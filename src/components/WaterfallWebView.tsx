@@ -76,6 +76,12 @@ function buildPreInject(
   // consistent across every server without relying on per-origin localStorage.
   try { localStorage.setItem('lsv_prefs', ${prefsJson}); } catch(e) {}
 
+  // Enable UberSDR's Android Chrome audio path so the HTTP audio stream
+  // (<audio src="/audio/stream?session=...">) is used instead of AudioContext.
+  // UberSDR reads this flag at module load time — must be set before app.js runs.
+  // Without this, UberSDR uses the desktop path which has no background audio.
+  try { localStorage.setItem('mediaSessionEnabled', 'true'); } catch(e) {}
+
   var SKIN_IDS = new Set([
     'utp','ubw-css',
     'lsv-chat-toast','lsv-hfdl-overlay','lsv-digmap-overlay','lsv-cwmap-overlay',
@@ -114,8 +120,8 @@ function buildInject(skinHtml: string): string {
   const skinEscaped = JSON.stringify(skinHtml);
   return `
 (function(){
-  if (window.__vibeSdrInjected === '0.1.49') return;
-  window.__vibeSdrInjected = '0.1.49';
+  if (window.__vibeSdrInjected === '0.1.50') return;
+  window.__vibeSdrInjected = '0.1.50';
 
   if (typeof window.__vibeStopObserver === 'function') window.__vibeStopObserver();
 
@@ -412,7 +418,10 @@ const WaterfallWebView = forwardRef<WaterfallWebViewHandle, WaterfallWebViewProp
         javaScriptEnabled
         domStorageEnabled
         mixedContentMode="always"
-        userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        userAgent={Platform.OS === 'android'
+          ? "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
+          : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        }
         injectedJavaScriptBeforeContentLoaded={preInject}
         onMessage={onMessage}
         onLoad={handleLoad}
