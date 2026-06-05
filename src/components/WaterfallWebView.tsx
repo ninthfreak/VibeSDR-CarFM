@@ -46,9 +46,11 @@ function buildPreInject(
   const leafletJsEsc  = JSON.stringify(leafletJs);
   const prefsJson     = JSON.stringify(JSON.stringify(mergedPrefs));
 
+  const isAndroid = Platform.OS === 'android';
   return `
 (function(){
   window.__vibeAppSkin = true;
+  window.__vibeAndroid = ${isAndroid ? 'true' : 'false'};
 
   // document.head is null at documentStart — use documentElement as fallback
   var _head = document.head || document.documentElement;
@@ -120,8 +122,8 @@ function buildInject(skinHtml: string): string {
   const skinEscaped = JSON.stringify(skinHtml);
   return `
 (function(){
-  if (window.__vibeSdrInjected === '0.1.50') return;
-  window.__vibeSdrInjected = '0.1.50';
+  if (window.__vibeSdrInjected === '0.1.51') return;
+  window.__vibeSdrInjected = '0.1.51';
 
   if (typeof window.__vibeStopObserver === 'function') window.__vibeStopObserver();
 
@@ -216,25 +218,36 @@ function buildInject(skinHtml: string): string {
   }
   setTimeout(tryStart, 500);
 
-  // ── 5. AirPods / route-change fix ────────────────────────────────────────
+  // ── 5. Media session / AirPods fix ───────────────────────────────────────
+  // iOS only: UberSDR's media session handling is broken on Safari — it calls
+  // mediaElement.pause() on AirPod disconnect which kills the bridge, and sets
+  // playbackState='paused' handing control to the music app. Override those.
+  //
+  // Android: UberSDR's _isMobileChrome path sets up its own HTTP audio stream
+  // and registers MediaSession correctly. Do NOT interfere — let it run.
+  // We only wire VTS next/prev and expose __vibeSetMeta for the state poll.
   (function() {
     var _pt = setInterval(function() {
       if (!window.mediaElement || !('mediaSession' in navigator)) return;
       clearInterval(_pt);
 
-      window.mediaElement.pause = function() {};
+      if (!window.__vibeAndroid) {
+        // iOS: prevent mediaElement.pause from killing the bridge
+        window.mediaElement.pause = function() {};
 
-      navigator.mediaSession.setActionHandler('pause', function() {
-        try { if (!window.isMuted && typeof window.toggleMute === 'function') window.toggleMute(); } catch(e) {}
-        try { if (window.mediaElement && window.mediaElement.paused) window.mediaElement.play().catch(function(){}); } catch(e) {}
-        try { navigator.mediaSession.playbackState = 'playing'; } catch(e) {}
-      });
-      navigator.mediaSession.setActionHandler('play', function() {
-        try { if (window.isMuted && typeof window.toggleMute === 'function') window.toggleMute(); } catch(e) {}
-        try { if (window.mediaElement && window.mediaElement.paused) window.mediaElement.play().catch(function(){}); } catch(e) {}
-        try { navigator.mediaSession.playbackState = 'playing'; } catch(e) {}
-      });
+        navigator.mediaSession.setActionHandler('pause', function() {
+          try { if (!window.isMuted && typeof window.toggleMute === 'function') window.toggleMute(); } catch(e) {}
+          try { if (window.mediaElement && window.mediaElement.paused) window.mediaElement.play().catch(function(){}); } catch(e) {}
+          try { navigator.mediaSession.playbackState = 'playing'; } catch(e) {}
+        });
+        navigator.mediaSession.setActionHandler('play', function() {
+          try { if (window.isMuted && typeof window.toggleMute === 'function') window.toggleMute(); } catch(e) {}
+          try { if (window.mediaElement && window.mediaElement.paused) window.mediaElement.play().catch(function(){}); } catch(e) {}
+          try { navigator.mediaSession.playbackState = 'playing'; } catch(e) {}
+        });
+      }
 
+      // Both platforms: map next/prev track to VTS station arrows
       try { navigator.mediaSession.setActionHandler('nexttrack', function() {
         try { var b=document.getElementById('lsv-vts-rarr'); if(b) b.click(); } catch(e) {}
       }); } catch(e) {}
@@ -253,11 +266,13 @@ function buildInject(skinHtml: string): string {
             artist: station || 'SDR Receiver',
             album:  'VibeSDR',
           });
-          navigator.mediaSession.playbackState = 'playing';
+          if (!window.__vibeAndroid) {
+            navigator.mediaSession.playbackState = 'playing';
+          }
         } catch(e) {}
       }
       window.__vibeSetMeta = _setMeta;
-      _setMeta(0, '');
+      if (!window.__vibeAndroid) _setMeta(0, '');
     }, 300);
     setTimeout(function() { clearInterval(_pt); }, 30000);
   })();
