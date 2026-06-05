@@ -6,6 +6,11 @@ A mobile-first SDR receiver app for iOS and Android, built with Expo / React Nat
 
 ---
 
+> [!WARNING]
+> **Android background audio is not working in the current release.** Audio stops when the app is backgrounded and media controls do not appear in the notification shade. This is a known issue caused by Android WebView suspending JavaScript execution when the app is not in the foreground. We are actively working on a fix (v1.1) that routes audio through a native player outside the WebView — this will resolve both background playback and media controls on Android. iOS is unaffected.
+
+---
+
 ## Screenshots
 
 | | | |
