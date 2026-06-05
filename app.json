@@ -1,25 +1,54 @@
 {
   "expo": {
-    "name": "VibeSDR-app",
-    "slug": "VibeSDR-app",
+    "name": "VibeSDR",
+    "slug": "VibeSDR",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.vibesdr.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "VibeSDR uses your location to show distance to each SDR instance and sort by nearest first.",
+        "NSLocalNetworkUsageDescription": "VibeSDR needs local network access to connect to SDR hardware.",
+        "UIBackgroundModes": [
+          "audio"
+        ],
+        "NSBonjourServices": [
+          "_http._tcp",
+          "_https._tcp"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.vibesdr.app",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0A0A12",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [],
+    "extra": {
+      "eas": {
+        "projectId": "117da7dc-3041-493f-a4d2-b79fa2fed326"
+      }
+    },
+    "owner": "stuey3d"
   }
 }

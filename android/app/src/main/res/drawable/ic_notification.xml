@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+  <!-- Radio cast/broadcast icon (monochrome, white fill for notification) -->
+  <path
+      android:fillColor="#FFFFFF"
+      android:pathData="M1,6.5L1,8.5C6.5,8.5 11,13 11,18.5L13,18.5C13,11.9 7.6,6.5 1,6.5Z"/>
+  <path
+      android:fillColor="#FFFFFF"
+      android:pathData="M1,10.5L1,12.5C4.3,12.5 7,15.2 7,18.5L9,18.5C9,14.1 5.4,10.5 1,10.5Z"/>
+  <path
+      android:fillColor="#FFFFFF"
+      android:pathData="M1,14.5L1,16.5C2.1,16.5 3,17.4 3,18.5L5,18.5C5,16.3 3.2,14.5 1,14.5Z"/>
+  <circle
+      android:fillColor="#FFFFFF"
+      android:cx="1"
+      android:cy="18.5"
+      android:r="1"/>
+  <path
+      android:fillColor="#FFFFFF"
+      android:pathData="M23,3L3,3L3,15.5L5,15.5L5,5L21,5L21,15.5L23,15.5Z"/>
+</vector>
