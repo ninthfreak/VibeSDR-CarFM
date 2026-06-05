@@ -84,6 +84,17 @@ function buildPreInject(
   // Without this, UberSDR uses the desktop path which has no background audio.
   try { localStorage.setItem('mediaSessionEnabled', 'true'); } catch(e) {}
 
+  // Android WebView doesn't implement AudioContext.prototype.setSinkId.
+  // UberSDR checks this to decide whether to use MediaStreamDestination bridge
+  // (_mediaSessionNeedsBridge = true) vs the HTTP stream path (_isMobileChrome).
+  // Without setSinkId, _mediaSessionNeedsBridge = true → _useMediaSessionBridge = true
+  // which forces the bridge path — no lock-screen widget, stutter, no background audio.
+  // Polyfilling setSinkId makes _mediaSessionNeedsBridge = false so UberSDR uses
+  // the Android Chrome HTTP stream path instead (the correct path for background audio).
+  if (${isAndroid} && typeof AudioContext !== 'undefined' && typeof AudioContext.prototype.setSinkId !== 'function') {
+    try { AudioContext.prototype.setSinkId = function() { return Promise.resolve(); }; } catch(e) {}
+  }
+
   var SKIN_IDS = new Set([
     'utp','ubw-css',
     'lsv-chat-toast','lsv-hfdl-overlay','lsv-digmap-overlay','lsv-cwmap-overlay',
@@ -122,8 +133,8 @@ function buildInject(skinHtml: string): string {
   const skinEscaped = JSON.stringify(skinHtml);
   return `
 (function(){
-  if (window.__vibeSdrInjected === '0.1.51') return;
-  window.__vibeSdrInjected = '0.1.51';
+  if (window.__vibeSdrInjected === '0.1.52') return;
+  window.__vibeSdrInjected = '0.1.52';
 
   if (typeof window.__vibeStopObserver === 'function') window.__vibeStopObserver();
 
