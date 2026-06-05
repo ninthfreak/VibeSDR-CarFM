@@ -6,7 +6,7 @@ import { WebViewMessageEvent } from 'react-native-webview';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useKeepAwake } from 'expo-keep-awake';
 import { RootStackParamList } from '../../App';
-import WaterfallWebView, { WaterfallWebViewHandle } from '../components/WaterfallWebView';
+import WaterfallWebView, { WaterfallWebViewHandle, loadAppPrefs, saveAppPref } from '../components/WaterfallWebView';
 import {
   clearDefaultInstance,
   getDefaultInstance,
@@ -32,6 +32,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const insets      = useSafeAreaInsets();
   const wvRef       = useRef<WaterfallWebViewHandle>(null);
   const [isDefault, setIsDefault] = useState(false);
+  const [appPrefs, setAppPrefs]   = useState<Record<string, unknown>>({});
+
+  useEffect(() => {
+    loadAppPrefs().then(setAppPrefs);
+  }, []);
 
   // Android media-service state refs (avoid triggering re-renders)
   const mediaStarted = useRef(false);
@@ -153,6 +158,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     try {
       const msg = JSON.parse(e.nativeEvent.data);
 
+      if (msg.type === 'pref-set' && msg.key) {
+        saveAppPref(msg.key as string, msg.value).catch(() => {});
+        setAppPrefs(prev => ({ ...prev, [msg.key as string]: msg.value }));
+      }
+
       if (msg.type === 'haptic') {
         const style = msg.style === 'light' ? Haptics.ImpactFeedbackStyle.Light : Haptics.ImpactFeedbackStyle.Rigid;
         Haptics.impactAsync(style).catch(() => {});
@@ -201,6 +211,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         ref={wvRef}
         url={baseUrl + '/'}
         viewMode={viewMode}
+        appPrefs={appPrefs}
         onMessage={onMessage}
         onLoad={refreshDefault}
         onError={() =>

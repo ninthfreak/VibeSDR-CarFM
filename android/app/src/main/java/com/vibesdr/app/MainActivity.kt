@@ -2,6 +2,9 @@ package com.vibesdr.app
 
 import android.os.Build
 import android.os.Bundle
+import android.view.View
+import android.view.ViewGroup
+import android.webkit.WebView
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
@@ -11,6 +14,26 @@ import com.facebook.react.defaults.DefaultReactActivityDelegate
 import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
+  // Keep WebView JS timers and audio context alive when the app is backgrounded.
+  // React Native's WebView calls webView.onPause() on activity pause which
+  // suspends JavaScript execution — this prevents UberSDR's audio engine
+  // from running and kills the media session connection.
+  override fun onPause() {
+    super.onPause()
+    resumeAllWebViews(window.decorView)
+  }
+
+  private fun resumeAllWebViews(view: View) {
+    if (view is WebView) {
+      view.resumeTimers()
+      view.onResume()
+    } else if (view is ViewGroup) {
+      for (i in 0 until view.childCount) {
+        resumeAllWebViews(view.getChildAt(i))
+      }
+    }
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     // Set the theme to AppTheme BEFORE onCreate to support
     // coloring the background, status bar, and navigation bar.

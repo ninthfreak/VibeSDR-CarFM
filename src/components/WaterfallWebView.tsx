@@ -1,5 +1,6 @@
-import React, { forwardRef, useImperativeHandle, useMemo, useRef } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import { SKIN_HTML } from '../assets/skinHtml';
 import { FONTS_CSS } from '../assets/fontsCSS';
@@ -9,15 +10,42 @@ import { ViewMode, skinPrefsJson } from '../services/viewMode';
 
 export const NATIVE_BAR_PX = 0;
 
+const APP_PREFS_KEY = '@vibesdr/app_prefs';
+
+async function loadAppPrefs(): Promise<Record<string, unknown>> {
+  try {
+    const raw = await AsyncStorage.getItem(APP_PREFS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveAppPref(key: string, value: unknown): Promise<void> {
+  try {
+    const prefs = await loadAppPrefs();
+    prefs[key] = value;
+    await AsyncStorage.setItem(APP_PREFS_KEY, JSON.stringify(prefs));
+  } catch {}
+}
+
 // ── Pre-page script ───────────────────────────────────────────────────────────
-// Built per-connection so it can embed the correct lsv_prefs for the chosen
-// view mode, preventing the skin's own picker from showing and ensuring the
-// right mode (default / a11y) is applied from first render.
-function buildPreInject(viewMode: ViewMode, fontsCss: string, leafletCss: string, leafletJs: string): string {
-  const prefs = skinPrefsJson(viewMode);
-  const fontsEscaped   = JSON.stringify(fontsCss);
-  const leafletCssEsc  = JSON.stringify(leafletCss);
-  const leafletJsEsc   = JSON.stringify(leafletJs);
+function buildPreInject(
+  viewMode: ViewMode,
+  fontsCss: string,
+  leafletCss: string,
+  leafletJs: string,
+  appPrefs: Record<string, unknown>,
+): string {
+  const skinPrefs = JSON.parse(skinPrefsJson(viewMode)) as Record<string, unknown>;
+  // Merge saved app prefs (e.g. haptics) into the skin prefs
+  const mergedPrefs = { ...skinPrefs, ...appPrefs };
+
+  const fontsEscaped  = JSON.stringify(fontsCss);
+  const leafletCssEsc = JSON.stringify(leafletCss);
+  const leafletJsEsc  = JSON.stringify(leafletJs);
+  const prefsJson     = JSON.stringify(JSON.stringify(mergedPrefs));
+
   return `
 (function(){
   window.__vibeAppSkin = true;
@@ -44,10 +72,9 @@ function buildPreInject(viewMode: ViewMode, fontsCss: string, leafletCss: string
     if (!window.L) { var ljs = document.createElement('script'); ljs.textContent = ${leafletJsEsc}; _head.appendChild(ljs); }
   } catch(e) {}
 
-  // Pre-set skin mode so the picker never shows and lsv-a11y is applied on first load.
-  // Audio/media session settings are intentionally NOT touched here — UberSDR
-  // and the server defaults handle those correctly without interference.
-  try { localStorage.setItem('lsv_prefs', ${JSON.stringify(prefs)}); } catch(e) {}
+  // Pre-set merged skin + app prefs (skin mode, haptics, etc.) so they are
+  // consistent across every server without relying on per-origin localStorage.
+  try { localStorage.setItem('lsv_prefs', ${prefsJson}); } catch(e) {}
 
   var SKIN_IDS = new Set([
     'utp','ubw-css',
@@ -80,16 +107,15 @@ function buildPreInject(viewMode: ViewMode, fontsCss: string, leafletCss: string
   };
 })();
 true;
-`;};
+`;}
 
 // ── Post-load injection ───────────────────────────────────────────────────────
-// Runs after page load. Stops the observer then injects our skin as master.
 function buildInject(skinHtml: string): string {
   const skinEscaped = JSON.stringify(skinHtml);
   return `
 (function(){
-  if (window.__vibeSdrInjected === '0.1.47') return;
-  window.__vibeSdrInjected = '0.1.47';
+  if (window.__vibeSdrInjected === '0.1.48') return;
+  window.__vibeSdrInjected = '0.1.48';
 
   if (typeof window.__vibeStopObserver === 'function') window.__vibeStopObserver();
 
@@ -176,8 +202,6 @@ function buildInject(skinHtml: string): string {
   runNext();
 
   // ── 4. Auto-click start ───────────────────────────────────────────────────
-  // Clicks automatically when no password is required. If a password prompt
-  // is shown the overlay remains visible and the user fills it in manually.
   var _startTries = 0;
   function tryStart() {
     var btn = document.getElementById('audio-start-button');
@@ -187,22 +211,13 @@ function buildInject(skinHtml: string): string {
   setTimeout(tryStart, 500);
 
   // ── 5. AirPods / route-change fix ────────────────────────────────────────
-  // When AirPods disconnect iOS fires the MediaSession 'pause' action.
-  // UberSDR's handler: (1) calls mediaElement.pause() killing the bridge,
-  // and (2) sets playbackState='paused' telling iOS to hand controls to
-  // the music app. We must override BOTH after UberSDR registers its handlers
-  // (detectable once window.mediaElement exists, meaning startAudio completed).
   (function() {
     var _pt = setInterval(function() {
       if (!window.mediaElement || !('mediaSession' in navigator)) return;
       clearInterval(_pt);
 
-      // No-op mediaElement.pause so the bridge element never stops
       window.mediaElement.pause = function() {};
 
-      // Re-register pause/play handlers AFTER UberSDR's, so ours win.
-      // pause → mute gain only, never pause element or set 'paused' state.
-      // play  → unmute and ensure element is playing.
       navigator.mediaSession.setActionHandler('pause', function() {
         try { if (!window.isMuted && typeof window.toggleMute === 'function') window.toggleMute(); } catch(e) {}
         try { if (window.mediaElement && window.mediaElement.paused) window.mediaElement.play().catch(function(){}); } catch(e) {}
@@ -214,7 +229,6 @@ function buildInject(skinHtml: string): string {
         try { navigator.mediaSession.playbackState = 'playing'; } catch(e) {}
       });
 
-      // VTS skip buttons mapped to next/prev track
       try { navigator.mediaSession.setActionHandler('nexttrack', function() {
         try { var b=document.getElementById('lsv-vts-rarr'); if(b) b.click(); } catch(e) {}
       }); } catch(e) {}
@@ -222,7 +236,6 @@ function buildInject(skinHtml: string): string {
         try { var b=document.getElementById('lsv-vts-larr'); if(b) b.click(); } catch(e) {}
       }); } catch(e) {}
 
-      // Set initial Now Playing metadata and mark playing so iOS shows controls
       function _fmtHz(hz) {
         if (!hz) return 'VibeSDR';
         return hz >= 1000000 ? (hz/1e6).toFixed(3)+' MHz' : (hz/1000).toFixed(3)+' kHz';
@@ -244,9 +257,6 @@ function buildInject(skinHtml: string): string {
   })();
 
   // ── 6. Mute indicator ────────────────────────────────────────────────────
-  // Floating pill shown whenever isMuted is true — covers the case where the
-  // media session pause action mutes audio silently (no visible mute button
-  // in the mobile skin). Tap to restore audio via UberSDR's toggleMute().
   (function() {
     var style = document.createElement('style');
     style.textContent =
@@ -285,9 +295,6 @@ function buildInject(skinHtml: string): string {
       else   pill.classList.remove('vmp-on');
     }
 
-    // Hook radioAPI.notifyMuteChange — called by UberSDR whenever mute toggles.
-    // Poll until radioAPI exists then wrap its notifyMuteChange.
-    var _hooked = false;
     var _hookTimer = setInterval(function() {
       if (!window.radioAPI) return;
       clearInterval(_hookTimer);
@@ -296,9 +303,7 @@ function buildInject(skinHtml: string): string {
         _setMuted(!!muted);
         if (_orig) try { _orig.call(window.radioAPI, muted); } catch(e) {}
       };
-      _hooked = true;
     }, 200);
-    // Fallback: poll both window.isMuted and mute-btn text for broadest compatibility
     var _btnTimer = setInterval(function() {
       try {
         var m = !!(window.isMuted);
@@ -330,14 +335,11 @@ function buildInject(skinHtml: string): string {
       } catch(_) {}
       var muted = !!(window.isMuted);
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'state', hz: hz, station: station, muted: muted }));
-      // Keep iOS Now Playing info current
       try { if (typeof window.__vibeSetMeta === 'function') window.__vibeSetMeta(hz, station); } catch(e) {}
     } catch(e) {}
   }, 500);
 
   // ── 8. Android audio-started signal ────────────────────────────────────────
-  // Fires once when mediaElement begins playing so the native layer can start
-  // its ForegroundService and show media controls in the notification shade.
   (function() {
     var _sent = false;
     var _pt = setInterval(function() {
@@ -355,13 +357,12 @@ function buildInject(skinHtml: string): string {
 `;
 }
 
-// Both modes inject the full skin. The correct visual mode (default / a11y)
-// is applied by the skin itself based on lsv_prefs set in PRE_INJECT.
 const INJECT_SCRIPT = buildInject(SKIN_HTML);
 
 interface WaterfallWebViewProps {
   url:        string;
   viewMode?:  ViewMode;
+  appPrefs?:  Record<string, unknown>;
   onMessage?: (event: WebViewMessageEvent) => void;
   onLoad?:    () => void;
   onError?:   () => void;
@@ -372,10 +373,13 @@ export interface WaterfallWebViewHandle {
 }
 
 const WaterfallWebView = forwardRef<WaterfallWebViewHandle, WaterfallWebViewProps>(
-  ({ url, viewMode = 'default', onMessage, onLoad, onError }, ref) => {
+  ({ url, viewMode = 'default', appPrefs = {}, onMessage, onLoad, onError }, ref) => {
     const webViewRef = useRef<WebView>(null as any);
 
-    const preInject   = useMemo(() => buildPreInject(viewMode, FONTS_CSS, LEAFLET_CSS, LEAFLET_JS), [viewMode]);
+    const preInject = useMemo(
+      () => buildPreInject(viewMode, FONTS_CSS, LEAFLET_CSS, LEAFLET_JS, appPrefs),
+      [viewMode, appPrefs],
+    );
 
     useImperativeHandle(ref, () => ({
       inject: (js: string) => {
@@ -422,6 +426,7 @@ const WaterfallWebView = forwardRef<WaterfallWebViewHandle, WaterfallWebViewProp
 
 WaterfallWebView.displayName = 'WaterfallWebView';
 export default WaterfallWebView;
+export { loadAppPrefs, saveAppPref };
 
 const styles = StyleSheet.create({
   webview: { flex: 1, backgroundColor: '#000000' },
