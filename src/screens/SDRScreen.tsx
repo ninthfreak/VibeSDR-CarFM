@@ -56,6 +56,7 @@ import ChatDrawer,
 import DecoderPanel,
   { type DecoderType } from '../components/DecoderPanel';
 import SpecRatioOverlay  from '../components/SpecRatioOverlay';
+import MapOverlay, { type MapKind } from '../components/MapOverlay';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -154,6 +155,9 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const [menuOpen,      setMenuOpen]      = useState(false);
   const [freqModalOpen, setFreqModalOpen] = useState(false);
+
+  // Server map overlays (HFDL / Digital spots / CW spots — skin parity)
+  const [mapKind, setMapKind] = useState<MapKind | null>(null);
 
   // Frequency display unit — chosen in FreqModal, drives the main readout too.
   const [freqUnit, setFreqUnit] = useState<'hz' | 'khz' | 'mhz'>('khz');
@@ -270,7 +274,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onError:     (msg: string) => setDecoderStatus('error: ' + msg),
       onSpot: (s) => {
         if (s.kind !== spotsKindRef.current) return;
-        setSpots((prev: SpotRow[]) => [s, ...prev].slice(0, 200));
+        spotBufRef.current.push(s); // flushed by the 400ms tick — no setState here
       },
     });
     decoderClient.current = dc;
@@ -281,10 +285,38 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [selDecoder, setSelDecoder] =
     useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|null>(null);
 
-  // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders
+  // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders.
+  // Spots are BUFFERED in a ref and flushed to state on a 400ms tick: the
+  // server replays its whole buffer on subscribe (hundreds of messages in a
+  // burst) and a setState per spot re-renders the entire screen tree — that's
+  // what stuttered the waterfall. The skin never had this because DOM rows
+  // append incrementally.
   const [spotsKind, setSpotsKind] = useState<SpotsKind | null>(null);
   const [spots,     setSpots]     = useState<SpotRow[]>([]);
-  const spotsKindRef = useRef<SpotsKind | null>(null);
+  const spotsKindRef  = useRef<SpotsKind | null>(null);
+  const spotBufRef    = useRef<SpotRow[]>([]);
+  const spotTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopSpotFlush = useCallback(() => {
+    if (spotTimerRef.current) { clearInterval(spotTimerRef.current); spotTimerRef.current = null; }
+    spotBufRef.current = [];
+  }, []);
+
+  const startSpotFlush = useCallback(() => {
+    stopSpotFlush();
+    spotTimerRef.current = setInterval(() => {
+      const buf = spotBufRef.current;
+      if (buf.length === 0) return;
+      spotBufRef.current = [];
+      buf.reverse(); // arrival order oldest→newest; display newest first
+      setSpots((prev: SpotRow[]) => {
+        const next = buf.concat(prev);
+        return next.length > 200 ? next.slice(0, 200) : next;
+      });
+    }, 400);
+  }, [stopSpotFlush]);
+
+  useEffect(() => stopSpotFlush, [stopSpotFlush]); // clear on unmount
 
   const openDecoder = useCallback((type: DecoderType) => {
     setActiveDecoder(type);
@@ -317,7 +349,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     decoderClient.current?.stopSpots();
     spotsKindRef.current = null;
     setSpotsKind(null);
-  }, []);
+    stopSpotFlush();
+  }, [stopSpotFlush]);
 
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
@@ -342,9 +375,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       setSpots([]);
       spotsKindRef.current = k;
       setSpotsKind(k);
+      startSpotFlush();
       decoderClient.current?.startSpots(k);
     }
-  }, [closeDecoder, stopSpots]);
+  }, [closeDecoder, stopSpots, startSpotFlush]);
 
   // RTTY settings — applying requires a re-attach (server reads params at attach)
   const [rttySettings, setRttySettings] = useState<RttySettings>({ ...RTTY_PRESETS.ham });
@@ -751,6 +785,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onDecToggle={onDecToggle}
         spotsKind={spotsKind}
         onSpotsToggle={onSpotsToggle}
+        onServerMap={(k) => { setMenuOpen(false); setMapKind(k); }}
         rttySettings={rttySettings}
         onRttySettings={onRttySettings}
         wefaxLpm={wefaxLpm}
@@ -812,6 +847,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         current={status.mode}
         onSelect={onMode}
         onClose={() => setModeSelOpen(false)}
+      />
+
+      {/* Server map overlay (HFDL / Digital / CW — full-screen WebView Leaflet) */}
+      <MapOverlay
+        visible={mapKind !== null}
+        kind={mapKind}
+        baseUrl={baseUrl}
+        onClose={() => setMapKind(null)}
       />
 
       {/* Frequency modal */}

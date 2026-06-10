@@ -54,6 +54,8 @@ export interface MenuSheetProps {
   /** Digital/CW spots feeds (skin lsvSpots). */
   spotsKind?:      'digi'|'cw'|null;
   onSpotsToggle?:  (k: 'digi'|'cw') => void;
+  /** Server map overlays (skin lsv-hfdl / lsv-digmap / lsv-cwmap). */
+  onServerMap?:    (k: 'hfdl'|'digi'|'cw') => void;
   rttySettings?:   RttySettings;
   onRttySettings?: (s: RttySettings) => void;
   wefaxLpm?:       number;
@@ -290,7 +292,7 @@ export default function MenuSheet({
   onClose, onBack, onReconnect, onResetSettings, onDisplaySettings,
   onZoomIn, onZoomOut, onSetDefault,
   decMode = null, decOn = false, onDecToggle,
-  spotsKind = null, onSpotsToggle,
+  spotsKind = null, onSpotsToggle, onServerMap,
   rttySettings, onRttySettings,
   wefaxLpm = 120, onWefaxLpm,
   vfoNeedle = '#ff8800', onVfoNeedle,
@@ -614,12 +616,12 @@ export default function MenuSheet({
               />
             </BtnRow>
 
-            {/* ── SERVER MAPS ────────────────────────────────────── */}
+            {/* ── SERVER MAPS — full-screen Leaflet overlays (skin parity) ── */}
             <SectionLabel label="SERVER MAPS" />
             <BtnRow>
-              <Btn label="✈ HFDL"     onPress={() => {}} />
-              <Btn label="📡 DIGITAL"  onPress={() => {}} />
-              <Btn label="⊟ CW"       onPress={() => {}} />
+              <Btn label="✈ HFDL"     onPress={() => onServerMap?.('hfdl')} />
+              <Btn label="📡 DIGITAL"  onPress={() => onServerMap?.('digi')} />
+              <Btn label="⊟ CW"       onPress={() => onServerMap?.('cw')} />
             </BtnRow>
 
             {/* ── CLIENT DECODERS — skin: toggle start/stop, menu stays open;

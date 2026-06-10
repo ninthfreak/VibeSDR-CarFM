@@ -11,9 +11,10 @@
  * Matches VibeSDR_Mockup_SAVE.html #lsv-decoder-panel exactly.
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
+  FlatList,
   ScrollView,
   StyleSheet,
   Text,
@@ -77,6 +78,43 @@ function fmtSpotDist(km?: number): string {
   return km >= 1000 ? (km / 1000).toFixed(1) + 'Mm' : Math.round(km) + 'km';
 }
 
+// Memoized spot row — with FlatList virtualization only the ~12 visible rows
+// render, and unchanged rows skip re-render entirely when new spots flush in.
+const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, onTuneHz }: {
+  s: SpotRow; isCW: boolean; font: string; callColor: string;
+  onTuneHz?: (hz: number) => void;
+}) {
+  return (
+    <TouchableOpacity style={dp.spotRow}
+      onPress={() => s.freqHz && onTuneHz?.(s.freqHz)} activeOpacity={0.6}>
+      <Text style={[dp.spotCell, dp.spotFreq, { fontFamily: font }]}>
+        {fmtSpotFreq(s.freqHz)}
+      </Text>
+      <Text style={[dp.spotCell, dp.spotTime, { fontFamily: font }]}>
+        {fmtSpotTime(s.time)}
+      </Text>
+      <Text style={[dp.spotCell, dp.spotMode, { fontFamily: font }]}>
+        {isCW ? (s.wpm ? Math.round(s.wpm) + 'w' : '') : s.mode}
+      </Text>
+      <Text style={[dp.spotCell, dp.spotBand, { fontFamily: font }]}>{s.band}</Text>
+      <Text style={[dp.spotCell, dp.spotCall, { color: callColor, fontFamily: font }]}
+            numberOfLines={1}>
+        {s.call}
+      </Text>
+      <Text style={[dp.spotCell, dp.spotSnr,
+        { color: (s.snr ?? -99) >= 0 ? '#55d98d' : 'rgba(255,160,0,0.65)', fontFamily: font }]}>
+        {s.snr !== undefined ? s.snr : ''}
+      </Text>
+      <Text style={[dp.spotCell, dp.spotDist, { fontFamily: font }]}>
+        {fmtSpotDist(s.distKm)}
+      </Text>
+      <Text style={[dp.spotCell, dp.spotCountry, { fontFamily: font }]} numberOfLines={1}>
+        {s.country}
+      </Text>
+    </TouchableOpacity>
+  );
+});
+
 const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   rtty:    'RTTY',
   navtex:  'NAVTEX',
@@ -127,6 +165,13 @@ export default function DecoderPanel({
       (sfBand === 'ALL' || s.band === sfBand) &&
       (cutoff === 0 || s.time >= cutoff));
   }, [isSpotsMode, spots, spotsKind, sfMode, sfBand, sfAge]);
+
+  const { theme: themeForRows } = useTheme();
+  const renderSpot = useCallback(({ item }: { item: SpotRow }) => (
+    <SpotRowView s={item} isCW={spotsKind === 'cw'} font={themeForRows.font}
+                 callColor={themeForRows.name === 'white' ? '#ffffff' : C.outputCl}
+                 onTuneHz={onTuneHz} />
+  ), [spotsKind, themeForRows, onTuneHz]);
   // Canvas header state — fed by DecoderImageCanvas callbacks (skin parity)
   const [imageInfo,   setImageInfo]   = useState('');
   const [hasPrev,     setHasPrev]     = useState(false);
@@ -333,44 +378,23 @@ export default function DecoderPanel({
           </ScrollView>
         )}
 
-        {/* Spots table — newest first; tap frequency to tune (skin parity) */}
+        {/* Spots table — virtualized; newest first; tap frequency to tune */}
         {!minimised && isSpotsMode && (
-          <ScrollView style={dp.body} showsVerticalScrollIndicator>
-            {visibleSpots.length === 0 && (
+          <FlatList
+            style={dp.body}
+            data={visibleSpots}
+            keyExtractor={(s: SpotRow, i: number) => `${s.time}-${s.call}-${s.freqHz}-${i}`}
+            renderItem={renderSpot}
+            initialNumToRender={12}
+            maxToRenderPerBatch={12}
+            windowSize={5}
+            removeClippedSubviews
+            ListEmptyComponent={
               <Text style={[dp.output, dp.spotEmpty, { color: dc.status, fontFamily: t.font }]}>
                 waiting for spots…
               </Text>
-            )}
-            {visibleSpots.map((s, i) => (
-              <TouchableOpacity key={`${s.call}-${s.time}-${i}`} style={dp.spotRow}
-                onPress={() => s.freqHz && onTuneHz?.(s.freqHz)} activeOpacity={0.6}>
-                <Text style={[dp.spotCell, dp.spotFreq, { fontFamily: t.font }]}>
-                  {fmtSpotFreq(s.freqHz)}
-                </Text>
-                <Text style={[dp.spotCell, dp.spotTime, { fontFamily: t.font }]}>
-                  {fmtSpotTime(s.time)}
-                </Text>
-                <Text style={[dp.spotCell, dp.spotMode, { fontFamily: t.font }]}>
-                  {spotsKind === 'cw' ? (s.wpm ? Math.round(s.wpm) + 'w' : '') : s.mode}
-                </Text>
-                <Text style={[dp.spotCell, dp.spotBand, { fontFamily: t.font }]}>{s.band}</Text>
-                <Text style={[dp.spotCell, dp.spotCall, { color: dc.output, fontFamily: t.font }]}
-                      numberOfLines={1}>
-                  {s.call}
-                </Text>
-                <Text style={[dp.spotCell, dp.spotSnr,
-                  { color: (s.snr ?? -99) >= 0 ? '#55d98d' : 'rgba(255,160,0,0.65)', fontFamily: t.font }]}>
-                  {s.snr !== undefined ? s.snr : ''}
-                </Text>
-                <Text style={[dp.spotCell, dp.spotDist, { fontFamily: t.font }]}>
-                  {fmtSpotDist(s.distKm)}
-                </Text>
-                <Text style={[dp.spotCell, dp.spotCountry, { fontFamily: t.font }]} numberOfLines={1}>
-                  {s.country}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+            }
+          />
         )}
 
       </View>
