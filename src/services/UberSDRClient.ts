@@ -23,6 +23,14 @@ import { VibePowerModule } from '../components/AudioPlayer';
 
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl';
 
+/** Server-side mode bandwidth defaults (websocket.go, verbatim). */
+export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
+  usb: [50, 2700],     lsb: [-2700, -50],
+  am:  [-5000, 5000],  sam: [-5000, 5000],
+  cwu: [-200, 200],    cwl: [-200, 200],
+  fm:  [-8000, 8000],  nfm: [-5000, 5000],
+};
+
 export interface SDRStatus {
   frequency: number;    // Hz
   mode: SDRMode;
@@ -72,8 +80,8 @@ export class UberSDRClient {
   private status: SDRStatus = {
     frequency:     14_074_000,
     mode:          'usb',
-    bandwidthLow:  -3000,
-    bandwidthHigh:  3000,
+    bandwidthLow:  50,    // usb defaults — kept in sync via MODE_BANDWIDTHS
+    bandwidthHigh: 2700,
     binCount:       1024,
     binBandwidth:   0,
     centerHz:       0,
@@ -129,6 +137,11 @@ export class UberSDRClient {
 
   setMode(mode: SDRMode) {
     this.status.mode = mode;
+    // Server applies these defaults on every mode change (websocket.go —
+    // "These match the defaults in app.js setMode()"). It never reports
+    // bandwidth back, so mirror the exact table to stay in sync.
+    const bw = MODE_BANDWIDTHS[mode];
+    if (bw) { this.status.bandwidthLow = bw[0]; this.status.bandwidthHigh = bw[1]; }
     VibePowerModule?.sendTuneCommand(this.status.frequency, mode);
   }
 

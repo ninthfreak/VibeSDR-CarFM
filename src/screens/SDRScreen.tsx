@@ -595,8 +595,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── Mode / filter / tune ──────────────────────────────────────────────────
 
   const onMode = useCallback((m: SDRMode) => {
-    client.current?.setMode(m);
-    setStatus((prev: SDRStatus) => ({ ...prev, mode: m }));
+    const c = client.current; if (!c) return;
+    c.setMode(m); // client mirrors the server's per-mode bandwidth defaults
+    setStatus({ ...c.getStatus() });
+  }, []);
+
+  // Atomic both-edges setter — single setBandwidth, no stale-closure edge
+  const onFilterBoth = useCallback((low: number, high: number) => {
+    client.current?.setBandwidth(low, high);
+    setStatus((prev: SDRStatus) => ({ ...prev, bandwidthLow: low, bandwidthHigh: high }));
   }, []);
 
   const onFilterLow  = useCallback((v: number) => { client.current?.setBandwidth(v, status.bandwidthHigh); setStatus((prev: SDRStatus) => ({ ...prev, bandwidthLow: v })); }, [status.bandwidthHigh]);
@@ -776,6 +783,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onDbMax={setDbMax}
         onFilterLow={onFilterLow}
         onFilterHigh={onFilterHigh}
+        onFilterBoth={onFilterBoth}
         onNr={onNrMode}
         onZoomIn={onZoomIn}
         onZoomOut={onZoomOut}

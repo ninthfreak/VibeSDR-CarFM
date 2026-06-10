@@ -42,6 +42,8 @@ export interface MenuSheetProps {
   filterHigh:   number;
   onFilterLow:  (v: number) => void;
   onFilterHigh: (v: number) => void;
+  /** Atomic both-edges setter — used by the mirrored sliders + SYNC. */
+  onFilterBoth?: (low: number, high: number) => void;
   nr?:          boolean;
   onNr?:        (mode: 'off'|'nr'|'nr2') => void;
   onZoomIn?:    () => void;
@@ -278,7 +280,7 @@ function RttySettingsRows({ s, onChange }:
 export default function MenuSheet({
   visible, serverName, serverUrl,
   colormap, dbMin, dbMax, onColormap, onDbMin, onDbMax,
-  filterLow, filterHigh, onFilterLow, onFilterHigh,
+  filterLow, filterHigh, onFilterLow, onFilterHigh, onFilterBoth,
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
@@ -314,6 +316,7 @@ export default function MenuSheet({
   const translateY = useRef(new Animated.Value(SHEET_H)).current;
   const backdropOp = useRef(new Animated.Value(0)).current;
   const [dispSettingsOpen, setDispSettingsOpen] = useState(false);
+  const [bwSync,           setBwSync]           = useState(false);
 
   // NR cycle state — off→nr→nr2. SERV is locked by server DSP section.
   const [nrMode, setNrMode] = useState<'off'|'nr'|'nr2'|'serv'>(
@@ -534,25 +537,35 @@ export default function MenuSheet({
 
             {/* ── AUDIO ──────────────────────────────────────────── */}
             <SectionLabel label="AUDIO" />
-            <View style={styles.bwRow}>
-              <Text style={styles.bwLabel}>LSB</Text>
-              <Slider style={styles.bwSlider}
-                minimumValue={0} maximumValue={15_000} step={50}
-                value={Math.abs(filterLow)}
-                onValueChange={(v: number) => onFilterLow(-v)}
+            {/* Bandwidth — mirrored sliders around the carrier: slide the LEFT
+                one LEFT to widen the lower sideband, the RIGHT one RIGHT to
+                widen the upper. SYNC mirrors both edges (AM/FM symmetric). */}
+            <View style={styles.bwMirrorRow}>
+              <Text style={styles.bwEdgeVal}>{filterLow >= 0 ? '+' : '−'}{fmtHz(Math.abs(filterLow))}</Text>
+              <Slider style={styles.bwHalfSlider}
+                minimumValue={-8000} maximumValue={0} step={50}
+                value={Math.min(0, filterLow)}
+                onValueChange={(v: number) => {
+                  if (bwSync) onFilterBoth?.(v, -v);
+                  else        onFilterBoth?.(v, filterHigh);
+                }}
+                minimumTrackTintColor={C.muted} maximumTrackTintColor={C.gold}
+                thumbTintColor={C.gold} />
+              <TouchableOpacity hitSlop={6}
+                style={[styles.btn, bwSync && styles.btnActive]}
+                onPress={() => setBwSync((p: boolean) => !p)} activeOpacity={0.7}>
+                <Text style={[styles.btnText, bwSync && styles.btnTextActive]}>SYNC</Text>
+              </TouchableOpacity>
+              <Slider style={styles.bwHalfSlider}
+                minimumValue={0} maximumValue={8000} step={50}
+                value={Math.max(0, filterHigh)}
+                onValueChange={(v: number) => {
+                  if (bwSync) onFilterBoth?.(-v, v);
+                  else        onFilterBoth?.(filterLow, v);
+                }}
                 minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted}
                 thumbTintColor={C.gold} />
-              <Text style={styles.bwVal}>−{fmtHz(Math.abs(filterLow))}</Text>
-            </View>
-            <View style={styles.bwRow}>
-              <Text style={styles.bwLabel}>USB</Text>
-              <Slider style={styles.bwSlider}
-                minimumValue={0} maximumValue={15_000} step={50}
-                value={filterHigh}
-                onValueChange={onFilterHigh}
-                minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted}
-                thumbTintColor={C.gold} />
-              <Text style={styles.bwVal}>+{fmtHz(filterHigh)}</Text>
+              <Text style={styles.bwEdgeVal}>{filterHigh < 0 ? '−' : '+'}{fmtHz(Math.abs(filterHigh))}</Text>
             </View>
 
             {/* NR cycles off→NR→NR2. Shows SERV (green, locked) when server DSP active. */}
@@ -775,6 +788,9 @@ const styles = StyleSheet.create({
   sliderRow:   { paddingVertical: 4, gap: 4 },
   sliderLabel: { color: C.sectionC, fontFamily: 'Nixie One', fontSize: 11, letterSpacing: 1, width: 72, flexShrink: 0 },
   bwRow:    { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
+  bwMirrorRow:  { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 },
+  bwHalfSlider: { flex: 1, height: 32 },
+  bwEdgeVal:    { color: C.gold, fontFamily: 'Nixie One', fontSize: 10, minWidth: 44, textAlign: 'center' },
   bwLabel:  { color: C.sectionC, fontFamily: 'Nixie One', fontSize: 11, letterSpacing: 1, width: 32 },
   bwSlider: { flex: 1, height: 32 },
   bwVal:    { color: C.gold, fontFamily: 'Nixie One', fontSize: 11, minWidth: 68, textAlign: 'right' },
