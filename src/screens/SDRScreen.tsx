@@ -590,8 +590,16 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state: string) => {
-      if (state !== 'active') client.current?.pauseSpectrum();
-      else                    client.current?.resumeSpectrum();
+      if (state !== 'active') {
+        client.current?.pauseSpectrum();
+      } else {
+        // Instant zombie-socket check — after a background suspension the
+        // audio WS can be half-open (server reaped the session, socket never
+        // errors) leaving audio+spectrum dead until relaunch. The native
+        // watchdog also catches this within ~8s; this makes it immediate.
+        (NativeModules.VibePowerModule as { revive?: () => void })?.revive?.();
+        client.current?.resumeSpectrum();
+      }
     });
     return () => sub.remove();
   }, []);

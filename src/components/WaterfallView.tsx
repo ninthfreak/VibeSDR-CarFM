@@ -552,7 +552,7 @@ export default function WaterfallView({
         startSpecTween();
       }
 
-      if (cfg.peakHold) {
+      if (cfg.peakHold && !boost) {
         const pk = frame.peak;
         const sLen = pk.length;
         const baseline = cfg.wfTop;
@@ -570,6 +570,11 @@ export default function WaterfallView({
         pp.addPoly(pool, false);
         swapPath(peakPath, pp);
       } else {
+        // Peak hold PAUSES while interacting: bin-indexed peaks detach from
+        // their signals as the view moves (geometry is pinned during gestures
+        // so the processor can't see the shift) and smear the display. Clear
+        // and hide; it re-seeds within a frame or two of settling.
+        if (boost) proc.current.resetPeakHold();
         swapPath(peakPath, Skia.Path.Make()); // empty = draw nothing
       }
     } else {

@@ -47,6 +47,25 @@ class VibePowerModule: RCTEventEmitter {
   private let FRAME_SIZE: Int32 = 5760
   private var instanceName: String = ""
 
+  // Zombie-socket watchdog. Packets flow ~50/s, so staleness is a reliable
+  // death signal. After background suspension (e.g. user switches to another
+  // app and iOS freezes us once audio is interrupted), the server reaps the
+  // session but our socket never errors — receiveLoop waits forever and audio
+  // + spectrum stay dead until app relaunch (bug 2026-06-11).
+  private var lastPacketAt  = Date()
+  private var healthTimer: Timer?
+
+  // Playback live-edge control (laggy-tuning bug 2026-06-11): scheduleBuffer
+  // with no accounting let the queue grow after any delivery burst, so
+  // playback ran seconds behind live FOREVER — tuning sounded delayed because
+  // you kept hearing the backlog. queuedSeconds is mutated on audioQ only.
+  private var queuedSeconds: Double = 0
+  // Tune coalescing: the velocity drum can emit 20+ steps/s; one WS tune per
+  // step thrashes radiod. Leading send + 80ms trailing timer.
+  private var pendingTune: (freq: Int, mode: String)?
+  private var lastTuneSentAt = Date(timeIntervalSince1970: 0)
+  private var tuneTimer: Timer?
+
   // MARK: - Exported methods
 
   @objc func startAudioEngine(_ baseUrl: String, frequency: Int, mode: String, uuid: String) {
@@ -59,6 +78,8 @@ class VibePowerModule: RCTEventEmitter {
     isRunning    = true
     isMuted      = false
     packetCount  = 0
+    lastPacketAt = Date()
+    startHealthTimer()
     configureAVSession()
     startEngine(sampleRate: 48000, channels: 1)
     openAudioWs(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid)
@@ -73,11 +94,84 @@ class VibePowerModule: RCTEventEmitter {
     stopEngine()
   }
 
+  /** Called from JS on app-foreground: instant zombie check instead of
+   *  waiting for the next watchdog tick. */
+  @objc func revive() {
+    DispatchQueue.main.async { [weak self] in
+      self?.reviveIfDead(staleAfter: 3)
+    }
+  }
+
+  // MARK: - Watchdog
+
+  private func startHealthTimer() {
+    healthTimer?.invalidate()
+    let t = Timer(timeInterval: 4.0, repeats: true) { [weak self] _ in
+      self?.reviveIfDead(staleAfter: 8)
+    }
+    RunLoop.main.add(t, forMode: .common)
+    healthTimer = t
+  }
+
+  private func reviveIfDead(staleAfter: TimeInterval) {
+    guard isRunning else { return }
+    let stale  = Date().timeIntervalSince(lastPacketAt)
+    let wsDead = (wsTask?.state != .running)
+    guard stale > staleAfter || wsDead else { return }
+    NSLog("[VibePowerModule] watchdog: stale=%.1fs wsDead=%d — reviving audio WS",
+          stale, wsDead ? 1 : 0)
+    lastPacketAt = Date() // debounce — one revive attempt per window
+    wsTask?.cancel(with: .goingAway, reason: nil)
+    wsTask = nil
+    if let engine = audioEngine, !engine.isRunning {
+      try? AVAudioSession.sharedInstance().setActive(true)
+      try? engine.start()
+      if !isMuted { playerNode?.play() }
+    }
+    // SAME uuid — decoders + spectrum WS are keyed to it server-side.
+    openAudioWs(baseUrl: currentBase, frequency: currentFreq,
+                mode: currentMode, uuid: currentUuid)
+  }
+
   @objc func sendTuneCommand(_ frequency: Int, mode: String) {
     currentFreq = frequency
     currentMode = mode
-    sendWsJson(["type": "tune", "frequency": frequency, "mode": mode])
-    DispatchQueue.main.async { self.updateNowPlaying() }
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.pendingTune = (frequency, mode)
+      let since = Date().timeIntervalSince(self.lastTuneSentAt)
+      if since >= 0.08 {
+        self.flushPendingTune()
+      } else if self.tuneTimer == nil {
+        let t = Timer(timeInterval: 0.08 - since, repeats: false) { [weak self] _ in
+          self?.tuneTimer = nil
+          self?.flushPendingTune()
+        }
+        RunLoop.main.add(t, forMode: .common)
+        self.tuneTimer = t
+      }
+      self.updateNowPlaying()
+    }
+  }
+
+  private func flushPendingTune() {
+    guard let t = pendingTune else { return }
+    pendingTune = nil
+    lastTuneSentAt = Date()
+    sendWsJson(["type": "tune", "frequency": t.freq, "mode": t.mode])
+    // Drop queued (pre-tune) audio so what you HEAR snaps to the new
+    // frequency — fine-tuning SSB through a stale backlog is impossible.
+    audioQ.async { [weak self] in
+      guard let self else { return }
+      if self.queuedSeconds > 0.15 {
+        self.queuedSeconds = 0
+        let player = self.playerNode
+        DispatchQueue.main.async {
+          player?.stop()  // discards scheduled buffers
+          if !self.isMuted { player?.play() }
+        }
+      }
+    }
   }
 
   @objc func sendBandwidth(_ low: Int, high: Int) {
@@ -142,6 +236,7 @@ class VibePowerModule: RCTEventEmitter {
         switch msg {
         case .data(let data):
           self.packetCount += 1
+          self.lastPacketAt = Date()
           if self.packetCount <= 3 {
             NSLog("[VibePowerModule] ws pkt#%d len=%d", self.packetCount, data.count)
           }
@@ -186,6 +281,8 @@ class VibePowerModule: RCTEventEmitter {
 
   private func stopEngine() {
     isRunning = false
+    healthTimer?.invalidate()
+    healthTimer = nil
     wsTask?.cancel(with: .goingAway, reason: nil)
     wsTask    = nil
     wsSession = nil
@@ -308,6 +405,11 @@ class VibePowerModule: RCTEventEmitter {
     guard let player = playerNode, let fmt = audioFormat,
           let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(frameCount))
     else { return }
+    // Live-edge bound: if a delivery burst piles up more than ~0.4s of queued
+    // audio, drop instead of scheduling — latency stays bounded instead of
+    // accumulating forever (runs on audioQ; queuedSeconds audioQ-only).
+    let dur = Double(frameCount) / fmt.sampleRate
+    if queuedSeconds > 0.4 { return }
     buf.frameLength = AVAudioFrameCount(frameCount)
     if ch == 1 {
       let out = buf.floatChannelData![0]
@@ -316,7 +418,11 @@ class VibePowerModule: RCTEventEmitter {
       let ch0 = buf.floatChannelData![0], ch1 = buf.floatChannelData![1]
       for i in 0..<frameCount { ch0[i] = samples[i*2]; ch1[i] = samples[i*2+1] }
     }
-    player.scheduleBuffer(buf, completionHandler: nil)
+    queuedSeconds += dur
+    player.scheduleBuffer(buf) { [weak self] in
+      guard let self else { return }
+      self.audioQ.async { self.queuedSeconds = max(0, self.queuedSeconds - dur) }
+    }
   }
 
   // MARK: - Opus lifecycle

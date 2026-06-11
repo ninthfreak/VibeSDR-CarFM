@@ -344,6 +344,14 @@ export class SignalProcessor {
     };
   }
 
+  /** Clear ONLY the peak-hold line — used while the view is moving (tune/
+   *  pan/zoom): peaks are bin-indexed, so they detach from their signals the
+   *  moment the bins' frequencies shift. It re-seeds from live data on the
+   *  next settled frame. */
+  resetPeakHold() {
+    this.peakLine = null;
+  }
+
   /** Full reset (reconnect / instance change). */
   reset() {
     this.dbAvg = null;
