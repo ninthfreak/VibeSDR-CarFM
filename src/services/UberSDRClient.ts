@@ -128,6 +128,12 @@ export class UberSDRClient {
     this.destroyed = false;
     this.status.frequency = frequency;
     this.status.mode = mode;
+    // Mirror the server's per-mode bandwidth defaults for the CONNECT mode
+    // too (setMode already does) — without this, connecting in a restored
+    // non-USB mode kept the constructor's USB edges and the first emission
+    // overwrote the screen's correct values (AM showing only one sideband).
+    const cbw = MODE_BANDWIDTHS[mode];
+    if (cbw) { this.status.bandwidthLow = cbw[0]; this.status.bandwidthHigh = cbw[1]; }
 
     try {
       await this._checkConnection();

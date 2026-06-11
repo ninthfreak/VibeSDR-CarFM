@@ -81,7 +81,8 @@ export const DEFAULT_PROCESSOR_SETTINGS: SignalProcessorSettings = {
 };
 
 export interface ProcessedFrame {
-  /** LUT indices, length = bin count of this frame. */
+  /** Normalised intensity bytes (0–255) for the GPU waterfall texture —
+   *  NOT LUT indices (palette/unsharp/contrast are shader-side now). */
   row:   Uint8Array;
   /** Normalised [0,1] spectrum trace, same length. */
   spec:  Float32Array;
@@ -298,25 +299,14 @@ export class SignalProcessor {
       norm[j] = mag / 255;
     }
 
-    // ── 8. Shader port: unsharp mask + S-curve contrast → LUT index ─────────
+    // ── 8. Row output = NORMALISED INTENSITY bytes (GPU waterfall, 2026-06-11)
+    // Unsharp, S-curve contrast and the LUT lookup moved into the SkSL
+    // runtime shader (WaterfallView) — the v1 WebGL architecture. `row` is no
+    // longer LUT indices: it feeds a Gray_8 intensity texture, and sharpness/
+    // contrast/palette now apply LIVE to the whole history as uniforms.
     const out = this.outRow!;
-    // 0–10 → 0–1.2. Deliberately stronger than the shader's 0–0.5 u_sharp
-    // range — at 0.05/unit the whole slider span was barely perceptible.
-    const sharp = s.wfSharpness * 0.12;
-    const contrast = Math.max(-1, Math.min(1, s.wfContrast / 10)); // → u_contrast
     for (let j = 0; j < n; j++) {
-      let c = norm[j];
-      if (sharp > 0) {
-        const l = norm[j > 0 ? j - 1 : j];
-        const r = norm[j < n - 1 ? j + 1 : j];
-        c = c + sharp * (c - (l + r) * 0.5);
-      }
-      const raw = Math.max(0, Math.min(1, c));
-      const sCurve = raw * raw * (3 - 2 * raw); // smoothstep
-      const v = contrast > 0
-        ? raw + (sCurve - raw) * contrast            // mix(raw, s, contrast)
-        : raw + ((raw * 0.5 + 0.25) - raw) * -contrast; // flatten midtones
-      out[j] = Math.max(0, Math.min(255, Math.round(v * 255)));
+      out[j] = Math.max(0, Math.min(255, Math.round(norm[j] * 255)));
     }
 
     // ── Normalised spectrum / peak outputs ───────────────────────────────────

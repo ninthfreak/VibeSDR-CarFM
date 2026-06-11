@@ -44,11 +44,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PixelRatio, StyleSheet, Text, View } from 'react-native';
 import {
   Canvas,
+  Fill,
   Skia,
   Image as SkiaImage,
+  ImageShader,
   Path,
   Rect,
   LinearGradient,
+  Shader,
   BlurStyle,
   vec,
   AlphaType,
@@ -165,6 +168,46 @@ export interface WaterfallViewProps {
   lastInteractAt?: React.MutableRefObject<number>;
 }
 
+// ── GPU waterfall shader (the v1 WebGL design, ported to SkSL) ───────────────
+// The texture holds RAW normalised intensity (Gray_8 ring buffer); the shader
+// does ring addressing (scroll = uniform, no memmove), sub-pixel slide
+// (uShift from Reanimated — zero JS per display frame), unsharp, S-curve
+// contrast and the palette LUT lookup. Palette/sharpness/contrast changes
+// recolour the ENTIRE history live. CRITICAL: this renders inside the
+// on-screen Canvas — never via offscreen SkSurface snapshots (different GPU
+// context → draws black; learned 2026-06-11).
+const WF_SKSL = `
+uniform shader wf;
+uniform shader lut;
+uniform float uHead;     // ring write position (rows)
+uniform float uShift;    // sub-pixel slide offset (screen px)
+uniform float uRows;     // ring rows (256)
+uniform float uTexW;     // bins
+uniform float uDrawW;    // draw width (screen px)
+uniform float uDrawH;    // draw height incl. overscan row (screen px)
+uniform float uSharp;    // unsharp amount (0..~1.2)
+uniform float uContrast; // -1..1 S-curve mix
+
+half4 main(float2 xy) {
+  float yy  = xy.y + uShift;
+  float row = floor(yy / uDrawH * uRows);
+  float ty  = mod(uHead - 1.0 - row + 2.0 * uRows, uRows) + 0.5;
+  float tx  = clamp(xy.x / uDrawW * uTexW, 0.5, uTexW - 0.5);
+  float c   = wf.eval(float2(tx, ty)).r;
+  if (uSharp > 0.0) {
+    float l = wf.eval(float2(max(tx - 1.0, 0.5), ty)).r;
+    float r = wf.eval(float2(min(tx + 1.0, uTexW - 0.5), ty)).r;
+    c = c + uSharp * (c - (l + r) * 0.5);
+  }
+  float raw = clamp(c, 0.0, 1.0);
+  float s   = raw * raw * (3.0 - 2.0 * raw);
+  float v   = uContrast > 0.0
+    ? mix(raw, s, uContrast)
+    : mix(raw, raw * 0.5 + 0.25, -uContrast);
+  return lut.eval(float2(clamp(v, 0.0, 1.0) * 255.0 + 0.5, 0.5));
+}`;
+const WF_EFFECT = Skia.RuntimeEffect.Make(WF_SKSL);
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function WaterfallView({
@@ -219,6 +262,10 @@ export default function WaterfallView({
     // Quadratic slider curve: 5 = 1× base, 10 = 4× — the linear curve made
     // the upper half of the slider nearly imperceptible.
     const sharpMul = Math.pow(wfSharpness / 5, 2);
+    // GPU-side row effects (unsharp + S-curve) — uniforms, applied LIVE to
+    // the whole waterfall history on the next draw.
+    uSharpSv.value    = Math.min(10, sharpBase * sharpMul) * 0.12;
+    uContrastSv.value = Math.max(-1, Math.min(1, wfContrast / 10));
     const patch: Partial<SignalProcessorSettings> = {
       autoContrast,
       manualRange: wfCoarse === 'manual' ? { minDb: dbMin, maxDb: dbMax } : null,
@@ -248,16 +295,29 @@ export default function WaterfallView({
     return stops.reverse(); // gradient runs top→bottom; hot colour at top
   }, [lut]);
 
-  // ── Ring buffer of LUT indices + persistent RGBA display buffer ────────────
-  // NOTE (CPU audit): a GPU self-blit via offscreen SkSurface was tried and
-  // REVERTED — snapshots from a JS-thread offscreen surface are texture-backed
-  // in a different GPU context, so the on-screen canvas draws them as BLACK.
-  // The escape hatch (makeNonTextureImage) is a 1MB GPU→CPU readback per push,
-  // worse than this CPU path. Don't retry without solving context sharing.
-  const idxBuf       = useRef<Uint8Array | null>(null);
-  const dispBuf      = useRef<Uint8Array | null>(null); // display order, newest row first
+  // ── Intensity ring buffer (Gray_8, ring order — the shader does the
+  // display-order mapping via uHead). Each push = one row write + a 256KB
+  // single-channel image (vs the old 1MB RGBA full rebuild + CPU colourise).
+  const idxBuf       = useRef<Uint8Array | null>(null); // normalised intensity bytes
   const rowHead      = useRef(0);
   const lastBinCount = useRef(0);
+  const [texReady, setTexReady] = useState(false);
+  const texReadyRef  = useRef(false);
+
+  // Shader uniforms driven from the UI thread (no React render per change)
+  const uHead       = useSharedValue(0);
+  const uTexW       = useSharedValue(1024);
+  const uSharpSv    = useSharedValue(0);
+  const uContrastSv = useSharedValue(0);
+
+  // Palette = a 256×1 LUT texture; switching recolours ALL history instantly.
+  const lutImage = useMemo(() => {
+    const data = Skia.Data.fromBytes(lut);
+    return Skia.Image.MakeImage(
+      { width: 256, height: 1, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
+      data, 256 * 4,
+    );
+  }, [lut]);
 
   // ── Display state ───────────────────────────────────────────────────────────
   // Image + paths are Reanimated shared values, NOT React state: Skia nodes
@@ -304,13 +364,22 @@ export default function WaterfallView({
     pathRetired.current = [];
   }, []);
 
-  // ── Smooth scroll (UI thread) ───────────────────────────────────────────────
+  // ── Smooth scroll (UI thread) — fed to the shader as a sub-pixel sample
+  // offset (uShift); no view transform, no gap at the slide edge.
   const scrollFrac  = useSharedValue(1);
-  const wfTransform = useDerivedValue(() => [
-    { translateY: -(1 - scrollFrac.value) * rowH },
-  ]);
   const lastFrameTs = useRef(0);
   const avgFrameMs  = useRef(150);
+
+  const wfUniforms = useDerivedValue(() => ({
+    uHead:     uHead.value,
+    uShift:    (1 - scrollFrac.value) * rowH,
+    uRows:     ROWS,
+    uTexW:     uTexW.value,
+    uDrawW:    width,
+    uDrawH:    wfRenderH,
+    uSharp:    uSharpSv.value,
+    uContrast: uContrastSv.value,
+  }), [width, wfRenderH, rowH]);
 
   // ── Spectrum tween (smooth tune, settled state) ────────────────────────────
   // Data frames arrive at ~10Hz (or ~3Hz under the idle divisor); setting the
@@ -383,35 +452,30 @@ export default function WaterfallView({
   // reach 30/60 lines per second.
   const pushRow = useCallback((row: Uint8Array) => {
     const n = row.length;
-    if (n !== lastBinCount.current || !idxBuf.current || !dispBuf.current) {
+    if (n !== lastBinCount.current || !idxBuf.current) {
       idxBuf.current  = new Uint8Array(n * ROWS);
-      dispBuf.current = new Uint8Array(n * ROWS * 4);
       rowHead.current = 0;
       lastBinCount.current = n;
+      uTexW.value = n;
     }
     idxBuf.current.set(row, rowHead.current * n);
     rowHead.current = (rowHead.current + 1) % ROWS;
 
-    const disp = dispBuf.current;
-    disp.copyWithin(n * 4, 0, n * 4 * (ROWS - 1));
-    for (let i = 0; i < n; i++) {
-      const l = row[i] * 4;
-      const d = i * 4;
-      disp[d]     = lut[l];
-      disp[d + 1] = lut[l + 1];
-      disp[d + 2] = lut[l + 2];
-      disp[d + 3] = 255;
-    }
-    const data = Skia.Data.fromBytes(disp);
+    const data = Skia.Data.fromBytes(idxBuf.current);
     const img = Skia.Image.MakeImage(
-      { width: n, height: ROWS, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
+      { width: n, height: ROWS, colorType: ColorType.Gray_8, alphaType: AlphaType.Opaque },
       data,
-      n * 4,
+      n,
     );
-    if (img) swapWfImage(img, data); // UI-thread swap + retire the old 1MB pair
-    else data.dispose();
+    if (img) {
+      swapWfImage(img, data); // UI-thread swap + retire old pair (~256KB now)
+      uHead.value = rowHead.current;
+      if (!texReadyRef.current) { texReadyRef.current = true; setTexReady(true); }
+    } else {
+      data.dispose();
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lut, swapWfImage]);
+  }, [swapWfImage]);
 
   // pushLine = pushRow + per-push scroll treatment. The line pipeline runs at
   // the SAME rate boosted or settled — only the transform differs (vsync
@@ -596,33 +660,8 @@ export default function WaterfallView({
     return () => { frameSink.current = null; };
   }, [frameSink, handleFrame]);
 
-  // Re-colourise instantly on palette change (no waiting for next data frame).
-  // Full rebuild from the index ring — rare, only on user palette switch.
-  useEffect(() => {
-    const buf  = idxBuf.current;
-    const disp = dispBuf.current;
-    const n = lastBinCount.current;
-    if (!buf || !disp || !n) return;
-    const head = rowHead.current;
-    for (let r = 0; r < ROWS; r++) {
-      const srcOff = ((head - 1 - r + ROWS * 2) % ROWS) * n;
-      const dstOff = r * n * 4;
-      for (let i = 0; i < n; i++) {
-        const l = buf[srcOff + i] * 4;
-        const d = dstOff + i * 4;
-        disp[d] = lut[l]; disp[d + 1] = lut[l + 1];
-        disp[d + 2] = lut[l + 2]; disp[d + 3] = 255;
-      }
-    }
-    const data = Skia.Data.fromBytes(disp);
-    const img = Skia.Image.MakeImage(
-      { width: n, height: ROWS, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
-      data, n * 4,
-    );
-    if (img) swapWfImage(img, data);
-    else data.dispose();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lut]);
+  // (Palette switches need no rebuild anymore — the lutImage memo swaps the
+  // 256×1 LUT texture and the shader recolours the whole history next draw.)
 
   // ── Frequency geometry ──────────────────────────────────────────────────────
   const visStart = centerHz - bwHz / 2;
@@ -811,11 +850,17 @@ export default function WaterfallView({
       <View style={[styles.root, { width, height }]}>
 
         <Canvas style={{ position: 'absolute', left: 0, top: wfTop, width, height: wfH }}>
-          {/* image is a shared value (nullable — Skia skips draw): line pushes
-              swap it on the UI thread without re-rendering React. */}
-          <SkiaImage image={wfImage} x={0} y={0}
-                     width={width} height={wfRenderH}
-                     transform={wfTransform} fit="fill" />
+          {/* GPU waterfall: intensity ring + LUT sampled by the runtime
+              shader; scroll/slide/sharpness/contrast are uniforms (UI-thread,
+              zero React). Child order maps to `uniform shader wf, lut`. */}
+          {texReady && lutImage && WF_EFFECT && (
+            <Fill>
+              <Shader source={WF_EFFECT} uniforms={wfUniforms}>
+                <ImageShader image={wfImage} fit="none" />
+                <ImageShader image={lutImage} fit="none" />
+              </Shader>
+            </Fill>
+          )}
         </Canvas>
 
         <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>
