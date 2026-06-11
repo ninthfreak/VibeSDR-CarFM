@@ -45,7 +45,7 @@ import { setDefaultInstance }                          from '../services/default
 import { useTheme }                                     from '../contexts/ThemeContext';
 
 import WaterfallView   from '../components/WaterfallView';
-import ControlsBar     from '../components/ControlsBar';
+import ControlsBar, { createMeterBus } from '../components/ControlsBar';
 import MenuSheet       from '../components/MenuSheet';
 import AudioPlayer     from '../components/AudioPlayer';
 import FreqModal       from '../components/FreqModal';
@@ -73,6 +73,7 @@ const DRUM_SENS = {
 const VFO_FINE_MULT  = 4;    // sensitivity multiplier at the slow end
 const VFO_VEL_FINE   = 40;   // px/s and below → fully fine
 const VFO_VEL_FAST   = 350;  // px/s and above → full speed
+
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -119,7 +120,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     bandwidthLow: -3000, bandwidthHigh: 3000,
     binCount: 1024, binBandwidth: 0, centerHz: 0, bwHz: 0,
   });
-  const [bins, setBins] = useState<Float32Array | null>(null);
+  // Hot-path frame sink — WaterfallView registers its imperative frame handler
+  // here; spectrum frames bypass React state entirely (CPU audit 2026-06-11:
+  // setState per 10–20Hz frame re-rendered the whole tree ≈ a full core).
+  const wfFrameSink = useRef<((b: Float32Array, s: SDRStatus) => void) | null>(null);
 
   // ── Step ──────────────────────────────────────────────────────────────────
 
@@ -197,10 +201,10 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // ── Signal / SNR ──────────────────────────────────────────────────────────
 
-  const [signalLevel,  setSignalLevel]  = useState(0);
-  const [peakLevel,    setPeakLevel]    = useState(0);
-  const [snrDb,        setSnrDb]        = useState(40);
-  const [signalActive, setSignalActive] = useState(false);
+  // Meter values bypass React state entirely (full-tree re-render per update
+  // was ~a third of all JS time in the CPU profile) — leaf widgets subscribe.
+  const meterBus    = useRef(createMeterBus());
+  const meterSmooth = useRef({ level: 0, peak: 0, hold: 0 });
   const [signalMode,   setSignalMode]   = useState<'snr' | 'smeter' | 'dbfs'>('snr');
 
   // ── Display prefs persistence — every waterfall/spectrum/display setting in
@@ -511,12 +515,27 @@ export default function SDRScreen({ route, navigation }: Props) {
     const c = new UberSDRClient(baseUrl, sessionUuid, {
       onConnect:    () => { if (!destroyed.current) setConnected(true); },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
+      onLink: (q) => {
+        if (destroyed.current) return;
+        const b = meterBus.current;
+        b.emit({ ...b.value, link: q });
+      },
       onStatus:     (s) => { if (!destroyed.current) setStatus(s); },
       onSpectrum:   (newBins, s) => {
         if (destroyed.current) return;
-        setBins(new Float32Array(newBins));
-        setStatus(s);
+        // Waterfall/spectrum render imperatively — no React state per frame.
+        wfFrameSink.current?.(newBins, s);
+        // Geometry/status drives the React overlay (band plan, readouts) —
+        // only update when something actually changed (settled frames don't).
+        setStatus((prev: SDRStatus) =>
+          prev.centerHz === s.centerHz && prev.bwHz === s.bwHz &&
+          prev.frequency === s.frequency && prev.mode === s.mode &&
+          prev.bandwidthLow === s.bandwidthLow && prev.bandwidthHigh === s.bandwidthHigh &&
+          prev.binCount === s.binCount && prev.binBandwidth === s.binBandwidth
+            ? prev : s);
         // ── Derive signal level + SNR from bins ────────────────────────────
+        // Full data rate (~10Hz) — updates only re-render the two meter leaf
+        // widgets via the bus, so there's no need to throttle anymore.
         // Find peak bin power in the current bandwidth window
         if (newBins.length > 0) {
           const len = newBins.length;
@@ -532,20 +551,30 @@ export default function SDRScreen({ route, navigation }: Props) {
             if (v > peak) peak = v;
             sum += v; count++;
           }
-          const avg = count > 0 ? sum / count : -120;
           // Noise floor from outer 20% of bins
           const edgeN = Math.floor(len * 0.1);
           let noiseSum = 0, noiseCount = 0;
           for (let i = 0; i < edgeN; i++) { noiseSum += newBins[i]; noiseCount++; }
           for (let i = len - edgeN; i < len; i++) { noiseSum += newBins[i]; noiseCount++; }
           const noise = noiseCount > 0 ? noiseSum / noiseCount : -130;
-          const snr = Math.max(0, Math.min(100, (peak - noise) * 2.5));
-          const normLevel = Math.max(0, Math.min(1, (peak + 130) / 90));
-          const normPeak  = Math.max(0, Math.min(1, (avg  + 130) / 90));
-          setSignalLevel(normLevel);
-          setPeakLevel(normPeak);
-          setSnrDb(snr);
-          setSignalActive(peak > noise + 6);
+          // Text = honest SNR dB above the noise floor ("NNdb", skin lsvSnrDisp
+          // parity — the old fake S-meter conversion pinned at S9+45). Bar fill
+          // stays the absolute-level mapping (the look from the v2 screenshots
+          // the user approved); skin's 30/60/80 sigNorm knee was calibrated for
+          // the server's broadband SNR stat and leaves a quiet passband empty.
+          const snrDb = peak - noise;
+          const norm  = Math.max(0, Math.min(1, (peak + 130) / 90));
+          // Skin-feel smoothing rescaled for 10Hz updates (the skin's 0.55/0.18
+          // alphas assumed its ~60Hz rAF loop — at 10Hz they felt sluggish).
+          const sm = meterSmooth.current;
+          sm.level += (norm > sm.level ? 0.85 : 0.35) * (norm - sm.level);
+          if (sm.level >= sm.peak)   { sm.peak = sm.level; sm.hold = 15; }
+          else if (sm.hold > 0)      { sm.hold--; }
+          else                       { sm.peak = Math.max(0, sm.peak - 0.02); }
+          meterBus.current.emit({
+            level: sm.level, peak: sm.peak, snr: snrDb, active: snrDb > 6,
+            link: meterBus.current.value.link,
+          });
         }
       },
       onError: (msg) => {
@@ -837,7 +866,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           band plan strip is never hidden under the notch */}
       <View style={{ marginTop: insets.top }}>
       <WaterfallView
-        bins={bins}
+        frameSink={wfFrameSink}
         binCount={status.binCount}
         centerHz={status.centerHz}
         bwHz={status.bwHz}
@@ -916,10 +945,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           connected={connected}
           bottomInset={0}
           instanceHost={instanceName ?? baseUrl}
-          signalLevel={signalLevel}
-          peakLevel={peakLevel}
-          snrDb={snrDb}
-          signalActive={signalActive}
+          meterBus={meterBus.current}
           isRecording={isRecording}
           recSeconds={recSeconds}
           chatUnread={chatUnread}

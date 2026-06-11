@@ -20,6 +20,7 @@ import React, {
 } from 'react';
 import {
   Animated,
+  AppState,
   Share,
   StyleSheet,
   Text,
@@ -73,6 +74,37 @@ function sigGradPos(sig: number): number[] {
 }
 
 // ── SNR text — port of snrToDisplay() ────────────────────────────────────────
+// ── Meter bus ─────────────────────────────────────────────────────────────────
+// Meter values arrive ~7×/s; routing them through screen-level React state
+// re-rendered the entire SDRScreen tree per update (CPU profile: React task
+// execution ≈ a third of all JS time). The bus lets ONLY the two leaf widgets
+// that display them (SignalCanvas, FreqModePill) subscribe and re-render.
+/** link: 0=disconnected, 1=poor(red), 2=fluctuating(yellow), 3=good(green) */
+export interface MeterValues { level: number; peak: number; snr: number; active: boolean; link: 0|1|2|3 }
+export interface MeterBus {
+  value: MeterValues;
+  subs:  Set<(v: MeterValues) => void>;
+  emit:  (v: MeterValues) => void;
+}
+export function createMeterBus(): MeterBus {
+  const bus: MeterBus = {
+    value: { level: 0, peak: 0, snr: 40, active: false, link: 0 },
+    subs:  new Set(),
+    emit(v: MeterValues) { bus.value = v; bus.subs.forEach(f => f(v)); },
+  };
+  return bus;
+}
+function useMeters(bus?: MeterBus): MeterValues | null {
+  const [v, setV] = useState<MeterValues | null>(bus ? bus.value : null);
+  useEffect(() => {
+    if (!bus) return;
+    const f = (nv: MeterValues) => setV(nv);
+    bus.subs.add(f);
+    return () => { bus.subs.delete(f); };
+  }, [bus]);
+  return bus ? v : null;
+}
+
 function snrToText(snrDb: number): string {
   const dbfs = (snrDb - 30) / 50 * 80 - 127;
   if (dbfs >= -73) { const ab = Math.round(dbfs + 73); return ab > 0 ? `S9+${ab}` : 'S9'; }
@@ -90,7 +122,11 @@ function snrToText(snrDb: number): string {
 function useClock() {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000);
+    // Background audio keeps JS alive when locked — don't re-render the
+    // controls every second behind a screen nobody can see.
+    const id = setInterval(() => {
+      if (AppState.currentState === 'active') setNow(new Date());
+    }, 1000);
     return () => clearInterval(id);
   }, []);
   const utc   = now.toUTCString().slice(17, 22);
@@ -117,6 +153,9 @@ export interface ControlsBarProps {
   peakLevel?:    number;
   snrDb?:        number;
   signalActive?: boolean;
+  /** Meter bus — values bypass React screen state; only the meter leaves
+   *  subscribe. Preferred over the 4 legacy props above. */
+  meterBus?:     MeterBus;
   bottomInset:   number;
   onVfoDelta:    (px: number) => void;
   onBwDelta:     (px: number) => void;
@@ -135,8 +174,14 @@ export interface ControlsBarProps {
 
 // ── Signal bar canvas ─────────────────────────────────────────────────────────
 
-function SignalCanvas({ width, height, signal = 0, peak = 0 }:
-  { width: number; height: number; signal?: number; peak?: number }) {
+function SignalCanvas({ width, height, signal: sigProp = 0, peak: peakProp = 0, bus }:
+  { width: number; height: number; signal?: number; peak?: number; bus?: MeterBus }) {
+  const m = useMeters(bus);
+  const signal = m ? m.level : sigProp;
+  const peak   = m ? m.peak  : peakProp;
+
+  // Direct rendering at the real data rate (~10Hz) — interpolation removed by
+  // request; updates cost only this small canvas re-render via the meter bus.
   if (width < 4) return null;
   const fillW  = width * Math.min(1, Math.max(0, signal));
   const peakX  = width * Math.min(1, Math.max(0, peak));
@@ -157,17 +202,70 @@ function SignalCanvas({ width, height, signal = 0, peak = 0 }:
   );
 }
 
+// ── Link quality bars (replaces the old connection dot) ───────────────────────
+// Mobile-signal style: 3 green = solid link, 2 yellow = jitter/some drops,
+// 1 red = stalling/reconnecting, all dim = disconnected.
+function LinkBars({ q }: { q: 0 | 1 | 2 | 3 }) {
+  const litColor = q === 3 ? '#33cc44' : q === 2 ? '#e0b020' : '#e04040';
+  return (
+    <View style={pm.linkWrap}>
+      {[0, 1, 2].map(i => (
+        <View key={i} style={[pm.linkBar, {
+          height: 4 + i * 3,
+          backgroundColor: q > 0 && i < q ? litColor : 'rgba(255,255,255,0.18)',
+        }]} />
+      ))}
+    </View>
+  );
+}
+
+// ── Link indicator cluster: 📱 ⇄ bars ⇄ server ───────────────────────────────
+// Lives in the bottom row so the metaphor is explicit: quality of the path
+// between THIS phone and the SDR server.
+function PhoneGlyph({ color }: { color: string }) {
+  return (
+    <View style={[pm.phoneGlyph, { borderColor: color }]}>
+      <View style={[pm.phoneDot, { backgroundColor: color }]} />
+    </View>
+  );
+}
+function ServerGlyph({ color }: { color: string }) {
+  return (
+    <View style={[pm.serverGlyph, { borderColor: color }]}>
+      <View style={[pm.serverLine, { backgroundColor: color }]} />
+      <View style={[pm.serverLine, { backgroundColor: color }]} />
+    </View>
+  );
+}
+export function LinkIndicator({ bus }: { bus?: MeterBus }) {
+  const m = useMeters(bus);
+  const q = m ? m.link : 0;
+  const dim = 'rgba(255,255,255,0.40)';
+  return (
+    <View style={pm.linkRow}>
+      <PhoneGlyph color={dim} />
+      <Text style={pm.linkArrows}>⇄</Text>
+      <LinkBars q={q} />
+      <Text style={pm.linkArrows}>⇄</Text>
+      <ServerGlyph color={dim} />
+    </View>
+  );
+}
+
 // ── Freq + mode pill ──────────────────────────────────────────────────────────
 // All sizes passed as props from parent so they scale with useUiScale()
 
 function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActive,
   onFreqTap, onModeTap, freqFontSize, freqWidth, unitFontSize, modeFontSize,
-  modeLs, snrWidth, pillPadH, pillPadV, modePadH, modePadV, gap,
+  modeLs, snrWidth, pillPadH, pillPadV, modePadH, modePadV, gap, bus,
 }: any) {
   const { theme: t } = useTheme();
+  // Skin parity (lsvSnrDisp): plain "NNdb", not a synthetic S-meter reading.
+  const m = useMeters(bus);
+  const liveSnrText = m ? (isFinite(m.snr) ? `${Math.round(m.snr)}db` : '') : snrText;
+  const liveActive  = m ? m.active : signalActive;
   return (
     <View style={pm.row}>
-      <View style={[pm.dot, connected ? pm.dotOn : pm.dotOff]} />
       <TouchableOpacity
         style={[pm.freqBox, { backgroundColor: t.pillBg, paddingHorizontal: pillPadH, paddingVertical: pillPadV, gap }]}
         onPress={onFreqTap} activeOpacity={0.80} hitSlop={8}
@@ -189,8 +287,8 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
         <Text style={[pm.modeLbl, { color: t.modeColor, fontSize: modeFontSize, letterSpacing: modeLs, fontFamily: t.font }]}>
           {modeLabel}
         </Text>
-        <Text style={[pm.snr, { color: t.snrColor, fontFamily: t.font, width: snrWidth, opacity: signalActive ? 0.90 : 0.45 }]}>
-          {snrText}
+        <Text style={[pm.snr, { color: t.snrColor, fontFamily: t.font, width: snrWidth, opacity: liveActive ? 0.90 : 0.45 }]}>
+          {liveSnrText}
         </Text>
       </TouchableOpacity>
     </View>
@@ -198,7 +296,17 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
 }
 
 const pm = StyleSheet.create({
-  row:     { flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center' },
+  row:      { flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center' },
+  linkWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 1.5, alignSelf: 'center', flexShrink: 0 },
+  linkBar:  { width: 3, borderRadius: 1 },
+  linkRow:    { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  linkArrows: { color: 'rgba(255,255,255,0.40)', fontSize: 9, lineHeight: 11 },
+  phoneGlyph: { width: 8, height: 13, borderWidth: 1, borderRadius: 2,
+                alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 1.5 },
+  phoneDot:   { width: 2.5, height: 1.5, borderRadius: 1 },
+  serverGlyph:{ width: 13, height: 11, borderWidth: 1, borderRadius: 2,
+                justifyContent: 'space-evenly', paddingHorizontal: 2 },
+  serverLine: { height: 1, borderRadius: 0.5 },
   dot:     { width: 7, height: 7, borderRadius: 3.5, marginRight: 5, alignSelf: 'center', flexShrink: 0 },
   dotOn:   { backgroundColor: '#00cc44' },
   dotOff:  { backgroundColor: '#333' },
@@ -241,7 +349,7 @@ function ShareIcon({ size, color }: { size: number; color: string }) {
 
 // ── PORTRAIT ──────────────────────────────────────────────────────────────────
 
-function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive,
+function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread }: any) {
 
@@ -291,7 +399,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
   });
 
   // All dp values go through s.r() — port of applyUiScale()'s r() function
-  const SIG_H      = s.r(34);
+  const SIG_H      = s.r(40); // match the landscape bar height (skin look)
   const DRUM_H     = s.r(60);
   const ROW_GAP    = s.r(7);
   const COL_GAP    = s.r(8);
@@ -300,13 +408,16 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
   const ICON_SZ    = s.r(20);
   const HBURG_W    = s.r(16);
   // Freq/mode sizing — read from theme so white mode can increase them
-  const FREQ_FONT  = s.r(t.freqSize);
-  const FREQ_W     = s.r(t.freqWidth);
-  const UNIT_FONT  = s.r(11);
-  const MODE_FONT  = s.r(t.modeSize);
+  // Pill sized to leave the signal bar visible around it (the white theme's
+  // 28pt/168w pill covered the whole frame — screenshots 2026-06-11; 23/138
+  // was still too wide on a 390pt screen).
+  const FREQ_FONT  = s.r(22);
+  const FREQ_W     = s.r(130);
+  const UNIT_FONT  = s.r(9);
+  const MODE_FONT  = s.r(13);
   const MODE_LS    = s.f(t.modeLs);
-  const SNR_W      = s.r(t.name === 'white' ? 86 : 78);
-  const PILL_PAD_H = s.r(10);
+  const SNR_W      = s.r(58);
+  const PILL_PAD_H = s.r(7);
   const PILL_PAD_V = s.r(5);
   const MODE_PAD_H = s.r(10);
   const MODE_PAD_V = s.r(6);
@@ -320,10 +431,10 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
       {/* Row 1 — signal bar */}
       <View style={[por.sigFrame, { height: SIG_H }]}
             onLayout={(e: any) => setSigW(e.nativeEvent.layout.width)}>
-        <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} />
+        <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
         <FreqModePill
           freqStr={freqStr} unit={unit} modeLabel={modeLabel} snrText={snrText}
-          connected={connected} signalActive={signalActive}
+          connected={connected} signalActive={signalActive} bus={bus}
           onFreqTap={onFreqTap} onModeTap={onModeTap}
           freqFontSize={FREQ_FONT} freqWidth={FREQ_W} unitFontSize={UNIT_FONT}
           modeFontSize={MODE_FONT} modeLs={MODE_LS} snrWidth={SNR_W}
@@ -384,17 +495,22 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
         <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta}  style={{ flex: 1 }} />
       </View>
 
-      {/* Row 4 — clock + rec */}
+      {/* Row 4 — clock · link quality · rec */}
       <View style={por.clockRow}>
-        <Text style={[por.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
-          {clock}
-        </Text>
-        {isRecording && (
-          <View style={por.recRow}>
-            <View style={por.recDot} />
-            <Text style={[por.recTime, { fontFamily: t.font, fontSize: CLOCK_FONT }]}>{recTime}</Text>
-          </View>
-        )}
+        <View style={{ flex: 1 }}>
+          <Text style={[por.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
+            {clock}
+          </Text>
+        </View>
+        <LinkIndicator bus={bus} />
+        <View style={{ flex: 1, alignItems: 'flex-end' }}>
+          {isRecording && (
+            <View style={por.recRow}>
+              <View style={por.recDot} />
+              <Text style={[por.recTime, { fontFamily: t.font, fontSize: CLOCK_FONT }]}>{recTime}</Text>
+            </View>
+          )}
+        </View>
       </View>
 
     </View>
@@ -414,7 +530,7 @@ const por = StyleSheet.create({
 
 // ── LANDSCAPE ─────────────────────────────────────────────────────────────────
 
-function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive,
+function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread }: any) {
 
@@ -423,16 +539,17 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
   const [sigW, setSigW] = useState(0);
 
   const DRUM_H    = s.r(44);   // landscape drum height from skin BASE_LSV_DH=44
-  const SIG_H     = s.r(48);
+  const SIG_H     = s.r(40);  // was 48 — frame dwarfed the small pill
   const GAP       = s.r(6);
   const BTN_W     = s.r(56);
-  // Landscape sizes are smaller than portrait but still scale with theme
-  const FREQ_FONT = s.r(t.name === 'white' ? 20 : 16);
-  const FREQ_W    = s.r(t.name === 'white' ? 132 : 110);
-  const UNIT_FONT = s.r(8);
-  const MODE_FONT = s.r(t.name === 'white' ? 13 : 11);
+  // Pill enlarged toward portrait proportions — at 20pt in a 48pt frame the
+  // signal bar visually swallowed it (screenshots 2026-06-11).
+  const FREQ_FONT = s.r(24);
+  const FREQ_W    = s.r(148);
+  const UNIT_FONT = s.r(9);
+  const MODE_FONT = s.r(15);
   const MODE_LS   = s.f(t.modeLs > 1.5 ? 1.2 : 1.0);
-  const SNR_W     = s.r(t.name === 'white' ? 86 : 78);
+  const SNR_W     = s.r(74);
   const PILL_PAD_H = s.r(5);
   const PILL_PAD_V = s.r(3);
   const MODE_PAD_H = s.r(7);
@@ -443,7 +560,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
   const CLOCK_FONT = s.f(7);
 
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: GAP }}>
+    <View style={{ flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center', gap: GAP }}>
 
       {/* VFO drum + clock */}
       <View style={{ flex: 1, minWidth: s.r(80), maxWidth: s.r(160) }}>
@@ -451,6 +568,9 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
         <Text style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
           {clock}
         </Text>
+        <View style={{ alignItems: 'center', marginTop: 2 }}>
+          <LinkIndicator bus={bus} />
+        </View>
         {isRecording && (
           <View style={lnd.recRow}>
             <View style={lnd.recDot} />
@@ -475,14 +595,15 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
         </TouchableOpacity>
       </View>
 
-      {/* Signal bar + pill (flex:2) */}
-      <View style={{ flex: 2, justifyContent: 'center' }}
+      {/* Signal bar + pill — flex so small screens (SE) get a shorter bar with
+          everything still fitting; maxWidth caps the stretch on big panels. */}
+      <View style={{ flex: 2, maxWidth: s.r(440), justifyContent: 'center' }}
             onLayout={(e: any) => setSigW(e.nativeEvent.layout.width)}>
         <View style={[lnd.sigFrame, { height: SIG_H }]}>
-          <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} />
+          <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
           <FreqModePill
             freqStr={freqStr} unit={unit} modeLabel={modeLabel} snrText={snrText}
-            connected={connected} signalActive={signalActive}
+            connected={connected} signalActive={signalActive} bus={bus}
             onFreqTap={onFreqTap} onModeTap={onModeTap}
             freqFontSize={FREQ_FONT} freqWidth={FREQ_W} unitFontSize={UNIT_FONT}
             modeFontSize={MODE_FONT} modeLs={MODE_LS} snrWidth={SNR_W}
@@ -530,7 +651,7 @@ const lnd = StyleSheet.create({
 
 export default function ControlsBar({
   frequency, mode, step, connected, bottomInset,
-  signalLevel, peakLevel, snrDb = 40, signalActive,
+  signalLevel, peakLevel, snrDb = 40, signalActive, meterBus,
   onVfoDelta, onBwDelta, onMode, onStep,
   onMenu, onChat, onFreqTap, onModeTap,
   instanceHost = 'ubersdr',
@@ -567,7 +688,7 @@ export default function ControlsBar({
 
   const shared = {
     freqStr, unit, modeLabel: mode.toUpperCase(), snrText,
-    connected, signalActive,
+    connected, signalActive, bus: meterBus,
     signal: signalLevel, peak: peakLevel,
     stepLabel, onFreqTap, onModeTap,
     onStep: cycleStep, onChat, onMenu, onShare: handleShare,

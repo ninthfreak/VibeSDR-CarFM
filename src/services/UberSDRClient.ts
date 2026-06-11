@@ -48,6 +48,9 @@ export interface SDRCallbacks {
   onError:      (msg: string) => void;
   onConnect:    () => void;
   onDisconnect: () => void;
+  /** Link quality: 0=down, 1=poor(red), 2=fluctuating(yellow), 3=good(green).
+   *  Derived from frame inter-arrival jitter, stalls, ping RTT, reconnects. */
+  onLink?:      (q: 0 | 1 | 2 | 3) => void;
   onDbg?:       (msg: string) => void;
 }
 
@@ -254,6 +257,7 @@ export class UberSDRClient {
    */
   setRate(divisor: number) {
     this.rateDivisor = Math.max(1, Math.min(8, Math.round(divisor)));
+    this.gapHist.length = 0; // legit frame-rate change — don't read as stalls
     if (this.spectrumWs?.readyState === WebSocket.OPEN) {
       this.spectrumWs.send(JSON.stringify({ type: 'set_rate', divisor: this.rateDivisor }));
     }
@@ -333,14 +337,25 @@ export class UberSDRClient {
     return s;
   }
 
-  /** Stop spectrum display (app backgrounded). Native audio continues unaffected. */
+  /** Stop spectrum display (app backgrounded). Native audio continues
+   *  unaffected. The paused flag is CRITICAL: without it the onclose handler
+   *  auto-reconnects 3s later and the whole spectrum pipeline runs behind the
+   *  locked screen forever (background audio keeps JS alive — measured ~50%
+   *  CPU locked). */
+  private pausedByApp = false;
   pauseSpectrum() {
+    this.pausedByApp = true;
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    if (this.sendTimer)      { clearTimeout(this.sendTimer);      this.sendTimer = null; }
+    if (this.settleTimer)    { clearTimeout(this.settleTimer);    this.settleTimer = null; }
+    this.pendingView = null;
     this.spectrumWs?.close();
     this.spectrumWs = null;
   }
 
   /** Resume spectrum display (app foregrounded). */
   resumeSpectrum() {
+    this.pausedByApp = false;
     if (!this.destroyed && !this.spectrumWs) {
       this._openSpectrumWs();
     }
@@ -359,7 +374,7 @@ export class UberSDRClient {
   // ── Private ────────────────────────────────────────────────────────────────
 
   private dbg(msg: string) {
-    console.warn('[UberSDR]', msg);
+    if (__DEV__) console.warn('[UberSDR]', msg); // console is NOT free in release
     this.callbacks.onDbg?.(msg);
   }
 
@@ -429,15 +444,29 @@ export class UberSDRClient {
       }
     };
 
+    // Ping doubles as the RTT probe for link quality (server excludes pings
+    // from rate limiting, so 5s cadence is safe). One outstanding ping at a
+    // time — pong handler computes RTT + jitter EMAs.
     const ping = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
-      else clearInterval(ping);
-    }, 30_000);
+      if (ws.readyState === WebSocket.OPEN) {
+        this.pingSentAt = Date.now();
+        ws.send(JSON.stringify({ type: 'ping' }));
+      } else clearInterval(ping);
+    }, 5_000);
+
+    const qual = setInterval(() => {
+      if (ws.readyState !== WebSocket.OPEN) { clearInterval(qual); return; }
+      this._evalLink();
+    }, 1_000);
 
     ws.onclose = (e) => {
       clearInterval(ping);
+      clearInterval(qual);
       this.dbg('Spectrum WS closed code=' + e.code);
-      if (!this.destroyed) {
+      this.lastReconnectAt = Date.now();
+      this.gapHist.length = 0;
+      this._evalLink(); // → 0 (down) immediately
+      if (!this.destroyed && !this.pausedByApp) {
         this.callbacks.onDisconnect();
         this._scheduleReconnect();
       }
@@ -537,7 +566,55 @@ export class UberSDRClient {
 
   private unwrapped: Float32Array = new Float32Array(0);
 
+  // ── Link quality state ──────────────────────────────────────────────────
+  private gapHist: number[] = [];   // recent frame inter-arrival gaps (ms)
+  private lastFrameAt    = 0;
+  private lastReconnectAt = 0;
+  private pingSentAt     = 0;
+  private rttAvg         = 0;       // EMA of ping RTT
+  private rttJit         = 0;       // EMA of |rtt − rttAvg|
+  private lastLink: -1 | 0 | 1 | 2 | 3 = -1;
+
+  /** Score the link like a phone signal indicator. Stalls are judged against
+   *  the MEDIAN gap, so legit rate changes (idle divisor) don't read as loss. */
+  private _evalLink() {
+    let q: 0 | 1 | 2 | 3;
+    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) {
+      q = 0;
+    } else {
+      const now = Date.now();
+      const h = this.gapHist;
+      let med = 120;
+      if (h.length >= 5) {
+        const s = [...h].sort((a, b) => a - b);
+        med = s[s.length >> 1];
+      }
+      let stalls = 0;
+      for (let i = 0; i < h.length; i++) if (h[i] > med * 2.5 + 50) stalls++;
+      const starving = this.lastFrameAt > 0 &&
+        now - this.lastFrameAt > Math.max(2000, med * 4);
+      if (now - this.lastReconnectAt < 8000 || stalls >= 3 || starving || this.rttJit > 250) {
+        q = 1;
+      } else if (stalls >= 1 || this.rttJit > 80 || this.rttAvg > 400) {
+        q = 2;
+      } else {
+        q = 3;
+      }
+    }
+    if (q !== this.lastLink) {
+      this.lastLink = q;
+      this.callbacks.onLink?.(q);
+    }
+  }
+
   private _emitSpectrum(frequency: number) {
+    // Frame inter-arrival tracking for link quality
+    const fNow = Date.now();
+    if (this.lastFrameAt > 0) {
+      this.gapHist.push(fNow - this.lastFrameAt);
+      if (this.gapHist.length > 40) this.gapHist.shift();
+    }
+    this.lastFrameAt = fNow;
     const s = this.status;
     s.centerHz = frequency;
     s.bwHz     = s.binBandwidth * s.binCount;
@@ -580,6 +657,15 @@ export class UberSDRClient {
   }
 
   private _handleSpectrumMessage(msg: Record<string, unknown>) {
+    if (msg.type === 'pong') {
+      if (this.pingSentAt > 0) {
+        const rtt = Date.now() - this.pingSentAt;
+        this.pingSentAt = 0;
+        this.rttAvg += 0.3 * (rtt - this.rttAvg);
+        this.rttJit += 0.3 * (Math.abs(rtt - this.rttAvg) - this.rttJit);
+      }
+      return;
+    }
     // Server replies with type:"config" — sent on connect and after every
     // zoom/pan/reset/set_rate (sendStatus in user_spectrum_websocket.go):
     //   { type:"config", centerFreq, binCount, binBandwidth, totalBandwidth }
@@ -635,7 +721,7 @@ export class UberSDRClient {
   }
 
   private _scheduleReconnect() {
-    if (this.destroyed) return;
+    if (this.destroyed || this.pausedByApp) return;
     this.reconnectTimer = setTimeout(() => {
       if (!this.destroyed) this._openSpectrumWs();
     }, 3000);

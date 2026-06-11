@@ -112,6 +112,11 @@ export class SignalProcessor {
   private maxHistory: Array<{ value: number; ts: number }> = [];
   private actualMinDb = -120;
   private actualMaxDb = -20;
+  // 1dB histogram for the noise percentile — reused every frame. (The original
+  // port pushed all bins into a number[] and .sort()ed it with a JS comparator
+  // PER FRAME — ~10k interpreted comparator calls + array churn at 10-20Hz was
+  // the single biggest JS/GC load in the 2026-06-11 CPU profile.)
+  private dbHist = new Uint32Array(300); // bucket b = (db + 280)dB, clamped
 
   // Frame timing + flush detection
   private lastFrameMs    = 0;
@@ -188,31 +193,45 @@ export class SignalProcessor {
       this.actualMinDb = s.manualRange.minDb;
       this.actualMaxDb = s.manualRange.maxDb;
     } else {
-      const values: number[] = [];
+      // Noise percentile via reusable 1dB histogram — one O(n) pass, zero
+      // allocations (sub-dB precision is irrelevant: the result is floored,
+      // margined and history-averaged anyway).
+      const hist = this.dbHist;
+      hist.fill(0);
       let absoluteMax = -Infinity;
+      let count = 0;
       for (let i = 0; i < n; i++) {
         const db = bins[i];
-        if (isFinite(db)) {
-          values.push(db);
-          if (db > absoluteMax) absoluteMax = db;
-        }
+        if (!isFinite(db)) continue;
+        count++;
+        if (db > absoluteMax) absoluteMax = db;
+        let b = (db + 280) | 0; // -280..+19 dB → bucket 0..299
+        if (b < 0) b = 0; else if (b > 299) b = 299;
+        hist[b]++;
       }
-      if (values.length > 0) {
-        values.sort((a, b) => a - b);
-        const floorIdx  = Math.floor(values.length * NOISE_PERCENTILE);
-        const targetMin = Math.floor(values[floorIdx] - RANGE_MARGIN);
+      if (count > 0) {
+        const target = Math.floor(count * NOISE_PERCENTILE);
+        let acc = 0, floorDb = -120;
+        for (let b = 0; b < 300; b++) {
+          acc += hist[b];
+          if (acc > target) { floorDb = b - 280; break; }
+        }
+        const targetMin = Math.floor(floorDb - RANGE_MARGIN);
         const targetMax = Math.ceil(absoluteMax + RANGE_MARGIN);
 
-        this.minHistory.push({ value: targetMin, ts: now });
-        this.minHistory = this.minHistory.filter(m => now - m.ts <= MIN_HISTORY_MS);
-        this.maxHistory.push({ value: targetMax, ts: now });
-        this.maxHistory = this.maxHistory.filter(m => now - m.ts <= MAX_HISTORY_MS);
+        // In-place history prune (the .filter() pair allocated two arrays per
+        // frame); entries are time-ordered so expired ones sit at the front.
+        const mins = this.minHistory, maxs = this.maxHistory;
+        mins.push({ value: targetMin, ts: now });
+        while (mins.length && now - mins[0].ts > MIN_HISTORY_MS) mins.shift();
+        maxs.push({ value: targetMax, ts: now });
+        while (maxs.length && now - maxs[0].ts > MAX_HISTORY_MS) maxs.shift();
 
-        const avgMin = this.minHistory.reduce((a, m) => a + m.value, 0) / this.minHistory.length;
-        const avgMax = this.maxHistory.reduce((a, m) => a + m.value, 0) / this.maxHistory.length;
+        let sumMin = 0; for (let i = 0; i < mins.length; i++) sumMin += mins[i].value;
+        let sumMax = 0; for (let i = 0; i < maxs.length; i++) sumMax += maxs[i].value;
 
-        this.actualMinDb = avgMin + s.autoContrast;
-        this.actualMaxDb = avgMax - s.autoContrast;
+        this.actualMinDb = sumMin / mins.length + s.autoContrast;
+        this.actualMaxDb = sumMax / maxs.length - s.autoContrast;
       }
     }
     // Guard: never collapse the window below 10 dB

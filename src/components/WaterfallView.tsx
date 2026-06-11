@@ -53,6 +53,7 @@ import {
   vec,
   AlphaType,
   ColorType,
+  type SkData,
   type SkImage,
   type SkPath,
 } from '@shopify/react-native-skia';
@@ -64,6 +65,7 @@ import {
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { getColorLUT } from '../assets/colormapUtils';
+import type { SDRStatus } from '../services/UberSDRClient';
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
 import { BAND_PLAN, type Band } from '../constants/bandPlan';
 
@@ -114,7 +116,12 @@ function bandColor(b: Band): string {
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 export interface WaterfallViewProps {
-  bins:        Float32Array | null;
+  /** Hot-path frame input — the parent assigns frames into this ref's handler
+   *  from onSpectrum. Frames NEVER go through React state (a setState per
+   *  10–20Hz frame re-rendered the whole screen tree ≈ a full core). */
+  frameSink?:  React.MutableRefObject<((bins: Float32Array, status: SDRStatus) => void) | null>;
+  /** @deprecated frames come via frameSink; prop kept for compatibility. */
+  bins?:       Float32Array | null;
   binCount:    number;
   centerHz:    number;
   bwHz:        number;
@@ -161,7 +168,7 @@ export interface WaterfallViewProps {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function WaterfallView({
-  bins, binCount, centerHz, bwHz, tuneHz,
+  frameSink, binCount, centerHz, bwHz, tuneHz,
   filterLow = -3000, filterHigh = 3000,
   dbMin = -120, dbMax = -20, wfCoarse = 'auto',
   colormap = 'gqrx', width, height,
@@ -242,6 +249,11 @@ export default function WaterfallView({
   }, [lut]);
 
   // ── Ring buffer of LUT indices + persistent RGBA display buffer ────────────
+  // NOTE (CPU audit): a GPU self-blit via offscreen SkSurface was tried and
+  // REVERTED — snapshots from a JS-thread offscreen surface are texture-backed
+  // in a different GPU context, so the on-screen canvas draws them as BLACK.
+  // The escape hatch (makeNonTextureImage) is a 1MB GPU→CPU readback per push,
+  // worse than this CPU path. Don't retry without solving context sharing.
   const idxBuf       = useRef<Uint8Array | null>(null);
   const dispBuf      = useRef<Uint8Array | null>(null); // display order, newest row first
   const rowHead      = useRef(0);
@@ -258,6 +270,39 @@ export default function WaterfallView({
   const specPath = useSharedValue<SkPath>(Skia.Path.Make());
   const peakPath = useSharedValue<SkPath>(Skia.Path.Make());
   const [liveRange, setLiveRange] = useState({ dbMin: -120, dbMax: -20 });
+
+  // ── Deterministic Skia disposal ─────────────────────────────────────────────
+  // Hermes only sees the tiny JS wrappers, NOT the ~1MB native buffer behind
+  // each waterfall image — it feels no memory pressure and lets dead images
+  // accumulate for ages (measured ~770MB resident, plus constant GC churn).
+  // Retire queues delay dispose() by a couple of swaps so the UI thread can
+  // never be mid-draw on a freed object.
+  const wfLive    = useRef<{ img: SkImage; data: SkData } | null>(null);
+  const wfRetired = useRef<{ img: SkImage; data: SkData }[]>([]);
+  const swapWfImage = useCallback((img: SkImage, data: SkData) => {
+    wfImage.value = img;
+    if (wfLive.current) wfRetired.current.push(wfLive.current);
+    wfLive.current = { img, data };
+    while (wfRetired.current.length > 2) {
+      const r = wfRetired.current.shift()!;
+      r.img.dispose(); r.data.dispose();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const pathRetired = useRef<SkPath[]>([]);
+  const swapPath = useCallback((sv: { value: SkPath }, p: SkPath) => {
+    pathRetired.current.push(sv.value);
+    sv.value = p;
+    while (pathRetired.current.length > 4) pathRetired.current.shift()!.dispose();
+  }, []);
+
+  useEffect(() => () => { // unmount: flush the queues
+    wfRetired.current.forEach(r => { r.img.dispose(); r.data.dispose(); });
+    wfRetired.current = [];
+    pathRetired.current.forEach(p => p.dispose());
+    pathRetired.current = [];
+  }, []);
 
   // ── Smooth scroll (UI thread) ───────────────────────────────────────────────
   const scrollFrac  = useSharedValue(1);
@@ -277,18 +322,31 @@ export default function WaterfallView({
   const tweenTimer  = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Path builder in a ref so the tween tick never closes over stale layout.
+  // addPoly = ONE JSI call for the whole polyline. Points come from a POOL of
+  // mutated-in-place objects: allocating fresh {x,y}s per build (×30Hz tween)
+  // fed the Hermes GC ~12k objects/s — profiling showed HadesGC at ~18% of all
+  // CPU samples. Trace sampled every 2px — the data is smoothed, identical look.
+  const SPEC_PX_STEP = 2;
+  const specPtsPool = useRef<{ x: number; y: number }[]>([]);
+  const peakPtsPool = useRef<{ x: number; y: number }[]>([]);
   const buildSpecPathRef = useRef<(spec: Float32Array) => SkPath>(null as never);
   buildSpecPathRef.current = (spec: Float32Array) => {
     const sLen = spec.length;
     const baseline = wfTop;
-    const sp = Skia.Path.Make();
-    sp.moveTo(0, baseline);
-    for (let px = 0; px < width; px++) {
+    const w = Math.floor(width);
+    const count = Math.ceil(w / SPEC_PX_STEP) + 2;
+    const pool = specPtsPool.current;
+    while (pool.length < count) pool.push({ x: 0, y: 0 });
+    if (pool.length > count) pool.length = count;
+    let k = 0;
+    pool[k].x = 0; pool[k].y = baseline; k++;
+    for (let px = 0; px < w; px += SPEC_PX_STEP) {
       const v = spec[Math.floor((px / width) * sLen)];
-      sp.lineTo(px, baseline - v * specH);
+      pool[k].x = px; pool[k].y = baseline - v * specH; k++;
     }
-    sp.lineTo(width, baseline);
-    sp.close();
+    pool[k].x = w; pool[k].y = baseline;
+    const sp = Skia.Path.Make();
+    sp.addPoly(pool, true); // addPoly copies synchronously — pool reuse is safe
     return sp;
   };
 
@@ -311,7 +369,7 @@ export default function WaterfallView({
         const a = Math.abs(d);
         if (a > maxDelta) maxDelta = a;
       }
-      specPath.value = buildSpecPathRef.current(disp); // UI-thread — no React render
+      swapPath(specPath, buildSpecPathRef.current(disp)); // UI-thread — no React render
       if (maxDelta < 0.002) stopSpecTween(); // converged — let the display idle
     }, SPEC_TWEEN_MS);
   }, [stopSpecTween]);
@@ -344,14 +402,16 @@ export default function WaterfallView({
       disp[d + 2] = lut[l + 2];
       disp[d + 3] = 255;
     }
+    const data = Skia.Data.fromBytes(disp);
     const img = Skia.Image.MakeImage(
       { width: n, height: ROWS, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
-      Skia.Data.fromBytes(disp),
+      data,
       n * 4,
     );
-    if (img) wfImage.value = img; // UI-thread swap — no React render
+    if (img) swapWfImage(img, data); // UI-thread swap + retire the old 1MB pair
+    else data.dispose();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lut]);
+  }, [lut, swapWfImage]);
 
   // pushLine = pushRow + per-push scroll treatment. The line pipeline runs at
   // the SAME rate boosted or settled — only the transform differs (vsync
@@ -378,8 +438,10 @@ export default function WaterfallView({
   const pushLineRef = useRef(pushLine);
   pushLineRef.current = pushLine; // ticker always sees current palette + boost state
 
-  const prevRow   = useRef<Uint8Array | null>(null); // last data row (lerp source)
-  const lerpBuf   = useRef<Uint8Array | null>(null);
+  const prevRow    = useRef<Uint8Array | null>(null); // last data row (lerp source)
+  const lerpBuf    = useRef<Uint8Array | null>(null);
+  const rowPool    = useRef<[Uint8Array | null, Uint8Array | null]>([null, null]);
+  const rowPoolIdx = useRef(0);
   const lineTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopLineTicker = useCallback(() => {
@@ -413,16 +475,27 @@ export default function WaterfallView({
 
   useEffect(() => stopLineTicker, [stopLineTicker]); // clear on unmount
 
-  // ── Frame processing ────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!bins || bins.length === 0 || width < 4) return;
-    const n = bins.length;
+  // ── Frame processing (imperative hot path — NO React state per frame) ──────
+  // Frames arrive through frameSink, a ref the parent fills from onSpectrum.
+  // Routing 10–20Hz frames through setState re-rendered the entire screen tree
+  // per frame (~a full core of CPU). Per-render config is mirrored into a ref
+  // so the stable callback never closes over stale props.
+  const frameCfg = useRef({ width, wfTop, specH, specShow, peakHold,
+                            smoothTune, rowsPerFrame: ROWS_PER_FRAME });
+  frameCfg.current = { width, wfTop, specH, specShow, peakHold,
+                       smoothTune, rowsPerFrame: ROWS_PER_FRAME };
+
+  const handleFrame = useCallback((fbins: Float32Array, fstatus: SDRStatus) => {
+    const cfg = frameCfg.current;
+    if (!fbins || fbins.length === 0 || cfg.width < 4) return;
 
     // 1. M9PSY pipeline + UberSDR auto-range
-    const frame = proc.current.process(bins, centerHz, bwHz);
+    const frame = proc.current.process(fbins, fstatus.centerHz, fstatus.bwHz);
+    // dB axis labels — quantised to whole dB so auto-range wobble doesn't
+    // trigger a React re-render every frame.
+    const rMin = Math.round(frame.dbMin), rMax = Math.round(frame.dbMax);
     setLiveRange(prev =>
-      prev.dbMin === frame.dbMin && prev.dbMax === frame.dbMax
-        ? prev : { dbMin: frame.dbMin, dbMax: frame.dbMax });
+      prev.dbMin === rMin && prev.dbMax === rMax ? prev : { dbMin: rMin, dbMax: rMax });
 
     // 2. Frame interval + interaction state (smooth tune)
     const now = Date.now();
@@ -432,30 +505,38 @@ export default function WaterfallView({
     }
     lastFrameTs.current = now;
     // Boost: native-rate slide + per-frame spectrum while the user interacts.
-    const boost = smoothTune &&
+    const boost = cfg.smoothTune &&
       now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
 
     // 3. Waterfall lines — runs IDENTICALLY boosted or settled (constant fill
     //    rate; pushLine decides slide-vs-snap per push). NATIVE: the raw data
     //    row once per frame. fps modes: n lines morphing prev→cur across the
     //    frame interval (10×2 / 10×3 lines per second).
-    const cur  = Uint8Array.from(frame.row);
+    //    Row copies ping-pong between two pooled buffers (GC pressure — the
+    //    processor reuses frame.row, so a snapshot is still required).
+    let cur = rowPool.current[rowPoolIdx.current];
+    if (!cur || cur.length !== frame.row.length) {
+      cur = new Uint8Array(frame.row.length);
+      rowPool.current[rowPoolIdx.current] = cur;
+    }
+    cur.set(frame.row);
+    rowPoolIdx.current ^= 1;
     const from = prevRow.current;
-    if (ROWS_PER_FRAME > 1 && from && from.length === cur.length) {
-      startLineInterp(from, cur, ROWS_PER_FRAME, avgFrameMs.current);
+    if (cfg.rowsPerFrame > 1 && from && from.length === cur.length) {
+      startLineInterp(from, cur, cfg.rowsPerFrame, avgFrameMs.current);
     } else {
       stopLineTicker();
-      pushLine(cur);
+      pushLineRef.current(cur);
     }
     prevRow.current = cur;
 
-    // 5. Spectrum + peak paths from normalised [0,1] traces
-    if (specShow && specH > 4) {
+    // 4. Spectrum + peak paths from normalised [0,1] traces
+    if (cfg.specShow && cfg.specH > 4) {
       if (boost) {
         // Full rate: trace follows every data frame directly.
         stopSpecTween();
         specDispRef.current = null;
-        specPath.value = buildSpecPathRef.current(frame.spec);
+        swapPath(specPath, buildSpecPathRef.current(frame.spec));
       } else {
         // Settled: retarget the ~30fps tween — the displayed trace eases to
         // this frame instead of jumping (data is only ~10Hz / ~3Hz idle).
@@ -466,37 +547,49 @@ export default function WaterfallView({
         }
         if (!specDispRef.current || specDispRef.current.length !== frame.spec.length) {
           specDispRef.current = Float32Array.from(frame.spec);
-          specPath.value = buildSpecPathRef.current(specDispRef.current);
+          swapPath(specPath, buildSpecPathRef.current(specDispRef.current));
         }
         startSpecTween();
       }
 
-      if (peakHold) {
+      if (cfg.peakHold) {
         const pk = frame.peak;
         const sLen = pk.length;
-        const baseline = wfTop;
-        const pp = Skia.Path.Make();
-        for (let px = 0; px < width; px++) {
-          const v = pk[Math.floor((px / width) * sLen)];
-          const y = baseline - v * specH;
-          if (px === 0) pp.moveTo(px, y); else pp.lineTo(px, y);
+        const baseline = cfg.wfTop;
+        const w = Math.floor(cfg.width);
+        const count = Math.ceil(w / SPEC_PX_STEP);
+        const pool = peakPtsPool.current;
+        while (pool.length < count) pool.push({ x: 0, y: 0 });
+        if (pool.length > count) pool.length = count;
+        for (let k = 0; k < count; k++) {
+          const px = k * SPEC_PX_STEP;
+          const v = pk[Math.floor((px / cfg.width) * sLen)];
+          pool[k].x = px; pool[k].y = baseline - v * cfg.specH;
         }
-        peakPath.value = pp;
+        const pp = Skia.Path.Make();
+        pp.addPoly(pool, false);
+        swapPath(peakPath, pp);
       } else {
-        peakPath.value = Skia.Path.Make(); // empty = draw nothing
+        swapPath(peakPath, Skia.Path.Make()); // empty = draw nothing
       }
     } else {
       // Spectrum hidden — nothing needs inter-frame smoothness; the panel can
       // fall all the way to the data rate.
       stopSpecTween();
-      specPath.value = Skia.Path.Make();
-      peakPath.value = Skia.Path.Make();
+      swapPath(specPath, Skia.Path.Make());
+      swapPath(peakPath, Skia.Path.Make());
     }
 
     // (Scroll transform is handled per push inside pushLine — slide when
     // boosted, whole-pixel snap when settled.)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bins]);
+  }, []);
+
+  useEffect(() => {
+    if (!frameSink) return;
+    frameSink.current = handleFrame;
+    return () => { frameSink.current = null; };
+  }, [frameSink, handleFrame]);
 
   // Re-colourise instantly on palette change (no waiting for next data frame).
   // Full rebuild from the index ring — rare, only on user palette switch.
@@ -516,11 +609,13 @@ export default function WaterfallView({
         disp[d + 2] = lut[l + 2]; disp[d + 3] = 255;
       }
     }
+    const data = Skia.Data.fromBytes(disp);
     const img = Skia.Image.MakeImage(
       { width: n, height: ROWS, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
-      Skia.Data.fromBytes(disp), n * 4,
+      data, n * 4,
     );
-    if (img) wfImage.value = img;
+    if (img) swapWfImage(img, data);
+    else data.dispose();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lut]);
 
@@ -744,6 +839,12 @@ export default function WaterfallView({
             <Rect key={i} x={0} y={d.y} width={width} height={0.5}
                   color="rgba(255,180,0,0.12)" />
           ))}
+        </Canvas>
+
+        {/* Canvas: LIVE spectrum trace — isolated so the ~30Hz tween repaints
+            ONLY these two paths, not the band plan/ticks/needle/acrylics
+            (sharing one canvas redrew the whole overlay per tween tick). */}
+        <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height: wfTop + 1 }}>
           {specShow && (
             <Path path={specPath} style="fill">
               <LinearGradient start={vec(0, specTop)} end={vec(0, wfTop)}
@@ -753,6 +854,10 @@ export default function WaterfallView({
           {specShow && peakHold && (
             <Path path={peakPath} paint={peakPaint} />
           )}
+        </Canvas>
+
+        {/* Canvas: needle + acrylics — repaints only on React render (rare). */}
+        <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>
 
           {/* ── Acrylic sideband panels (band-strip bottom → screen bottom) ── */}
           {needle && needle.nX > needle.loXc && (
