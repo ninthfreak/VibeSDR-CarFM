@@ -92,6 +92,7 @@ function mkMsg(type: ChatMessage['type'], text: string, user?: string): ChatMess
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
+
 export default function SDRScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName, password } = route.params;
   useKeepAwake();
@@ -527,11 +528,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfFrameSink.current?.(newBins, s);
         // Geometry/status drives the React overlay (band plan, readouts) —
         // only update when something actually changed (settled frames don't).
+        // Epsilon gate: radiod's per-frame frequency stamps can jitter ±1Hz —
+        // exact comparison leaked ~3-5 full-tree renders/s while settled
+        // (render-counter diagnostic 2026-06-11). Sub-2Hz wobble is invisible
+        // at any usable span; real changes pass untouched.
         setStatus((prev: SDRStatus) =>
-          prev.centerHz === s.centerHz && prev.bwHz === s.bwHz &&
+          Math.abs(prev.centerHz - s.centerHz) < 2 &&
+          Math.abs(prev.bwHz - s.bwHz) < 2 &&
           prev.frequency === s.frequency && prev.mode === s.mode &&
           prev.bandwidthLow === s.bandwidthLow && prev.bandwidthHigh === s.bandwidthHigh &&
-          prev.binCount === s.binCount && prev.binBandwidth === s.binBandwidth
+          prev.binCount === s.binCount &&
+          Math.abs(prev.binBandwidth - s.binBandwidth) < 1e-6
             ? prev : s);
         // ── Derive signal level + SNR from bins ────────────────────────────
         // Full data rate (~10Hz) — updates only re-render the two meter leaf
@@ -897,6 +904,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
   }, []);
 
+  // Stable handlers — inline lambdas defeat the React.memo on ControlsBar.
+  const onStepOpen  = useCallback(() => setStepOpen(true), []);
+  const onMenuOpen  = useCallback(() => setMenuOpen(true), []);
+  const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
+  const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
+
   // ── Layout ────────────────────────────────────────────────────────────────
 
   const bottomInset = insets.bottom;
@@ -1000,11 +1013,11 @@ export default function SDRScreen({ route, navigation }: Props) {
           onVfoDelta={onVfoDelta}
           onBwDelta={onBwDelta}
           onMode={onMode}
-          onStep={() => setStepOpen(true)}
-          onMenu={() => setMenuOpen(true)}
+          onStep={onStepOpen}
+          onMenu={onMenuOpen}
           onChat={openChat}
-          onFreqTap={() => setFreqModalOpen(true)}
-          onModeTap={() => setModeSelOpen(true)}
+          onFreqTap={onFreqOpen}
+          onModeTap={onModeOpen}
           freqUnit={freqUnit}
         />
       </View>

@@ -649,7 +649,7 @@ const lnd = StyleSheet.create({
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 
-export default function ControlsBar({
+function ControlsBar({
   frequency, mode, step, connected, bottomInset,
   signalLevel, peakLevel, snrDb = 40, signalActive, meterBus,
   onVfoDelta, onBwDelta, onMode, onStep,
@@ -741,3 +741,7 @@ const root = StyleSheet.create({
     borderWidth: 1,
   },
 });
+
+// Memo wall — clock/meters live in internal state or the bus, so screen
+// renders with stable props skip this whole subtree.
+export default React.memo(ControlsBar);

@@ -227,7 +227,7 @@ const WF_EFFECT = Skia.RuntimeEffect.Make(WF_SKSL);
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function WaterfallView({
+function WaterfallView({
   frameSink, binCount, centerHz, bwHz, tuneHz,
   filterLow = -3000, filterHigh = 3000,
   dbMin = -120, dbMax = -20, wfCoarse = 'auto',
@@ -545,11 +545,14 @@ export default function WaterfallView({
 
     // 1. M9PSY pipeline + UberSDR auto-range
     const frame = proc.current.process(fbins, fstatus.centerHz, fstatus.bwHz);
-    // dB axis labels — quantised to whole dB so auto-range wobble doesn't
-    // trigger a React re-render every frame.
+    // dB axis labels — 2dB HYSTERESIS, not just rounding: a noisy floor
+    // hovering on a .5 boundary flipped the rounded value every few frames,
+    // re-rendering the whole WaterfallView tree at up to 10Hz (profiled:
+    // React task execution was still ~a third of all JS post-meter-bus).
     const rMin = Math.round(frame.dbMin), rMax = Math.round(frame.dbMax);
     setLiveRange(prev =>
-      prev.dbMin === rMin && prev.dbMax === rMax ? prev : { dbMin: rMin, dbMax: rMax });
+      Math.abs(prev.dbMin - rMin) < 2 && Math.abs(prev.dbMax - rMax) < 2
+        ? prev : { dbMin: rMin, dbMax: rMax });
 
     // 2. Frame interval + interaction state (smooth tune)
     const now = Date.now();
@@ -824,6 +827,79 @@ export default function WaterfallView({
     Gesture.Simultaneous(Gesture.Exclusive(tapGesture, panGesture), pinchGesture),
     [tapGesture, panGesture, pinchGesture]);
 
+  // Needle + acrylics memoised likewise — only rebuilds when the needle
+  // geometry or colour actually changes.
+  const needleCanvas = useMemo(() => (
+    <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>
+
+      {/* ── Acrylic sideband panels (band-strip bottom → screen bottom) ── */}
+      {needle && needle.nX > needle.loXc && (
+        <Rect x={needle.loXc} y={BAND_H}
+              width={needle.nX - needle.loXc} height={height - BAND_H}>
+          <LinearGradient
+            start={vec(needle.loXc, 0)} end={vec(needle.nX, 0)}
+            colors={[hexRgba(needleColor, 0.03), hexRgba(needleColor, 0.06),
+                     hexRgba(needleColor, 0.14), hexRgba(needleColor, 0.28)]}
+            positions={[0, 0.15, 0.55, 1]} />
+        </Rect>
+      )}
+      {needle && needle.hiXc > needle.nX && (
+        <Rect x={needle.nX} y={BAND_H}
+              width={needle.hiXc - needle.nX} height={height - BAND_H}>
+          <LinearGradient
+            start={vec(needle.nX, 0)} end={vec(needle.hiXc, 0)}
+            colors={[hexRgba(needleColor, 0.28), hexRgba(needleColor, 0.14),
+                     hexRgba(needleColor, 0.06), hexRgba(needleColor, 0.03)]}
+            positions={[0, 0.45, 0.85, 1]} />
+        </Rect>
+      )}
+      {needle && needle.loXc > 0 && edgeStrip && (
+        <SkiaImage image={edgeStrip.img} x={needle.loXc - edgeStrip.halfW} y={BAND_H}
+                   width={edgeStrip.w} height={edgeStrip.h} fit="fill" />
+      )}
+      {needle && needle.hiXc < width && edgeStrip && (
+        <SkiaImage image={edgeStrip.img} x={needle.hiXc - edgeStrip.halfW} y={BAND_H}
+                   width={edgeStrip.w} height={edgeStrip.h} fit="fill" />
+      )}
+
+      {/* ── LED needle: halo → glow → filament (cached strip) ── */}
+      {needle && needleStrip && (
+        <SkiaImage image={needleStrip.img} x={needle.nX - needleStrip.halfW} y={0}
+                   width={needleStrip.w} height={height} fit="fill" />
+      )}
+
+    </Canvas>
+  ), [width, height, needle, needleStrip, edgeStrip, needleColor]);
+
+  // Static overlay (band plan/ticks/dB lines) memoised as ELEMENTS — when the
+  // component re-renders for unrelated reasons React reuses the subtree and
+  // skips reconciling dozens of Skia nodes.
+  const staticOverlayCanvas = useMemo(() => (
+    <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>
+      {/* Opaque header backing — WebGL parity rgb(2,2,2) */}
+      <Rect x={0} y={0} width={width} height={wfTop} color="rgb(2,2,2)" />
+      {/* ── Band plan strip ── */}
+      {bandSegs.map(s => (
+        <Rect key={s.key} x={s.x0} y={0} width={s.x1 - s.x0} height={BAND_H}
+              color={s.color} />
+      ))}
+      <Rect x={0} y={BAND_H - 1} width={width} height={1}
+            color="rgba(255,200,80,0.25)" />
+      {/* ── Ticker backing + tick marks ── */}
+      <Rect x={0} y={tickTop} width={width} height={TICK_H}
+            color="rgba(0,10,4,0.85)" />
+      {ticks.map((t, i) => (
+        <Rect key={i} x={t.x - 0.5} y={tickTop} width={1} height={5}
+              color="rgba(0,180,60,0.45)" />
+      ))}
+      {/* ── Faint dB reference lines ── */}
+      {specShow && dbLabels.map((d, i) => (
+        <Rect key={i} x={0} y={d.y} width={width} height={0.5}
+              color="rgba(255,180,0,0.12)" />
+      ))}
+    </Canvas>
+  ), [width, height, wfTop, tickTop, bandSegs, ticks, dbLabels, specShow]);
+
   // ── Render ──────────────────────────────────────────────────────────────────
   // Canvas 1 (bottom): waterfall texture only — the ONLY thing the 120Hz
   // Reanimated scroll repaints. Canvas 2 (top): everything else, repainted at
@@ -846,33 +922,7 @@ export default function WaterfallView({
           )}
         </Canvas>
 
-        <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>
-
-          {/* Opaque header backing — WebGL parity rgb(2,2,2) */}
-          <Rect x={0} y={0} width={width} height={wfTop} color="rgb(2,2,2)" />
-
-          {/* ── Band plan strip ── */}
-          {bandSegs.map(s => (
-            <Rect key={s.key} x={s.x0} y={0} width={s.x1 - s.x0} height={BAND_H}
-                  color={s.color} />
-          ))}
-          <Rect x={0} y={BAND_H - 1} width={width} height={1}
-                color="rgba(255,200,80,0.25)" />
-
-          {/* ── Ticker backing + tick marks ── */}
-          <Rect x={0} y={tickTop} width={width} height={TICK_H}
-                color="rgba(0,10,4,0.85)" />
-          {ticks.map((t, i) => (
-            <Rect key={i} x={t.x - 0.5} y={tickTop} width={1} height={5}
-                  color="rgba(0,180,60,0.45)" />
-          ))}
-
-          {/* ── Spectrum: LUT-gradient fill, faint dB reference lines, peak ── */}
-          {specShow && dbLabels.map((d, i) => (
-            <Rect key={i} x={0} y={d.y} width={width} height={0.5}
-                  color="rgba(255,180,0,0.12)" />
-          ))}
-        </Canvas>
+        {staticOverlayCanvas}
 
         {/* Canvas: LIVE spectrum trace — isolated so the ~30Hz tween repaints
             ONLY these two paths, not the band plan/ticks/needle/acrylics
@@ -889,46 +939,7 @@ export default function WaterfallView({
           )}
         </Canvas>
 
-        {/* Canvas: needle + acrylics — repaints only on React render (rare). */}
-        <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>
-
-          {/* ── Acrylic sideband panels (band-strip bottom → screen bottom) ── */}
-          {needle && needle.nX > needle.loXc && (
-            <Rect x={needle.loXc} y={BAND_H}
-                  width={needle.nX - needle.loXc} height={height - BAND_H}>
-              <LinearGradient
-                start={vec(needle.loXc, 0)} end={vec(needle.nX, 0)}
-                colors={[hexRgba(needleColor, 0.03), hexRgba(needleColor, 0.06),
-                         hexRgba(needleColor, 0.14), hexRgba(needleColor, 0.28)]}
-                positions={[0, 0.15, 0.55, 1]} />
-            </Rect>
-          )}
-          {needle && needle.hiXc > needle.nX && (
-            <Rect x={needle.nX} y={BAND_H}
-                  width={needle.hiXc - needle.nX} height={height - BAND_H}>
-              <LinearGradient
-                start={vec(needle.nX, 0)} end={vec(needle.hiXc, 0)}
-                colors={[hexRgba(needleColor, 0.28), hexRgba(needleColor, 0.14),
-                         hexRgba(needleColor, 0.06), hexRgba(needleColor, 0.03)]}
-                positions={[0, 0.45, 0.85, 1]} />
-            </Rect>
-          )}
-          {needle && needle.loXc > 0 && edgeStrip && (
-            <SkiaImage image={edgeStrip.img} x={needle.loXc - edgeStrip.halfW} y={BAND_H}
-                       width={edgeStrip.w} height={edgeStrip.h} fit="fill" />
-          )}
-          {needle && needle.hiXc < width && edgeStrip && (
-            <SkiaImage image={edgeStrip.img} x={needle.hiXc - edgeStrip.halfW} y={BAND_H}
-                       width={edgeStrip.w} height={edgeStrip.h} fit="fill" />
-          )}
-
-          {/* ── LED needle: halo → glow → filament (cached strip) ── */}
-          {needle && needleStrip && (
-            <SkiaImage image={needleStrip.img} x={needle.nX - needleStrip.halfW} y={0}
-                       width={needleStrip.w} height={height} fit="fill" />
-          )}
-
-        </Canvas>
+        {needleCanvas}
 
         {/* ── Text overlays (RN Text — crisp, uses expo-font faces) ── */}
 
@@ -990,3 +1001,7 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 0 },
   },
 });
+
+// Memo wall: residual SDRScreen renders stop here — every prop is a
+// primitive, a stable ref, or a useCallback.
+export default React.memo(WaterfallView);
