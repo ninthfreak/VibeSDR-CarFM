@@ -3,30 +3,34 @@
  * Ported from skin v6.3.2 (lsv-hfdl / lsv-digmap / lsv-cwmap overlays).
  *
  * Architecture: react-native-webview running a self-contained HTML document.
+ * ALL chrome lives inside the WebView (skin layout parity) — one slim topbar
+ * `← SDR | TITLE | (SNAP) | count` padded by env(safe-area-inset-*), so
+ * landscape wastes no vertical space. The back button posts 'close' to RN.
+ *
  * The WebView talks to the UberSDR server directly:
  *   HFDL  — polls {base}/addon/hfdl/aircraft (5s) + /groundstations (piggy-backed)
- *   DIGI  — own /ws/dxcluster socket, subscribe_digital_spots
- *   CW    — own /ws/dxcluster socket, subscribe_cw_spots
+ *   DIGI/CW — own /ws/dxcluster socket. The server REQUIRES the registered
+ *     session UUID (validated against /connection + User-Agent map), so the
+ *     app's live sessionUuid is injected — random IDs are rejected with 400.
  *   RX position — {base}/api/description → receiver.gps
  *
- * HFDL skin parity: exact AC/GS SVGs, latest-flight toast (callsign · via GS ·
- * age, refreshed 15s), yellow/cyan pulse glow on latest AC + its GS, expanding
- * rings after snap, SNAP toggle (persisted), GS popups with 3-bar signal meter
- * + per-frequency ON/off list, AC popups with alt/speed/freq/sig/GS/dist/age.
+ * Skin parity per map:
+ *   HFDL (amber): lattice-tower GS icons, AC table popups (Alt row dropped —
+ *     never populates upstream — replaced by Tracked = tracked_km), latest-
+ *     flight toast, pulse glow + expanding rings, SNAP, ⓘ legend.
+ *   DIGI/CW (green): band-coloured circle markers sized by SNR, filters row,
+ *     ⓘ scrolling legend with arrows, 📊 stats sheet (range/countries/bands/
+ *     modes with bar charts), new-spot toast, country abbreviations.
  *
- * GPU acceleration: WKWebView composites Leaflet's translate3d pan/zoom.
- * On top of that:
- *   - CSS transition on marker transforms → aircraft GLIDE between polls,
- *     interpolated by the compositor (icons only swapped when content changes,
- *     otherwise setLatLng rides the transition; disabled during zoom anims)
- *   - pulse glow + rings are pure CSS keyframes (compositor-driven)
- *   - will-change hints on panes/markers
+ * GPU acceleration: WKWebView composites Leaflet's translate3d pan/zoom;
+ * HFDL markers glide between polls on a CSS transform transition; pulse and
+ * rings are pure CSS keyframes.
  */
 
 import React, { useMemo } from 'react';
-import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Modal, StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { CABBR } from '../assets/countryAbbr';
 
 export type MapKind = 'hfdl' | 'digi' | 'cw';
 
@@ -34,34 +38,79 @@ interface MapOverlayProps {
   visible: boolean;
   kind:    MapKind | null;
   baseUrl: string;          // http(s)://host — used for fetch + ws URLs
+  /** Registered session UUID — required by /ws/dxcluster validation. */
+  sessionUuid: string;
   onClose: () => void;
 }
 
-const TITLES: Record<MapKind, string> = {
-  hfdl: '✈ HFDL LIVE',
-  digi: '📡 DIGITAL SPOTS',
-  cw:   '⊟ CW SPOTS',
-};
-
 // ── HTML document builder ─────────────────────────────────────────────────────
 
-function buildHtml(kind: MapKind, baseUrl: string): string {
+function buildHtml(kind: MapKind, baseUrl: string, uuid: string): string {
   const base = baseUrl.replace(/\/+$/, '');
   const wsBase = base.replace(/^http/, 'ws');
+  const isHfdl = kind === 'hfdl';
+  // Theme: HFDL amber (255,160,0), spots maps green (80,200,80) — skin parity.
+  const T = isHfdl
+    ? { bg: '#090602', a: '255,160,0', hi: '255,200,80', txt: '255,180,60' }
+    : { bg: '#060906', a: '80,200,80', hi: '120,240,120', txt: '120,240,120' };
+  const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
+  const CNT_ICON = isHfdl
+    ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 26 26" style="vertical-align:middle;opacity:0.75"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="rgba(255,190,40,0.9)"/></svg>`
+    : kind === 'cw'
+    ? `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="11" viewBox="0 0 13 11" style="vertical-align:middle;margin-right:2px;opacity:0.8;color:rgba(${T.hi},0.9)"><rect x="1" y="1" width="11" height="4" rx="1" fill="currentColor" opacity="0.9"/><line x1="6.5" y1="5" x2="6.5" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="8" width="7" height="2" rx="1" fill="currentColor" opacity="0.7"/></svg>`
+    : '&#128225;';
+
   return `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-  html,body{margin:0;padding:0;height:100%;background:#0a0804;overflow:hidden;}
-  #map{position:absolute;inset:0;background:#0a0804;}
+  html,body{margin:0;padding:0;height:100%;background:${T.bg};overflow:hidden;}
+  body{display:flex;flex-direction:column;font-family:'Courier New',monospace;}
+  /* ── topbar — skin lsv-hfdl-topbar / lsv-smap-topbar (single slim row) ── */
+  #topbar{display:flex;align-items:center;gap:8px;padding:6px 10px;
+    padding-left:max(10px,env(safe-area-inset-left));padding-right:max(10px,env(safe-area-inset-right));
+    padding-top:max(8px,env(safe-area-inset-top));
+    background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.97);border-bottom:1px solid rgba(${T.a},0.18);flex-shrink:0;z-index:2;}
+  #back{background:rgba(${T.a},0.08);border:1px solid rgba(${T.a},0.30);border-radius:8px;
+    color:rgba(${T.a},0.85);font-family:inherit;font-size:12px;letter-spacing:1px;padding:5px 10px;
+    cursor:pointer;flex-shrink:0;-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
+  #back:active{background:rgba(${T.a},0.18);}
+  #title{font-size:13px;letter-spacing:2px;color:rgba(${T.a},0.80);flex:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #cntwrap{display:flex;align-items:center;gap:5px;font-size:11px;letter-spacing:1px;color:rgba(${T.a},0.60);flex-shrink:0;}
+  #cnt{color:rgba(${T.hi},0.90);font-size:14px;}
+  #snap{background:rgba(255,160,0,0.08);border:1px solid rgba(255,160,0,0.20);border-radius:8px;
+    color:rgba(255,160,0,0.45);font-size:10px;letter-spacing:0.5px;padding:5px 7px;cursor:pointer;
+    font-family:inherit;-webkit-tap-highlight-color:transparent;touch-action:manipulation;line-height:1.2;text-align:center;flex-shrink:0;}
+  #snap.on{border-color:rgba(255,160,0,0.50);color:rgba(255,190,60,0.90);background:rgba(255,160,0,0.10);}
+  /* ── filters row (digi/cw) — skin lsv-smap-filters ── */
+  #filters{display:flex;align-items:center;gap:6px;padding:4px 10px;
+    padding-left:max(10px,env(safe-area-inset-left));padding-right:max(10px,env(safe-area-inset-right));
+    background:rgba(6,9,6,0.97);border-bottom:1px solid rgba(${T.a},0.10);flex-shrink:0;flex-wrap:wrap;}
+  select{background:rgba(${T.a},0.06);border:1px solid rgba(${T.a},0.25);border-radius:6px;
+    color:rgba(${T.a},0.85);font-family:inherit;font-size:10px;letter-spacing:0.5px;padding:4px 20px 4px 7px;cursor:pointer;
+    appearance:none;-webkit-appearance:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='rgba(${T.a},0.6)' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 6px center;}
+  .flabel{font-size:9px;letter-spacing:1px;color:rgba(${T.a},0.35);}
+  #map{flex:1;position:relative;overflow:hidden;background:${T.bg};}
+  #lmap{position:absolute;inset:0;background:${T.bg};}
   /* ── GPU hints — markers glide between updates on the compositor ── */
   .leaflet-pane{will-change:transform;}
   .leaflet-marker-icon.glide{transition:transform 2.2s linear;will-change:transform;}
   body.nog .leaflet-marker-icon.glide{transition:none;}
   .leaflet-fade-anim .leaflet-tile{will-change:opacity;}
+  /* skin map theming */
+  .leaflet-tile{filter:brightness(0.65) saturate(0.7);}
+  .leaflet-popup-content-wrapper{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);border:1px solid rgba(${T.a},0.30);color:rgba(${T.txt},0.90);font-family:'Courier New',monospace;font-size:11px;border-radius:8px;}
+  .leaflet-popup-tip{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
+  .leaflet-popup-close-button{color:rgba(${T.a},0.50)!important;}
+  .leaflet-popup-content{margin:10px 12px;font-family:'Courier New',monospace;}
+  .leaflet-control-zoom a{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.90);color:rgba(${T.a},0.70);border-color:rgba(${T.a},0.20);}
+  .leaflet-bottom{padding-bottom:max(8px,env(safe-area-inset-bottom));}
+  .leaflet-control-attribution{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.a},0.25);font-size:8px;}
   /* skin lsv-hfdl pulse + rings (verbatim keyframes) */
   @keyframes pulseac{0%,100%{filter:drop-shadow(0 0 3px rgba(255,255,80,0.5));}50%{filter:drop-shadow(0 0 10px rgba(255,255,80,1)) drop-shadow(0 0 18px rgba(255,200,0,0.7));}}
   @keyframes pulsegs{0%,100%{filter:drop-shadow(0 0 3px rgba(80,200,255,0.5));}50%{filter:drop-shadow(0 0 10px rgba(80,220,255,1)) drop-shadow(0 0 18px rgba(0,180,255,0.7));}}
@@ -71,52 +120,187 @@ function buildHtml(kind: MapKind, baseUrl: string): string {
   .ring{position:absolute;pointer-events:none;z-index:650;width:26px;height:26px;border-radius:50%;border:2px solid;transform:translate(-50%,-50%);animation:ring 1.4s ease-out 3;will-change:transform,opacity;}
   .ring-ac{border-color:rgba(255,255,100,0.85);}
   .ring-gs{border-color:rgba(80,220,255,0.85);}
-  #bar{position:fixed;top:0;left:0;right:0;z-index:9999;display:flex;align-items:center;gap:8px;
-    padding:8px 10px;padding-left:max(10px,env(safe-area-inset-left));padding-right:max(10px,env(safe-area-inset-right));
-    background:rgba(10,8,4,0.88);border-bottom:1px solid rgba(255,160,0,0.25);
-    font-family:'Courier New',monospace;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}
-  #cnt{color:#ffb833;font-size:12px;letter-spacing:1px;white-space:nowrap;}
-  #stat{color:rgba(255,160,0,0.55);font-size:10px;letter-spacing:1px;flex:1;text-align:right;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  select{background:rgba(20,16,8,0.9);color:#ffb833;border:1px solid rgba(255,160,0,0.35);
-    border-radius:4px;font-size:11px;padding:3px 4px;font-family:inherit;}
-  #snap{background:rgba(255,160,0,0.08);border:1px solid rgba(255,160,0,0.20);border-radius:8px;
-    color:rgba(255,160,0,0.45);font-size:10px;letter-spacing:0.5px;padding:4px 8px;cursor:pointer;
-    font-family:inherit;-webkit-tap-highlight-color:transparent;}
-  #snap.on{border-color:rgba(255,160,0,0.50);color:rgba(255,190,60,0.90);background:rgba(255,160,0,0.10);}
-  #toast{position:fixed;bottom:max(12px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
-    z-index:1000;background:rgba(9,6,2,0.93);border:1px solid rgba(255,160,0,0.30);border-radius:20px;
-    padding:6px 14px;font-family:'Courier New',monospace;font-size:11px;letter-spacing:1px;
-    color:rgba(255,190,60,0.90);white-space:nowrap;opacity:0;transition:opacity 0.4s;max-width:90vw;
+  /* ── toast — skin lsv-hfdl-toast / lsv-smap-toast ── */
+  #toast{position:absolute;bottom:max(10px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
+    z-index:1000;background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.93);border:1px solid rgba(${T.a},0.30);border-radius:20px;
+    padding:6px 14px;font-size:11px;letter-spacing:1px;
+    color:rgba(${T.hi},0.90);white-space:nowrap;opacity:0;transition:opacity 0.4s;max-width:90vw;
     overflow:hidden;text-overflow:ellipsis;cursor:pointer;}
   #toast.on{opacity:1;}
   .tf{color:#ffe566;font-size:12px;}
   .tg{color:rgba(255,160,0,0.55);}
   .ta{color:rgba(255,160,0,0.40);font-size:10px;}
-  .leaflet-popup-content-wrapper{background:rgba(10,8,4,0.94);color:#cfc;border:1px solid rgba(255,160,0,0.3);border-radius:8px;}
-  .leaflet-popup-tip{background:rgba(10,8,4,0.94);}
-  .leaflet-popup-content{margin:10px 12px;font-family:'Courier New',monospace;}
+  /* ── legend — skin lsv-smap-legend / lsv-hfdl-legend ── */
+  #legend{position:absolute;bottom:max(44px,calc(env(safe-area-inset-bottom) + 34px));left:max(10px,env(safe-area-inset-left));
+    z-index:1000;font-size:10px;letter-spacing:0.8px;color:rgba(${T.hi},0.80);pointer-events:auto;}
+  #legbtn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;
+    background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.88);border:1px solid rgba(${T.a},0.30);border-radius:8px;cursor:pointer;
+    font-size:14px;line-height:1;-webkit-tap-highlight-color:transparent;touch-action:manipulation;color:rgba(${T.hi},0.80);}
+  #legbtn:active{background:rgba(${T.a},0.15);}
+  #legbody{display:none;position:absolute;bottom:0;left:34px;background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.92);
+    border:1px solid rgba(${T.a},0.18);border-radius:8px;padding:7px 9px;white-space:nowrap;
+    max-height:min(320px,calc(100vh - 200px));overflow-y:scroll;overflow-x:hidden;
+    -webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;}
+  #legend.open #legbody{display:block;}
+  #legbody::-webkit-scrollbar{width:4px;}
+  #legbody::-webkit-scrollbar-track{background:transparent;}
+  #legbody::-webkit-scrollbar-thumb{background:rgba(${T.a},0.40);border-radius:2px;}
+  .lg-row{display:flex;align-items:center;gap:8px;margin:3px 0;font-size:10px;}
+  .lg-dot{display:inline-block;width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+  .lg-sec{font-size:9px;letter-spacing:1.5px;color:rgba(${T.a},0.40);margin:6px 0 3px;}
+  .scroll-arrow{display:none;position:sticky;left:0;right:0;text-align:center;font-size:11px;line-height:1;padding:2px 0;pointer-events:none;color:rgba(${T.hi},0.90);}
+  .scroll-arrow-up{top:0;}
+  .scroll-arrow-dn{bottom:0;}
+  .scroll-arrow.arr-on{display:block;}
+  /* ── stats (digi/cw) — skin lsv-st ── */
+  #statsbtnwrap{position:absolute;bottom:max(120px,calc(env(safe-area-inset-bottom) + 110px));right:max(10px,env(safe-area-inset-right));
+    z-index:1000;pointer-events:auto;}
+  #statsbtn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;
+    background:rgba(6,9,6,0.88);border:1px solid rgba(${T.a},0.30);border-radius:8px;cursor:pointer;
+    font-size:13px;line-height:1;-webkit-tap-highlight-color:transparent;touch-action:manipulation;color:rgba(${T.hi},0.80);}
+  #statsbtn:active{background:rgba(${T.a},0.15);}
+  #stsheet{display:none;position:absolute;inset:0;z-index:1500;background:rgba(4,12,4,0.82);
+    color:rgba(${T.hi},0.80);font-size:10px;letter-spacing:0.8px;
+    backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+    overflow-y:scroll;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;
+    padding:16px max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));
+    scrollbar-width:thin;scrollbar-color:rgba(${T.a},0.50) rgba(${T.a},0.10);}
+  #stsheet::-webkit-scrollbar{width:5px;}
+  #stsheet::-webkit-scrollbar-track{background:rgba(${T.a},0.08);border-radius:3px;}
+  #stsheet::-webkit-scrollbar-thumb{background:rgba(${T.a},0.50);border-radius:3px;min-height:40px;}
+  #stsheet.open{display:block;}
+  .st-close{position:sticky;top:0;float:right;background:rgba(${T.a},0.12);border:1px solid rgba(${T.a},0.35);
+    border-radius:8px;color:rgba(${T.hi},0.85);font-family:inherit;font-size:11px;letter-spacing:1px;padding:5px 10px;
+    cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;margin-bottom:8px;z-index:10;}
+  .st-title{font-size:13px;letter-spacing:2px;color:rgba(${T.a},0.70);margin-bottom:12px;padding-top:2px;}
+  .st-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:700px;margin:0 auto;}
+  @media(max-width:480px){.st-grid{grid-template-columns:1fr;}}
+  .st-card{background:rgba(6,9,6,0.60);border:1px solid rgba(${T.a},0.12);border-radius:8px;padding:10px 12px;}
+  .st-sect{font-size:9px;letter-spacing:1.5px;color:rgba(${T.a},0.45);margin:0 0 6px;}
+  .st-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:4px 0;font-size:11px;}
+  .st-val{color:rgba(${T.hi},0.95);font-size:12px;font-weight:bold;}
+  .st-sub{font-size:9px;color:rgba(${T.a},0.45);letter-spacing:0.5px;margin:-2px 0 6px;}
+  .st-bar{height:3px;background:rgba(${T.a},0.12);border-radius:2px;margin:2px 0 6px;}
+  .st-bf{height:3px;background:rgba(${T.a},0.65);border-radius:2px;transition:width 0.4s;}
 </style>
 </head><body>
-<div id="bar">
-  <span id="cnt">…</span>
-  ${kind === 'hfdl' ? `<button id="snap">⚙ SNAP</button>` : ''}
-  ${kind === 'digi' ? `
-  <select id="fMode"><option>ALL</option><option>FT8</option><option>FT4</option><option>WSPR</option><option>JS8</option></select>` : ''}
-  ${kind !== 'hfdl' ? `
-  <select id="fBand"><option>ALL</option><option>160m</option><option>80m</option><option>60m</option><option>40m</option><option>30m</option><option>20m</option><option>17m</option><option>15m</option><option>12m</option><option>10m</option></select>
-  <select id="fAge"><option value="0">AGE</option><option value="15">15m</option><option value="30">30m</option><option value="60">1h</option></select>` : ''}
-  <span id="stat">connecting…</span>
+<div id="topbar">
+  <button id="back">&#8592; SDR</button>
+  <div id="title">${TITLE}</div>
+  ${isHfdl ? `<button id="snap" title="Toggle auto-snap to latest aircraft">&#9881;<br>SNAP</button>` : ''}
+  <div id="cntwrap">${CNT_ICON}<span id="cnt">&#8230;</span></div>
 </div>
-<div id="map"></div>
-${kind === 'hfdl' ? '<div id="toast"></div>' : ''}
+${!isHfdl ? `
+<div id="filters">
+  <span class="flabel">FILTER</span>
+  ${kind === 'digi' ? `<select id="fMode"><option value="ALL">All</option><option>FT8</option><option>FT4</option><option>FT2</option><option>WSPR</option><option>JS8</option></select>` : ''}
+  <select id="fBand"><option value="ALL">All</option><option>160m</option><option>80m</option><option>60m</option><option>40m</option><option>30m</option><option>20m</option><option>17m</option><option>15m</option><option>12m</option><option>10m</option></select>
+  <select id="fAge">${kind === 'digi'
+    ? `<option value="ALL">All</option><option value="2m" selected>2 min</option><option value="5m">5 min</option><option value="15m">15 min</option><option value="30m">30 min</option><option value="1h">1 hour</option>`
+    : `<option value="ALL">All</option><option value="15m" selected>15 min</option><option value="30m">30 min</option><option value="1h">1 hour</option><option value="3h">3 hours</option>`}</select>
+</div>` : ''}
+<div id="map">
+  <div id="lmap"></div>
+  <div id="legend">
+    <div id="legbtn" title="Legend">&#9432;</div>
+    <div id="legbody">
+      <div class="scroll-arrow scroll-arrow-up" id="arr-up">&#9650;</div>
+      ${isHfdl ? `
+      <div class="lg-sec">AIRCRAFT AGE</div>
+      <div class="lg-row"><span class="lg-dot" style="background:rgba(80,255,120,0.92);"></span><span>&lt; 2 min</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:rgba(180,255,80,0.88);"></span><span>&lt; 5 min</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:rgba(255,190,40,0.85);"></span><span>&lt; 15 min</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:rgba(255,80,60,0.75);"></span><span>older</span></div>
+      <div class="lg-sec">GND STATION</div>
+      <div class="lg-row"><span class="lg-dot" style="background:rgba(60,220,80,0.92);"></span><span>strong</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:rgba(220,200,40,0.92);"></span><span>medium</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:rgba(255,100,60,0.85);"></span><span>weak</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:rgba(120,120,140,0.60);"></span><span>no sig</span></div>
+      ` : `
+      <div class="lg-sec">BAND COLOUR</div>
+      <div class="lg-row"><span class="lg-dot" style="background:#9b30d9;"></span><span>2200m</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#c71585;"></span><span>630m</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#e8001e;"></span><span>160m</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#ff5500;"></span><span>80m</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#ff8c00;"></span><span>60m</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#ffd700;"></span><span>40m</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#aacc00;"></span><span>30m</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#00cc44;"></span><span>20m</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#00ccaa;"></span><span>17m</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#00aaff;"></span><span>15m</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#0055ff;"></span><span>12m</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#6600ff;"></span><span>11m</span></div>
+      <div class="lg-row"><span class="lg-dot" style="background:#cc00cc;"></span><span>10m</span></div>
+      <div class="lg-sec">SNR / SIZE</div>
+      <div class="lg-row"><span class="lg-dot" style="width:14px;height:14px;background:rgba(255,255,255,0.5);box-shadow:0 0 6px 3px rgba(255,255,255,0.4);"></span><span>Strong (&ge;0 dB)</span></div>
+      <div class="lg-row"><span class="lg-dot" style="width:9px;height:9px;background:rgba(255,255,255,0.5);"></span><span>Medium (-20 to 0)</span></div>
+      <div class="lg-row"><span class="lg-dot" style="width:6px;height:6px;background:rgba(255,255,255,0.3);"></span><span>Weak (&lt; -20 dB)</span></div>
+      `}
+      <div class="scroll-arrow scroll-arrow-dn" id="arr-dn">&#9660;</div>
+    </div>
+  </div>
+  ${!isHfdl ? `
+  <div id="statsbtnwrap"><div id="statsbtn" title="Stats">&#128202;</div></div>
+  <div id="stsheet">
+    <button class="st-close" id="stclose">&#10005; CLOSE</button>
+    <div class="st-title">${kind === 'digi' ? 'DIGITAL' : 'CW'} SPOTS &mdash; STATISTICS</div>
+    <div class="st-grid">
+      <div class="st-card">
+        <div class="st-sect">RANGE</div>
+        <div class="st-row"><span>Closest</span><span class="st-val" id="s-close">&mdash;</span></div>
+        <div class="st-sub" id="s-close-sub"></div>
+        <div class="st-row"><span>Furthest</span><span class="st-val" id="s-far">&mdash;</span></div>
+        <div class="st-sub" id="s-far-sub"></div>
+      </div>
+      <div class="st-card">
+        <div class="st-sect">TOP COUNTRIES</div>
+        <div id="s-countries"></div>
+      </div>
+      <div class="st-card">
+        <div class="st-sect">SPOTS BY BAND</div>
+        <div id="s-bands"></div>
+      </div>
+      ${kind === 'digi' ? `
+      <div class="st-card">
+        <div class="st-sect">SPOTS BY MODE</div>
+        <div id="s-modes"></div>
+      </div>` : ''}
+    </div>
+  </div>` : ''}
+  <div id="toast"></div>
+</div>
 <script>
-var BASE='${base}', WSBASE='${wsBase}', KIND='${kind}';
+var BASE='${base}', WSBASE='${wsBase}', KIND='${kind}', UUID='${uuid}';
 var RX_LAT=0, RX_LON=0;
-var map=L.map('map',{zoomControl:false,attributionControl:false,fadeAnimation:true,zoomAnimation:true,markerZoomAnimation:true})
+var CABBR=${JSON.stringify(CABBR)};
+function abbr(c){if(!c)return'';var s=String(c).trim();if(CABBR[s])return CABBR[s];return s.length>10?s.substring(0,9)+'\\u2026':s;}
+var map=L.map('lmap',{zoomControl:false,attributionControl:true,fadeAnimation:true,zoomAnimation:true,markerZoomAnimation:true})
   .setView([30,0],2);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:14}).addTo(map);
-var cnt=document.getElementById('cnt'), stat=document.getElementById('stat');
+L.control.zoom({position:'bottomright'}).addTo(map);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OSM',maxZoom:14}).addTo(map);
+var cnt=document.getElementById('cnt');
+var toast=document.getElementById('toast');
+
+document.getElementById('back').addEventListener('click',function(){
+  if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage('close');
+});
+
+// Legend toggle + scroll arrows (skin lsvScrollArrows)
+var legEl=document.getElementById('legend'), legBody=document.getElementById('legbody');
+function updArrows(el,upId,dnId){
+  var atTop=el.scrollTop<4, atBot=el.scrollTop+el.clientHeight>=el.scrollHeight-4;
+  var u=document.getElementById(upId), d=document.getElementById(dnId);
+  if(u)u.classList.toggle('arr-on',!atTop);
+  if(d)d.classList.toggle('arr-on',!atBot);
+}
+legBody.addEventListener('scroll',function(){updArrows(legBody,'arr-up','arr-dn');},{passive:true});
+legBody.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
+legBody.addEventListener('touchmove',function(e){e.stopPropagation();},{passive:true});
+document.getElementById('legbtn').addEventListener('click',function(e){
+  e.stopPropagation();
+  legEl.classList.toggle('open');
+  if(legEl.classList.contains('open'))setTimeout(function(){updArrows(legBody,'arr-up','arr-dn');},20);
+});
 
 // Marker glide must not fight Leaflet's zoom repositioning
 map.on('zoomstart',function(){document.body.classList.add('nog');});
@@ -128,7 +312,7 @@ function age(ms){var s=Math.floor((Date.now()-ms)/1000);if(s<5)return'just now';
 function distKm(lat,lon){if(!RX_LAT&&!RX_LON)return null;var R=6371,r=Math.PI/180;var dLat=(lat-RX_LAT)*r,dLon=(lon-RX_LON)*r;var a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(RX_LAT*r)*Math.cos(lat*r)*Math.sin(dLon/2)*Math.sin(dLon/2);return Math.round(R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)));}
 
 var RX_SVG='<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,10 17,10 17,21 13,21 13,15 9,15 9,21 5,21 5,10 1,10" fill="rgba(255,200,60,0.85)" stroke="rgba(0,0,0,0.5)" stroke-width="1"/></svg>';
-function addRx(){if(RX_LAT||RX_LON){L.marker([RX_LAT,RX_LON],{icon:L.divIcon({html:RX_SVG,className:'',iconSize:[22,22],iconAnchor:[11,11]})}).addTo(map).bindPopup('<b style="color:#ffb833">RECEIVER</b>');map.setView([RX_LAT,RX_LON],5);}}
+function addRx(){if(RX_LAT||RX_LON){L.marker([RX_LAT,RX_LON],{icon:L.divIcon({html:RX_SVG,className:'',iconSize:[22,22],iconAnchor:[11,22]}),zIndexOffset:1000}).addTo(map).bindPopup('<div style="font-size:11px;letter-spacing:1px;">&#127968; Your receiver</div>');map.setView([RX_LAT,RX_LON],KIND==='hfdl'?4:3);}}
 
 fetch(BASE+'/api/description').then(function(r){return r.json();}).then(function(d){
   var gps=d&&d.receiver&&d.receiver.gps;
@@ -140,7 +324,7 @@ fetch(BASE+'/api/description').then(function(r){return r.json();}).then(function
 if(KIND==='hfdl'){
   var gsM={}, acM={}, gsNames={};
   var glowGS=null, glowAC=null, lastFlight=null, pendingFit=null;
-  var toast=document.getElementById('toast'), ageTimer=null;
+  var ageTimer=null;
   var snapBtn=document.getElementById('snap');
   var snapOn=(function(){try{var v=localStorage.getItem('lsv_hfdl_snap');return v===null?true:v==='1';}catch(e){return true;}})();
   function updSnap(){snapBtn.classList.toggle('on',snapOn);}
@@ -163,7 +347,8 @@ if(KIND==='hfdl'){
     +'</g></svg>';
   }
 
-  // skin _gsSVG: radiating arcs + dot + mast + ground line + legs, ✕ when silent
+  // skin _gsSVG verbatim: lattice radio tower (mast + legs + cross braces +
+  // ground line) with radiating wave arcs off the antenna tip, ✕ when silent
   function gsSVG(glow,sig){
     var c,xOver=false;
     if(glow){c='rgba(255,240,60,1)';}
@@ -178,7 +363,15 @@ if(KIND==='hfdl'){
     +'<path d="M7,14 A11,11 0 0,0 7,-2" fill="none" stroke="'+c+'" stroke-width="1.3" stroke-linecap="round" opacity="0.55"/>'
     +'<path d="M23,14 A11,11 0 0,1 23,-2" fill="none" stroke="'+c+'" stroke-width="1.3" stroke-linecap="round" opacity="0.55"/>'
     +'<circle cx="15" cy="6" r="2.8" fill="'+c+'"/>'
-    +'<line x1="15" y1="6" x2="15" y2="30" stroke="'+c+'" stroke-width="2.2" stroke-linecap="round"/>'
+    +'<line x1="15" y1="6" x2="15" y2="30" stroke="'+c+'" stroke-width="1.8" stroke-linecap="round"/>'
+    +'<line x1="15" y1="8" x2="4" y2="30" stroke="'+c+'" stroke-width="1.8" stroke-linecap="round"/>'
+    +'<line x1="15" y1="8" x2="26" y2="30" stroke="'+c+'" stroke-width="1.8" stroke-linecap="round"/>'
+    +'<line x1="8" y1="19" x2="22" y2="19" stroke="'+c+'" stroke-width="1.4" stroke-linecap="round"/>'
+    +'<line x1="5" y1="26" x2="25" y2="26" stroke="'+c+'" stroke-width="1.4" stroke-linecap="round"/>'
+    +'<line x1="8" y1="19" x2="15" y2="26" stroke="'+c+'" stroke-width="1" stroke-linecap="round" opacity="0.7"/>'
+    +'<line x1="22" y1="19" x2="15" y2="26" stroke="'+c+'" stroke-width="1" stroke-linecap="round" opacity="0.7"/>'
+    +'<line x1="5" y1="26" x2="15" y2="30" stroke="'+c+'" stroke-width="1" stroke-linecap="round" opacity="0.7"/>'
+    +'<line x1="25" y1="26" x2="15" y2="30" stroke="'+c+'" stroke-width="1" stroke-linecap="round" opacity="0.7"/>'
     +'<line x1="1" y1="30" x2="29" y2="30" stroke="'+c+'" stroke-width="2.2" stroke-linecap="round"/>'
     +'<line x1="4" y1="30" x2="2" y2="34" stroke="'+c+'" stroke-width="1.8" stroke-linecap="round"/>'
     +'<line x1="26" y1="30" x2="28" y2="34" stroke="'+c+'" stroke-width="1.8" stroke-linecap="round"/>';
@@ -189,7 +382,7 @@ if(KIND==='hfdl'){
     }
     return svg+'</svg>';
   }
-  function icon(svg,w,h,ax,ay){return L.divIcon({html:svg,className:'glide',iconSize:[w,h],iconAnchor:[ax,ay]});}
+  function icon(svg,w,h,ax,ay){return L.divIcon({html:svg,className:'glide',iconSize:[w,h],iconAnchor:[ax,ay],popupAnchor:[0,-ay]});}
 
   // skin _sigMeterHTML: 3 signal bars
   function sigBars(dbfs){if(dbfs==null||dbfs===0)return 0;if(dbfs>-40)return 3;if(dbfs>-55)return 2;return 1;}
@@ -282,22 +475,28 @@ if(KIND==='hfdl'){
     if(lastFlight&&lastFlight.key)fitToLatest(lastFlight.key,lastFlight.gsid);
   });
 
+  // skin _buildACPopup table — Alt row dropped (never populates upstream),
+  // Tracked (tracked_km accumulated path) in its place per design review.
   function buildACPopup(a,lat,lon,hdg){
     var fl=a.flight||a.reg||a.key;
-    var d=distKm(lat,lon);
-    return'<div style="font-size:12px;letter-spacing:1px;color:rgba(120,240,120,0.95)">'+fl+'</div>'
-    +'<div style="margin-top:4px;display:flex;align-items:center;gap:5px;">'
-    +'<span style="font-size:10px;color:rgba(255,160,0,0.55);">Signal:</span>'
-    +sigMeterHTML(a.sig_level)
-    +(a.sig_level?'<span style="font-size:9px;color:rgba(255,160,0,0.40);">'+a.sig_level.toFixed(1)+' dBFS</span>':'')
-    +'</div>'
-    +'<div style="margin-top:4px;font-size:10px;color:rgba(255,160,0,0.65);">'
-    +(a.alt_valid&&a.alt_ft?Math.round(a.alt_ft).toLocaleString()+' ft &middot; ':'')
-    +(a.gnd_spd_kts?Math.round(a.gnd_spd_kts)+' kts &middot; ':'')
-    +(a.freq_khz?(a.freq_khz/1000).toFixed(3)+' MHz':'')+'</div>'
-    +'<div style="margin-top:3px;font-size:10px;color:rgba(255,160,0,0.5);">'
-    +(gsNames[a.gs_id]?'via '+gsNames[a.gs_id]+'<br>':'')
-    +(d?d+' km &middot; ':'')+age(a.last_seen*1000)+'</div>';
+    var dist=distKm(lat,lon);
+    var spd=a.gnd_spd_kts?Math.round(a.gnd_spd_kts)+' kts':'';
+    var gsN=gsNames[a.gs_id]||'';
+    var freq=a.freq_khz?(a.freq_khz/1000).toFixed(3)+' MHz':'';
+    var sig=a.sig_level?a.sig_level.toFixed(1)+' dBFS':'';
+    var tracked=a.tracked_km?Math.round(a.tracked_km).toLocaleString()+' km'+(spd?' &bull; '+spd:''):spd;
+    var row=function(label,val){return val?'<tr><td style="color:rgba(255,160,0,0.5);padding-right:8px;white-space:nowrap;">'+label+'</td><td style="color:rgba(255,210,80,0.9);">'+val+'</td></tr>':'';};
+    return '<div style="font-size:11px;letter-spacing:0.8px;">'
+      +'<div style="font-size:13px;font-weight:600;color:rgba(255,210,60,1);margin-bottom:6px;">'+fl+(a.icao&&a.icao!==fl?' <span style="font-size:10px;color:rgba(255,180,60,0.55);">'+a.icao+'</span>':'')+'</div>'
+      +'<table style="border-collapse:collapse;">'
+      +row('Freq',freq)
+      +row('Via',gsN)
+      +row('Signal',sig)
+      +row('Distance',dist?dist+' km':'')
+      +row('Tracked',tracked)
+      +row('Msgs',a.msg_count||'')
+      +row('Seen',age(a.last_seen*1000))
+      +'</table></div>';
   }
 
   // skin _fetchGS — fields: gs_id, location, frequencies[{freq_khz,enabled}],
@@ -327,6 +526,8 @@ if(KIND==='hfdl'){
         var ph='<div style="font-size:12px;letter-spacing:1px;color:rgba(255,200,80,0.9)">'+name+'</div>'
           +'<div style="margin-top:4px;display:flex;align-items:center;gap:6px;">'
           +'<span style="font-size:10px;color:rgba(255,160,0,0.55);">Signal:</span>'+sigLine+'</div>';
+        var d=distKm(s.lat,s.lon);
+        if(d)ph+='<div style="margin-top:3px;font-size:10px;color:rgba(255,160,0,0.5);">'+d+' km from receiver</div>';
         if(freqs.length){
           ph+='<div style="margin-top:6px;">';
           freqs.forEach(function(f){
@@ -354,16 +555,15 @@ if(KIND==='hfdl'){
           gsM[id]=mk;
         }
       });
-      stat.textContent='live';
       if(pendingFit){var pf=pendingFit;pendingFit=null;fitToLatest(pf.acKey,pf.gsid);}
-    }).catch(function(){stat.textContent='hfdl addon unavailable';});
+    }).catch(function(){});
   }
 
   // skin _fetchAC — latest flight detection → toast + glow + snap
   function fetchAC(){
     fetch(BASE+'/addon/hfdl/aircraft').then(function(r){if(!r.ok)throw 0;return r.json();}).then(function(data){
       var ac=Array.isArray(data)?data:[];
-      cnt.textContent='✈ '+ac.length;
+      cnt.textContent=ac.length;
       var latest=null;
       ac.forEach(function(a){
         if(a.lat==null||a.lon==null)return;
@@ -411,44 +611,66 @@ if(KIND==='hfdl'){
         if(!cur[k]){try{map.removeLayer(acM[k]);}catch(e){}delete acM[k];if(glowAC===k)glowAC=null;}
       });
       fetchGS();
-    }).catch(function(){stat.textContent='hfdl addon unavailable';});
+    }).catch(function(){cnt.textContent='&#10005;';});
   }
   fetchAC();
   setInterval(fetchAC,5000);
 }
 
-// ════════ DIGI / CW spots ════════
+// ════════ DIGI / CW spots (skin lsv-digmap / lsv-cwmap parity) ════════
 if(KIND==='digi'||KIND==='cw'){
   var isCW=(KIND==='cw');
   var spots=[], markers={}, MAXS=500;
   var fMode=document.getElementById('fMode'), fBand=document.getElementById('fBand'), fAge=document.getElementById('fAge');
-  var MODE_COL={FT8:'rgba(80,255,120,0.9)',FT4:'rgba(60,200,255,0.9)',WSPR:'rgba(200,120,255,0.9)',JS8:'rgba(255,170,50,0.9)',CW:'rgba(255,220,80,0.9)'};
+
+  // skin BAND_COLOUR — markers coloured by band, sized by SNR
+  var BAND_COLOUR={'2200m':'#9b30d9','630m':'#c71585','160m':'#e8001e','80m':'#ff5500','60m':'#ff8c00',
+    '40m':'#ffd700','30m':'#aacc00','20m':'#00cc44','17m':'#00ccaa','15m':'#00aaff','12m':'#0055ff','11m':'#6600ff','10m':'#cc00cc'};
+  var BAND_RANGES={'2200m':[135700,137800],'630m':[472000,479000],'160m':[1800000,2000000],'80m':[3500000,4000000],
+    '60m':[5250000,5450000],'40m':[7000000,7300000],'30m':[10100000,10150000],'20m':[14000000,14350000],
+    '17m':[18068000,18168000],'15m':[21000000,21450000],'12m':[24890000,24990000],'11m':[26965000,27405000],'10m':[28000000,29700000]};
+  var BAND_ORDER=['2200m','630m','160m','80m','60m','40m','30m','20m','17m','15m','12m','11m','10m'];
 
   function spotHz(f){if(!f)return 0;return f<1000?Math.round(f*1e6):Math.round(f);}
-  function key(s){return (s.call||'')+'|'+(s.band||'');}
+  function bandFromHz(hz){for(var b in BAND_RANGES){var r=BAND_RANGES[b];if(hz>=r[0]&&hz<=r[1])return b;}return null;}
+  function spotBand(s){return s.band||bandFromHz(spotHz(s.freq))||null;}
+  function key(s){return (s.call||'?')+'|'+(s.band||'')+'|'+(s.mode||'');}
+  // skin _snrStyle: size + glow from SNR
+  function snrStyle(snr){
+    var v=(snr===undefined||snr===null||isNaN(parseFloat(snr)))?-99:parseFloat(snr);
+    if(v>=0)  return{r:8,op:0.92,glow:true};
+    if(v>=-20)return{r:6,op:0.80,glow:false};
+    return      {r:4,op:0.55,glow:false};
+  }
   function passes(s){
     if(!isCW&&fMode&&fMode.value!=='ALL'&&s.mode!==fMode.value)return false;
-    if(fBand&&fBand.value!=='ALL'&&s.band!==fBand.value)return false;
-    var am=fAge?parseInt(fAge.value):0;
-    if(am>0&&Date.now()-s.t>am*60000)return false;
+    if(fBand&&fBand.value!=='ALL'&&spotBand(s)!==fBand.value)return false;
+    var fa=fAge?fAge.value:'ALL';
+    if(fa!=='ALL'){
+      var ms={'2m':120000,'5m':300000,'15m':900000,'30m':1800000,'1h':3600000,'3h':10800000}[fa]||Infinity;
+      if(Date.now()-s.t>ms)return false;
+    }
     return true;
   }
   function style(s){
-    var col=MODE_COL[s.mode]||'rgba(120,240,120,0.9)';
-    var snr=s.snr!==undefined?s.snr:-30;
-    var r=snr>=0?7:snr>=-10?6:snr>=-18?5:4;
-    return{radius:r,fillColor:col,color:snr>=0?col:'rgba(0,0,0,0.4)',weight:snr>=0?2:1,opacity:snr>=0?0.9:0.5,fillOpacity:0.75};
+    var col=BAND_COLOUR[spotBand(s)]||'#aaaaaa';
+    var ss=snrStyle(s.snr);
+    return{radius:ss.r,fillColor:col,color:ss.glow?col:'rgba(0,0,0,0.4)',weight:ss.glow?2:1,opacity:ss.glow?0.9:0.5,fillOpacity:ss.op};
   }
+  // skin spot popup: call / mode·band·freq / SNR·country / age (+distance)
   function popup(s){
     var hz=spotHz(s.freq);
+    var band=spotBand(s);
     return'<div style="font-size:12px;color:rgba(120,240,120,0.95);letter-spacing:1px;">'+s.call+'</div>'
-    +'<div style="margin-top:4px;font-size:10px;color:rgba(80,200,80,0.7);">'
-    +(s.mode?s.mode+' · ':'')+(s.band?s.band+' · ':'')+(hz?(hz/1e6).toFixed(4)+' MHz':'')+'</div>'
+    +'<div style="margin-top:4px;font-size:10px;color:rgba(80,200,80,0.70);">'
+    +(s.mode?'<span style="margin-right:6px;">'+s.mode+'</span>':'')
+    +(band?'<span style="margin-right:6px;">'+band+'</span>':'')
+    +(hz?'<span>'+(hz/1e6).toFixed(4)+' MHz</span>':'')+'</div>'
     +'<div style="margin-top:3px;font-size:10px;color:rgba(80,200,80,0.55);">'
-    +(s.snr!==undefined?'SNR '+s.snr+' dB':'')+(s.wpm?' · '+Math.round(s.wpm)+' wpm':'')
-    +(s.country?' · '+s.country:'')+'</div>'
-    +'<div style="margin-top:2px;font-size:9px;color:rgba(80,200,80,0.4);">'+age(s.t)
-    +(distKm(s.lat,s.lon)?' · '+distKm(s.lat,s.lon)+' km':'')+'</div>';
+    +(s.snr!==undefined?'SNR: '+s.snr+' dB':'')+(s.wpm?' &bull; '+Math.round(s.wpm)+' wpm':'')
+    +(s.country?' &bull; '+abbr(s.country):'')+'</div>'
+    +'<div style="margin-top:2px;font-size:9px;color:rgba(80,200,80,0.35);">'+age(s.t)
+    +(s.distKm?' &bull; '+Math.round(s.distKm)+' km':'')+'</div>';
   }
   function upsert(s){
     if(!passes(s))return;
@@ -456,33 +678,96 @@ if(KIND==='digi'||KIND==='cw'){
     if(markers[k]){markers[k].setStyle(style(s)).setLatLng([s.lat,s.lon]);markers[k].setPopupContent(popup(s));}
     else{markers[k]=L.circleMarker([s.lat,s.lon],style(s)).bindPopup(popup(s),{maxWidth:200}).addTo(map);}
   }
+  function updateCount(){cnt.textContent=Object.keys(markers).length;}
   function rebuild(){
     Object.keys(markers).forEach(function(k){try{map.removeLayer(markers[k]);}catch(e){}});
     markers={};
     spots.forEach(function(s){upsert(s);});
-    cnt.textContent=(isCW?'⊟ ':'📡 ')+Object.keys(markers).length;
+    updateCount();
+    if(statsOpen)updateStats();
   }
   [fMode,fBand,fAge].forEach(function(el){if(el)el.onchange=rebuild;});
   setInterval(rebuild,30000); // age filter refresh + prune display
+
+  // ── stats sheet (skin lsvSmapStats) ──
+  var statsOpen=false;
+  var stSheet=document.getElementById('stsheet');
+  function barRow(label,n,max){
+    return'<div class="st-row"><span>'+label+'</span><span class="st-val">'+n+'</span></div>'
+    +'<div class="st-bar"><div class="st-bf" style="width:'+Math.round(n/max*100)+'%"></div></div>';
+  }
+  function setH(id,v){var e=document.getElementById(id);if(e)e.innerHTML=v||'';}
+  function setT(id,v){var e=document.getElementById(id);if(e)e.textContent=v||'';}
+  function updateStats(){
+    var vis=spots.filter(passes);
+    if(!vis.length){
+      setT('s-close','—');setT('s-far','—');setT('s-close-sub','');setT('s-far-sub','');
+      setH('s-countries','<div style="font-size:9px;color:rgba(80,200,80,0.35)">No data</div>');
+      setH('s-bands','');if(!isCW)setH('s-modes','');
+      return;
+    }
+    function callSub(s){return(s.call||'')+(s.country?' \\u2022 '+abbr(s.country):'')+(s.mode&&!isCW?' \\u2022 '+s.mode:'');}
+    var wd=vis.filter(function(s){return s.distKm>0;});
+    if(wd.length){
+      wd.sort(function(a,b){return a.distKm-b.distKm;});
+      var cl=wd[0],fa=wd[wd.length-1];
+      setT('s-close',Math.round(cl.distKm)+' km');setT('s-close-sub',callSub(cl));
+      setT('s-far',Math.round(fa.distKm)+' km');setT('s-far-sub',callSub(fa));
+    }else{
+      setT('s-close','—');setT('s-far','—');setT('s-close-sub','');setT('s-far-sub','');
+    }
+    var cm={};vis.forEach(function(s){var c=abbr(s.country)||'Unknown';cm[c]=(cm[c]||0)+1;});
+    var ct=Object.keys(cm).sort(function(a,b){return cm[b]-cm[a];}).slice(0,3);
+    setH('s-countries',ct.length?ct.map(function(c,i){return barRow((i+1)+'. '+c,cm[c],cm[ct[0]]);}).join(''):'<div style="font-size:9px;color:rgba(80,200,80,0.35)">No country data</div>');
+    var bm={};vis.forEach(function(s){var b=spotBand(s)||'?';bm[b]=(bm[b]||0)+1;});
+    var bx=Math.max.apply(null,Object.keys(bm).map(function(b){return bm[b];}).concat([1]));
+    setH('s-bands',BAND_ORDER.filter(function(b){return bm[b];}).map(function(b){return barRow(b,bm[b],bx);}).join('')||'&mdash;');
+    if(!isCW){
+      var mm={};vis.forEach(function(s){var m=(s.mode||'?').toUpperCase();mm[m]=(mm[m]||0)+1;});
+      var mx=Math.max.apply(null,Object.keys(mm).map(function(m){return mm[m];}).concat([1]));
+      setH('s-modes',Object.keys(mm).sort(function(a,b){return mm[b]-mm[a];}).map(function(m){return barRow(m,mm[m],mx);}).join('')||'&mdash;');
+    }
+  }
+  document.getElementById('statsbtn').addEventListener('click',function(e){
+    e.stopPropagation();
+    statsOpen=!statsOpen;
+    stSheet.classList.toggle('open',statsOpen);
+    if(statsOpen)updateStats();
+  });
+  document.getElementById('stclose').addEventListener('click',function(e){
+    e.stopPropagation();statsOpen=false;stSheet.classList.remove('open');
+  });
+  stSheet.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
+  stSheet.addEventListener('touchmove',function(e){e.stopPropagation();},{passive:true});
 
   function norm(d,cw){
     var lat=d.latitude, lon=d.longitude;
     if(lat==null||lon==null)return null;
     return{
-      lat:lat, lon:lon, kind:cw?'cw':'digi',
+      lat:lat, lon:lon,
       mode:cw?'CW':String(d.mode||'').toUpperCase(),
       band:String(d.band||''),
       call:String(cw?(d.dx_call||''):(d.callsign||'')),
       snr:typeof d.snr==='number'?d.snr:undefined,
       wpm:typeof d.wpm==='number'?d.wpm:undefined,
       freq:d.frequency, country:String(d.country||''),
+      distKm:(function(){var v=parseFloat(d.distance_km);return isNaN(v)?(lat!=null?distKm(lat,lon):0):v;})(),
       t:(function(ts){var x=new Date(ts).getTime();return isNaN(x)?Date.now():x;})(cw?d.time:d.timestamp)
     };
   }
+  function showSpotToast(s){
+    var band=spotBand(s)||'';
+    if(!s.call)return;
+    toast.textContent=s.call+(s.mode?' '+s.mode:'')+(band?' '+band:'');
+    toast.classList.add('on');
+    clearTimeout(toast._tid);
+    toast._tid=setTimeout(function(){toast.classList.remove('on');},3000);
+  }
   function connect(){
-    var ws=new WebSocket(WSBASE+'/ws/dxcluster?user_session_id=map-'+Math.random().toString(36).slice(2));
+    // Server validates this UUID against the registered /connection session —
+    // random IDs are rejected with 400 before upgrade.
+    var ws=new WebSocket(WSBASE+'/ws/dxcluster?user_session_id='+UUID);
     ws.onopen=function(){
-      stat.textContent='live';
       ws.send(JSON.stringify({type:isCW?'subscribe_cw_spots':'subscribe_digital_spots'}));
     };
     ws.onmessage=function(e){
@@ -495,11 +780,13 @@ if(KIND==='digi'||KIND==='cw'){
           spots.unshift(s);
           if(spots.length>MAXS)spots.length=MAXS;
           upsert(s);
-          cnt.textContent=(isCW?'⊟ ':'📡 ')+Object.keys(markers).length;
+          updateCount();
+          showSpotToast(s);
+          if(statsOpen)updateStats();
         }
       }catch(x){}
     };
-    ws.onclose=function(){stat.textContent='reconnecting…';setTimeout(connect,3000);};
+    ws.onclose=function(){setTimeout(connect,3000);};
   }
   connect();
 }
@@ -509,11 +796,10 @@ if(KIND==='digi'||KIND==='cw'){
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function MapOverlay({ visible, kind, baseUrl, onClose }: MapOverlayProps) {
-  const insets = useSafeAreaInsets();
+export default function MapOverlay({ visible, kind, baseUrl, sessionUuid, onClose }: MapOverlayProps) {
   const html = useMemo(
-    () => (kind ? buildHtml(kind, baseUrl) : ''),
-    [kind, baseUrl],
+    () => (kind ? buildHtml(kind, baseUrl, sessionUuid) : ''),
+    [kind, baseUrl, sessionUuid],
   );
 
   if (!visible || !kind) return null;
@@ -527,16 +813,6 @@ export default function MapOverlay({ visible, kind, baseUrl, onClose }: MapOverl
       supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
     >
       <View style={mo.root}>
-        <View style={[mo.titleBar, {
-          paddingTop: insets.top + 6,
-          paddingLeft: Math.max(14, insets.left),
-          paddingRight: Math.max(14, insets.right),
-        }]}>
-          <Text style={mo.title}>{TITLES[kind]}</Text>
-          <TouchableOpacity onPress={onClose} hitSlop={10} style={mo.backBtn}>
-            <Text style={mo.backTxt}>← BACK</Text>
-          </TouchableOpacity>
-        </View>
         <WebView
           source={{ html }}
           originWhitelist={['*']}
@@ -545,6 +821,7 @@ export default function MapOverlay({ visible, kind, baseUrl, onClose }: MapOverl
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
+          onMessage={(e) => { if (e.nativeEvent.data === 'close') onClose(); }}
         />
       </View>
     </Modal>
@@ -552,18 +829,6 @@ export default function MapOverlay({ visible, kind, baseUrl, onClose }: MapOverl
 }
 
 const mo = StyleSheet.create({
-  root:     { flex: 1, backgroundColor: '#0a0804' },
-  titleBar: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingBottom: 8,
-    backgroundColor: '#0a0804',
-    borderBottomWidth: 1, borderBottomColor: 'rgba(255,160,0,0.25)',
-  },
-  title:   { color: '#ffb833', fontSize: 13, letterSpacing: 2, fontFamily: 'Atkinson Hyperlegible' },
-  backBtn: {
-    borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)', borderRadius: 5,
-    paddingHorizontal: 10, paddingVertical: 4,
-  },
-  backTxt: { color: 'rgba(255,160,0,0.8)', fontSize: 11, letterSpacing: 1, fontFamily: 'Atkinson Hyperlegible' },
-  web:     { flex: 1, backgroundColor: '#0a0804' },
+  root: { flex: 1, backgroundColor: '#0a0804' },
+  web:  { flex: 1, backgroundColor: '#0a0804' },
 });

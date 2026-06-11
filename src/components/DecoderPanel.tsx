@@ -24,6 +24,7 @@ import {
 import { useTheme } from '../contexts/ThemeContext';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/DecoderClient';
+import { abbrCountry } from '../assets/countryAbbr';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -75,7 +76,7 @@ function fmtSpotTime(t: number): string {
 }
 function fmtSpotDist(km?: number): string {
   if (km === undefined || km === null) return '';
-  return km >= 1000 ? (km / 1000).toFixed(1) + 'Mm' : Math.round(km) + 'km';
+  return Math.round(km) + 'km';
 }
 
 // Memoized spot row — with FlatList virtualization only the ~12 visible rows
@@ -109,7 +110,7 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
         {fmtSpotDist(s.distKm)}
       </Text>
       <Text style={[dp.spotCell, dp.spotCountry, { fontFamily: font }]} numberOfLines={1}>
-        {s.country}
+        {abbrCountry(s.country)}
       </Text>
     </TouchableOpacity>
   );

@@ -95,6 +95,9 @@ export interface MenuSheetProps {
   onCentreVfo?:    () => void;
   /** Hide the controls bar for a full-screen waterfall (chevron restores). */
   onHideControls?: () => void;
+  onDispReset?:      () => void;
+  onDispSaveServer?: () => void;
+  onDispSaveGlobal?: () => void;
   hapticsEnabled?: boolean;
   onHaptics?:      (on: boolean) => void;
 
@@ -303,6 +306,7 @@ export default function MenuSheet({
   signalMode = 'snr', onSignalMode,
   displayStyle = 'amber', onDisplayStyle,
   drumMode = 'normal', onDrumMode, onCentreVfo, onHideControls,
+  onDispReset, onDispSaveServer, onDispSaveGlobal,
   hapticsEnabled = false, onHaptics,
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
@@ -461,9 +465,9 @@ export default function MenuSheet({
 
                 {/* Save row */}
                 <BtnRow>
-                  <Btn label="↺ RESET"       onPress={() => {}} />
-                  <Btn label="💾 THIS SERVER" onPress={() => {}} />
-                  <Btn label="🌐 GLOBAL"      onPress={() => {}} />
+                  <Btn label="↺ RESET"       onPress={onDispReset} />
+                  <Btn label="💾 THIS SERVER" onPress={onDispSaveServer} />
+                  <Btn label="🌐 GLOBAL"      onPress={onDispSaveGlobal} />
                 </BtnRow>
 
                 {/* Layout — spectrum/waterfall ratio */}
@@ -739,7 +743,11 @@ export default function MenuSheet({
             </BtnRow>
 
             {/* ── CLIENT DECODERS — skin: toggle start/stop, menu stays open;
-                   settings for the selected mode appear underneath ── */}
+                   settings for the selected mode appear underneath.
+                   Landscape: hidden — the decoder panel needs vertical space
+                   that landscape (esp. SE-class screens) doesn't have. Maps
+                   stay available; rotate to portrait for decoders. ── */}
+            {!isLandscape && (<>
             <SectionLabel label="CLIENT DECODERS" />
             <BtnRow>
               {(['rtty','navtex','wefax','sstv','morse'] as const).map(k => (
@@ -780,6 +788,7 @@ export default function MenuSheet({
                 <SubLabel label="Filters in decoder panel header · tap a spot to tune" small />
               </View>
             )}
+            </>)}
 
             {/* ── CONTROLS ───────────────────────────────────────── */}
             <SectionLabel label="CONTROLS" />

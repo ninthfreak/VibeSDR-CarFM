@@ -142,6 +142,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   // here; spectrum frames bypass React state entirely (CPU audit 2026-06-11:
   // setState per 10–20Hz frame re-rendered the whole tree ≈ a full core).
   const wfFrameSink = useRef<((b: Float32Array, s: SDRStatus) => void) | null>(null);
+  // Bumped by the menu's ⟳ RECONNECT to recycle the client (connect effect dep)
+  const [reconnectNonce, setReconnectNonce] = useState(0);
 
   // Muted via media controls (AirPods squeeze → pause = mute) — native emits
   // VibeMuted so the UI can show a tap-to-unmute banner.
@@ -250,8 +252,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── Display prefs persistence — every waterfall/spectrum/display setting in
   // one blob, restored on launch, saved debounced (sliders fire per-tick).
   const prefsLoaded = useRef(false);
+  // Save scope: 'server' when a per-instance override exists (saved via the
+  // display panel's THIS SERVER button) — auto-save then targets that key so
+  // later tweaks stick to this instance instead of silently reverting.
+  const prefsTarget = useRef<'global' | 'server'>('global');
+  const latestPrefsJson = useRef('');
   useEffect(() => {
-    AsyncStorage.getItem('lsv_display_prefs').then((j: string | null) => {
+    (async () => {
+      let j: string | null = null;
+      try {
+        j = await AsyncStorage.getItem('lsv_display_prefs:' + baseUrl);
+        if (j) prefsTarget.current = 'server';
+        else j = await AsyncStorage.getItem('lsv_display_prefs');
+      } catch {}
+      applyPrefs(j);
+    })();
+    function applyPrefs(j: string | null) {
       if (j) {
         try {
           const p = JSON.parse(j) as Record<string, unknown>;
@@ -273,24 +289,59 @@ export default function SDRScreen({ route, navigation }: Props) {
         } catch {}
       }
       prefsLoaded.current = true;
-    }).catch(() => { prefsLoaded.current = true; });
-  }, []);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseUrl]);
 
   useEffect(() => {
     if (!prefsLoaded.current) return; // don't clobber the blob with defaults pre-load
+    const json = JSON.stringify({
+      dbMin, dbMax, colormap, specShow, specSmoothing, specFloor,
+      specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
+      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, signalMode, step,
+      specRatioPortrait, specRatioLandscape,
+    });
+    latestPrefsJson.current = json;
+    const key = prefsTarget.current === 'server'
+      ? 'lsv_display_prefs:' + baseUrl : 'lsv_display_prefs';
     const t = setTimeout(() => {
-      AsyncStorage.setItem('lsv_display_prefs', JSON.stringify({
-        dbMin, dbMax, colormap, specShow, specSmoothing, specFloor,
-        specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
-        autoContrast, spatialSmooth, wfCoarse, vfoNeedle, signalMode, step,
-        specRatioPortrait, specRatioLandscape,
-      })).catch(() => {});
+      AsyncStorage.setItem(key, json).catch(() => {});
     }, 500);
     return () => clearTimeout(t);
   }, [dbMin, dbMax, colormap, specShow, specSmoothing, specFloor,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
       autoContrast, spatialSmooth, wfCoarse, vfoNeedle, signalMode, step,
-      specRatioPortrait, specRatioLandscape]);
+      specRatioPortrait, specRatioLandscape, baseUrl]);
+
+  // Display-panel save row (skin parity): RESET = defaults + drop the server
+  // override; THIS SERVER = per-instance override; GLOBAL = the shared blob.
+  const onDispReset = useCallback(() => {
+    AsyncStorage.removeItem('lsv_display_prefs:' + baseUrl).catch(() => {});
+    prefsTarget.current = 'global';
+    setDbMin(-120); setDbMax(-20); setColormap('gqrx');
+    setSpecShow(true); setSpecSmoothing(5); setSpecFloor(0);
+    setSpecPeakScale(10); setPeakHold(true);
+    setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
+    setAutoContrast(10); setSpatialSmooth(true); setWfCoarse('auto');
+    setVfoNeedle('#ff8800'); setSignalMode('snr'); setStep(1000);
+    setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
+    Alert.alert('Display Reset', 'Display settings restored to defaults.');
+  }, [baseUrl]);
+
+  const onDispSaveServer = useCallback(() => {
+    prefsTarget.current = 'server';
+    AsyncStorage.setItem('lsv_display_prefs:' + baseUrl, latestPrefsJson.current)
+      .catch(() => {});
+    Alert.alert('Saved', 'Display settings saved for this server.');
+  }, [baseUrl]);
+
+  const onDispSaveGlobal = useCallback(() => {
+    prefsTarget.current = 'global';
+    AsyncStorage.removeItem('lsv_display_prefs:' + baseUrl).catch(() => {});
+    AsyncStorage.setItem('lsv_display_prefs', latestPrefsJson.current)
+      .catch(() => {});
+    Alert.alert('Saved', 'Display settings saved as the global default.');
+  }, [baseUrl]);
 
   // ── Recording ─────────────────────────────────────────────────────────────
 
@@ -343,14 +394,36 @@ export default function SDRScreen({ route, navigation }: Props) {
     // TODO: send via UberSDR chat WebSocket
   }, [myCallsign, addChatMsg]);
 
+  // Chat drawer doesn't fit landscape even on a 17 Pro Max (let alone SE) —
+  // the button stays live for the unread pulse, but opening demands portrait.
+  const [chatRotateHint, setChatRotateHint] = useState(false);
+  const chatHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showChatRotateHint = useCallback(() => {
+    setChatRotateHint(true);
+    if (chatHintTimer.current) clearTimeout(chatHintTimer.current);
+    chatHintTimer.current = setTimeout(() => setChatRotateHint(false), 2500);
+  }, []);
+  useEffect(() => () => {
+    if (chatHintTimer.current) clearTimeout(chatHintTimer.current);
+  }, []);
+
   const openChat = useCallback(() => {
+    if (isLandscape) { showChatRotateHint(); return; }
     setChatOpen(true);
     setChatUnread(false);
-  }, []);
+  }, [isLandscape, showChatRotateHint]);
 
   const closeChat = useCallback(() => {
     setChatOpen(false);
   }, []);
+
+  // Rotating to landscape with chat open → close it and explain why
+  useEffect(() => {
+    if (isLandscape && chatOpen) {
+      setChatOpen(false);
+      showChatRotateHint();
+    }
+  }, [isLandscape, chatOpen, showChatRotateHint]);
 
   // ── Decoder ───────────────────────────────────────────────────────────────
 
@@ -664,8 +737,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       c.connect(status.frequency, status.mode);
     });
     return () => { cancelled = true; destroyed.current = true; c.destroy(); client.current = null; };
+  // reconnectNonce: menu ⟳ RECONNECT recycles the whole client (the old
+  // handler destroyed it and never reconnected — dead radio until relaunch)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl]);
+  }, [baseUrl, reconnectNonce]);
 
   // Persist the tune (debounced — the drum changes frequency rapidly) so the
   // next visit to this instance resumes where you left off.
@@ -948,6 +1023,19 @@ export default function SDRScreen({ route, navigation }: Props) {
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
   }, []);
 
+  // Menu INSTANCE row — ← BACK returns to the instance picker (it previously
+  // fell back to just closing the menu); ⟳ RECONNECT recycles the client.
+  const onBackToPicker = useCallback(() => {
+    setMenuOpen(false);
+    navigation.goBack();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const onReconnect = useCallback(() => {
+    setMenuOpen(false);
+    setConnected(false);
+    setReconnectNonce((n: number) => n + 1);
+  }, []);
+
   // Stable handlers — inline lambdas defeat the React.memo on ControlsBar.
   const onStepOpen  = useCallback(() => setStepOpen(true), []);
   const onMenuOpen  = useCallback(() => setMenuOpen(true), []);
@@ -1017,22 +1105,47 @@ export default function SDRScreen({ route, navigation }: Props) {
         onChange={(p, l) => { setSpecRatioPortrait(p); setSpecRatioLandscape(l); }}
         onClose={() => setRatioOverlayOpen(false)}
       />
-      <DecoderPanel
-        activeDecoder={activeDecoder}
-        decoderText={decoderText}
-        decoderStatus={decoderStatus}
-        decoding={decoding}
-        bottomOffset={pillBottom + 8}
-        onClear={() => setDecoderText('')}
-        onClose={closeDecoder}
-        morseQuality={morseQuality}
-        onMorseQuality={onMorseQuality}
-        spotsKind={spotsKind}
-        spots={spots}
-        onTuneHz={onTuneHz}
-        imageRef={decoderImageRef}
-        onImageStatus={setDecoderStatus}
-      />
+      {/* Decoder panel needs vertical space landscape doesn't have (skin
+          parity: panel is portrait-only) — decoder keeps running, banner
+          tells the user where it went. */}
+      {isLandscape && (activeDecoder !== null || spotsKind !== null) ? (
+        <View style={[styles.rotateBanner, { bottom: pillBottom + 8 }]}
+              pointerEvents="none">
+          <Text style={styles.rotateBannerText}>
+            ⟳ ROTATE TO PORTRAIT TO VIEW DECODER
+          </Text>
+        </View>
+      ) : (
+        <DecoderPanel
+          activeDecoder={activeDecoder}
+          decoderText={decoderText}
+          decoderStatus={decoderStatus}
+          decoding={decoding}
+          bottomOffset={pillBottom + 8}
+          onClear={() => setDecoderText('')}
+          onClose={closeDecoder}
+          morseQuality={morseQuality}
+          onMorseQuality={onMorseQuality}
+          spotsKind={spotsKind}
+          spots={spots}
+          onTuneHz={onTuneHz}
+          imageRef={decoderImageRef}
+          onImageStatus={setDecoderStatus}
+        />
+      )}
+
+      {/* Chat rotate hint — chat is portrait-only, button stays for unread */}
+      {chatRotateHint && (
+        <View style={[styles.rotateBanner, {
+                bottom: pillBottom + 8 +
+                  (isLandscape && (activeDecoder !== null || spotsKind !== null) ? 42 : 0),
+              }]}
+              pointerEvents="none">
+          <Text style={styles.rotateBannerText}>
+            ⟳ ROTATE TO PORTRAIT FOR CHAT
+          </Text>
+        </View>
+      )}
 
       {/* Muted banner — media-control pause (AirPods) maps to mute */}
       {isMuted && (
@@ -1125,7 +1238,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         onRec={toggleRecording}
         onSignalMode={setSignalMode}
         onDisplayStyle={handleDisplayStyle}
-        onReconnect={() => { client.current?.destroy(); setConnected(false); }}
+        onBack={onBackToPicker}
+        onReconnect={onReconnect}
         onResetSettings={() => {
           setDbMin(-120); setDbMax(-20); setColormap('gqrx');
           setStep(1000);
@@ -1158,6 +1272,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         idleSlow={idleSlow}             onIdleSlow={onIdleSlow}
         drumMode={drumMode}             onDrumMode={onDrumMode}
         onCentreVfo={onCentreVfo}       onHideControls={onHideControls}
+        onDispReset={onDispReset}       onDispSaveServer={onDispSaveServer}
+        onDispSaveGlobal={onDispSaveGlobal}
         snrSquelch={snrSquelch}         onSnrSquelch={onSnrSquelch}
         fmSquelch={fmSquelch}           onFmSquelch={onFmSquelch}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
@@ -1189,6 +1305,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         visible={mapKind !== null}
         kind={mapKind}
         baseUrl={baseUrl}
+        sessionUuid={sessionUuid}
         onClose={() => setMapKind(null)}
       />
 
@@ -1228,6 +1345,16 @@ export default function SDRScreen({ route, navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
+  rotateBanner: {
+    position: 'absolute', alignSelf: 'center', zIndex: 55,
+    backgroundColor: 'rgba(8,12,6,0.92)', borderWidth: 1,
+    borderColor: 'rgba(120,240,120,0.45)', borderRadius: 8,
+    paddingHorizontal: 14, paddingVertical: 7,
+  },
+  rotateBannerText: {
+    color: 'rgba(140,255,140,0.9)', fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 12, fontWeight: '700', letterSpacing: 0.5,
+  },
   mutedBanner: {
     position: 'absolute', alignSelf: 'center', zIndex: 60,
     backgroundColor: 'rgba(20,6,4,0.92)', borderWidth: 1,

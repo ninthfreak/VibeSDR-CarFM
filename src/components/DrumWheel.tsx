@@ -220,17 +220,25 @@ export default function DrumWheel({
     return p;
   }, [tx0, tx1, bx0, bx1, drumTop]);
 
-  // Scrolling notch ticks across the drum face
+  // Scrolling ticks projected onto a CYLINDER: world arc distance d maps to
+  // screen x = cx + R·sin(d/R) with brightness/width ∝ cos(d/R) — ticks
+  // compress and roll away at the edges, so motion reads as rotation instead
+  // of a sliding strip. Centre spacing equals world spacing (sin′(0)=1), so
+  // tuning landings look identical to before.
   const ticks = useMemo(() => {
-    if (W <= 0) return [];
+    if (W <= 0) return [] as Array<{ x: number; major: boolean; med: boolean; fade: number }>;
+    const R   = W / 2 - 2;
     const pxs = W > 120 ? 13 : W > 80 ? 11 : W > 55 ? 9 : 7;
-    const i0 = Math.floor((scroll - W / 2) / pxs) - 1;
-    const i1 = Math.ceil((scroll + W / 2) / pxs) + 1;
-    const out: Array<{ x: number; major: boolean; med: boolean }> = [];
+    const span = (R * Math.PI) / 2;
+    const i0 = Math.floor((scroll - span) / pxs) - 1;
+    const i1 = Math.ceil((scroll + span) / pxs) + 1;
+    const out: Array<{ x: number; major: boolean; med: boolean; fade: number }> = [];
     for (let i = i0; i <= i1; i++) {
-      const x = W / 2 - scroll + i * pxs;
-      if (x < 1 || x > W - 1) continue;
-      out.push({ x, major: i % 8 === 0, med: i % 4 === 0 });
+      const d = i * pxs - scroll;
+      const a = d / R;
+      if (a <= -Math.PI / 2 + 0.05 || a >= Math.PI / 2 - 0.05) continue;
+      const x = W / 2 + R * Math.sin(a);
+      out.push({ x, major: i % 8 === 0, med: i % 4 === 0, fade: Math.cos(a) });
     }
     return out;
   }, [W, scroll]);
@@ -248,10 +256,8 @@ export default function DrumWheel({
     [type, cx, drumTop, iconSz]);
 
   // LED carrier at the V base
-  const carW = Math.max(8, trapWB * 0.4);
-  const carH = Math.max(4, drumTop * 0.16);
 
-  const pmFontSz = Math.max(9, Math.round(drumTop * 0.46));
+  const pmFontSz = Math.max(10, Math.round(drumTop * 0.51));
 
   if (W <= 0) {
     return (
@@ -272,16 +278,37 @@ export default function DrumWheel({
               colors={['#101410', '#0a0c0a', '#060706']} positions={[0, 0.4, 1]} />
           </RoundedRect>
 
-          {/* ── Drum body — near-black rubberised cylinder ── */}
+          {/* ── Drum body — convex plastic wheel poking out of the panel:
+              crown catches the light mid-face, falls away to the seams ── */}
           <Rect x={1} y={drumTop} width={W - 2} height={drumH - 1}>
             <LinearGradient start={vec(0, drumTop)} end={vec(0, H)}
-              colors={['#161614', '#0b0b0a', '#040404', '#0a0a09']}
-              positions={[0, 0.22, 0.72, 1]} />
+              colors={['#070807', '#191a18', '#232422', '#181917', '#050505']}
+              positions={[0, 0.28, 0.50, 0.74, 1]} />
           </Rect>
+
+          {/* Slot shadows — the panel edge occludes the wheel at both seams */}
+          <Rect x={1} y={drumTop} width={W - 2} height={Math.max(4, drumH * 0.14)}>
+            <LinearGradient start={vec(0, drumTop)} end={vec(0, drumTop + Math.max(4, drumH * 0.14))}
+              colors={['rgba(0,0,0,0.62)', 'rgba(0,0,0,0)']} />
+          </Rect>
+          <Rect x={1} y={H - 1 - Math.max(4, drumH * 0.16)} width={W - 2} height={Math.max(4, drumH * 0.16)}>
+            <LinearGradient start={vec(0, H - 1 - Math.max(4, drumH * 0.16))} end={vec(0, H - 1)}
+              colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.58)']} />
+          </Rect>
+
+          {/* Green backlight seeping through the panel/wheel gaps */}
+          <Line p1={vec(3, drumTop + 0.5)} p2={vec(W - 3, drumTop + 0.5)}
+                color={G(0.30)} strokeWidth={1.4}>
+            <BlurMask blur={4} style="normal" respectCTM />
+          </Line>
+          <Line p1={vec(3, H - 1.5)} p2={vec(W - 3, H - 1.5)}
+                color={G(0.20)} strokeWidth={1.2}>
+            <BlurMask blur={4} style="normal" respectCTM />
+          </Line>
 
           {/* Drum rim — caught light along the cylinder's top edge */}
           <Rect x={1} y={drumTop} width={W - 2} height={RIM_H}
-                color="rgba(180,185,175,0.18)" />
+                color="rgba(180,185,175,0.14)" />
 
           {/* Knurl ridges — highlight/shadow pairs suggest the grip texture */}
           {ridges.map((y, i) => (
@@ -293,17 +320,38 @@ export default function DrumWheel({
             </Group>
           ))}
 
-          {/* Mechanical notches — grey, clipped to the drum */}
+          {/* Engraved notches — cosine-faded with the curvature; each line
+              carries a shadow pair so the cuts read as depth, not paint */}
           <Group clip={Skia.XYWHRect(1, drumTop + RIM_H, W - 2, drumH - RIM_H - 1)}>
-            {ticks.map((t, i) => (
-              <Line key={i}
-                p1={vec(t.x, drumTop + RIM_H + 2)} p2={vec(t.x, H - 3)}
-                color={t.major ? 'rgba(150,146,136,0.50)'
-                     : t.med  ? 'rgba(100,96,88,0.34)'
-                     :          'rgba(60,58,52,0.22)'}
-                strokeWidth={t.major ? 1.6 : 0.8} />
-            ))}
+            {ticks.map((t, i) => {
+              const base = t.major ? 0.55 : t.med ? 0.36 : 0.22;
+              const a    = base * (0.15 + 0.85 * t.fade);
+              const sw   = (t.major ? 1.5 : 0.8) * (0.5 + 0.5 * t.fade);
+              return (
+                <Group key={i}>
+                  {(t.major || t.med) && (
+                    <Line
+                      p1={vec(t.x + 0.9, drumTop + RIM_H + 2)} p2={vec(t.x + 0.9, H - 3)}
+                      color={`rgba(0,0,0,${(0.5 * t.fade).toFixed(3)})`}
+                      strokeWidth={sw} />
+                  )}
+                  <Line
+                    p1={vec(t.x, drumTop + RIM_H + 2)} p2={vec(t.x, H - 3)}
+                    color={`rgba(168,166,158,${a.toFixed(3)})`}
+                    strokeWidth={sw} />
+                </Group>
+              );
+            })}
           </Group>
+
+          {/* Specular sheen — studio light caught across the curvature */}
+          <Rect x={1} y={drumTop + drumH * 0.16} width={W - 2} height={drumH * 0.26}>
+            <LinearGradient
+              start={vec(0, drumTop + drumH * 0.16)}
+              end={vec(0, drumTop + drumH * 0.42)}
+              colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.07)', 'rgba(255,255,255,0)']}
+              positions={[0, 0.45, 1]} />
+          </Rect>
 
           {/* Drum side shading — cylindrical falloff at the edges */}
           <Rect x={1} y={drumTop} width={W * 0.12} height={drumH - 1}>
@@ -335,38 +383,37 @@ export default function DrumWheel({
             </Group>
           ))}
 
-          {/* Icon — green LED stroke */}
-          <Path path={iconPath} color={G(0.9)} strokeWidth={1.3} style="stroke"
+          {/* Icon — green LED: glow BEHIND a crisp stroke (BlurMask on the
+              stroke itself smudged the icons — acrylic rule applies) */}
+          <Path path={iconPath} color={G(0.45)} strokeWidth={2.6} style="stroke"
                 strokeCap="round" strokeJoin="round">
-            <BlurMask blur={2} style="normal" respectCTM />
+            <BlurMask blur={3} style="normal" respectCTM />
           </Path>
+          <Path path={iconPath} color={G(0.95)} strokeWidth={1.1} style="stroke"
+                strokeCap="round" strokeJoin="round" />
 
-          {/* ── LED carrier needle ──
-              Plastic carrier sits at the V base; red LED emerges from it;
-              the beam shines DOWNWARD into the drum only. */}
-          <RoundedRect x={cx - carW / 2} y={drumTop - carH} width={carW} height={carH} r={2}
-                       color="#1a1a18" />
-          <RoundedRect x={cx - carW / 2} y={drumTop - carH} width={carW} height={carH} r={2}
-                       color="rgba(120,120,110,0.35)" style="stroke" strokeWidth={0.7} />
-          {/* LED dot at the carrier mouth */}
-          <Rect x={cx - 1.6} y={drumTop - 3} width={3.2} height={3.2} color={RD(1, 60)}>
-            <BlurMask blur={2.5} style="normal" respectCTM />
-          </Rect>
-
-          {/* Beam — drumTop → bottom, clipped to the drum, 3 glow layers */}
+          {/* (LED carrier housing removed per design review — the beam
+              emerges straight from the V base.) */}
+          {/* Deep-red LED beam (no dot at the carrier — per design brief):
+              a soft pool of red light on the wheel surface + glow layers +
+              razor filament */}
           <Group clip={Skia.XYWHRect(1, drumTop, W - 2, drumH - 1)}>
+            <Rect x={cx - W * 0.16} y={drumTop} width={W * 0.32} height={drumH - 1}>
+              <RadialGradient c={vec(cx, drumTop + drumH * 0.30)} r={W * 0.16}
+                colors={[RD(0.16, 42), RD(0.05, 40), 'rgba(0,0,0,0)']}
+                positions={[0, 0.55, 1]} />
+            </Rect>
             <Line p1={vec(cx, drumTop)} p2={vec(cx, H - 1)}
-                  color={RD(0.12)} strokeWidth={10}>
-              <BlurMask blur={7} style="normal" respectCTM />
+                  color={RD(0.14, 40)} strokeWidth={9}>
+              <BlurMask blur={6} style="normal" respectCTM />
             </Line>
             <Line p1={vec(cx, drumTop)} p2={vec(cx, H - 1)}
-                  color={RD(0.45)} strokeWidth={3}>
-              <BlurMask blur={3.5} style="normal" respectCTM />
+                  color={RD(0.50, 44)} strokeWidth={2.6}>
+              <BlurMask blur={3} style="normal" respectCTM />
             </Line>
+            {/* Crisp deep-red filament — glow BEHIND a razor line */}
             <Line p1={vec(cx, drumTop)} p2={vec(cx, H - 1)}
-                  color={RD(0.98, 62)} strokeWidth={1}>
-              <BlurMask blur={2} style="normal" respectCTM />
-            </Line>
+                  color={RD(1, 52)} strokeWidth={0.9} />
           </Group>
 
           {/* ── Outer panel border — green LED glow + solid ── */}

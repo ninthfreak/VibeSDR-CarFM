@@ -579,7 +579,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
     <View style={{ flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center', gap: GAP }}>
 
       {/* VFO drum + clock */}
-      <View style={{ flex: 1, minWidth: s.r(80), maxWidth: s.r(160) }}>
+      <View style={{ flex: 1, minWidth: s.r(80) }}>
         <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} />
         <Text style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
           {clock}
@@ -613,7 +613,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
 
       {/* Signal bar + pill — flex so small screens (SE) get a shorter bar with
           everything still fitting; maxWidth caps the stretch on big panels. */}
-      <View style={{ flex: 2, maxWidth: s.r(440), justifyContent: 'center' }}
+      <View style={{ width: s.r(340), justifyContent: 'center' }}
             onLayout={(e: any) => setSigW(e.nativeEvent.layout.width)}>
         <View style={[lnd.sigFrame, { height: SIG_H }]}>
           <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
@@ -645,7 +645,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
       </View>
 
       {/* Zoom drum */}
-      <View style={{ flex: 1, minWidth: s.r(80), maxWidth: s.r(160) }}>
+      <View style={{ flex: 1, minWidth: s.r(80) }}>
         <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />
       </View>
 

@@ -764,7 +764,16 @@ function WaterfallView({
     };
     layer(0.35, 28 * sc, 1.5 * sc);  // outer halo
     layer(0.70, 16 * sc, 0.8 * sc);  // mid glow
-    layer(1.00,  6 * sc, 0.5);       // core filament
+    layer(0.80,  6 * sc, 0.8);       // filament glow
+    // CRISP core filament — HTML canvas shadowBlur glows BEHIND a sharp
+    // stroke, but MaskFilter blurs the stroke itself; the v1 acrylic look
+    // is blurred halo + razor hairline on top.
+    const crisp = Skia.Paint();
+    crisp.setColor(Skia.Color(needleColor));
+    crisp.setStrokeWidth(0.75);
+    crisp.setStyle(1);
+    crisp.setAntiAlias(true);
+    c.drawPath(path, crisp);
     return { img: surface.makeImageSnapshot(), halfW, w };
   }, [needleColor, needle?.scaleQ, height, dpr]);
 
@@ -787,6 +796,13 @@ function WaterfallView({
     p.setAntiAlias(true);
     p.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, 8, false));
     c.drawPath(path, p);
+    // Crisp acrylic edge line on top of the glow (v1 shadow semantics).
+    const pc = Skia.Paint();
+    pc.setColor(Skia.Color(hexRgba(needleColor, 0.35)));
+    pc.setStrokeWidth(Math.max(0.75, sc * 0.75));
+    pc.setStyle(1);
+    pc.setAntiAlias(true);
+    c.drawPath(path, pc);
     return { img: surface.makeImageSnapshot(), halfW, w, h };
   }, [needleColor, needle?.scaleQ, height, dpr]);
 
@@ -924,6 +940,17 @@ function WaterfallView({
 
         {staticOverlayCanvas}
 
+        {/* Init splash — the spectrum WS takes 1-2s to deliver its first
+            frame; show intent instead of a black void. texReady flips on the
+            first pushed row and never re-renders after. */}
+        {!texReady && (
+          <View style={wfStyles.initWrap} pointerEvents="none">
+            <Text style={[wfStyles.initText, { fontFamily }]}>
+              WATERFALL INITIALIZING…
+            </Text>
+          </View>
+        )}
+
         {/* Canvas: LIVE spectrum trace — isolated so the ~30Hz tween repaints
             ONLY these two paths, not the band plan/ticks/needle/acrylics
             (sharing one canvas redrew the whole overlay per tween tick). */}
@@ -1005,3 +1032,14 @@ const styles = StyleSheet.create({
 // Memo wall: residual SDRScreen renders stop here — every prop is a
 // primitive, a stable ref, or a useCallback.
 export default React.memo(WaterfallView);
+
+const wfStyles = StyleSheet.create({
+  initWrap: {
+    position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  initText: {
+    color: 'rgba(255,255,255,0.55)', fontSize: 14,
+    letterSpacing: 2, fontWeight: '600',
+  },
+});
