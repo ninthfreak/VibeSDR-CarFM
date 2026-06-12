@@ -66,14 +66,17 @@ export interface ReceiverInfo {
   callsign?: string;
   name?:     string;
   location?: string;
+  /** UberSDR server software version — /api/description top-level `version`. */
+  serverVersion?: string;
 }
 
 export async function fetchReceiverInfo(baseUrl: string): Promise<ReceiverInfo | null> {
   try {
     const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/description`);
     if (!res.ok) return null;
-    const d = await res.json() as { receiver?: ReceiverInfo };
-    return d?.receiver ?? null;
+    const d = await res.json() as { receiver?: ReceiverInfo; version?: string };
+    if (!d?.receiver && !d?.version) return null;
+    return { ...(d.receiver ?? {}), serverVersion: d.version };
   } catch {
     return null;
   }

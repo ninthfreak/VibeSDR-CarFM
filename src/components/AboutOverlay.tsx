@@ -1,0 +1,213 @@
+/**
+ * AboutOverlay — full-screen "About VibeSDR" page (opened from the menu
+ * footer). What's new in V2, full credits for everything borrowed or built
+ * on, and the GPL-3.0 licence statement. Pure native scroll view styled to
+ * match BrowserOverlay's bar + the a11y menu skin.
+ */
+
+import React from 'react';
+import {
+  Image, Linking, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+export interface AboutOverlayProps {
+  visible: boolean;
+  onClose: () => void;
+}
+
+const APP_VERSION = '2.0.0';
+
+// Stuart's personal message — source: reference/VibeSDR About.rtf (proofread,
+// voice preserved; V1-era references updated for V2).
+const STUEY_URL = 'https://stuey3d.tunnel.ubersdr.org/';
+const STUART_MESSAGE: string[] = [
+  'Hi, my name is Stuart (Stuey3D) and I am the UI designer and tester for this project.',
+  "VibeSDR came about from the frustration of trying to use extremely powerful WebSDR servers on mobile devices, only to be served a broken website that wasn't optimised for mobile and tried to fit the entire desktop site onto a phone screen. I'd had an idea for a mobile-optimised SDR interface for a while, but I am not a developer and I don't know how to code, so I had no way of realising my UI ideas.",
+  "After some back and forth with M9PSY, the creator of the amazing UberSDR web SDR software, he made a basic mobile web UI for UberSDR — some desktop assets reused and repositioned for mobile — but most of UberSDR's cool features, such as the decoders and maps, were still not available to users. I had helped M9PSY test various features over the previous few weeks and suggested new ones, and he encouraged me to make my own add-ons for UberSDR, since it already had sections where a user could add their own code for info banners or badges. I told him I was no coder, but he said just get AI to do it — I was good at testing and providing feedback, and that's all the AI needed.",
+  "A bit sceptical, I started by getting ChatGPT to create a simple PSKReporter tracking badge, which grew to be quite sophisticated with all sorts of stats tracking and graphs. I was amazed at how quickly I got it to such an advanced level — even though with ChatGPT you'd fix one thing and break ten others, so many hours were spent testing everything. During this time, at my suggestion, M9PSY added a widget gallery to UberSDR that lets a user add up to ten widgets to their page — so my PSKR badge was suddenly a widget any UberSDR instance owner could install at the click of a button.",
+  'I was so excited about my progress with the PSKR badge that I chatted to M9PSY about it, and he said: "I\'ll let you into a little secret — Claude is better."',
+  "So with that knowledge I embarked on my next widget: a search bar for the bookmarks, as at the time UberSDR lacked a bookmark search feature. Guessing M9PSY was probably fed up with me badgering him for new features, I decided to build my own bookmark search (which is part of this app too). It turned out very well, so I showed it off to M9PSY — who said he had already built a bookmark search but hadn't enabled it yet. That being said, I asked whether his refreshed dynamically during a session, as the EiBi bookmarks change with station schedules. His loaded once on page load and that was it — so my search bar had more functionality, having discovered the dynamic bookmarks early.",
+  'M9PSY kept encouraging me and explained that a widget is HTML code that loads last and can be very powerful — even removing the entire UI and replacing it. Interesting, I thought: maybe Claude and I could build a UI skin that would make controlling UberSDR better.',
+  'Over 500 builds of the UI — which I dubbed Pocket UberSDR at the time — Claude and I managed to get around 90–95% of the full UberSDR desktop functionality running in a mobile-optimised interface. We got most of the radio decoders working on-device, plus viewers for the on-server add-ons such as Digital Spots, CW Spots and HFDL aircraft tracking. I even beat M9PSY to getting server-side noise reduction working on mobile.',
+  'That UI was a labour of love, with many late nights and early mornings spent testing on multiple devices and reporting back, and it became what I truly believe to be the ultimate mobile SDR interface. M9PSY openly admits he is old skool and doesn\'t really use mobile devices, so mobile was much lower down his priority list for UberSDR. Armed with my new confidence, and with Claude by my side, I like to think I successfully saved him a job.',
+  "One big issue remained: my UI was an optional skin/widget for UberSDR, and for everybody to be able to use it, individual instance owners would need to add it to their servers. I felt a little deflated — most users set up their instances, forget them, and leave them running without even adding the cool new features M9PSY has been building (such as 24/7 server-side WEFAX/SSTV/NAVTEX decoding), so what chance did my UI have if server owners wouldn't add it? And then it hit me: I'll make an app I can share directly with users. Like Thanos, I thought \"Fine, I'll do it myself\" — and the app you are using is the result of that thought.",
+  'When you load the app you are taken to the instance list, where you can set a default that loads straight away (ideal for instance owners, or if you simply have a favourite). And regardless of whether the instance owner has added my UI to their server, you get the full mobile-optimised interface — tested all the way down to a 4-inch screen (iPhone SE in Display Zoom mode).',
+  "I am extremely proud of this app. It has been a labour of love and a lot of testing — but I am simply one man with no coding experience, just a vision and a tool (Claude) to realise that vision. I also believe in openness and honesty, and I will never hide the fact that this app was coded with AI — which is why it is called VibeSDR, to really lean into the vibe-coding aspect of it. I know some people do not like AI, due to its resource usage and the amount of slop posted daily on social media. For me, I would not feel happy sharing this app if I hadn't tested it as much as one man can, and the name VibeSDR was chosen so that people who are anti-AI can choose not to use this app if they feel that's right for them.",
+  "Is this app perfect? Probably not. Will there be bugs? Yeah, probably. I have genuinely spent hours upon hours testing, and a lot of time fixing tiny things like alignment issues that would have been \"good enough\" — but I wanted them perfect. I really hope that when you use this app you can see the thought and love that have gone into it, and that everything is laid out logically.",
+  "Well, that's it — my app-creation history laid out bare. I hope you enjoy this app as much as I enjoyed making it.",
+];
+
+const VERSION_HISTORY: { v: string; detail: string }[] = [
+  { v: 'V1', detail: 'Initial version — UberSDR support only, using the server-provided waterfall and spectrum.' },
+  { v: 'V2', detail: "Fully native rewrite with a custom GPU waterfall/spectrum stack (V1's headline future plan, delivered), native audio with background playback and media controls, on-device decoders, chat, bookmarks and much more — see What's New above." },
+];
+
+const FUTURE_PLANS: string[] = [
+  'OpenWebRX & KiwiSDR support. I also operate an OpenWebRX server which I can use for testing, so the plan is to map the controls to OpenWebRX and intercept the waterfall data to run in this app\'s own custom waterfall — that way, no matter which server you connect to, everything should look and work the same.',
+];
+
+const V2_CHANGES: string[] = [
+  'GPU waterfall — Skia runtime shader with in-shader temporal line synthesis',
+  'Full UberSDR skin parity: server maps (HFDL/digi/CW), spots tables, stats and legends',
+  'Native audio engines on iOS and Android (Opus over WebSocket, background playback)',
+  'Client noise reduction: NR, NR2 and noise blanker, processed on-device',
+  'Server-side NR with dynamic filter list and live parameter control',
+  'AAC audio recorder with share sheet',
+  'Voice Tuning System (VTS): station/band announcements, bookmark skipping and search',
+  'User bookmarks — per-instance or global, UberSDR-compatible import/export',
+  'Live chat with user list, mute, zoom-sync and tune-sync',
+  'Media session: lock-screen/watch/car controls with tune-step or bookmark skip',
+  'Admin pages in-app (Admin / Noise Floor / Band Conditions / Listeners)',
+  'Spectrum backdrop image with opacity control and station ID overlay',
+  'VFO glow and frost controls, signal-meter modes, S-meter calibration',
+  'Instance picker: location-aware sorting, country flags, favourites, defaults',
+  'Share tuned station as a tappable deep link',
+  'Haptic tuning feedback and ProMotion 120 Hz rendering',
+];
+
+const CREDITS: { name: string; detail: string }[] = [
+  { name: 'UberSDR — madpsy',
+    detail: 'The server this client is built for: protocol, web UI design reference, NR2 / noise-blanker / WebSDR-NR DSP algorithms, colour palettes, band plans and bookmark format.' },
+  { name: 'ka9q-radio — Phil Karn, KA9Q',
+    detail: 'The SDR engine (radiod) underneath UberSDR.' },
+  { name: 'Opus — Xiph.Org Foundation',
+    detail: 'Audio codec used for all streaming and decoding.' },
+  { name: 'EiBi',
+    detail: 'Shortwave broadcast schedules used for live station bookmarks.' },
+  { name: 'GQRX, KiwiSDR, CuteSDR, SdrDx, OpenWebRX, matplotlib',
+    detail: 'Origins of the waterfall colour palettes.' },
+  { name: 'Leaflet, OpenStreetMap & CARTO',
+    detail: 'Map rendering and tiles for the HFDL / digital / CW maps.' },
+  { name: 'Atkinson Hyperlegible — Braille Institute',
+    detail: 'Primary UI typeface. Nixie One and VT323 are used for the frequency displays.' },
+  { name: 'React Native, Expo, Hermes, Skia, Reanimated, Gesture Handler, OkHttp',
+    detail: 'The frameworks and libraries that make the app run.' },
+];
+
+export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
+  if (!visible) return null;
+  return (
+    <Modal
+      visible
+      animationType="slide"
+      supportedOrientations={['portrait', 'landscape']}
+      onRequestClose={onClose}
+    >
+      <SafeAreaView style={styles.root} edges={['top']}>
+        <View style={styles.bar}>
+          <TouchableOpacity onPress={onClose} hitSlop={12} activeOpacity={0.7}>
+            <Text style={styles.back}>← SDR</Text>
+          </TouchableOpacity>
+          <Text style={styles.title}>About VibeSDR</Text>
+          <View style={{ width: 50 }} />
+        </View>
+
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+          <View style={styles.heroRow}>
+            <Image source={require('../../assets/icon.png')} style={styles.icon} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.appName}>VibeSDR V2</Text>
+              <Text style={styles.appVer}>Version {APP_VERSION}</Text>
+              <Text style={styles.appSub}>A native mobile client for UberSDR receivers</Text>
+            </View>
+          </View>
+
+          <Text style={styles.section}>A MESSAGE FROM STUART</Text>
+          {STUART_MESSAGE.map((p, i) => (
+            <Text key={i} style={[styles.body, { marginBottom: 10 }]}>{p}</Text>
+          ))}
+          <TouchableOpacity onPress={() => Linking.openURL(STUEY_URL)}>
+            <Text style={styles.link}>Visit my UberSDR instance: stuey3d.tunnel.ubersdr.org</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.section}>WHAT'S NEW IN V2</Text>
+          {V2_CHANGES.map((c) => (
+            <View key={c} style={styles.bulletRow}>
+              <Text style={styles.bulletDot}>•</Text>
+              <Text style={styles.bulletText}>{c}</Text>
+            </View>
+          ))}
+
+          <Text style={styles.section}>VERSION HISTORY</Text>
+          {VERSION_HISTORY.map((v) => (
+            <View key={v.v} style={styles.creditBlock}>
+              <Text style={styles.creditName}>{v.v}</Text>
+              <Text style={styles.creditDetail}>{v.detail}</Text>
+            </View>
+          ))}
+
+          <Text style={styles.section}>FUTURE PLANS</Text>
+          {FUTURE_PLANS.map((p, i) => (
+            <Text key={i} style={styles.body}>{p}</Text>
+          ))}
+
+          <Text style={styles.section}>CREDITS</Text>
+          <Text style={styles.body}>
+            VibeSDR stands on the work of other open projects. Thank you to all of them.
+          </Text>
+          {CREDITS.map((c) => (
+            <View key={c.name} style={styles.creditBlock}>
+              <Text style={styles.creditName}>{c.name}</Text>
+              <Text style={styles.creditDetail}>{c.detail}</Text>
+            </View>
+          ))}
+
+          <Text style={styles.section}>LICENCE</Text>
+          <Text style={styles.body}>
+            VibeSDR is free software, released under the GNU General Public License
+            version 3 (GPL-3.0). You may redistribute and/or modify it under the terms
+            of that licence. This program is distributed in the hope that it will be
+            useful, but WITHOUT ANY WARRANTY — without even the implied warranty of
+            MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+          </Text>
+          <TouchableOpacity onPress={() => Linking.openURL('https://www.gnu.org/licenses/gpl-3.0.html')}>
+            <Text style={styles.link}>www.gnu.org/licenses/gpl-3.0</Text>
+          </TouchableOpacity>
+
+          <View style={{ height: 40 }} />
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+const F = 'Atkinson Hyperlegible';
+
+const styles = StyleSheet.create({
+  root:  { flex: 1, backgroundColor: '#000' },
+  bar:   {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 14, paddingTop: 6, paddingBottom: 8, backgroundColor: '#0a0a0a',
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.18)',
+  },
+  back:  { color: '#ffe566', fontFamily: F, fontSize: 16 },
+  title: { color: 'rgba(255,255,255,0.85)', fontFamily: F, fontSize: 15 },
+
+  scroll:  { flex: 1 },
+  content: { paddingHorizontal: 18, paddingTop: 16 },
+
+  heroRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 6 },
+  icon:    { width: 64, height: 64, borderRadius: 14 },
+  appName: { color: '#fff', fontFamily: F, fontSize: 22, fontWeight: 'bold', letterSpacing: 1 },
+  appVer:  { color: '#ffe566', fontFamily: F, fontSize: 13, marginTop: 2 },
+  appSub:  { color: 'rgba(255,255,255,0.70)', fontFamily: F, fontSize: 12, marginTop: 2 },
+
+  section: {
+    color: 'rgba(180,190,210,0.80)', fontFamily: F, fontSize: 12, fontWeight: 'bold',
+    letterSpacing: 2, marginTop: 22, marginBottom: 8,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.12)',
+    paddingTop: 14,
+  },
+  body: { color: 'rgba(255,255,255,0.85)', fontFamily: F, fontSize: 13, lineHeight: 19, marginBottom: 8 },
+
+  bulletRow:  { flexDirection: 'row', gap: 8, marginBottom: 5, paddingRight: 4 },
+  bulletDot:  { color: '#ffe566', fontFamily: F, fontSize: 13, lineHeight: 19 },
+  bulletText: { flex: 1, color: 'rgba(255,255,255,0.85)', fontFamily: F, fontSize: 13, lineHeight: 19 },
+
+  creditBlock:  { marginBottom: 12 },
+  creditName:   { color: '#fff', fontFamily: F, fontSize: 13, fontWeight: 'bold' },
+  creditDetail: { color: 'rgba(255,255,255,0.70)', fontFamily: F, fontSize: 12, lineHeight: 17, marginTop: 2 },
+
+  link: { color: '#6ec8ff', fontFamily: F, fontSize: 13, marginTop: 2 },
+});

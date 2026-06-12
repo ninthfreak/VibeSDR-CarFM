@@ -65,6 +65,7 @@ import DecoderPanel,
 import SpecRatioOverlay  from '../components/SpecRatioOverlay';
 import MapOverlay, { type MapKind } from '../components/MapOverlay';
 import BrowserOverlay from '../components/BrowserOverlay';
+import AboutOverlay from '../components/AboutOverlay';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import PasswordModal from '../components/PasswordModal';
 import {
@@ -241,6 +242,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const bgOpacityUserSet = useRef(false);
   // Station-ID overlay (web drawStationIdOverlay parity)
   const [stationId,     setStationId]     = useState<{ line1: string; line2?: string; color: string } | null>(null);
+  // Server software version (menu footer — identifies the backend type)
+  const [serverVersion, setServerVersion] = useState<string | null>(null);
+  const [aboutOpen,     setAboutOpen]     = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -259,11 +263,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (!bgOpacityUserSet.current && typeof cfg?.spectrum_bg_opacity === 'number') {
         setBgOpacity(Math.round(Math.max(0, Math.min(1, cfg.spectrum_bg_opacity)) * 10));
       }
-      if (cfg?.station_id_overlay === false) { setStationId(null); return; }
+      const overlayOff = cfg?.station_id_overlay === false;
+      if (overlayOff) setStationId(null);
       const idColor = /^#[0-9a-fA-F]{6}$/.test((cfg?.station_id_color ?? '').trim())
         ? (cfg!.station_id_color as string).trim() : '#ffffff';
       fetchReceiverInfo(baseUrl).then((r: ReceiverInfo | null) => {
         if (cancelled || !r) return;
+        if (r.serverVersion) setServerVersion(r.serverVersion);
+        if (overlayOff) return;
         const callsign = (r.callsign ?? '').trim();
         const name     = (r.name ?? '').trim();
         if (!callsign && !name) return;
@@ -2110,7 +2117,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         onServerDsp={onServerDsp}
         onServerDspFilter={onServerDspFilter}
         onServerDspParam={onServerDspParam}
+        serverVersion={serverVersion}
+        onAbout={() => { setMenuOpen(false); setAboutOpen(true); }}
       />
+
+      {/* About VibeSDR — V2 changes, credits, GPL-3.0 */}
+      <AboutOverlay visible={aboutOpen} onClose={() => setAboutOpen(false)} />
 
       {/* Step picker — bottom sheet */}
       <StepPicker

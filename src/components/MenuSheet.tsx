@@ -11,6 +11,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Animated,
   Dimensions,
+  Image,
   Modal,
   ScrollView,
   StyleSheet,
@@ -133,6 +134,10 @@ export interface MenuSheetProps {
   onAdminLink?:     (path: string, title: string) => void;
   onResetSettings?: () => void;
   onDisplaySettings?: () => void;
+  /** UberSDR server software version (/api/description) — footer right side. */
+  serverVersion?:   string | null;
+  /** Opens the About VibeSDR overlay (footer left side). */
+  onAbout?:         () => void;
 
   // Display settings panel props
   vfoNeedle?:         string;
@@ -181,6 +186,12 @@ export interface MenuSheetProps {
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
+
+// Server-software logos for the menu footer — one per supported backend so the
+// user can see what they're connected to (KiwiSDR/OpenWebRX to come).
+const SERVER_LOGOS: Record<string, any> = {
+  ubersdr: require('../../assets/logo_ubersdr.png'),
+};
 
 // Accessibility skin (reference body.lsv-a11y) — the single style going
 // forward: white Atkinson Hyperlegible text, larger touch targets, neutral
@@ -383,6 +394,7 @@ export default function MenuSheet({
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks,
   onClose, onBack, onAdminLink, onResetSettings, onDisplaySettings,
+  serverVersion = null, onAbout,
   onZoomIn, onZoomOut, onSetDefault, isDefaultInstance = false,
   decMode = null, decOn = false, onDecToggle,
   spotsKind = null, onSpotsToggle, onServerMap,
@@ -1190,6 +1202,25 @@ export default function MenuSheet({
               <Btn label="↺ RESET INTERFACE SETTINGS" full danger onPress={onResetSettings} />
             </BtnRow>
 
+            {/* ── Footer — app version | server type + version. The logo
+                identifies WHICH backend this instance runs (UberSDR today;
+                KiwiSDR/OpenWebRX later), so it's keyed by server type. ── */}
+            <View style={styles.footerRow}>
+              <TouchableOpacity onPress={onAbout} hitSlop={8}>
+                <Text style={styles.footerBrand}>VibeSDR V2</Text>
+                <Text style={styles.footerAboutHint}>ABOUT</Text>
+              </TouchableOpacity>
+              <View style={styles.footerServer}>
+                <Image source={SERVER_LOGOS.ubersdr} style={styles.footerLogo} resizeMode="contain" />
+                <View>
+                  <Text style={styles.footerServerName}>UberSDR</Text>
+                  {serverVersion ? (
+                    <Text style={styles.footerServerVer}>v{serverVersion}</Text>
+                  ) : null}
+                </View>
+              </View>
+            </View>
+
             <View style={{ height: 24 }} />
             </>)}
           </ScrollView>
@@ -1227,6 +1258,30 @@ const styles = StyleSheet.create({
   sectionLabel: {
     color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 12,
     fontWeight: 'bold', letterSpacing: 2,
+  },
+
+  footerRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.divider,
+    marginTop: 14, paddingTop: 14, paddingHorizontal: 2,
+  },
+  footerBrand: {
+    color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 15,
+    fontWeight: 'bold', letterSpacing: 1.5,
+  },
+  footerAboutHint: {
+    color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 10,
+    letterSpacing: 2, marginTop: 1,
+  },
+  footerServer: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  footerLogo:   { width: 30, height: 30 },
+  footerServerName: {
+    color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 13,
+    fontWeight: 'bold', letterSpacing: 1, textAlign: 'right',
+  },
+  footerServerVer: {
+    color: C.sliderLabel, fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
+    letterSpacing: 1, textAlign: 'right', marginTop: 1,
   },
 
   btnRow:    { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingVertical: 4 },
