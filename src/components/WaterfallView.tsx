@@ -160,6 +160,13 @@ export interface WaterfallViewProps {
   wfSharpness?:    number;
   frameRate?:      'native' | '20fps' | '30fps';
   needleColor?:    string;        // VFO colour — needle, sidebands, peak hold
+  /** Needle/glow brightness 1–10 (5 = original look) — bright palettes can
+   *  swallow the needle whatever colour it is. */
+  needleIntensity?: number;
+  /** Frosted backing 0–10 (0 = off): smoked-glass band over the passband
+   *  that dims the waterfall behind the needle — contrast on bright
+   *  palettes even when their colours match the needle. */
+  needleFrost?: number;
   // Smooth tune (variable refresh): 120Hz interpolated scroll while the user
   // is interacting; once settled the waterfall steps rows discretely (data is
   // ~10Hz — the slide is pure interpolation) and the spectrum trace eases at
@@ -238,7 +245,7 @@ function WaterfallView({
   autoContrast = 10, specSmoothing = 5, specFloor = 0, specPeakScale = 10,
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0,
-  frameRate = '20fps', needleColor = '#ff2020',
+  frameRate = '20fps', needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
   smoothTune = true, lastInteractAt,
 }: WaterfallViewProps) {
 
@@ -762,20 +769,24 @@ function WaterfallView({
       p.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, blur, false));
       c.drawPath(path, p);
     };
-    layer(0.35, 28 * sc, 1.5 * sc);  // outer halo
-    layer(0.70, 16 * sc, 0.8 * sc);  // mid glow
-    layer(0.80,  6 * sc, 0.8);       // filament glow
+    // Intensity 1–10 (5 = original): scales halo alphas and, above 5, widens
+    // the strokes too — a maxed needle punches through the brightest palettes
+    const k = needleIntensity / 5;
+    const wk = Math.max(1, k);
+    layer(Math.min(1, 0.35 * k), 28 * sc, 1.5 * sc * wk);  // outer halo
+    layer(Math.min(1, 0.70 * k), 16 * sc, 0.8 * sc * wk);  // mid glow
+    layer(Math.min(1, 0.80 * k),  6 * sc, 0.8 * wk);       // filament glow
     // CRISP core filament — HTML canvas shadowBlur glows BEHIND a sharp
     // stroke, but MaskFilter blurs the stroke itself; the v1 acrylic look
     // is blurred halo + razor hairline on top.
     const crisp = Skia.Paint();
     crisp.setColor(Skia.Color(needleColor));
-    crisp.setStrokeWidth(0.75);
+    crisp.setStrokeWidth(0.75 * wk);
     crisp.setStyle(1);
     crisp.setAntiAlias(true);
     c.drawPath(path, crisp);
     return { img: surface.makeImageSnapshot(), halfW, w };
-  }, [needleColor, needle?.scaleQ, height, dpr]);
+  }, [needleColor, needleIntensity, needle?.scaleQ, height, dpr]);
 
   const edgeStrip = useMemo(() => {
     const h = height - BAND_H;
@@ -848,6 +859,15 @@ function WaterfallView({
   const needleCanvas = useMemo(() => (
     <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>
 
+      {/* ── Frosted backing (under the acrylics): smoked-glass band dims the
+             waterfall across the passband so the needle keeps contrast on
+             bright palettes whatever colour it is ── */}
+      {needle && needleFrost > 0 && needle.hiXc > needle.loXc && (
+        <Rect x={needle.loXc} y={BAND_H}
+              width={needle.hiXc - needle.loXc} height={height - BAND_H}
+              color={`rgba(0,0,0,${(needleFrost / 10) * 0.72})`} />
+      )}
+
       {/* ── Acrylic sideband panels (band-strip bottom → screen bottom) ── */}
       {needle && needle.nX > needle.loXc && (
         <Rect x={needle.loXc} y={BAND_H}
@@ -885,7 +905,7 @@ function WaterfallView({
       )}
 
     </Canvas>
-  ), [width, height, needle, needleStrip, edgeStrip, needleColor]);
+  ), [width, height, needle, needleStrip, edgeStrip, needleColor, needleFrost]);
 
   // Static overlay (band plan/ticks/dB lines) memoised as ELEMENTS — when the
   // component re-renders for unrelated reasons React reuses the subtree and

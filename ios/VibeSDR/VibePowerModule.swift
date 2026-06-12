@@ -104,6 +104,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // the handshake window can be lost, which left the session on the URL's
   // freq/mode while the UI showed the restored tune.
   private var wsNeedsTuneAssert = false
+  // SERVER BUG WORKAROUND (FM half-speed, root-caused 2026-06-12): ubersdr
+  // creates its opus encoder ONCE per WS at the then-current sample rate;
+  // a mode change flips radiod to a new rate but keeps the old encoder, so
+  // the audio is time-stretched INSIDE the opus stream (tape-with-dying-
+  // batteries FM). Cycling the WS makes the server build a fresh encoder.
+  private var wsBaseSr: Int32 = 0
+  private var srFlipCount = 0
+  private var lastSrCycleAt = Date(timeIntervalSince1970: 0)
   private var isRunning     = false
   private var isMuted       = false
   private var currentFreq:  Int    = 14_074_000
@@ -495,6 +503,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let task = session.webSocketTask(with: url)
     wsTask = task
     wsNeedsTuneAssert = true
+    wsBaseSr = 0
+    srFlipCount = 0
     task.resume()
     receiveLoop(task: task)
   }
@@ -525,6 +535,33 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
             self.wsNeedsTuneAssert = false
             self.sendWsJson(["type": "tune",
                              "frequency": self.currentFreq, "mode": self.currentMode])
+          }
+          // Header sample-rate flip → server's per-WS opus encoder is now
+          // mismatched (see wsBaseSr note) — cycle the socket for a fresh
+          // encoder. 3-packet confirmation + 4s cooldown so buffered
+          // stragglers around the flip can't cause a reconnect storm.
+          if data.count > 21 {
+            let b = [UInt8](data.prefix(12))
+            let sr = Int32(b[8]) | Int32(b[9]) << 8 | Int32(b[10]) << 16 | Int32(b[11]) << 24
+            if sr >= 8000 && sr <= 96000 {
+              if self.wsBaseSr == 0 {
+                self.wsBaseSr = sr
+              } else if sr != self.wsBaseSr {
+                self.srFlipCount += 1
+                if self.srFlipCount >= 3,
+                   Date().timeIntervalSince(self.lastSrCycleAt) > 4 {
+                  NSLog("[VibePowerModule] sample rate %d→%d — cycling WS for a fresh server encoder", self.wsBaseSr, sr)
+                  self.lastSrCycleAt = Date()
+                  task.cancel(with: .goingAway, reason: nil)
+                  self.wsTask = nil
+                  self.openAudioWs(baseUrl: self.currentBase, frequency: self.currentFreq,
+                                   mode: self.currentMode, uuid: self.currentUuid)
+                  return  // new receive loop owns the socket now
+                }
+              } else {
+                self.srFlipCount = 0
+              }
+            }
           }
           if self.packetCount <= 3 {
             NSLog("[VibePowerModule] ws pkt#%d len=%d", self.packetCount, data.count)

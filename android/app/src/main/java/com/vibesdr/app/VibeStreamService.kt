@@ -110,6 +110,15 @@ class VibeStreamService : Service() {
     private val packetQueue = LinkedBlockingDeque<ByteArray>(32)
     private var decodeThread: Thread? = null
 
+    // SERVER BUG WORKAROUND (FM half-speed): ubersdr creates its opus encoder
+    // ONCE per WS at the then-current sample rate; a mode change flips radiod
+    // to a new rate but keeps the old encoder → audio time-stretched INSIDE
+    // the opus stream. A header-rate flip cycles the WS so the server builds
+    // a fresh encoder (3-packet confirm + 4s cooldown for flip stragglers).
+    @Volatile private var wsBaseSr = 0
+    @Volatile private var srFlipCount = 0
+    @Volatile private var lastSrCycleAt = 0L
+
     // ── Client noise DSP (VibeDSP.kt — iOS/skin parity) ──────────────────────
     // Engines run at the STREAM rate (packet-header sr: linear 12k / FM 24k)
     // for exact tuning parity; the opus decoder always outputs 48k, so the
@@ -358,6 +367,8 @@ class VibeStreamService : Service() {
             .build().also { httpClient = it }
         val url = wsUrl()
         Log.i(TAG, "opening audio WS: $url")
+        wsBaseSr = 0
+        srFlipCount = 0
         val socket = client.newWebSocket(Request.Builder().url(url).build(),
             object : WebSocketListener() {
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
@@ -365,6 +376,29 @@ class VibeStreamService : Service() {
                     packetCount++
                     lastPacketAt = SystemClock.elapsedRealtime()
                     if (packetCount <= 3) Log.i(TAG, "ws pkt#$packetCount len=${bytes.size}")
+                    // Header rate flip → server encoder mismatched, cycle WS
+                    if (bytes.size > HEADER_LEN) {
+                        val sr = (bytes[8].toInt() and 0xFF) or ((bytes[9].toInt() and 0xFF) shl 8) or
+                            ((bytes[10].toInt() and 0xFF) shl 16) or ((bytes[11].toInt() and 0xFF) shl 24)
+                        if (sr in 8000..96000) {
+                            if (wsBaseSr == 0) {
+                                wsBaseSr = sr
+                            } else if (sr != wsBaseSr) {
+                                srFlipCount++
+                                if (srFlipCount >= 3 &&
+                                    SystemClock.elapsedRealtime() - lastSrCycleAt > 4_000) {
+                                    Log.i(TAG, "sample rate $wsBaseSr→$sr — cycling WS for fresh server encoder")
+                                    lastSrCycleAt = SystemClock.elapsedRealtime()
+                                    webSocket.cancel()
+                                    ws = null
+                                    mainHandler.post { if (running) openWs() }
+                                    return
+                                }
+                            } else {
+                                srFlipCount = 0
+                            }
+                        }
+                    }
                     // Recording keeps decoding through mutes (file taps the
                     // decoded feed); playback is gated at the AudioTrack write
                     if (!muted || recArmed) {

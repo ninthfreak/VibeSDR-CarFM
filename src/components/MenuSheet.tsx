@@ -137,6 +137,12 @@ export interface MenuSheetProps {
   // Display settings panel props
   vfoNeedle?:         string;
   onVfoNeedle?:       (hex: string) => void;
+  /** Needle/glow brightness 1–10 (5 = original look). */
+  vfoIntensity?:      number;
+  onVfoIntensity?:    (v: number) => void;
+  /** Frosted backing 0–10 (0 = off) — dims the waterfall behind the needle. */
+  vfoFrost?:          number;
+  onVfoFrost?:        (v: number) => void;
   wfCoarse?:          'auto' | 'manual';
   onWfCoarse?:        (v: 'auto' | 'manual') => void;
   /** UberSDR auto-range symmetric contrast 0–20 (web calibration = 10). */
@@ -379,6 +385,8 @@ export default function MenuSheet({
   rttySettings, onRttySettings,
   wefaxLpm = 120, onWefaxLpm,
   vfoNeedle = '#ff8800', onVfoNeedle,
+  vfoIntensity = 5, onVfoIntensity,
+  vfoFrost = 0, onVfoFrost,
   wfCoarse = 'auto', onWfCoarse,
   autoContrast = 10, onAutoContrast,
   spatialSmooth = true, onSpatialSmooth,
@@ -750,6 +758,33 @@ export default function MenuSheet({
                       onPress={() => onVfoNeedle?.(c.hex)}
                     />
                   ))}
+                </View>
+
+                {/* VFO Intensity — needle + glow brightness; bright palettes
+                    can swallow the needle whatever colour it is */}
+                <View style={styles.bwRow}>
+                  <Text style={styles.bwLabel}>VFO GLOW</Text>
+                  <Slider style={styles.bwSlider}
+                    minimumValue={1} maximumValue={10} step={1}
+                    value={vfoIntensity}
+                    onValueChange={(v: number) => onVfoIntensity?.(v)}
+                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted}
+                    thumbTintColor={C.gold} />
+                  <Text style={styles.bwVal}>{vfoIntensity}</Text>
+                </View>
+
+                {/* Frosted backing — dims the waterfall across the passband
+                    so the needle keeps contrast on bright palettes */}
+                <View style={styles.bwRow}>
+                  <Text style={styles.bwLabel}>VFO FROST</Text>
+                  <Slider style={styles.bwSlider}
+                    minimumValue={0} maximumValue={10} step={1}
+                    value={vfoFrost}
+                    onValueChange={(v: number) => onVfoFrost?.(v)}
+                    minimumTrackTintColor={vfoFrost > 0 ? C.gold : C.muted}
+                    maximumTrackTintColor={C.muted}
+                    thumbTintColor={C.gold} />
+                  <Text style={styles.bwVal}>{vfoFrost === 0 ? 'Off' : vfoFrost}</Text>
                 </View>
 
                 {/* Waterfall — Coarse */}

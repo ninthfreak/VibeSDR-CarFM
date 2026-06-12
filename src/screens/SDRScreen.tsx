@@ -226,6 +226,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   // all slow with the data; any touch restores full rate instantly.
   const [idleSlow,      setIdleSlow]      = useState(true);
   const [vfoNeedle,     setVfoNeedle]     = useState('#ff8800');
+  // Needle/glow brightness 1-10 (5 = original look) — bright palettes can
+  // swallow the needle whatever colour it is (Stuart 2026-06-12 eve)
+  const [vfoIntensity,  setVfoIntensity]  = useState(5);
+  // Frost 0-10 (0 = off): smoked-glass band over the passband
+  const [vfoFrost,      setVfoFrost]      = useState(0);
   // SNR squelch (audio gate) — value ≤ -999 = open/disabled
   const [snrSquelch,    setSnrSquelch]    = useState(-999);
   // FM squelch — value ≤ -999 = open. Only active on fm/nfm modes.
@@ -320,6 +325,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (p.signalMode === 'snr' || p.signalMode === 'smeter' || p.signalMode === 'dbfs') setSignalMode(p.signalMode);
           if (typeof p.colormap === 'string')  setColormap(p.colormap);
           if (typeof p.vfoNeedle === 'string') setVfoNeedle(p.vfoNeedle);
+          num('vfoIntensity', setVfoIntensity);
+          num('vfoFrost', setVfoFrost);
         } catch {}
       }
       prefsLoaded.current = true;
@@ -332,7 +339,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const json = JSON.stringify({
       dbMin, dbMax, colormap, specShow, specSmoothing, specFloor,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
-      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, signalMode, step,
+      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, signalMode, step,
       specRatioPortrait, specRatioLandscape,
     });
     latestPrefsJson.current = json;
@@ -344,7 +351,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearTimeout(t);
   }, [dbMin, dbMax, colormap, specShow, specSmoothing, specFloor,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
-      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, signalMode, step,
+      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, signalMode, step,
       specRatioPortrait, specRatioLandscape, baseUrl]);
 
   // Display-panel save row (skin parity): RESET = defaults + drop the server
@@ -357,7 +364,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setSpecPeakScale(10); setPeakHold(true);
     setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
     setAutoContrast(10); setSpatialSmooth(true); setWfCoarse('auto');
-    setVfoNeedle('#ff8800'); setSignalMode('snr'); setStep(1000);
+    setVfoNeedle('#ff8800'); setVfoIntensity(5); setVfoFrost(0); setSignalMode('snr'); setStep(1000);
     setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
     Alert.alert('Display Reset', 'Display settings restored to defaults.');
   }, [baseUrl]);
@@ -1359,6 +1366,21 @@ export default function SDRScreen({ route, navigation }: Props) {
     sendAudioCmd({ type: 'set_squelch', squelchOpen: db });
   }, [sendAudioCmd]);
 
+  // radiod creates FM channels with its own DEFAULT squelch — entering
+  // fm/nfm must re-assert the app's squelch state (default −999 = always
+  // open), otherwise marginal signals cut in and out while the UI says
+  // "Open". Delayed so the server has re-created the radiod channel after
+  // the mode tune.
+  const fmSquelchRef = useRef(fmSquelch);
+  useEffect(() => { fmSquelchRef.current = fmSquelch; }, [fmSquelch]);
+  useEffect(() => {
+    if (status.mode !== 'fm' && status.mode !== 'nfm') return;
+    const t = setTimeout(() => {
+      sendAudioCmd({ type: 'set_squelch', squelchOpen: fmSquelchRef.current });
+    }, 700);
+    return () => clearTimeout(t);
+  }, [status.mode, sendAudioCmd]);
+
   // ── Server-side NR (DSP insert) ───────────────────────────────────────────
   // Ref mirrors so the WS-event listener and debounced senders read current
   // values without re-subscribing.
@@ -1790,6 +1812,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfSharpness={wfSharpness}
         frameRate={frameRate}
         needleColor={vfoNeedle}
+        needleIntensity={vfoIntensity}
+        needleFrost={vfoFrost}
         specFrac={specFrac}
       />
       </View>
@@ -1966,7 +1990,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           setSpecPeakScale(10); setPeakHold(true);
           setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
           setAutoContrast(10); setSpatialSmooth(true);
-          setWfCoarse('auto'); setFrameRate('20fps'); setVfoNeedle('#ff8800');
+          setWfCoarse('auto'); setFrameRate('20fps'); setVfoNeedle('#ff8800'); setVfoIntensity(5); setVfoFrost(0);
           setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
           onNrMode('off'); onNb(false);
           onSnrSquelch(-999); onFmSquelch(-999);
@@ -1989,6 +2013,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         }}
         onSpecRatio={() => { setMenuOpen(false); setRatioOverlayOpen(true); }}
         vfoNeedle={vfoNeedle}           onVfoNeedle={setVfoNeedle}
+        vfoIntensity={vfoIntensity}       onVfoIntensity={setVfoIntensity}
+        vfoFrost={vfoFrost}               onVfoFrost={setVfoFrost}
         wfCoarse={wfCoarse}             onWfCoarse={setWfCoarse}
         autoContrast={autoContrast}     onAutoContrast={setAutoContrast}
         spatialSmooth={spatialSmooth}   onSpatialSmooth={setSpatialSmooth}
