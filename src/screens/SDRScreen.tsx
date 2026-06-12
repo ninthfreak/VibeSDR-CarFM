@@ -37,7 +37,9 @@ import { useKeepAwake }       from 'expo-keep-awake';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList }     from '../../App';
 
-import { UberSDRClient, MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
+import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
+import { createBackend } from '../services/UberSDRAdapter';
+import type { SDRBackend } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind,
@@ -154,7 +156,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // ── Client ────────────────────────────────────────────────────────────────
 
-  const client    = useRef<UberSDRClient | null>(null);
+  const client    = useRef<SDRBackend | null>(null);
   const destroyed = useRef(false);
   const sessionUuid = useMemo(() => uuidv4(), [baseUrl]);
 
@@ -979,7 +981,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   useEffect(() => {
     destroyed.current = false;
-    const c = new UberSDRClient(baseUrl, sessionUuid, {
+    const c = createBackend('ubersdr', baseUrl, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
       onConnect:    () => { if (!destroyed.current) setConnected(true); },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
