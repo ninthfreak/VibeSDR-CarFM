@@ -564,6 +564,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => { chatUsersRef.current = chatUsers; }, [chatUsers]);
   const chatIdRef = useRef(0);
 
+  // chat_user_update broadcasts arrive whenever ANY user on the instance
+  // retunes — on a busy instance that's several per second, and each
+  // setChatUsers re-renders the entire screen tree (the historic CPU
+  // killer). Maintain the list in the ref always; only touch React state
+  // while the drawer is actually open (synced on open).
+  const updateChatUsers = useCallback((fn: (prev: ChatUserRow[]) => ChatUserRow[]) => {
+    chatUsersRef.current = fn(chatUsersRef.current);
+    if (chatOpenRef.current) setChatUsers(chatUsersRef.current);
+  }, []);
+
   // Handler refs — the decoder-client effect below builds its callbacks once
   // per connect, but tune/mode/filter handlers are declared later in the file
   const onTuneHzRef    = useRef<((hz: number) => void) | null>(null);
@@ -604,6 +614,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (isLandscape) { showChatRotateHint(); return; }
     // Prime the chat stream (history replay arrives quiet) even before join
     decoderClient.current?.subscribeChat();
+    setChatUsers(chatUsersRef.current);  // ref is live; state only while open
     setChatOpen(true);
     setChatUnread(false);
   }, [isLandscape, showChatRotateHint]);
@@ -705,12 +716,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onChatLeft: (username: string, isHistory: boolean) => {
         if (!isHistory) addChatMsg(mkMsg('system', `${username} left the chat`), true);
-        setChatUsers((prev: ChatUserRow[]) => prev.filter((u: ChatUserRow) => u.username !== username));
+        updateChatUsers((prev: ChatUserRow[]) =>
+          prev.filter((u: ChatUserRow) => u.username !== username));
         setSyncedUser((prev: string | null) => (prev === username ? null : prev));
       },
-      onChatUsers: (users: ChatUserRow[]) => setChatUsers(users),
+      onChatUsers: (users: ChatUserRow[]) => updateChatUsers(() => users),
       onChatUserUpdate: (u: ChatUserRow) => {
-        setChatUsers((prev: ChatUserRow[]) => {
+        updateChatUsers((prev: ChatUserRow[]) => {
           const i = prev.findIndex((x: ChatUserRow) => x.username === u.username);
           if (i < 0) return [...prev, u];
           const next = [...prev];
