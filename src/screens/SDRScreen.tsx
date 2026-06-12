@@ -43,7 +43,8 @@ import { type DecoderImageHandle }                     from '../components/Decod
 import { MIN_HZ, MAX_HZ, STEPS }                       from '../services/sdrTypes';
 import { v4 as uuidv4 }                                from 'uuid';
 import AsyncStorage                                    from '@react-native-async-storage/async-storage';
-import { setDefaultInstance }                          from '../services/defaultInstance';
+import { setDefaultInstance, getDefaultInstance,
+         clearDefaultInstance }                        from '../services/defaultInstance';
 import { useTheme }                                     from '../contexts/ThemeContext';
 
 import WaterfallView   from '../components/WaterfallView';
@@ -982,11 +983,31 @@ export default function SDRScreen({ route, navigation }: Props) {
     c.zoom(s.centerHz, s.binBandwidth * 2);
   }, []);
 
-  const onSetDefault = useCallback(() => {
-    setDefaultInstance({ name: instanceName ?? baseUrl, url: baseUrl })
-      .then(() => Alert.alert('Default Set', `${instanceName ?? baseUrl} is now your default instance.`))
+  // Toggle: SET DEFAULT when this instance isn't the default, CLEAR when it is
+  const [isDefault, setIsDefault] = useState(false);
+  useEffect(() => {
+    getDefaultInstance()
+      .then((d) => setIsDefault(!!d && d.url === baseUrl))
       .catch(() => {});
-  }, [baseUrl, instanceName]);
+  }, [baseUrl]);
+
+  const onSetDefault = useCallback(() => {
+    if (isDefault) {
+      clearDefaultInstance()
+        .then(() => {
+          setIsDefault(false);
+          Alert.alert('Default Cleared', 'No default instance is set.');
+        })
+        .catch(() => {});
+    } else {
+      setDefaultInstance({ name: instanceName ?? baseUrl, url: baseUrl })
+        .then(() => {
+          setIsDefault(true);
+          Alert.alert('Default Set', `${instanceName ?? baseUrl} is now your default instance.`);
+        })
+        .catch(() => {});
+    }
+  }, [baseUrl, instanceName, isDefault]);
 
   // ── Waterfall gestures ────────────────────────────────────────────────────
 
@@ -1067,9 +1088,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
 
   // ── SNR squelch (audio gate) ──────────────────────────────────────────────
+  // The slider/state are in OUR meter's units (spectrum-derived passband
+  // SNR). The server gates on radiod's raw audio-stream SNR, which reads
+  // ~30dB higher (floors at ~30 — madpsy/ka9q_ubersdr#77, same offset the
+  // signal meter compensates for), so shift +30 on the wire.
   const onSnrSquelch = useCallback((minSnr: number) => {
     setSnrSquelch(minSnr);
-    sendAudioCmd({ type: 'set_audio_gate', min_snr: minSnr });
+    sendAudioCmd({ type: 'set_audio_gate', min_snr: minSnr <= -999 ? -999 : minSnr + 30 });
   }, [sendAudioCmd]);
 
   // ── FM squelch ────────────────────────────────────────────────────────────
@@ -1348,6 +1373,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onZoomIn={onZoomIn}
         onZoomOut={onZoomOut}
         onSetDefault={onSetDefault}
+        isDefaultInstance={isDefault}
         decMode={selDecoder}
         decOn={activeDecoder !== null && activeDecoder === selDecoder}
         onDecToggle={onDecToggle}

@@ -51,6 +51,7 @@ export interface MenuSheetProps {
   onZoomIn?:    () => void;
   onZoomOut?:   () => void;
   onSetDefault?: () => void;
+  isDefaultInstance?: boolean;
   /** Client decoders — skin semantics: toggle start/stop, menu stays open. */
   decMode?:        'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|null;
   decOn?:          boolean;
@@ -346,7 +347,7 @@ export default function MenuSheet({
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
   onClose, onBack, onAdminLink, onResetSettings, onDisplaySettings,
-  onZoomIn, onZoomOut, onSetDefault,
+  onZoomIn, onZoomOut, onSetDefault, isDefaultInstance = false,
   decMode = null, decOn = false, onDecToggle,
   spotsKind = null, onSpotsToggle, onServerMap,
   rttySettings, onRttySettings,
@@ -726,14 +727,16 @@ export default function MenuSheet({
               </View>
             )}
 
-            {/* SNR Squelch — audio gate, always visible. Slider 24–80 dB, left = Off */}
+            {/* SNR Squelch — audio gate, always visible. Slider 0–50 dB in OUR
+                meter's units (SDRScreen shifts +30 for the server's raw SNR
+                scale), left = Off */}
             <View style={styles.bwRow}>
               <Text style={styles.bwLabel}>SNR SQL</Text>
               <Slider style={styles.bwSlider}
-                minimumValue={24} maximumValue={80} step={0.5}
-                value={Math.max(24, snrSquelch === -999 ? 24 : snrSquelch)}
-                onValueChange={(v: number) => onSnrSquelch?.(v <= 24.1 ? -999 : v)}
-                minimumTrackTintColor={snrSquelch > 24 ? C.gold : C.muted}
+                minimumValue={0} maximumValue={50} step={0.5}
+                value={Math.max(0, snrSquelch === -999 ? 0 : snrSquelch)}
+                onValueChange={(v: number) => onSnrSquelch?.(v <= 0.1 ? -999 : v)}
+                minimumTrackTintColor={snrSquelch > 0 ? C.gold : C.muted}
                 maximumTrackTintColor={C.muted}
                 thumbTintColor={C.gold} />
               <Text style={styles.bwVal}>{snrSquelch <= -999 ? 'Off' : `≥${snrSquelch.toFixed(0)}`}</Text>
@@ -913,7 +916,8 @@ export default function MenuSheet({
             <SectionLabel label="INSTANCE" />
             <Text style={styles.instanceUrl} numberOfLines={1}>{serverName || serverUrl}</Text>
             <BtnRow>
-              <Btn label="☆ SET DEFAULT" onPress={onSetDefault} />
+              <Btn label={isDefaultInstance ? '★ CLEAR DEFAULT' : '☆ SET DEFAULT'}
+                   active={isDefaultInstance} onPress={onSetDefault} />
               <Btn label="← BACK"        onPress={onBack ?? onClose} />
             </BtnRow>
             <BtnRow col>

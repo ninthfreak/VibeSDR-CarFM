@@ -114,6 +114,9 @@ export default function InstancePickerScreen({ navigation }: Props) {
 
   useFocusEffect(useCallback(() => {
     getViewMode().then(mode => { if (mode) setViewModeState(mode); });
+    // Re-read the default on every focus — the SDR menu can set/clear it,
+    // and returning here doesn't remount (stale star otherwise).
+    getDefaultInstance().then(d => setDefaultInst(d)).catch(() => {});
   }, []));
 
   const { colors: C, font: F, scale } = themeFor(viewMode);
