@@ -1,3 +1,5 @@
+import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
+
 export interface SDRInstance {
   name:          string;
   url:           string;
@@ -40,14 +42,31 @@ let _cacheLon:  number | null = null;
 const CACHE_TTL_MS = 60_000;
 
 export async function getUserLocation(): Promise<{ lat: number; lon: number } | null> {
-  return new Promise(resolve => {
-    if (!navigator.geolocation) { resolve(null); return; }
-    navigator.geolocation.getCurrentPosition(
-      pos => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-      ()  => resolve(null),
-      { timeout: 5000, maximumAge: 300_000 },
-    );
-  });
+  // navigator.geolocation does NOT exist in React Native — the old code
+  // always resolved null, never prompted, and the directory fell back to
+  // IP geolocation (wildly wrong on cellular). Native one-shot instead:
+  // iOS prompts via CoreLocation; Android needs the runtime permission.
+  try {
+    if (Platform.OS === 'android') {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+        {
+          title: 'Location for nearest servers',
+          message: 'VibeSDR uses your location to sort SDR instances by distance.',
+          buttonPositive: 'OK',
+        },
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) return null;
+    }
+    const mod = NativeModules.VibePowerModule as
+      | { getLocation?: () => Promise<{ lat: number; lon: number } | null> }
+      | undefined;
+    const res = await mod?.getLocation?.();
+    return res && typeof res.lat === 'number' && typeof res.lon === 'number'
+      ? { lat: res.lat, lon: res.lon } : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchInstances(

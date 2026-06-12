@@ -52,6 +52,7 @@ import { useTheme }                                     from '../contexts/ThemeC
 
 import WaterfallView   from '../components/WaterfallView';
 import ControlsBar, { createMeterBus } from '../components/ControlsBar';
+import { setDrumHaptics } from '../components/DrumWheel';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import AudioPlayer, { VibePowerModule } from '../components/AudioPlayer';
 import FreqModal       from '../components/FreqModal';
@@ -65,6 +66,7 @@ import SpecRatioOverlay  from '../components/SpecRatioOverlay';
 import MapOverlay, { type MapKind } from '../components/MapOverlay';
 import BrowserOverlay from '../components/BrowserOverlay';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
+import PasswordModal from '../components/PasswordModal';
 import {
   fetchBookmarks, fetchBands, findNearest, findNextBookmark,
   fmtBandFreq, deriveItuRegion, refreshBandSnr, getBandSnrDb, propCondition,
@@ -382,10 +384,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const toggleRecording = useCallback(() => {
-    if (Platform.OS !== 'ios') {
-      Alert.alert('Recording', 'Recording is not yet supported on Android.');
-      return;
-    }
     if (!isRecording) {
       VibePowerModule?.startRecording()
         .then(() => {
@@ -676,7 +674,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           AsyncStorage.removeItem('lsv_chat_callsign:' + baseUrl).catch(() => {});
         }
       },
-    });
+    }, password);
     decoderClient.current = dc;
 
     // Saved callsign → auto-join on connect (skin autoLogin parity); the
@@ -843,15 +841,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       c?.syncFrequency(e.frequency, e.mode as SDRMode);
       setStatus((prev: SDRStatus) => ({ ...prev, frequency: e.frequency, ...(e.mode ? { mode: e.mode as SDRMode } : {}) }));
       // Media-control skips tune blind from the lock screen / car stereo —
-      // follow with the view once the needle nears the span edge, otherwise
-      // repeated skips walk the VFO off-screen with the waterfall stuck.
-      if (c) {
-        const v = c.getView();
-        const span = v.binBandwidth * (v.binCount || 1024);
-        if (span > 0 && Math.abs(e.frequency - v.centerHz) > span * 0.4) {
-          c.pan(e.frequency);
-        }
-      }
+      // recentre the view on EVERY skip so the VFO stays centred and the
+      // waterfall moves around it (drum-style; Stuart's design). Skips made
+      // while the spectrum WS is paused (locked) land in view.centerHz and
+      // the onopen view-restore replays them on unlock.
+      c?.pan(e.frequency);
     });
     const subMute = emitter.addListener('VibeMuted', (e: { muted: boolean }) => {
       setIsMuted(!!e.muted);
@@ -913,6 +907,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     destroyed.current = false;
     const c = new UberSDRClient(baseUrl, sessionUuid, {
+      // (callbacks below; bypass password rides every WS URL)
       onConnect:    () => { if (!destroyed.current) setConnected(true); },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
       onLink: (q) => {
@@ -987,9 +982,19 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onError: (msg) => {
         if (destroyed.current) return;
-        Alert.alert('Connection Error', msg, [{ text: 'Back', onPress: () => navigation.goBack() }]);
+        // Rate-limited / blocked → straight to the bypass-password box (the
+        // instance password gets around per-IP limits); other errors offer
+        // both routes.
+        if (/429|rate.?limit|too many|refused|denied|blocked|busy/i.test(msg)) {
+          setPwPrompt(true);
+        } else {
+          Alert.alert('Connection Error', msg, [
+            { text: 'Back to Instances', onPress: () => navigation.goBack() },
+            { text: 'Enter Password', onPress: () => setPwPrompt(true) },
+          ]);
+        }
       },
-    });
+    }, password);
     client.current = c;
     // QoL: restore the last frequency/mode used on THIS instance before
     // connecting (the hardcoded default landed on the 20m FT8 squeal every
@@ -1014,10 +1019,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         ...(bw ? { bandwidthLow: bw[0], bandwidthHigh: bw[1] } : {}),
       }));
       lastTuneLoaded.current = true;
+      setTuneLoaded(true);
       c.connect(f, m);
     }).catch(() => {
       if (cancelled || destroyed.current) return;
       lastTuneLoaded.current = true;
+      setTuneLoaded(true);
       c.connect(status.frequency, status.mode);
     });
     return () => { cancelled = true; destroyed.current = true; c.destroy(); client.current = null; };
@@ -1027,6 +1034,18 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Persist the tune (debounced — the drum changes frequency rapidly) so the
   // next visit to this instance resumes where you left off.
   const lastTuneLoaded = useRef(false);
+  // Bypass-password prompt — rate-limited/blocked connections show this
+  // directly (the instance password gets around per-IP limits); submitting
+  // replaces the screen with a fresh session carrying the password on every
+  // WS URL (audio, spectrum, dxcluster).
+  const [pwPrompt, setPwPrompt] = useState(false);
+
+  // Audio engine start is GATED on the restore (ms-fast): the engine used to
+  // start with the default 14.074/USB in the audio-WS URL and the corrective
+  // restore tune could lose the race against the WS handshake — server stayed
+  // on 20m FT8/USB while the UI showed the restored station (sounded like
+  // "broken AM"), and zoom anchored on the stale server frequency.
+  const [tuneLoaded, setTuneLoaded] = useState(false);
   useEffect(() => {
     if (!lastTuneLoaded.current || !status.frequency) return;
     const t = setTimeout(() => {
@@ -1119,6 +1138,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_drum_sens', m).catch(() => {});
   }, []);
 
+  // ✦ HAPTICS toggle — was UI-only (props never passed from here, and the
+  // drums ticked unconditionally). Module-level switch in DrumWheel.
+  const [hapticsEnabled, setHapticsEnabled] = useState(true);
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_haptics').then((v: string | null) => {
+      if (v === '0') { setHapticsEnabled(false); setDrumHaptics(false); }
+    }).catch(() => {});
+  }, []);
+  const onHaptics = useCallback((on: boolean) => {
+    setHapticsEnabled(on);
+    setDrumHaptics(on);
+    AsyncStorage.setItem('lsv_haptics', on ? '1' : '0').catch(() => {});
+  }, []);
+
   // ── VFO drum ──────────────────────────────────────────────────────────────
   // Skin-parity step tuning (vSendDelta + vDown from Scalable_Mobile_UI v6.3.1):
   //   - pending accumulates in Hz: px × step / pxPerStep (velocity-adaptive)
@@ -1167,6 +1200,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   // per-event gives factor 1 = no-op), and the server snaps binBandwidth to a
   // ladder (small factors snap back to the same step). So compound the whole
   // gesture from the bandwidth captured at gesture start.
+  // VFO-anchored zoom: every zoom path (menu ±, zoom drum, pinch) anchors on
+  // the tuned frequency when it's inside the current span — a fresh connect
+  // sits on the server's default full-span view, so centre-anchored zooms
+  // dove into mid-band (≈15MHz) instead of the restored station. Falls back
+  // to the view centre when the VFO has been panned out of sight.
+  const zoomAnchorHz = useCallback((s: SDRStatus): number => {
+    const c = client.current; if (!c) return s.centerHz;
+    const span  = s.binBandwidth * (s.binCount || 1024);
+    const tuned = c.getStatus().frequency;
+    return tuned && span > 0 && Math.abs(tuned - s.centerHz) < span / 2
+      ? tuned : s.centerHz;
+  }, []);
+
   const bwZoomAcc = useRef({ base: 0, px: 0, t: 0 });
   const onBwDelta = useCallback((pxDelta: number) => {
     const c = client.current; if (!c) return;
@@ -1179,23 +1225,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     a.t = now;
     a.px += pxDelta;
     // Drum px per zoom octave (2×) — PRECISE nearly doubles the travel
-    c.zoom(s.centerHz, Math.max(0.5,
+    c.zoom(zoomAnchorHz(s), Math.max(0.5,
       a.base * Math.pow(0.5, a.px / DRUM_SENS[drumModeRef.current].zoomOctave)));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Menu ± zoom anchors on the VFO when it's inside the current span —
-  // fresh connects restore the tune but the view geometry still sits on the
-  // server default, so zooming before touching the VFO used to dive into
-  // the old default band (20m FT8) instead of where you're listening.
   const zoomBy = useCallback((factor: number) => {
     const c = client.current; if (!c) return;
     const v = c.getView(); if (!v.binBandwidth || !v.centerHz) return;
-    const span  = v.binBandwidth * (v.binCount || 1024);
-    const tuned = c.getStatus().frequency;
-    const anchor = tuned && span > 0 && Math.abs(tuned - v.centerHz) < span / 2
-      ? tuned : v.centerHz;
-    c.zoom(anchor, Math.max(1, v.binBandwidth * factor));
-  }, []);
+    c.zoom(zoomAnchorHz(v), Math.max(1, v.binBandwidth * factor));
+  }, [zoomAnchorHz]);
   const onZoomIn  = useCallback(() => zoomBy(0.5), [zoomBy]);
   const onZoomOut = useCallback(() => zoomBy(2),   [zoomBy]);
 
@@ -1248,7 +1287,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (now - a.t > 400 || !a.base) { a.base = s.binBandwidth; a.f = 1; }
     a.t = now;
     a.f *= factor;
-    c.zoom(s.centerHz, Math.max(0.5, a.base * a.f));
+    c.zoom(zoomAnchorHz(s), Math.max(0.5, a.base * a.f));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const onWfZoomDelta = useCallback((dyPx: number) => {
@@ -1398,6 +1438,30 @@ export default function SDRScreen({ route, navigation }: Props) {
     onFilterBothRef.current = onFilterBoth;
     onVtsJumpRef.current   = onVtsJump;
   });
+
+  // ── Share — deep link into this station (web-UI URL params; skin parity:
+  //    the skin shared window.location.href which carries the same params) ──
+  const onShareStation = useCallback(async () => {
+    const c = client.current;
+    let url = `${baseUrl.replace(/\/+$/, '')}/?freq=${Math.round(status.frequency)}`
+      + `&mode=${status.mode}`
+      + `&bwl=${Math.round(status.bandwidthLow)}&bwh=${Math.round(status.bandwidthHigh)}`;
+    const v = c?.getView();
+    if (v && v.binBandwidth > 0) {
+      const span = v.binBandwidth * (v.binCount || 1024);
+      if (span < 29_000_000) {  // only when actually zoomed in
+        url += `&zoom_freq=${Math.round(v.centerHz)}&zoom_bw=${v.binBandwidth.toFixed(1)}`;
+      }
+    }
+    const label = `VibeSDR — ${(status.frequency / 1e3).toFixed(3)} kHz ${status.mode.toUpperCase()}`;
+    try {
+      // iOS shares a real URL object (tappable everywhere); Android targets
+      // ignore the url field, so embed it in the message text instead
+      await Share.share(Platform.OS === 'ios'
+        ? { url, message: label }
+        : { message: `${label}\n${url}` });
+    } catch {}
+  }, [baseUrl, status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh]);
 
   // ── VTS (station/band steward — a11y popup bar only, no tuning guide) ─────
   // Stations come from /api/bookmarks (static config + live EiBi schedule);
@@ -1814,6 +1878,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           mode={status.mode}
           step={step}
           connected={connected}
+          onShare={onShareStation}
           bottomInset={0}
           instanceHost={instanceName ?? baseUrl}
           meterBus={meterBus.current}
@@ -1940,6 +2005,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         idleSlow={idleSlow}             onIdleSlow={onIdleSlow}
         drumMode={drumMode}             onDrumMode={onDrumMode}
         mediaSkip={mediaSkip}           onMediaSkip={onMediaSkip}
+        hapticsEnabled={hapticsEnabled} onHaptics={onHaptics}
         onCentreVfo={onCentreVfo}       onHideControls={onHideControls}
         onDispReset={onDispReset}       onDispSaveServer={onDispSaveServer}
         onDispSaveGlobal={onDispSaveGlobal}
@@ -2016,9 +2082,22 @@ export default function SDRScreen({ route, navigation }: Props) {
         onUserTap={chatUserTap}
       />
 
-      {/* Audio player (renderless) */}
+      {/* Bypass password — rate-limit recovery (replaces the session) */}
+      <PasswordModal
+        visible={pwPrompt}
+        serverUrl={baseUrl}
+        onSubmit={(pw: string) => {
+          setPwPrompt(false);
+          navigation.replace('SDR', { ...route.params, password: pw });
+        }}
+        onCancel={() => { setPwPrompt(false); navigation.goBack(); }}
+      />
+
+      {/* Audio player (renderless) — held until the saved tune is restored
+          so the audio WS opens on the CORRECT freq/mode (no race) */}
       <AudioPlayer
-        baseUrl={baseUrl}
+        baseUrl={tuneLoaded ? baseUrl : null}
+        password={password}
         frequency={status.frequency}
         mode={status.mode}
         step={step}

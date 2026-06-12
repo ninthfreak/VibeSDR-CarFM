@@ -24,7 +24,7 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     override fun getName() = "VibePowerModule"
 
     @ReactMethod
-    fun startAudioEngine(baseUrl: String, frequency: Double, mode: String, uuid: String) {
+    fun startAudioEngine(baseUrl: String, frequency: Double, mode: String, uuid: String, password: String) {
         VibeStreamService.reactContext = reactContext
         val intent = Intent(reactContext, VibeStreamService::class.java).apply {
             action = VibeStreamService.ACTION_START
@@ -32,6 +32,7 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
             putExtra(VibeStreamService.EXTRA_FREQUENCY, frequency.toLong())
             putExtra(VibeStreamService.EXTRA_MODE, mode)
             putExtra(VibeStreamService.EXTRA_UUID, uuid)
+            putExtra(VibeStreamService.EXTRA_PASSWORD, password)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             reactContext.startForegroundService(intent)
@@ -99,26 +100,64 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.skipMode = mode
     }
 
-    // Client NR/NR2/NB are native Swift DSP on iOS; the Kotlin port hasn't
-    // happened yet — accept the calls so JS stays platform-agnostic.
+    /** One-shot coarse location for nearest-first instance sorting. JS must
+     *  request ACCESS_COARSE_LOCATION via PermissionsAndroid first. */
     @ReactMethod
-    fun setNrMode(mode: String) { /* not yet implemented on Android */ }
+    fun getLocation(promise: Promise) {
+        try {
+            val lm = reactContext.getSystemService(android.content.Context.LOCATION_SERVICE)
+                as android.location.LocationManager
+            var best: android.location.Location? = null
+            for (p in lm.getProviders(true)) {
+                try {
+                    val l = lm.getLastKnownLocation(p) ?: continue
+                    if (best == null || l.time > best!!.time) best = l
+                } catch (_: SecurityException) { /* not granted */ }
+            }
+            val b = best
+            if (b != null) {
+                val map = com.facebook.react.bridge.Arguments.createMap()
+                map.putDouble("lat", b.latitude)
+                map.putDouble("lon", b.longitude)
+                promise.resolve(map)
+            } else {
+                promise.resolve(null)
+            }
+        } catch (e: Exception) {
+            promise.resolve(null)
+        }
+    }
 
+    // Client NR/NR2/NB — VibeDSP.kt engines in the service decode path
     @ReactMethod
-    fun setNoiseBlanker(on: Boolean) { /* not yet implemented on Android */ }
-
-    // Recording is iOS-only for now; reject so the JS .catch path fires
-    // (SDRScreen shows its own not-supported alert before calling anyway).
-    @ReactMethod
-    fun startRecording(promise: Promise) {
-        promise.reject("unsupported", "Recording is not yet supported on Android")
+    fun setNrMode(mode: String) {
+        VibeStreamService.instance?.let { it.nrMode = mode; it.requestDspReset() }
     }
 
     @ReactMethod
-    fun stopRecording(promise: Promise) { promise.resolve(null) }
+    fun setNoiseBlanker(on: Boolean) {
+        VibeStreamService.instance?.let { it.nbOn = on; it.requestDspReset() }
+    }
+
+    // Recorder — MediaCodec AAC + MediaMuxer on the service decode thread
+    @ReactMethod
+    fun startRecording(promise: Promise) {
+        val svc = VibeStreamService.instance
+        if (svc == null) promise.reject("not_running", "Audio engine is not running")
+        else svc.startRecordingNative(promise)
+    }
 
     @ReactMethod
-    fun shareRecording(path: String) { /* iOS-only */ }
+    fun stopRecording(promise: Promise) {
+        val svc = VibeStreamService.instance
+        if (svc == null) promise.resolve(null)
+        else svc.stopRecordingNative(promise)
+    }
+
+    @ReactMethod
+    fun shareRecording(path: String) {
+        VibeStreamService.instance?.shareRecordingNative(path)
+    }
 
     // NativeEventEmitter housekeeping (events arrive via RCTDeviceEventEmitter)
     @ReactMethod

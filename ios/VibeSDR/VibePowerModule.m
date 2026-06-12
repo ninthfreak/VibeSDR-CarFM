@@ -2,7 +2,7 @@
 #import <React/RCTEventEmitter.h>
 
 @interface RCT_EXTERN_MODULE(VibePowerModule, RCTEventEmitter)
-RCT_EXTERN_METHOD(startAudioEngine:(NSString *)baseUrl frequency:(NSInteger)frequency mode:(NSString *)mode uuid:(NSString *)uuid)
+RCT_EXTERN_METHOD(startAudioEngine:(NSString *)baseUrl frequency:(NSInteger)frequency mode:(NSString *)mode uuid:(NSString *)uuid password:(NSString *)password)
 RCT_EXTERN_METHOD(stopAudioEngine)
 RCT_EXTERN_METHOD(revive)
 RCT_EXTERN_METHOD(sendTuneCommand:(NSInteger)frequency mode:(NSString *)mode)
@@ -19,6 +19,7 @@ RCT_EXTERN_METHOD(setNoiseBlanker:(BOOL)on)
 RCT_EXTERN_METHOD(sendAudioCommand:(NSString *)json)
 RCT_EXTERN_METHOD(setNowPlaying:(NSString *)title artist:(NSString *)artist)
 RCT_EXTERN_METHOD(setMediaSkipMode:(NSString *)mode)
+RCT_EXTERN_METHOD(getLocation:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(setArtwork:(NSString *)serverType)
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(getDebugInfoSync)
 @end

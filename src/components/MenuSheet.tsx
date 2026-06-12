@@ -194,6 +194,10 @@ const C = {
 const { height: SCREEN_H } = Dimensions.get('window');
 const SHEET_H = Math.min(SCREEN_H * 0.88, 700);
 
+// Bookmark scope colours (key shown above the saved list)
+const BM_GLOBAL_C = 'rgba(110,200,255,0.95)';  // all instances — cyan
+const BM_LOCAL_C  = '#ffe566';                 // this instance — gold
+
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -619,17 +623,26 @@ export default function MenuSheet({
                        }} />
                 </BtnRow>
 
-                {/* Saved list — tap to tune, ✕ deletes */}
+                {/* Saved list — tap to tune, ✕ deletes. Scope colour-coded:
+                    cyan = all instances, gold = this instance only. */}
                 <SubLabel label={`Saved (${userBookmarks.length})`} />
+                <View style={styles.bmKey}>
+                  <View style={[styles.bmKeyDot, { backgroundColor: BM_GLOBAL_C }]} />
+                  <Text style={styles.bmKeyTxt}>All instances</Text>
+                  <View style={[styles.bmKeyDot, { backgroundColor: BM_LOCAL_C }]} />
+                  <Text style={styles.bmKeyTxt}>This instance</Text>
+                </View>
                 {userBookmarks.length === 0 && (
                   <Text style={styles.bmEmpty}>No bookmarks yet — tune somewhere good and save it.</Text>
                 )}
                 {userBookmarks.map((b: UserBookmark, i: number) => (
                   <View key={`${b.name}|${b.frequency}|${i}`} style={styles.bmRow}>
+                    <View style={[styles.bmKeyDot, { backgroundColor: b.scope ? BM_LOCAL_C : BM_GLOBAL_C }]} />
                     <TouchableOpacity style={styles.bmTune} activeOpacity={0.7}
                       onPress={() => onSearchTune?.(b.frequency, b.mode)}>
-                      <Text style={styles.bmName} numberOfLines={1}>
-                        {b.scope ? '' : '🌐 '}{b.name}
+                      <Text style={[styles.bmName, { color: b.scope ? BM_LOCAL_C : BM_GLOBAL_C }]}
+                        numberOfLines={1}>
+                        {b.name}
                       </Text>
                       <Text style={styles.bmFreq}>
                         {fmtFreq(b.frequency)}  {b.mode.toUpperCase()}
@@ -1113,7 +1126,9 @@ export default function MenuSheet({
             <BtnRow>
               <Btn label={isDefaultInstance ? '★ CLEAR DEFAULT' : '☆ SET DEFAULT'}
                    active={isDefaultInstance} onPress={onSetDefault} />
-              <Btn label="← BACK"        onPress={onBack ?? onClose} />
+            </BtnRow>
+            <BtnRow>
+              <Btn label="← BACK TO INSTANCE LIST" full onPress={onBack ?? onClose} />
             </BtnRow>
             <BtnRow col>
               <Btn label="↺ RESET INTERFACE SETTINGS" full danger onPress={onResetSettings} />
@@ -1218,6 +1233,15 @@ const styles = StyleSheet.create({
   },
   bmTune: { flex: 1, flexDirection: 'row', alignItems: 'baseline', gap: 8 },
   bmName: { flexShrink: 1, color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14 },
+  bmKey: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingBottom: 6,
+  },
+  bmKeyDot: { width: 9, height: 9, borderRadius: 4.5, flexShrink: 0 },
+  bmKeyTxt: {
+    color: 'rgba(255,255,255,0.55)', fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 11, marginRight: 10,
+  },
   bmFreq: { flexShrink: 0, color: '#ffe566', fontFamily: 'Atkinson Hyperlegible', fontSize: 12 },
   bmDel:  { color: 'rgba(220,80,80,0.85)', fontSize: 16, paddingHorizontal: 6 },
   bmImportBox: { minHeight: 90, textAlignVertical: 'top', marginTop: 4 },

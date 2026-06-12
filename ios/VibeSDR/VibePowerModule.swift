@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import CoreLocation
 import MediaPlayer
 import UIKit
 
@@ -15,7 +16,32 @@ import UIKit
 //   [21:]   Opus payload
 
 @objc(VibePowerModule)
-class VibePowerModule: RCTEventEmitter {
+class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
+
+  // MARK: - CLLocationManagerDelegate (one-shot location for the picker)
+
+  func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    guard locResolve != nil else { return }
+    switch manager.authorizationStatus {
+    case .authorizedWhenInUse, .authorizedAlways:
+      manager.requestLocation()
+    case .denied, .restricted:
+      locResolve?(nil)
+      locResolve = nil
+    default: break  // .notDetermined — prompt still showing
+    }
+  }
+
+  func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    guard let loc = locations.last else { return }
+    locResolve?(["lat": loc.coordinate.latitude, "lon": loc.coordinate.longitude])
+    locResolve = nil
+  }
+
+  func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+    locResolve?(nil)
+    locResolve = nil
+  }
 
   // MARK: - RCTEventEmitter
 
@@ -73,6 +99,11 @@ class VibePowerModule: RCTEventEmitter {
 
   private var wsTask:       URLSessionWebSocketTask?
   private var wsSession:    URLSession?
+  // Set on every WS (re)open; the first received packet triggers a tune
+  // re-assert so the server session always matches app state — sends during
+  // the handshake window can be lost, which left the session on the URL's
+  // freq/mode while the UI showed the restored tune.
+  private var wsNeedsTuneAssert = false
   private var isRunning     = false
   private var isMuted       = false
   private var currentFreq:  Int    = 14_074_000
@@ -80,6 +111,8 @@ class VibePowerModule: RCTEventEmitter {
   private var currentBase:  String = ""
   private var currentStep:  Int    = 1_000
   private var currentUuid:  String = ""
+  // Bypass password (rate-limit/ban bypass) — appended to the audio WS URL
+  private var bypassPassword: String = ""
   private var packetCount   = 0
   private let FRAME_SIZE: Int32 = 5760
   private var instanceName: String = ""
@@ -118,13 +151,14 @@ class VibePowerModule: RCTEventEmitter {
 
   // MARK: - Exported methods
 
-  @objc func startAudioEngine(_ baseUrl: String, frequency: Int, mode: String, uuid: String) {
+  @objc func startAudioEngine(_ baseUrl: String, frequency: Int, mode: String, uuid: String, password: String) {
     NSLog("[VibePowerModule] startAudioEngine %@ %d %@", baseUrl, frequency, mode)
     stopEngine()
     currentBase  = baseUrl
     currentFreq  = frequency
     currentMode  = mode
     currentUuid  = uuid
+    bypassPassword = password
     isRunning    = true
     isMuted      = false
     packetCount  = 0
@@ -390,6 +424,35 @@ class VibePowerModule: RCTEventEmitter {
     }
   }
 
+  // MARK: - Location (one-shot, for nearest-first instance sorting)
+  // navigator.geolocation doesn't exist in React Native — the JS picker
+  // never prompted and the directory fell back to IP geolocation (wildly
+  // wrong on cellular). NSLocationWhenInUseUsageDescription is in Info.plist.
+
+  private var locManager: CLLocationManager?
+  private var locResolve: RCTPromiseResolveBlock?
+
+  @objc func getLocation(_ resolve: @escaping RCTPromiseResolveBlock,
+                         rejecter reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.main.async {
+      self.locResolve?(nil)  // settle any stale request
+      self.locResolve = resolve
+      let mgr = self.locManager ?? CLLocationManager()
+      self.locManager = mgr
+      mgr.delegate = self
+      mgr.desiredAccuracy = kCLLocationAccuracyKilometer
+      switch mgr.authorizationStatus {
+      case .notDetermined:
+        mgr.requestWhenInUseAuthorization()  // continues in the delegate
+      case .authorizedWhenInUse, .authorizedAlways:
+        mgr.requestLocation()
+      default:
+        self.locResolve = nil
+        resolve(nil)  // denied — picker falls back to unsorted/IP order
+      }
+    }
+  }
+
   /** Half-height iOS share sheet (medium detent, grabber to expand) — skin
    *  parity with the web navigator.share card. Unlike the skin, no save-mode
    *  workaround is needed: the audio WS is native, so presenting the sheet
@@ -431,6 +494,7 @@ class VibePowerModule: RCTEventEmitter {
     wsSession = session
     let task = session.webSocketTask(with: url)
     wsTask = task
+    wsNeedsTuneAssert = true
     task.resume()
     receiveLoop(task: task)
   }
@@ -440,7 +504,11 @@ class VibePowerModule: RCTEventEmitter {
     if s.hasPrefix("https://") { s = "wss://" + s.dropFirst(8) }
     else if s.hasPrefix("http://") { s = "ws://" + s.dropFirst(7) }
     s = s.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    let path = "/ws?user_session_id=\(uuid)&frequency=\(frequency)&mode=\(mode)&format=opus&version=2"
+    var path = "/ws?user_session_id=\(uuid)&frequency=\(frequency)&mode=\(mode)&format=opus&version=2"
+    if !bypassPassword.isEmpty,
+       let pw = bypassPassword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+      path += "&password=\(pw)"
+    }
     return URL(string: s + path)
   }
 
@@ -453,6 +521,11 @@ class VibePowerModule: RCTEventEmitter {
         case .data(let data):
           self.packetCount += 1
           self.lastPacketAt = Date()
+          if self.wsNeedsTuneAssert {
+            self.wsNeedsTuneAssert = false
+            self.sendWsJson(["type": "tune",
+                             "frequency": self.currentFreq, "mode": self.currentMode])
+          }
           if self.packetCount <= 3 {
             NSLog("[VibePowerModule] ws pkt#%d len=%d", self.packetCount, data.count)
           }

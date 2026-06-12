@@ -153,11 +153,13 @@ export class DecoderClient {
   whisperLang    = 'auto';
   morseQuality: MorseQuality = 'all';
 
-  constructor(baseUrl: string, uuid: string, callbacks: DecoderCallbacks) {
-    this.baseUrl = baseUrl.replace(/\/+$/, '');
-    this.uuid    = uuid;
-    this.cb      = callbacks;
+  constructor(baseUrl: string, uuid: string, callbacks: DecoderCallbacks, password?: string) {
+    this.baseUrl  = baseUrl.replace(/\/+$/, '');
+    this.uuid     = uuid;
+    this.cb       = callbacks;
+    this.password = password ?? null;
   }
+  private password: string | null = null;
 
   /** Start a decoder. Replaces any running one (server enforces one/session). */
   start(name: DecoderName) {
@@ -311,7 +313,8 @@ export class DecoderClient {
   private _open() {
     if (this.destroyed) return;
     const url = this.baseUrl.replace(/^http/, 'ws')
-      + `/ws/dxcluster?user_session_id=${this.uuid}`;
+      + `/ws/dxcluster?user_session_id=${this.uuid}`
+      + (this.password ? `&password=${encodeURIComponent(this.password)}` : '');
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     this.ws = ws;

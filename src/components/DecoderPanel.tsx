@@ -66,17 +66,10 @@ const SF_AGES: Array<{ label: string; minutes: number }> = [
   { label: '30m', minutes: 30 }, { label: '1h', minutes: 60 },
 ];
 
-function fmtSpotFreq(hz: number): string {
-  return hz ? (hz / 1000).toFixed(1) : '';
-}
 function fmtSpotTime(t: number): string {
   const d = new Date(t);
   return String(d.getUTCHours()).padStart(2, '0') + ':' +
          String(d.getUTCMinutes()).padStart(2, '0');
-}
-function fmtSpotDist(km?: number): string {
-  if (km === undefined || km === null) return '';
-  return Math.round(km) + 'km';
 }
 
 // Memoized spot row — with FlatList virtualization only the ~12 visible rows
@@ -85,29 +78,26 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
   s: SpotRow; isCW: boolean; font: string; callColor: string;
   onTuneHz?: (hz: number) => void;
 }) {
+  // Columns: Time · Band · Mode · SNR · Call · Country (Stuart 2026-06-12 —
+  // freq + distance dropped, they truncated everything on the SE; the row
+  // tap still tunes to the spot's frequency)
   return (
     <TouchableOpacity style={dp.spotRow}
       onPress={() => s.freqHz && onTuneHz?.(s.freqHz)} activeOpacity={0.6}>
-      <Text style={[dp.spotCell, dp.spotFreq, { fontFamily: font }]}>
-        {fmtSpotFreq(s.freqHz)}
-      </Text>
       <Text style={[dp.spotCell, dp.spotTime, { fontFamily: font }]}>
         {fmtSpotTime(s.time)}
       </Text>
-      <Text style={[dp.spotCell, dp.spotMode, { fontFamily: font }]}>
-        {isCW ? (s.wpm ? Math.round(s.wpm) + 'w' : '') : s.mode}
-      </Text>
       <Text style={[dp.spotCell, dp.spotBand, { fontFamily: font }]}>{s.band}</Text>
-      <Text style={[dp.spotCell, dp.spotCall, { color: callColor, fontFamily: font }]}
-            numberOfLines={1}>
-        {s.call}
+      <Text style={[dp.spotCell, dp.spotMode, { fontFamily: font }]}>
+        {isCW ? (s.wpm ? Math.round(s.wpm) + 'w' : 'CW') : s.mode}
       </Text>
       <Text style={[dp.spotCell, dp.spotSnr,
         { color: (s.snr ?? -99) >= 0 ? '#55d98d' : 'rgba(255,160,0,0.65)', fontFamily: font }]}>
         {s.snr !== undefined ? s.snr : ''}
       </Text>
-      <Text style={[dp.spotCell, dp.spotDist, { fontFamily: font }]}>
-        {fmtSpotDist(s.distKm)}
+      <Text style={[dp.spotCell, dp.spotCall, { color: callColor, fontFamily: font }]}
+            numberOfLines={1}>
+        {s.call}
       </Text>
       <Text style={[dp.spotCell, dp.spotCountry, { fontFamily: font }]} numberOfLines={1}>
         {abbrCountry(s.country)}
@@ -446,15 +436,15 @@ const dp = StyleSheet.create({
     borderBottomColor: 'rgba(255,160,0,0.08)',
   },
   spotEmpty:   { padding: 12, textAlign: 'center' },
+  // 6-column layout (Time·Band·Mode·SNR·Call·Country) — fixed widths sized
+  // for the SE's ~340pt panel; call + country flex the remainder
   spotCell:    { fontSize: 10, letterSpacing: 0.4, color: 'rgba(255,160,0,0.60)' },
-  spotFreq:    { width: 52, color: '#ffb833' },
-  spotTime:    { width: 34 },
-  spotMode:    { width: 36 },
-  spotBand:    { width: 32 },
-  spotCall:    { flex: 1.2, fontSize: 11 },
-  spotSnr:     { width: 26, textAlign: 'right' },
-  spotDist:    { width: 46, textAlign: 'right' },
-  spotCountry: { flex: 1, textAlign: 'right' },
+  spotTime:    { width: 38 },
+  spotBand:    { width: 36 },
+  spotMode:    { width: 38 },
+  spotSnr:     { width: 28, textAlign: 'right' },
+  spotCall:    { flex: 1.3, fontSize: 11, marginLeft: 6 },
+  spotCountry: { flex: 0.9, textAlign: 'right' },
   settingsRow: {
     flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 5,
     paddingHorizontal: 12, paddingVertical: 6,

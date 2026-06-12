@@ -7,7 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 // Recording/NR methods are iOS-only — Android stubs them.
 export const VibePowerModule = NativeModules.VibePowerModule as
   | {
-      startAudioEngine:  (baseUrl: string, frequency: number, mode: string, uuid: string) => void;
+      startAudioEngine:  (baseUrl: string, frequency: number, mode: string, uuid: string, password: string) => void;
       stopAudioEngine:   () => void;
       sendTuneCommand:   (frequency: number, mode: string) => void;
       sendBandwidth:     (low: number, high: number) => void;
@@ -37,9 +37,11 @@ export interface AudioPlayerProps {
   step?:         number;
   instanceName?: string;
   uuid?:         string;
+  /** Bypass password — appended to the audio WS URL (rate-limit bypass). */
+  password?:     string;
 }
 
-export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceName, uuid: propUuid }: AudioPlayerProps) {
+export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceName, uuid: propUuid, password }: AudioPlayerProps) {
   const activeUrl  = useRef<string | null>(null);
   const activeFreq = useRef<number>(0);
   const activeMode = useRef<string>('');
@@ -56,7 +58,7 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
 
     if (baseUrl) {
       uuid.current = propUuid ?? uuidv4();
-      VibePowerModule?.startAudioEngine(baseUrl, frequency, mode, uuid.current);
+      VibePowerModule?.startAudioEngine(baseUrl, frequency, mode, uuid.current, password ?? '');
       VibePowerModule?.setInstanceName(instanceName ?? '');
       activeFreq.current = frequency;
       activeMode.current = mode;

@@ -6,13 +6,16 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+// safe-area-context SafeAreaView — RN's own is iOS-only, which put the
+// header under the status bar on Android (G35: cog untappable)
+import { SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { splashBridge } from '../../App';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -33,7 +36,7 @@ import {
 } from '../services/defaultInstance';
 import { Favourite, getFavourites, toggleFavourite } from '../services/favourites';
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
-import { ViewMode, clearViewMode, getViewMode, setViewMode } from '../services/viewMode';
+import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
 import PasswordModal from '../components/PasswordModal';
 
 type SortMode = 'nearest' | 'snr';
@@ -164,6 +167,25 @@ export default function InstancePickerScreen({ navigation }: Props) {
     if (!customUrl.trim()) return;
     let url = customUrl.trim();
     if (!url.startsWith('http://') && !url.startsWith('https://')) url = 'http://' + url;
+    // App Store security policy (ATS): plain HTTP is only allowed to LOCAL
+    // network addresses — public-internet servers must use HTTPS. iOS blocks
+    // the connection at the OS level, so warn instead of failing silently.
+    const host = url.replace(/^https?:\/\//, '').split(/[/:]/)[0];
+    const isLocal = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)
+      || host.endsWith('.local');
+    if (url.startsWith('http://') && !isLocal) {
+      Alert.alert(
+        'HTTP Not Supported',
+        'Plain HTTP is only supported for local network addresses (e.g. 192.168.x.x). ' +
+        'Internet servers must use https:// — App Store security policy blocks ' +
+        'unencrypted connections to the web.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Try HTTPS', onPress: () => connect(url.replace(/^http:/, 'https:'), url.replace(/^http:/, 'https:')) },
+        ],
+      );
+      return;
+    }
     connect(url, url);
   }, [customUrl, connect]);
 
@@ -181,29 +203,33 @@ export default function InstancePickerScreen({ navigation }: Props) {
     ]);
   }, []);
 
-  const handleResetSettings = useCallback(() => {
+  // Master factory reset — wipes ALL settings and stored data (display
+  // prefs, per-instance tunes, favourites, default instance, callsigns…),
+  // asking about bookmarks first (never cleared silently).
+  const handleMasterReset = useCallback(() => {
     Alert.alert(
-      'Reset App Settings',
-      'Clears your display mode choice and returns to the setup screen. Your default instance is kept.',
+      'Factory Reset',
+      'Clears ALL settings and stored data and returns the app to a fresh-install state. Recordings already saved to your device are not affected.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Reset', style: 'destructive', onPress: async () => {
-          await clearViewMode();
-          // Bookmarks are precious — never clear silently with a reset
+        { text: 'Reset Everything', style: 'destructive', onPress: async () => {
           const bms = await loadUserBookmarks().catch(() => [] as UserBookmark[]);
+          const wipe = async (keepBms: boolean) => {
+            await AsyncStorage.clear().catch(() => {});
+            if (keepBms && bms.length) await saveUserBookmarks(bms).catch(() => {});
+            navigation.replace('InstancePicker');
+          };
           if (bms.length > 0) {
             Alert.alert(
               'Bookmarks',
               `Keep your ${bms.length} saved bookmark${bms.length !== 1 ? 's' : ''}?`,
               [
-                { text: 'Keep', style: 'default',
-                  onPress: () => navigation.replace('InstancePicker') },
-                { text: 'Clear All', style: 'destructive',
-                  onPress: async () => { await saveUserBookmarks([]); navigation.replace('InstancePicker'); } },
+                { text: 'Keep', style: 'default', onPress: () => wipe(true) },
+                { text: 'Clear All', style: 'destructive', onPress: () => wipe(false) },
               ],
             );
           } else {
-            navigation.replace('InstancePicker');
+            wipe(false);
           }
         } },
       ],
@@ -267,7 +293,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
           >
             <View style={styles.rowMain}>
               <View style={styles.nameRow}>
-                <Text style={{ fontFamily: F, fontSize: fs(13), color: C.amber, flex: 1 }} numberOfLines={1}>
+                <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, flex: 1 }} numberOfLines={1}>
                   {isDefault ? '★ ' : ''}{fav.name}
                 </Text>
               </View>
@@ -308,44 +334,44 @@ export default function InstancePickerScreen({ navigation }: Props) {
         >
           <View style={styles.rowMain}>
             <View style={styles.nameRow}>
-              <Text style={{ fontFamily: F, fontSize: fs(13), color: C.amber, flex: 1 }} numberOfLines={1}>
+              <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, flex: 1 }} numberOfLines={1}>
                 {isDefault ? '★ ' : ''}{inst.name}
               </Text>
               {inst.version ? (
-                <Text style={{ fontFamily: F, fontSize: fs(9), color: versionOld ? C.red : C.textDim, marginLeft: 6 }}>
+                <Text style={{ fontFamily: F, fontSize: fs(11), color: versionOld ? C.red : C.textDim, marginLeft: 6 }}>
                   v{inst.version}
                 </Text>
               ) : null}
             </View>
             {versionOld && (
-              <Text style={{ fontFamily: F, fontSize: fs(9), color: C.red, marginTop: 2 }}>
+              <Text style={{ fontFamily: F, fontSize: fs(11), color: C.red, marginTop: 2 }}>
                 ⚠ Older than v{MIN_RECOMMENDED_VERSION} — may have visual glitches
               </Text>
             )}
             <View style={styles.metaRow}>
               {inst.location ? (
-                <Text style={{ fontFamily: F, fontSize: fs(10), color: C.gold }} numberOfLines={1}>{inst.location}</Text>
+                <Text style={{ fontFamily: F, fontSize: fs(12.5), color: C.gold }} numberOfLines={1}>{inst.location}</Text>
               ) : null}
               {inst.callsign ? (
-                <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim }}>
+                <Text style={{ fontFamily: F, fontSize: fs(12.5), color: C.textDim }}>
                   {inst.location ? '  ·  ' : ''}{inst.callsign}
                 </Text>
               ) : null}
               {inst.distance != null ? (
-                <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim }}>
+                <Text style={{ fontFamily: F, fontSize: fs(12.5), color: C.textDim }}>
                   {'  ·  '}{inst.distance < 1 ? '<1' : Math.round(inst.distance)} km
                 </Text>
               ) : null}
             </View>
             {inst.bestSnr != null ? (
-              <Text style={{ fontFamily: F, fontSize: fs(9), color: snrColor(inst.bestSnr, C), marginTop: 2 }}>
+              <Text style={{ fontFamily: F, fontSize: fs(11), color: snrColor(inst.bestSnr, C), marginTop: 2 }}>
                 {snrLabel(inst.bestSnr)}
               </Text>
             ) : null}
           </View>
           <View style={styles.rowRight}>
             {(inst.users != null && inst.maxUsers) ? (
-              <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim }}>{inst.users}/{inst.maxUsers}</Text>
+              <Text style={{ fontFamily: F, fontSize: fs(12), color: C.textDim }}>{inst.users}/{inst.maxUsers}</Text>
             ) : null}
             <TouchableOpacity style={{ padding: 4 }}
               onPress={() => isDefault ? handleClearDefault() : handleSetDefault({ name: inst.name, url: inst.url })}>
@@ -380,21 +406,11 @@ export default function InstancePickerScreen({ navigation }: Props) {
             </Text>
             <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim, letterSpacing: 1 }}>v2.0RC</Text>
           </View>
-          <TouchableOpacity style={{ padding: 8 }} onPress={handleResetSettings}>
-            <Text style={{ fontSize: fs(20), color: C.textDim }}>⚙</Text>
+          {/* ⚙ = factory reset (the mode-change badge is gone — single skin now) */}
+          <TouchableOpacity style={{ padding: 10 }} onPress={handleMasterReset} hitSlop={8}>
+            <Text style={{ fontSize: fs(22), color: C.textDim }}>⚙</Text>
           </TouchableOpacity>
         </View>
-
-        {/* Mode badge */}
-        <TouchableOpacity
-          style={[styles.modeBadge, { borderBottomColor: C.border }]}
-          onPress={handleResetSettings}
-        >
-          <Text style={{ fontFamily: F, fontSize: fs(10), color: C.gold, letterSpacing: 1 }}>
-            {viewMode === 'accessibility' ? '♿ ACCESSIBLE MODE' : '📻 DEFAULT MODE'}
-          </Text>
-          <Text style={{ fontFamily: F, fontSize: fs(9), color: C.textDim, textDecorationLine: 'underline' }}>change</Text>
-        </TouchableOpacity>
 
         {/* Default banner */}
         {defaultInst && (
@@ -552,7 +568,6 @@ const styles = StyleSheet.create({
   flex:          { flex: 1 },
   header:        { flexDirection: 'row', alignItems: 'center', padding: 16, paddingBottom: 8, borderBottomWidth: 1 },
   headerLeft:    { flex: 1, flexDirection: 'row', alignItems: 'baseline', gap: 8 },
-  modeBadge:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 5, borderBottomWidth: 1, backgroundColor: 'rgba(255,160,0,0.04)' },
   defaultBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,160,0,0.10)', borderBottomWidth: 1, paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
   customRow:     { flexDirection: 'row', gap: 8, padding: 12, paddingBottom: 8 },
   urlInput:      { flex: 1, height: 44, backgroundColor: 'rgba(20,10,0,0.75)', borderWidth: 1, borderRadius: 6, paddingHorizontal: 12 },

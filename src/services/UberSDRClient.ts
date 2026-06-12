@@ -116,10 +116,18 @@ export class UberSDRClient {
   private sendTimer:   ReturnType<typeof setTimeout> | null = null;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(baseUrl: string, uuid: string, callbacks: SDRCallbacks) {
+  constructor(baseUrl: string, uuid: string, callbacks: SDRCallbacks, password?: string) {
     this.baseUrl   = baseUrl.replace(/\/+$/, '');
     this.uuid      = uuid;
     this.callbacks = callbacks;
+    this.password  = password ?? null;
+  }
+
+  /** Bypass password (rate-limit/ban bypass) — appended to every WS URL,
+   *  exactly like the skin's window.bypassPassword. */
+  private password: string | null = null;
+  private _pwSuffix(): string {
+    return this.password ? `&password=${encodeURIComponent(this.password)}` : '';
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -346,7 +354,12 @@ export class UberSDRClient {
         'User-Agent':     'VibeSDR/2.0 (iOS; React Native)',
         'X-Requested-With': 'VibeSDR',
       },
-      body: JSON.stringify({ user_session_id: this.uuid }),
+      // password = bypass auth: rate-limited/blocked IPs get through with it
+      // (server validates it in this body BEFORE any WS can open)
+      body: JSON.stringify({
+        user_session_id: this.uuid,
+        ...(this.password ? { password: this.password } : {}),
+      }),
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => '');
@@ -365,7 +378,7 @@ export class UberSDRClient {
   private _openSpectrumWs() {
     if (this.destroyed) return;
 
-    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8`);
+    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._pwSuffix()}`);
     const ws  = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     this.spectrumWs = ws;

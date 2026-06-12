@@ -21,6 +21,7 @@ import React, {
 import {
   Animated,
   AppState,
+  Platform,
   Share,
   StyleSheet,
   Text,
@@ -30,6 +31,7 @@ import {
 import { BlurView } from 'expo-blur';
 import {
   Canvas,
+  Group,
   LinearGradient,
   Path,
   Rect,
@@ -174,6 +176,8 @@ export interface ControlsBarProps {
   onStep:        (s: number)  => void;
   onMenu:        () => void;
   onChat?:       () => void;
+  /** Deep-link share (instance URL + freq/mode params). Falls back to text. */
+  onShare?:      () => void;
   onFreqTap?:    () => void;
   onModeTap?:    () => void;
   freqUnit?:     FreqUnit;
@@ -269,6 +273,7 @@ export function LinkIndicator({ bus }: { bus?: MeterBus }) {
 function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActive,
   onFreqTap, onModeTap, freqFontSize, freqWidth, unitFontSize, modeFontSize,
   modeLs, snrWidth, pillPadH, pillPadV, modePadH, modePadV, gap, bus, meterMode,
+  tight = false,
 }: any) {
   const { theme: t } = useTheme();
   // Skin parity (lsvSnrDisp): plain "NNdb", not a synthetic S-meter reading.
@@ -280,7 +285,7 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
     // screens (SE / Moto G35) and with Android font metrics the fixed dp
     // widths overflow the frame; the freq text's adjustsFontSizeToFit
     // absorbs the squeeze (meter stays visible ≥13% each side).
-    <View style={[pm.row, { maxWidth: '74%', alignSelf: 'center' }]}>
+    <View style={[pm.row, { maxWidth: tight ? '66%' : '74%', alignSelf: 'center' }]}>
       <TouchableOpacity
         style={[pm.freqBox, { backgroundColor: t.pillBg, paddingHorizontal: pillPadH, paddingVertical: pillPadV, gap }]}
         onPress={onFreqTap} activeOpacity={0.80} hitSlop={8}
@@ -288,6 +293,11 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
         <Text style={[pm.freq, {
           color: t.freqColor, fontSize: freqFontSize, width: freqWidth,
           fontFamily: t.font, textShadowColor: t.freqGlowColor,
+          // Tight line metrics — Atkinson's tall default line-height (and
+          // Android's extra font padding) inflated the pill to fill the
+          // whole meter frame, hiding the signal ring around it
+          lineHeight: Math.round(freqFontSize * 1.12),
+          includeFontPadding: false,
         }]} numberOfLines={1} adjustsFontSizeToFit>
           {freqStr}
         </Text>
@@ -296,15 +306,20 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
         </Text>
       </TouchableOpacity>
       <TouchableOpacity
-        style={[pm.modeBtn, { backgroundColor: t.pillBg, paddingHorizontal: modePadH, paddingVertical: modePadV }]}
+        style={[pm.modeBtn, { backgroundColor: t.pillBg, paddingHorizontal: modePadH, paddingVertical: modePadV, minWidth: tight ? 72 : 84 }]}
         onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
       >
-        <Text style={[pm.modeLbl, { color: t.modeColor, fontSize: modeFontSize, letterSpacing: modeLs, fontFamily: t.font }]}>
+        <Text style={[pm.modeLbl, {
+          color: t.modeColor, fontSize: modeFontSize, letterSpacing: modeLs, fontFamily: t.font,
+          lineHeight: Math.round(modeFontSize * 1.15), includeFontPadding: false,
+        }]}>
           {modeLabel}
         </Text>
         <Text style={[pm.snr, {
           color: t.snrColor, fontFamily: t.font, width: snrWidth,
-          fontSize: Math.max(11, Math.round(modeFontSize * 0.8)),
+          fontSize: Math.max(9, Math.round(modeFontSize * 0.75)),
+          lineHeight: Math.round(Math.max(9, modeFontSize * 0.75) * 1.15),
+          includeFontPadding: false,
           fontWeight: '700',
           opacity: liveActive ? 1.0 : 0.65,
         }]}>
@@ -335,8 +350,7 @@ const pm = StyleSheet.create({
   unit:    { letterSpacing: 1, alignSelf: 'flex-end', paddingBottom: 2, flexShrink: 0 },
   modeBtn: { borderTopRightRadius: 5, borderBottomRightRadius: 5,
              borderLeftWidth: 1, borderLeftColor: 'rgba(70,60,45,0.45)',
-             alignItems: 'center', justifyContent: 'center', gap: 2, flexShrink: 0,
-             minWidth: 84 },
+             alignItems: 'center', justifyContent: 'center', gap: 1, flexShrink: 0 },
   modeLbl: { fontWeight: 'bold', textShadowColor: 'rgba(255,160,0,0.6)',
              textShadowOffset: { width:0,height:0 }, textShadowRadius: 5 },
   snr:     { fontSize: 9, textAlign: 'center' },
@@ -357,12 +371,28 @@ function Hamburger({ color, lineW }: { color: string; lineW: number }) {
 // ── Share icon canvas ─────────────────────────────────────────────────────────
 
 function ShareIcon({ size, color }: { size: number; color: string }) {
+  // Paths are authored in a 20×20 space — scale to the canvas, otherwise
+  // small buttons (SE landscape) clip the icon edges
+  const k = size / 20;
   return (
     <Canvas pointerEvents="none" style={{ width: size, height: size }}>
-      <Path path={SHARE_LINES} color={color} strokeWidth={1.6} style="stroke" strokeCap="round" />
-      <Path path={SHARE_C1}    color={color} strokeWidth={1.6} style="stroke" />
-      <Path path={SHARE_C2}    color={color} strokeWidth={1.6} style="stroke" />
-      <Path path={SHARE_C3}    color={color} strokeWidth={1.6} style="stroke" />
+      <Group transform={[{ scale: k }]}>
+        <Path path={SHARE_LINES} color={color} strokeWidth={1.6 / k} style="stroke" strokeCap="round" />
+        <Path path={SHARE_C1}    color={color} strokeWidth={1.6 / k} style="stroke" />
+        <Path path={SHARE_C2}    color={color} strokeWidth={1.6 / k} style="stroke" />
+        <Path path={SHARE_C3}    color={color} strokeWidth={1.6 / k} style="stroke" />
+      </Group>
+    </Canvas>
+  );
+}
+
+function ChatIcon({ size, color }: { size: number; color: string }) {
+  const k = size / 20;
+  return (
+    <Canvas pointerEvents="none" style={{ width: size, height: size }}>
+      <Group transform={[{ scale: k }]}>
+        <Path path={CHAT_PATH} color={color} strokeWidth={1.6 / k} style="stroke" strokeCap="round" strokeJoin="round" />
+      </Group>
     </Canvas>
   );
 }
@@ -430,17 +460,24 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
   // Freq/mode sizing — read from theme so white mode can increase them
   // Pill sized to leave the signal bar visible around it (the white theme's
   // 28pt/168w pill covered the whole frame — screenshots 2026-06-11; 23/138
-  // was still too wide on a 390pt screen).
-  const FREQ_FONT  = s.r(22);
-  const FREQ_W     = s.r(130);
+  // was still too wide on a 390pt screen). Android renders the same dp
+  // sizes WIDER (font metrics) and the pill swallowed the meter on the G35
+  // AND the iPhone SE — tighter sizes on Android and on narrow screens
+  // (screenshots 2026-06-12).
+  const tight      = Platform.OS === 'android' || s.isSmall;
+  const FREQ_FONT  = s.r(tight ? 19 : 22);
+  const FREQ_W     = s.r(tight ? 112 : 130);
   const UNIT_FONT  = s.r(9);
-  const MODE_FONT  = s.r(13);
+  const MODE_FONT  = s.r(tight ? 12 : 13);
   const MODE_LS    = s.f(t.modeLs);
-  const SNR_W      = s.r(58);
+  const SNR_W      = s.r(tight ? 50 : 58);
   const PILL_PAD_H = s.r(7);
-  const PILL_PAD_V = s.r(5);
+  // Slim vertical paddings — the pill must float INSIDE the meter frame
+  // with the signal ring visible above and below (boxes were touching the
+  // frame edges on SE/G35, screenshots 2026-06-12 eve)
+  const PILL_PAD_V = s.r(3);
   const MODE_PAD_H = s.r(10);
-  const MODE_PAD_V = s.r(6);
+  const MODE_PAD_V = s.r(3);
   const PILL_GAP   = s.r(5);
   const BTN_FONT   = s.f(t.btnSize);
   const CLOCK_FONT = s.f(8);
@@ -460,6 +497,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
           modeFontSize={MODE_FONT} modeLs={MODE_LS} snrWidth={SNR_W}
           pillPadH={PILL_PAD_H} pillPadV={PILL_PAD_V}
           modePadH={MODE_PAD_H} modePadV={MODE_PAD_V} gap={PILL_GAP}
+          tight={tight}
         />
       </View>
 
@@ -493,9 +531,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
             onPress={onChat} activeOpacity={0.75} hitSlop={10}
           >
             {/* decorative — don't let the Skia view contest the touch */}
-            <Canvas pointerEvents="none" style={{ width: ICON_SZ, height: ICON_SZ }}>
-              <Path path={CHAT_PATH} color={t.btnText} strokeWidth={1.6} style="stroke" strokeCap="round" strokeJoin="round" />
-            </Canvas>
+            <ChatIcon size={ICON_SZ} color={t.btnText} />
           </TouchableOpacity>
         </Animated.View>
 
@@ -639,9 +675,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
           style={[lnd.lsBtn, { borderColor: chatUnread ? 'rgba(40,140,255,0.85)' : t.btnBorder }]}
           onPress={onChat} activeOpacity={0.75} hitSlop={10}
         >
-          <Canvas pointerEvents="none" style={{ width: ICON_SZ, height: ICON_SZ }}>
-            <Path path={CHAT_PATH} color={t.btnText} strokeWidth={1.6} style="stroke" strokeCap="round" strokeJoin="round" />
-          </Canvas>
+          <ChatIcon size={ICON_SZ} color={t.btnText} />
         </TouchableOpacity>
         <TouchableOpacity style={[lnd.lsBtn, { borderColor: t.btnBorder }]} onPress={onShare} activeOpacity={0.75} hitSlop={10}>
           <ShareIcon size={ICON_SZ} color={t.btnText} />
@@ -677,6 +711,7 @@ function ControlsBar({
   instanceHost = 'ubersdr',
   isRecording = false, recSeconds = 0, chatUnread = false,
   freqUnit = 'khz',
+  onShare: onShareProp,
 }: ControlsBarProps) {
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -692,9 +727,12 @@ function ControlsBar({
     onStep(STEPS[(idx + 1) % STEPS.length]);
   }, [step, onStep]);
 
+  // Parent supplies the deep-link share (instance URL + freq/mode/bw/zoom
+  // params — tappable straight into the station); plain text is the fallback
   const handleShare = useCallback(async () => {
+    if (onShareProp) { onShareProp(); return; }
     await Share.share({ message: `VibeSDR — ${freqStr} ${unit} ${mode.toUpperCase()} — ${instanceHost}` });
-  }, [freqStr, unit, mode, instanceHost]);
+  }, [onShareProp, freqStr, unit, mode, instanceHost]);
 
   const hh = Math.floor(recSeconds / 3600);
   const mm = Math.floor((recSeconds % 3600) / 60);

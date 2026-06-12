@@ -38,6 +38,12 @@ import {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 
+// ── Drum haptics (menu ✦ HAPTICS toggle) ──────────────────────────────────────
+// Module-level so SDRScreen can flip it without threading a prop through
+// ControlsBar's layouts into every drum instance.
+let _hapticsOn = true;
+export function setDrumHaptics(on: boolean) { _hapticsOn = on; }
+
 // ── TUNABLES (preview-widget parameters, 2026-06-10 session) ──────────────────
 
 const DRUM_FRAC   = 0.60;  // drum body fraction of total height
@@ -101,19 +107,43 @@ export default function DrumWheel({
   const touching  = useRef(false);
 
   // ── Throttled send (UPDATE_RATE=40 → 25ms — UberSDR's confirmed max) ────────
-  // Haptic detent: one selection tick per LSV_PX_STEP crossing, throttled to
-  // 30ms so fast flicks feel like a ratchet, not a buzz (v1 bridge parity).
+  // Haptic detents: ACCUMULATED distance, one tick per LSV_PX_STEP crossing.
+  // The old per-send gate (|dPx| ≥ half a step) meant slow deliberate tuning
+  // never ticked while fast drags buzzed at the throttle cap. Now every
+  // detent crossing registers regardless of speed; intensity adapts —
+  // deliberate speeds get a Rigid mechanical click, flick speeds get the
+  // lighter selection tick (a fast spin feels like a freewheeling ratchet,
+  // not a buzz), capped at ~35 ticks/s.
   const lastHaptic = useRef(0);
+  const hapticAcc  = useRef(0);
+  const detentTick = useCallback((dPx: number) => {
+    if (!_hapticsOn) { hapticAcc.current = 0; return; }
+    hapticAcc.current += dPx;
+    if (Math.abs(hapticAcc.current) < LSV_PX_STEP) return;
+    // Consume ALL whole crossings (a single fast frame can cross several
+    // detents — they collapse into one tick, which is the ratchet feel)
+    hapticAcc.current %= LSV_PX_STEP;
+    const now  = performance.now();
+    const gap  = now - lastHaptic.current;
+    if (gap < 28) return;  // ratchet cap
+    lastHaptic.current = now;
+    if (gap > 90) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid).catch(() => {});
+    else          Haptics.selectionAsync().catch(() => {});
+  }, []);
+
+  // Soft landing thunk when a flick finishes coasting
+  const settleTick = useCallback(() => {
+    if (!_hapticsOn) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Soft).catch(() => {});
+  }, []);
+
   const sendDelta = useCallback((dPx: number) => {
     const now = performance.now();
     if (now - lastSend.current < 1000 / UPDATE_RATE) return;
     lastSend.current = now;
     onDelta(dPx);
-    if (Math.abs(dPx) >= LSV_PX_STEP * 0.5 && now - lastHaptic.current > 30) {
-      lastHaptic.current = now;
-      Haptics.selectionAsync().catch(() => {});
-    }
-  }, [onDelta]);
+    detentTick(dPx);
+  }, [onDelta, detentTick]);
 
   // ── Inertia (unchanged) ──────────────────────────────────────────────────────
   const inertia = useCallback((ts: number) => {
@@ -138,6 +168,7 @@ export default function DrumWheel({
       if (Math.abs(pending.current) >= LSV_PX_STEP * 0.6) sendDelta(pending.current);
       pending.current = 0;
       rafId.current = null;
+      settleTick();  // soft thunk — the flick has landed
       return;
     }
     const dx = vel.current * dt;
@@ -149,7 +180,7 @@ export default function DrumWheel({
     }
     setScroll(scrollRef.current);
     rafId.current = requestAnimationFrame(inertia);
-  }, [type, sendDelta]);
+  }, [type, sendDelta, settleTick]);
 
   const startInertia = useCallback(() => {
     // Flick gate: real flicks release at hundreds of px/s; anything under
