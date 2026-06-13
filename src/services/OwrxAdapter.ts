@@ -195,6 +195,13 @@ export class OwrxAdapter implements SDRBackend {
         }));
         this.modes = this.serverModes.map((m) => m.id);
         this.cb.onModes?.(this.serverModes.map((m) => ({ id: m.id, label: m.name, digital: m.digital })));
+        // If the modes list lands after config (so the start_mod passband wasn't
+        // known yet), apply it now and resend so the filter widens to match.
+        if (this.started) {
+          this.applyModeBandpass();
+          this.sendDemod();
+          this.cb.onStatus(this.getStatus());
+        }
         break;
       }
       case 'smeter':   if (typeof json.value === 'number') this.cb.onSMeter?.(json.value); break;
@@ -238,6 +245,9 @@ export class OwrxAdapter implements SDRBackend {
       this.caps.maxBandwidth = { default: Math.max(6000, Math.floor(this.cfg.sampRate / 2)) };
     }
     this.dbg(`cfg cf=${this.cfg.centerFreq} sr=${this.cfg.sampRate} fft=${this.cfg.fftSize} freq=${this.freq} fftcomp=${this.cfg.fftCompression}`);
+    // Profile's start_mod may be a wide mode (broadcast-FM profile → WFM): adopt
+    // its server passband so the filter isn't stuck narrow until a manual re-tap.
+    this.applyModeBandpass();
     // Send (or resend) the demod params now we know the profile window.
     this.started = true;
     this.sendDemod();
@@ -389,11 +399,15 @@ export class OwrxAdapter implements SDRBackend {
     this.freq = frequency; if (mode) this.mode = mode;
   }
 
+  /** Adopt the server's default passband for the current demodulator, if known. */
+  private applyModeBandpass(): void {
+    const info = this.serverModes.find((m) => m.id === (this.mode as string));
+    if (info?.bandpass) { this.bwLow = info.bandpass.low_cut; this.bwHigh = info.bandpass.high_cut; }
+  }
+
   setMode(mode: SDRMode): void {
     this.mode = mode;
-    // Adopt the server's default passband for this demodulator, if known.
-    const info = this.serverModes.find((m) => m.id === (mode as string));
-    if (info?.bandpass) { this.bwLow = info.bandpass.low_cut; this.bwHigh = info.bandpass.high_cut; }
+    this.applyModeBandpass();
     // The audio stream restarts on a mode change (e.g. NFM type-2 ↔ WFM type-4) —
     // reset both ADPCM decoders so stale state doesn't corrupt the new stream.
     this.audioDec.reset(); this.hdAudioDec.reset();
