@@ -319,6 +319,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const [connected, setConnected] = useState(false);
   const [profiles, setProfiles]   = useState<ProfileInfo[]>([]);  // OWRX only
+  const [activeProfileId, setActiveProfileId] = useState<string | undefined>(undefined);
   const [status, setStatus]       = useState<SDRStatus>({
     frequency: 14_074_000, mode: 'usb',
     bandwidthLow: -3000, bandwidthHigh: 3000,
@@ -2325,6 +2326,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Menu sheet */}
       <MenuSheet
         visible={menuOpen}
+        profiles={profiles}
+        activeProfileId={activeProfileId}
+        onSelectProfile={(id) => { client.current?.selectProfile?.(id); setActiveProfileId(id); }}
         vtsName={vtsMenuName}
         vtsFreq={vtsMenuFreq}
         onVtsPrev={onVtsPrev}

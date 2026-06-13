@@ -122,6 +122,10 @@ export interface MenuSheetProps {
   vtsFreq?:    number;
   onVtsNext?:  () => void;
   onVtsPrev?:  () => void;
+  // OWRX profiles (hidden unless a backend reports them)
+  profiles?:        { id: string; name: string }[];
+  activeProfileId?: string;
+  onSelectProfile?: (id: string) => void;
   searchBookmarks?: ServerBookmark[];
   searchBands?:     ServerBand[];
   onSearchTune?:    (hz: number, mode?: string | null, isBand?: boolean) => void;
@@ -394,6 +398,7 @@ export default function MenuSheet({
   hapticsEnabled = false, onHaptics,
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
+  profiles = [], activeProfileId, onSelectProfile,
   searchBookmarks = [], searchBands = [], onSearchTune,
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks,
@@ -532,8 +537,29 @@ export default function MenuSheet({
                 and was confusing to read). */}
             {!dispSettingsOpen && !bookmarksOpen && (<>
 
+            {/* ── PROFILE (OWRX only — hidden unless the backend reports profiles) ── */}
+            {profiles.length > 0 && (<>
+              <SectionLabel label="PROFILE" first />
+              <View style={styles.profileWrap}>
+                {profiles.map((p) => {
+                  const active = p.id === activeProfileId;
+                  return (
+                    <TouchableOpacity
+                      key={p.id}
+                      style={[styles.profileChip, active && styles.profileChipActive]}
+                      onPress={() => onSelectProfile?.(p.id)}
+                      activeOpacity={0.7}>
+                      <Text style={[styles.profileChipText, active && styles.profileChipTextActive]} numberOfLines={1}>
+                        {p.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>)}
+
             {/* ── NEARBY STATION ─────────────────────────────────── */}
-            <SectionLabel label="NEARBY STATION" first />
+            <SectionLabel label="NEARBY STATION" first={profiles.length === 0} />
             <View style={styles.vtsRow}>
               <TouchableOpacity style={styles.vtsArrow} onPress={onVtsPrev} hitSlop={8}>
                 <Text style={styles.vtsArrowText}>◂</Text>
@@ -1334,6 +1360,14 @@ const styles = StyleSheet.create({
   btnTextActive: { color: C.gold },
   btnTextDanger: { color: '#ff6666' },
 
+  profileWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingVertical: 6 },
+  profileChip: {
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8,
+    borderWidth: 1, borderColor: C.border, backgroundColor: C.btnBg,
+  },
+  profileChipActive: { borderColor: C.active, backgroundColor: C.btnBg },
+  profileChipText: { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 13 },
+  profileChipTextActive: { color: C.active },
   vtsRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
   vtsArrow: {
     backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border,

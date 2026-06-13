@@ -34,7 +34,7 @@ import {
   getDefaultInstance,
   setDefaultInstance,
 } from '../services/defaultInstance';
-import { Favourite, getFavourites, toggleFavourite } from '../services/favourites';
+import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType } from '../services/favourites';
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
 import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
 import PasswordModal from '../components/PasswordModal';
@@ -176,6 +176,14 @@ export default function InstancePickerScreen({ navigation }: Props) {
     }
   }, [navigation, viewMode]);
 
+  // Connect a saved favourite: use its stored backend type, or detect it once
+  // (and remember it) so an OpenWebRX/Kiwi favourite doesn't reconnect as UberSDR.
+  const connectFav = useCallback(async (fav: Favourite) => {
+    const type = fav.serverType ?? await detectServerType(fav.url);
+    if (!fav.serverType) { setFavouriteServerType(fav.url, type).catch(() => {}); }
+    connect(fav.url, fav.name, undefined, null, type);
+  }, [connect]);
+
   const connectCustom = useCallback(async () => {
     if (!customUrl.trim()) return;
     let url = customUrl.trim();
@@ -303,7 +311,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
           {showFavHeader && <SectionHeader label="FAVOURITES" fs={fs} F={F} C={C} />}
           <TouchableOpacity
             style={[styles.row, { borderColor: C.borderBright, backgroundColor: 'rgba(255,100,100,0.06)' }]}
-            onPress={() => connect(fav.url, fav.name)}
+            onPress={() => connectFav(fav)}
             disabled={connecting}
           >
             <View style={styles.rowMain}>
