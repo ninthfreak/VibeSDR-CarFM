@@ -1501,7 +1501,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     vfoPendingHz.current -= steps * s;
     const cur     = c.getStatus().frequency;
     const snapped = Math.round(cur / s) * s;   // vDown grid snap
-    const newHz   = Math.max(MIN_HZ, Math.min(MAX_HZ, snapped + steps * s));
+    const [loHz, hiHz] = c.caps.freqRange;     // backend range (OWRX VHF/UHF ≠ 0–30 MHz)
+    const newHz   = Math.max(loHz, Math.min(hiHz, snapped + steps * s));
     if (newHz === cur) return;
     c.tune(newHz);
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: newHz }));
@@ -1615,7 +1616,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onWfTapTune = useCallback((hz: number) => {
     const c = client.current; if (!c) return;
     markInteract();
-    const clamped = Math.max(MIN_HZ, Math.min(MAX_HZ, hz));
+    const [loHz, hiHz] = c.caps.freqRange;
+    const clamped = Math.max(loHz, Math.min(hiHz, hz));
     c.tune(clamped);
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
   }, []);
@@ -1753,7 +1755,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onTuneHz = useCallback((hz: number) => {
     const c = client.current; if (!c) return;
     markInteract();
-    const clamped = Math.max(MIN_HZ, Math.min(MAX_HZ, hz));
+    const [loHz, hiHz] = c.caps.freqRange;
+    const clamped = Math.max(loHz, Math.min(hiHz, hz));
     c.tune(clamped);
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
   }, []);

@@ -50,7 +50,9 @@ interface OwrxConfig {
 
 export class OwrxAdapter implements SDRBackend {
   readonly kind: BackendKind = 'owrx';
-  readonly caps = OWRX_CAPS;
+  // Per-instance copy so freqRange can be refined to the active profile window
+  // (OWRX profiles are anywhere — HF to VHF/UHF — not the UberSDR 0–30 MHz range).
+  readonly caps: BackendCapabilities = { ...OWRX_CAPS, freqRange: [0, 30_000_000] };
   readonly uuid: string;
 
   private ws: WebSocket | null = null;
@@ -186,6 +188,11 @@ export class OwrxAdapter implements SDRBackend {
       this.lastRow = null;   // clear stale waterfall on profile change
     }
 
+    // Refine the tunable range to the active profile window so the UI's clamps
+    // (which read caps.freqRange) don't peg VHF/UHF tunes to a 30 MHz ceiling.
+    if (this.cfg.sampRate) {
+      this.caps.freqRange = [this.cfg.centerFreq - this.cfg.sampRate / 2, this.cfg.centerFreq + this.cfg.sampRate / 2];
+    }
     this.dbg(`cfg cf=${this.cfg.centerFreq} sr=${this.cfg.sampRate} fft=${this.cfg.fftSize} freq=${this.freq} fftcomp=${this.cfg.fftCompression}`);
     // Send (or resend) the demod params now we know the profile window.
     this.started = true;
