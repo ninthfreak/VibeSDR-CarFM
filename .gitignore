@@ -49,3 +49,8 @@ yarn-error.*
 
 # Reference assets (local dev only)
 Reference/
+
+# Android release signing secrets (NEVER commit)
+android/keystore.properties
+android/app/upload-keystore.jks
+*.keystore
