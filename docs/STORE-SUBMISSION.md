@@ -4,8 +4,9 @@ Practical, paste-ready answers for the App Store and Google Play consoles.
 Package name / bundle ID / applicationId: **`com.vibesdr.app`**
 Privacy policy URL: **https://github.com/Stuey3D/VibeSDR/blob/main/PRIVACY.md**
 
-> ⚠️ Fill in the **demo instance** placeholder below with a stable, always-on public
-> SDR instance before submitting — reviewers must be able to hear audio immediately.
+> **Demo instance for review:** `https://stuey3d.tunnel.ubersdr.org/` (the
+> developer's own receiver, online ~99% of the time apart from brief updates).
+> Reviewers can select it from the instance list or add it manually by URL.
 
 ---
 
@@ -20,7 +21,9 @@ GETTING STARTED (no account needed):
 1. Launch the app. It opens on the instance picker (a list of public SDR receivers).
 2. Tap any instance with a green "online" indicator to connect — audio and a live
    spectrum/waterfall will start within a few seconds.
-   • Suggested instance for review: <DEMO_INSTANCE_NAME> (pre-set as the default).
+   • Recommended instance for review: the developer's own receiver,
+     https://stuey3d.tunnel.ubersdr.org/ — select it from the list, or use "add by
+     URL" if you'd like to go straight to it. It is online ~99% of the time.
 3. Drag the tuning dial or tap the waterfall to change frequency; use the AUDIO menu
    to change demodulator (AM/FM/SSB) and bandwidth.
 
@@ -121,7 +124,7 @@ matches the runtime permission users see.
 ---
 
 ## 3. Both stores — quick checklist
-- [ ] Set a stable **default/demo instance** that's reliably online for review.
+- [x] Demo instance for review: `https://stuey3d.tunnel.ubersdr.org/` (developer's own, ~99% uptime).
 - [ ] Privacy Policy URL pasted in both consoles.
 - [ ] Screenshots (already in `screenshots/`).
 - [ ] Apple: encryption = No (non-exempt). Location label = App Functionality only.
