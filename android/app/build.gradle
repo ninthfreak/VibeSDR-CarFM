@@ -97,6 +97,14 @@ android {
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
+    // Release/upload signing — loaded from android/keystore.properties (gitignored).
+    // If absent (e.g. a fresh clone), release falls back to the debug key so the
+    // project still builds; only the real upload AAB needs the upload key present.
+    def keystorePropsFile = rootProject.file("keystore.properties")
+    def hasUploadKey = keystorePropsFile.exists()
+    def keystoreProps = new Properties()
+    if (hasUploadKey) { keystoreProps.load(new FileInputStream(keystorePropsFile)) }
+
     signingConfigs {
         debug {
             storeFile file('debug.keystore')
@@ -104,15 +112,21 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        if (hasUploadKey) {
+            release {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            signingConfig hasUploadKey ? signingConfigs.release : signingConfigs.debug
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
