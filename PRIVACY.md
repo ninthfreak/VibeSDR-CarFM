@@ -69,6 +69,6 @@ If this policy changes, the updated version will be published at this URL with a
 
 ## Contact
 
-Questions about privacy: **stuey99@googlemail.com**
+Questions about privacy: **stuey3dttb@icloud.com**
 
 Source code: <https://github.com/Stuey3D/VibeSDR>
