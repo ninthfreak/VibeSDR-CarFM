@@ -39,7 +39,7 @@ import type { RootStackParamList }     from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { createBackend } from '../services/UberSDRAdapter';
-import type { SDRBackend } from '../services/SDRBackend';
+import { filterEdgeMax, type SDRBackend } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind,
@@ -2018,6 +2018,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         dbMax={dbMax}
         filterLow={status.bandwidthLow}
         filterHigh={status.bandwidthHigh}
+        bwEdgeMax={client.current ? filterEdgeMax(client.current.caps, status.mode) : 6000}
         nr={nrMode !== 'off'}
         nb={nb}
         recording={isRecording}

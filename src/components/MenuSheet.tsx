@@ -49,6 +49,9 @@ export interface MenuSheetProps {
 
   filterLow:    number;
   filterHigh:   number;
+  /** Per-edge passband half-width cap (Hz) for the active mode/backend.
+      Drives the bandwidth sliders' range — never hardcode it. Default 6000. */
+  bwEdgeMax?:   number;
   onFilterLow:  (v: number) => void;
   onFilterHigh: (v: number) => void;
   /** Atomic both-edges setter — used by the mirrored sliders + SYNC. */
@@ -376,7 +379,7 @@ function RttySettingsRows({ s, onChange }:
 export default function MenuSheet({
   visible, serverName, serverUrl,
   colormap, dbMin, dbMax, onColormap, onDbMin, onDbMax,
-  filterLow, filterHigh, onFilterLow, onFilterHigh, onFilterBoth,
+  filterLow, filterHigh, bwEdgeMax = 6000, onFilterLow, onFilterHigh, onFilterBoth,
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
@@ -478,6 +481,9 @@ export default function MenuSheet({
   }, [serverDspEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filterBw   = filterHigh - filterLow;
+  // Coarser step for wideband ranges (e.g. OWRX broadcast FM ±96 kHz) so the
+  // slider thumb travels in usable increments; 50 Hz for narrow modes.
+  const bwStep     = bwEdgeMax > 20000 ? 1000 : 50;
   const setFilterBw = useCallback((bw: number) => {
     const half = bw / 2;
     onFilterLow(-half);
@@ -517,6 +523,7 @@ export default function MenuSheet({
           <ScrollView style={styles.scroll}
             contentContainerStyle={[styles.scrollContent,
               { paddingBottom: sheetInsets.bottom + 16 }]}
+            keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}>
 
             {/* Display settings is its OWN view — it REPLACES the main menu
@@ -562,6 +569,9 @@ export default function MenuSheet({
                     <Text style={styles.searchHint}>
                       {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} · tap to tune
                     </Text>
+                    <ScrollView style={styles.searchScroll} nestedScrollEnabled
+                      keyboardShouldPersistTaps="handled"
+                      showsVerticalScrollIndicator={true}>
                     {searchResults.map((r: SearchResult, i: number) => (
                       <TouchableOpacity
                         key={i}
@@ -584,6 +594,7 @@ export default function MenuSheet({
                         </Text>
                       </TouchableOpacity>
                     ))}
+                    </ScrollView>
                   </>)}
                 </View>
               )}
@@ -949,8 +960,8 @@ export default function MenuSheet({
             <View style={styles.bwMirrorRow}>
               <Text style={styles.bwEdgeVal}>{filterLow >= 0 ? '+' : '−'}{fmtHz(Math.abs(filterLow))}</Text>
               <Slider style={styles.bwHalfSlider}
-                minimumValue={-8000} maximumValue={0} step={50}
-                value={Math.min(0, filterLow)}
+                minimumValue={-bwEdgeMax} maximumValue={0} step={bwStep}
+                value={Math.max(-bwEdgeMax, Math.min(0, filterLow))}
                 onValueChange={(v: number) => {
                   if (bwSync) onFilterBoth?.(v, -v);
                   else        onFilterBoth?.(v, filterHigh);
@@ -963,8 +974,8 @@ export default function MenuSheet({
                 <Text style={[styles.btnText, bwSync && styles.btnTextActive]}>SYNC</Text>
               </TouchableOpacity>
               <Slider style={styles.bwHalfSlider}
-                minimumValue={0} maximumValue={8000} step={50}
-                value={Math.max(0, filterHigh)}
+                minimumValue={0} maximumValue={bwEdgeMax} step={bwStep}
+                value={Math.min(bwEdgeMax, Math.max(0, filterHigh))}
                 onValueChange={(v: number) => {
                   if (bwSync) onFilterBoth?.(-v, v);
                   else        onFilterBoth?.(filterLow, v);
@@ -1370,6 +1381,7 @@ const styles = StyleSheet.create({
     marginTop: 4, borderWidth: 1, borderColor: 'rgba(255,255,255,0.22)',
     borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.45)', overflow: 'hidden',
   },
+  searchScroll: { maxHeight: 240 },
   searchHint: {
     color: 'rgba(255,255,255,0.45)', fontFamily: 'Atkinson Hyperlegible',
     fontSize: 11, paddingHorizontal: 10, paddingVertical: 6,

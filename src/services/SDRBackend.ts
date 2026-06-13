@@ -38,6 +38,18 @@ export interface BackendCapabilities {
   chat: boolean;
   /** UberSDR only. */
   serverNR: boolean;
+  /**
+   * Per-edge passband half-width cap in Hz, keyed by mode, with a `default`
+   * fallback. Drives the bandwidth sliders' range — never hardcode it, since
+   * it varies by demodulator and server (e.g. OWRX broadcast FM wants ±96 kHz
+   * = 192 kHz wide, while UberSDR narrow modes cap at 6 kHz).
+   */
+  maxBandwidth: { default: number } & Partial<Record<SDRMode, number>>;
+}
+
+/** Per-edge passband half-width cap (Hz) for the active mode. */
+export function filterEdgeMax(caps: BackendCapabilities, mode: SDRMode): number {
+  return caps.maxBandwidth[mode] ?? caps.maxBandwidth.default;
 }
 
 export interface SDRBackend {

@@ -269,7 +269,7 @@ export interface SearchResult {
 const BAND_GENERIC_RE = /^(band|bands|band\s*plan|bandplan)$/i;
 
 export function searchStations(
-  bms: ServerBookmark[], bands: ServerBand[], query: string, limit = 25,
+  bms: ServerBookmark[], bands: ServerBand[], query: string, limit = 200,
 ): SearchResult[] {
   const q = query.trim();
   if (!q) return [];

@@ -15,6 +15,7 @@ const UBERSDR_CAPS: BackendCapabilities = {
   freqRange:      [0, 30_000_000],
   chat:           true,
   serverNR:       true,
+  maxBandwidth:   { default: 6000 },
 };
 
 export class UberSDRAdapter implements SDRBackend {

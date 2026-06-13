@@ -28,7 +28,7 @@ export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
   usb: [50, 2700],     lsb: [-2700, -50],
   am:  [-5000, 5000],  sam: [-5000, 5000],
   cwu: [-200, 200],    cwl: [-200, 200],
-  fm:  [-8000, 8000],  nfm: [-5000, 5000],
+  fm:  [-6000, 6000],  nfm: [-5000, 5000],
 };
 
 export interface SDRStatus {
