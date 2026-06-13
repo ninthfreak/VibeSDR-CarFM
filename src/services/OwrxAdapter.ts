@@ -186,6 +186,7 @@ export class OwrxAdapter implements SDRBackend {
       this.lastRow = null;   // clear stale waterfall on profile change
     }
 
+    this.dbg(`cfg cf=${this.cfg.centerFreq} sr=${this.cfg.sampRate} fft=${this.cfg.fftSize} freq=${this.freq} fftcomp=${this.cfg.fftCompression}`);
     // Send (or resend) the demod params now we know the profile window.
     this.started = true;
     this.sendDemod();
@@ -285,6 +286,7 @@ export class OwrxAdapter implements SDRBackend {
     if (!this.cfg) { this.freq = frequency; return; }
     const half = this.cfg.sampRate / 2;
     const offset = frequency - this.cfg.centerFreq;
+    this.dbg(`tune in=${frequency} off=${Math.round(offset)} half=${half} ${Math.abs(offset) <= half ? 'IN' : 'OUT'}`);
     if (Math.abs(offset) <= half) {
       this.freq = frequency;
       this.viewCenter = frequency;        // VFO stays centred (UberSDR-like), view follows

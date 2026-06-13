@@ -319,6 +319,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const [connected, setConnected] = useState(false);
   const [profiles, setProfiles]   = useState<ProfileInfo[]>([]);  // OWRX only
+  const [owrxDbg, setOwrxDbg]     = useState('');                  // TEMP on-screen debug (OWRX)
   const [status, setStatus]       = useState<SDRStatus>({
     frequency: 14_074_000, mode: 'usb',
     bandwidthLow: -3000, bandwidthHigh: 3000,
@@ -1221,6 +1222,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onStatus:     (s) => { if (!destroyed.current) setStatus(s); },
       onProfiles:   (list) => { if (!destroyed.current) setProfiles(list); },
+      onDbg:        (m) => { if (!destroyed.current && route.params.serverType === 'owrx') setOwrxDbg((p) => (m + '\n' + p).split('\n').slice(0, 10).join('\n')); },
       onSpectrum:   (newBins, s) => {
         if (destroyed.current) return;
         // Waterfall/spectrum render imperatively — no React state per frame.
@@ -2318,6 +2320,15 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* VTS popup — station / band-crossing notifications above the pill */}
       {!controlsHidden && <VTSBar notif={vtsNotif} bottom={pillBottom + 8} />}
+
+      {/* TEMP OWRX debug overlay — screenshot + report; remove once geometry is solid */}
+      {route.params.serverType === 'owrx' && (
+        <View pointerEvents="none" style={{ position: 'absolute', top: 54, left: 8, right: 8, zIndex: 9999 }}>
+          <Text style={{ color: '#3f3', fontSize: 10, fontFamily: 'Menlo', backgroundColor: 'rgba(0,0,0,0.55)' }}>
+            {`f=${status.frequency} c=${Math.round(status.centerHz)} bw=${Math.round(status.bwHz)} bins=${status.binCount}\n${owrxDbg}`}
+          </Text>
+        </View>
+      )}
 
       {/* Menu sheet */}
       <MenuSheet
