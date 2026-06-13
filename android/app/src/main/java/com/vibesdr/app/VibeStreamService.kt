@@ -353,7 +353,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             emitEvent("VibeSkip") { it.putString("direction", if (direction > 0) "next" else "prev") }
             return
         }
-        val newFreq = (currentFreq + direction * currentStep).coerceAtLeast(100_000L)
+        val newFreq = snapStep(direction)
         currentFreq = newFreq
         // Stale VTS strings (old station name) — fall back until JS catches up
         npTitle = null
@@ -364,6 +364,17 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             it.putString("mode", currentMode)
         }
         mainHandler.post { updateMetadataSession(); updateNotification() }
+    }
+
+    /** Snap a media-control skip to the step grid, matching the VFO drum: an
+     *  off-grid frequency lands on the next/previous multiple of the step; an
+     *  on-grid one moves exactly one step. direction +1 = up, -1 = down. */
+    private fun snapStep(direction: Int): Long {
+        val s = currentStep
+        if (s <= 0) return currentFreq.coerceAtLeast(100_000L)
+        val snapped = if (direction > 0) (currentFreq / s + 1) * s
+                      else ((currentFreq + s - 1) / s - 1) * s
+        return snapped.coerceAtLeast(100_000L)
     }
 
     // ── WebSocket ────────────────────────────────────────────────────────────

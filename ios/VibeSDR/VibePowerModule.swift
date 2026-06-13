@@ -925,7 +925,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         self.sendEvent(withName: "VibeSkip", body: ["direction": "next"])
         return .success
       }
-      let newFreq = self.currentFreq + self.currentStep
+      let newFreq = self.snapStep(1)
       self.currentFreq = newFreq
       self.sendWsJson(["type": "tune", "frequency": newFreq])
       // Stale VTS strings (old station name) — fall back until JS catches up
@@ -944,7 +944,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         self.sendEvent(withName: "VibeSkip", body: ["direction": "prev"])
         return .success
       }
-      let newFreq = max(100_000, self.currentFreq - self.currentStep)
+      let newFreq = self.snapStep(-1)
       self.currentFreq = newFreq
       self.sendWsJson(["type": "tune", "frequency": newFreq])
       self.npTitleOverride = nil; self.npArtistOverride = nil
@@ -952,6 +952,17 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       self.sendEvent(withName: "VibeTuned", body: ["frequency": newFreq, "mode": self.currentMode])
       return .success
     }
+  }
+
+  /// Snap a media-control skip to the step grid, matching the VFO drum: an
+  /// off-grid frequency lands on the next/previous multiple of the step; an
+  /// on-grid one moves exactly one step. direction +1 = up, -1 = down.
+  private func snapStep(_ direction: Int) -> Int {
+    let s = currentStep
+    guard s > 0 else { return max(100_000, currentFreq) }
+    let snapped = direction > 0 ? (currentFreq / s + 1) * s
+                                : ((currentFreq + s - 1) / s - 1) * s
+    return max(100_000, snapped)
   }
 }
 
