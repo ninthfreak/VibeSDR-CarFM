@@ -174,6 +174,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     // disconnected vs a reconnect that failed (server full / rate-limited).
     @Volatile private var dataSaverDisconnected = false
     @Volatile private var reconnectFailed = false
+    @Volatile private var lastSignalEmit = 0L   // throttle the SNR (VibeSignal) event
     // Audio focus — when another app takes it (parity with iOS interruption) we
     // register a mute so the UI + data saver reflect it; user presses Play to
     // return (no auto-resume on regain).
@@ -635,6 +636,21 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             val sr = (pkt[8].toInt() and 0xFF) or ((pkt[9].toInt() and 0xFF) shl 8) or
                 ((pkt[10].toInt() and 0xFF) shl 16) or ((pkt[11].toInt() and 0xFF) shl 24)
             if (sr in 8000..96000) streamSr = sr
+
+            // SNR meter = radiod channel SNR = basebandPower − noiseDensity (both
+            // dBFS, per-packet header) — the demodulator's own channel measure, so
+            // independent of the spectrum/zoom (matches UberSDR).
+            val bb = Float.fromBits((pkt[13].toInt() and 0xFF) or ((pkt[14].toInt() and 0xFF) shl 8) or
+                ((pkt[15].toInt() and 0xFF) shl 16) or ((pkt[16].toInt() and 0xFF) shl 24))
+            val nd = Float.fromBits((pkt[17].toInt() and 0xFF) or ((pkt[18].toInt() and 0xFF) shl 8) or
+                ((pkt[19].toInt() and 0xFF) shl 16) or ((pkt[20].toInt() and 0xFF) shl 24))
+            if (bb > -900f && nd > -900f) {
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastSignalEmit > 200) {
+                    lastSignalEmit = now
+                    emitEvent("VibeSignal") { it.putDouble("snr", (bb - nd).toDouble()); it.putDouble("dbfs", bb.toDouble()) }
+                }
+            }
 
             // Channel-count flip → rebuild codec synchronously (no race:
             // this thread owns codec + track exclusively)
