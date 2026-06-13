@@ -11,19 +11,20 @@ A mobile-first SDR receiver app for iOS and Android. VibeSDR is a fully native c
 
 ## Screenshots
 
-> The images below live in [`screenshots/`](screenshots/). To refresh them, capture the current build on-device and replace the files in place (same filenames).
-
 | | | |
 |---|---|---|
-| ![Instance picker](screenshots/01-instance-picker.png) | ![Waterfall portrait](screenshots/02-waterfall-portrait.png) | ![RTTY decoder](screenshots/04-rtty-decoder.png) |
-| *Instance picker — sorted by distance* | *GPU waterfall — portrait* | *On-device RTTY decoder* |
-| ![LSB — The Pip](screenshots/06-lsb-the-pip.png) | ![Speech-to-text](screenshots/07-speech-to-text.png) | ![HFDL aircraft map](screenshots/08-hfdl-aircraft-map.png) |
-| *Bandwidth / passband tuning* | *Speech-to-text decoder* | *HFDL aircraft tracking map* |
+| ![Portrait waterfall](screenshots/03-waterfall-portrait.jpeg) | ![Lock screen](screenshots/05-lockscreen.jpeg) | ![Apple Watch](screenshots/06-apple-watch.jpeg) |
+| *GPU waterfall — portrait, AM broadcast* | *Lock-screen Now Playing (frequency · mode · step)* | *Apple Watch media controls* |
 
 | | |
 |---|---|
-| ![Landscape](screenshots/03-waterfall-landscape.png) | ![Landscape wide](screenshots/05-waterfall-landscape-wide.png) |
-| *Landscape waterfall* | *Landscape wide zoom* |
+| ![AM broadcast — landscape](screenshots/01-waterfall-am-landscape.png) | ![40m ham — band-aware](screenshots/02-band-aware-40m.jpeg) |
+| *Landscape waterfall with spectrum backdrop — Radio Caroline* | *40m ham in LSB / 500 Hz with live band conditions* |
+
+| | |
+|---|---|
+| ![Menu](screenshots/04-menu-controls.jpeg) | ![In the car](screenshots/07-in-car.jpeg) |
+| *Audio menu — passband, server NR, recording, squelch* | *In the car — band-aware tuning + head-unit metadata over Bluetooth* |
 
 ---
 
