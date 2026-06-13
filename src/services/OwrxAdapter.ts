@@ -173,15 +173,18 @@ export class OwrxAdapter implements SDRBackend {
     if ('audio_compression' in c) this.cfg.audioCompression = c.audio_compression;
     if ('start_mod' in c)         this.mode = (c.start_mod as SDRMode) || this.mode;
     if ('start_offset_freq' in c && this.cfg.centerFreq) this.freq = this.cfg.centerFreq + c.start_offset_freq;
+    // Ensure we have a tuned frequency inside the profile before centring the view.
+    if ((this.freq === 0 || Math.abs(this.freq - this.cfg.centerFreq) > this.cfg.sampRate / 2) && this.cfg.centerFreq) {
+      this.freq = this.cfg.centerFreq;
+    }
 
-    // Default the view to the whole profile (or re-centre on a profile switch).
+    // Centre the view on the VFO (a sensible default span), or re-centre on a switch.
     if (!this.viewInit || profileSwitch) {
-      this.viewCenter = this.cfg.centerFreq;
+      this.viewCenter = this.freq || this.cfg.centerFreq;
       this.viewBw = this.cfg.sampRate;
       this.viewInit = true;
       this.lastRow = null;   // clear stale waterfall on profile change
     }
-    if (this.freq === 0 && this.cfg.centerFreq) this.freq = this.cfg.centerFreq;
 
     // Send (or resend) the demod params now we know the profile window.
     this.started = true;
@@ -269,7 +272,9 @@ export class OwrxAdapter implements SDRBackend {
     const offset = frequency - this.cfg.centerFreq;
     if (Math.abs(offset) <= half) {
       this.freq = frequency;
+      this.viewCenter = frequency;        // VFO stays centred (UberSDR-like), view follows
       this.sendDemod();
+      if (this.lastRow) this.emitSlice(this.lastRow);
       this.cb.onStatus(this.getStatus());
       return;
     }
@@ -278,11 +283,14 @@ export class OwrxAdapter implements SDRBackend {
       Math.abs(frequency - (p.centerHz as number)) <= (p.bwHz as number) / 2);
     if (target) {
       this.freq = frequency;            // applied after the new config arrives
+      this.viewCenter = frequency;
       this.selectProfile(target.id);
     } else {
       // clamp to the window edge (UI pulses the drum at band edge)
       this.freq = this.cfg.centerFreq + Math.sign(offset) * half;
+      this.viewCenter = this.freq;
       this.sendDemod();
+      if (this.lastRow) this.emitSlice(this.lastRow);
       this.cb.onStatus(this.getStatus());
     }
   }
