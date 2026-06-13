@@ -1206,8 +1206,8 @@ export default function MenuSheet({
               ))}
             </OptRow>
 
-            {/* ── ADMIN — server pages in an in-app browser view ──── */}
-            <SectionLabel label="ADMIN" />
+            {/* ── INSTANCE ADMIN — server pages in an in-app browser view ──── */}
+            <SectionLabel label="INSTANCE ADMIN" />
             <BtnRow>
               <Btn label="ADMIN"      onPress={() => onAdminLink?.('/admin.html', 'Admin')} />
               <Btn label="NOISE"      onPress={() => onAdminLink?.('/noisefloor.html', 'Noise Floor')} />

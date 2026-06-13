@@ -370,7 +370,19 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   @objc func setMuted(_ muted: Bool) {
     isMuted = muted
-    if muted { playerNode?.pause() } else { playerNode?.play() }
+    // Pause the whole engine, not just the player: with the engine still running
+    // iOS treats the app as actively playing — the lock-screen pause button
+    // springs back to ▶ and iOS keeps grabbing shared AirPods from the Mac.
+    // Pausing the engine + playbackState=.paused makes the system honour pause
+    // and yield the route. The spectrum/audio WebSockets are unaffected (data
+    // keeps flowing for the waterfall + the data-saver countdown).
+    if muted {
+      playerNode?.pause()
+      audioEngine?.pause()
+    } else {
+      try? audioEngine?.start()
+      playerNode?.play()
+    }
     // JS shows a MUTED banner — media-control pause (AirPods squeeze) maps to
     // mute, which is otherwise invisible in the UI.
     sendEvent(withName: "VibeMuted", body: ["muted": muted])
