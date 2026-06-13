@@ -224,18 +224,33 @@ export class OwrxAdapter implements SDRBackend {
     this.emitSlice(row);
   }
 
-  /** Slice the full-profile FFT row down to the current view window and emit. */
+  /** Slice the full-profile FFT row to the current view window and emit. The
+   *  window is SHIFTED (not clamped) to stay inside the profile, so a VFO near a
+   *  band edge keeps a full-width view and the marker simply moves toward the edge
+   *  — clamping the edges instead pinned the VFO to the left edge and stuck it. */
+  /** The shifted view window [lo,hi] in absolute Hz — shared by the waterfall
+   *  slice and the status snapshot so the VFO overlay and waterfall agree. */
+  private window(): { lo: number; hi: number } {
+    const cf = this.cfg?.centerFreq ?? this.freq, sr = this.cfg?.sampRate ?? 0;
+    if (!sr) return { lo: cf, hi: cf };
+    const fullLo = cf - sr / 2, fullHi = cf + sr / 2;
+    const bw = Math.min(this.viewBw || sr, sr);
+    let lo = this.viewCenter - bw / 2, hi = this.viewCenter + bw / 2;
+    if (lo < fullLo) { lo = fullLo; hi = fullLo + bw; }
+    if (hi > fullHi) { hi = fullHi; lo = fullHi - bw; }
+    return { lo, hi };
+  }
+
   private emitSlice(full: Float32Array): void {
     if (!this.cfg || !this.cfg.sampRate) return;
     const cf = this.cfg.centerFreq, sr = this.cfg.sampRate;
-    const fullLo = cf - sr / 2, fullHi = cf + sr / 2;
-    const viewLo = Math.max(fullLo, this.viewCenter - this.viewBw / 2);
-    const viewHi = Math.min(fullHi, this.viewCenter + this.viewBw / 2);
+    const fullLo = cf - sr / 2;
+    const { lo, hi } = this.window();
     const n = full.length;
-    const loIdx = Math.max(0, Math.floor(((viewLo - fullLo) / sr) * n));
-    const hiIdx = Math.min(n, Math.ceil(((viewHi - fullLo) / sr) * n));
+    const loIdx = Math.max(0, Math.min(n, Math.round(((lo - fullLo) / sr) * n)));
+    const hiIdx = Math.max(loIdx, Math.min(n, Math.round(((hi - fullLo) / sr) * n)));
     const out = (loIdx === 0 && hiIdx === n) ? full : full.subarray(loIdx, hiIdx);
-    this.cb.onSpectrum(out, this.statusForSlice(out.length, viewLo, viewHi));
+    this.cb.onSpectrum(out, this.statusForSlice(out.length, lo, hi));
   }
 
   private statusForSlice(binCount: number, viewLo: number, viewHi: number): SDRStatus {
@@ -330,12 +345,16 @@ export class OwrxAdapter implements SDRBackend {
 
   // ── status ───────────────────────────────────────────────────────────────
   getStatus(): SDRStatus {
-    const cf = this.cfg?.centerFreq ?? this.freq, sr = this.cfg?.sampRate ?? 0;
+    const sr = this.cfg?.sampRate ?? 0;
+    const { lo, hi } = this.window();
+    const bw = Math.max(1, hi - lo);
+    const bins = this.cfg?.fftSize ? Math.round((bw / sr) * this.cfg.fftSize) : 0;
     return {
       frequency: this.freq, mode: this.mode,
       bandwidthLow: this.bwLow, bandwidthHigh: this.bwHigh,
-      binCount: this.cfg?.fftSize ?? 0, binBandwidth: sr / Math.max(1, this.cfg?.fftSize ?? 1),
-      centerHz: this.viewInit ? this.viewCenter : cf, bwHz: this.viewInit ? this.viewBw : sr,
+      binCount: bins, binBandwidth: bw / Math.max(1, bins),
+      centerHz: this.viewInit ? (lo + hi) / 2 : (this.cfg?.centerFreq ?? this.freq),
+      bwHz: this.viewInit ? bw : sr,
     };
   }
   getView(): SDRStatus { return this.getStatus(); }
