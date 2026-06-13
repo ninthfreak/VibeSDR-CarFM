@@ -740,19 +740,30 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     NotificationCenter.default.addObserver(
       forName: AVAudioSession.interruptionNotification, object: nil, queue: nil
     ) { [weak self] note in
-      guard let self, self.isRunning else { return }
+      guard let self else { return }
       let type = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
       if type == AVAudioSession.InterruptionType.began.rawValue {
-        // Another app took the audio session (e.g. a Mac grabbed the shared
-        // AirPods). iOS pauses us, but only the SYSTEM knows — sync our own
-        // state so the UI shows muted and the data-saver countdown starts.
-        // We do NOT auto-resume on .ended (the user chose to play elsewhere);
-        // they press Play to come back.
+        // Something grabbed the audio session — could be transient (Siri in the
+        // car, a phone call) or persistent (a Mac took the shared AirPods). iOS
+        // pauses us; sync our state so the UI shows muted. NB this calls
+        // disconnectForPause() → isRunning=false, so .ended must NOT gate on it.
+        guard self.isRunning else { return }
         DispatchQueue.main.async { if !self.isMuted { self.setMuted(true) } }
       } else if type == AVAudioSession.InterruptionType.ended.rawValue {
+        // Only auto-resume when iOS says the interruption was transient
+        // (.shouldResume) — e.g. Siri voice tuning in CarPlay. Without this the
+        // Siri interruption disconnected VibeSDR and it sat dead until a manual
+        // Play. A persistent takeover (no .shouldResume) still waits for Play.
+        let opts = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+        let shouldResume = (opts & AVAudioSession.InterruptionOptions.shouldResume.rawValue) != 0
+        guard shouldResume else { return }
         try? AVAudioSession.sharedInstance().setActive(true)
         DispatchQueue.main.async {
-          if !self.isMuted { try? self.audioEngine?.start(); self.playerNode?.play() }
+          if self.dataSaverDisconnected {
+            self.setMuted(false)   // full reconnect, identical to pressing ▶
+          } else if !self.isMuted {
+            try? self.audioEngine?.start(); self.playerNode?.play()
+          }
         }
       }
     }
