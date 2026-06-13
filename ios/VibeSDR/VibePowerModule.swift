@@ -948,6 +948,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // MARK: - Lock screen / media controls
 
   private func updateNowPlaying() {
+    refreshArtwork()  // keep the inset glyph/countdown in step with the state
     let mhz = String(format: "%.3f MHz", Double(currentFreq) / 1_000_000)
     let fallbackTitle  = "\(mhz) \(currentMode.uppercased())"
     let fallbackArtist = instanceName.isEmpty ? currentBase : instanceName
@@ -996,26 +997,68 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   @objc func setArtwork(_ serverType: String) {
     guard serverType != npArtworkType else { return }
     npArtworkType = serverType
-    DispatchQueue.main.async {
-      guard let base = UIImage(named: "artwork_base") else {
-        NSLog("[VibePowerModule] artwork_base missing"); return
-      }
-      var composed = base
-      if let overlay = UIImage(named: "logo_\(serverType)") {
-        let size = base.size
-        let inset = size.width * 0.30
-        let pad   = size.width * 0.045
-        composed = UIGraphicsImageRenderer(size: size).image { _ in
-          base.draw(in: CGRect(origin: .zero, size: size))
-          overlay.draw(in: CGRect(x: size.width - inset - pad,
-                                  y: size.height - inset - pad,
-                                  width: inset, height: inset))
+    DispatchQueue.main.async { self.updateNowPlaying() }  // refreshes art + pushes
+  }
+
+  // Composite the album art with a state-aware bottom-right inset: the server
+  // logo while playing, a muted-speaker glyph + minutes-to-disconnect while
+  // muted, a disconnected glyph once the data saver has dropped the stream.
+  private var lastArtworkKey = ""
+  private func refreshArtwork() {
+    guard let base = UIImage(named: "artwork_base") else { return }
+    let mins: Int? = (isMuted && muteTimeoutSec > 0 && muteSince != nil)
+      ? max(0, Int(ceil(Double(max(0, muteTimeoutSec - Int(Date().timeIntervalSince(muteSince!)))) / 60.0)))
+      : nil
+    let key = dataSaverDisconnected ? "disc"
+            : isMuted ? "mute-\(mins.map(String.init) ?? "x")"
+            : "play-\(npArtworkType)"
+    guard key != lastArtworkKey else { return }
+    lastArtworkKey = key
+
+    let size  = base.size
+    let inset = size.width * 0.30
+    let pad   = size.width * 0.045
+    let rect  = CGRect(x: size.width - inset - pad, y: size.height - inset - pad,
+                       width: inset, height: inset)
+    let img = UIGraphicsImageRenderer(size: size).image { _ in
+      base.draw(in: CGRect(origin: .zero, size: size))
+      if dataSaverDisconnected {
+        drawSymbol("wifi.slash", in: rect, tint: UIColor(red: 0.92, green: 0.32, blue: 0.28, alpha: 1))
+      } else if isMuted {
+        if let m = mins {
+          // glyph in the top ~⅔, the "Nm" countdown beneath it
+          let g = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height * 0.62)
+          drawSymbol("speaker.slash.fill", in: g, tint: UIColor(white: 0.95, alpha: 1))
+          drawCountdown("\(m)m", in: CGRect(x: rect.minX, y: rect.midY + rect.height * 0.12,
+                                            width: rect.width, height: rect.height * 0.36))
+        } else {
+          drawSymbol("speaker.slash.fill", in: rect, tint: UIColor(white: 0.95, alpha: 1))
         }
+      } else if let overlay = UIImage(named: "logo_\(npArtworkType)") {
+        overlay.draw(in: rect)
       }
-      let img = composed
-      self.npArtwork = MPMediaItemArtwork(boundsSize: img.size) { _ in img }
-      self.updateNowPlaying()
     }
+    npArtwork = MPMediaItemArtwork(boundsSize: img.size) { _ in img }
+  }
+
+  private func drawSymbol(_ name: String, in rect: CGRect, tint: UIColor) {
+    let cfg = UIImage.SymbolConfiguration(pointSize: rect.height, weight: .semibold)
+    guard let sym = UIImage(systemName: name, withConfiguration: cfg)?
+            .withTintColor(tint, renderingMode: .alwaysOriginal) else { return }
+    // aspect-fit the symbol inside rect
+    let s = min(rect.width / sym.size.width, rect.height / sym.size.height)
+    let w = sym.size.width * s, h = sym.size.height * s
+    sym.draw(in: CGRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h))
+  }
+
+  private func drawCountdown(_ text: String, in rect: CGRect) {
+    let p = NSMutableParagraphStyle(); p.alignment = .center
+    let attrs: [NSAttributedString.Key: Any] = [
+      .font: UIFont.systemFont(ofSize: rect.height * 0.9, weight: .bold),
+      .foregroundColor: UIColor(white: 0.95, alpha: 1),
+      .paragraphStyle: p,
+    ]
+    (text as NSString).draw(in: rect, withAttributes: attrs)
   }
 
   private func setupRemoteCommands() {

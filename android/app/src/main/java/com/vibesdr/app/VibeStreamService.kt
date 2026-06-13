@@ -1248,36 +1248,74 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     fun setArtworkNative(serverType: String) {
         if (serverType == npArtworkType) return
         npArtworkType = serverType
-        mainHandler.post {
-            try {
-                val base = android.graphics.BitmapFactory.decodeResource(
-                    resources, R.drawable.artwork_base) ?: return@post
-                val overlayId = resources.getIdentifier(
-                    "logo_$serverType", "drawable", packageName)
-                var composed = base
-                if (overlayId != 0) {
-                    val overlay = android.graphics.BitmapFactory.decodeResource(resources, overlayId)
-                    if (overlay != null) {
-                        composed = base.copy(android.graphics.Bitmap.Config.ARGB_8888, true)
-                        val canvas = android.graphics.Canvas(composed)
-                        val inset = composed.width * 0.30f
-                        val pad = composed.width * 0.045f
-                        val dst = android.graphics.RectF(
-                            composed.width - inset - pad, composed.height - inset - pad,
-                            composed.width - pad, composed.height - pad)
-                        canvas.drawBitmap(overlay, null, dst, null)
+        mainHandler.post { refreshArtwork(); updateMetadataSession(); updateNotification() }
+    }
+
+    // State-aware album art: server logo inset while playing, a muted-speaker
+    // glyph + minutes-to-disconnect while muted, a disconnected glyph once the
+    // data saver drops the stream. Keyed so it only recomposites on change.
+    private var lastArtworkKey = ""
+    private fun refreshArtwork() {
+        val mins = if (muted && muteTimeoutSec > 0 && muteSinceMs > 0L)
+            Math.ceil(((muteTimeoutSec - (System.currentTimeMillis() - muteSinceMs) / 1000)
+                .coerceAtLeast(0)).toDouble() / 60.0).toInt() else -1
+        val key = when {
+            dataSaverDisconnected -> "disc"
+            muted -> "mute-${if (mins >= 0) mins else "x"}"
+            else -> "play-$npArtworkType"
+        }
+        if (key == lastArtworkKey) return
+        lastArtworkKey = key
+        try {
+            val base = android.graphics.BitmapFactory.decodeResource(
+                resources, R.drawable.artwork_base) ?: return
+            val composed = base.copy(android.graphics.Bitmap.Config.ARGB_8888, true)
+            val canvas = android.graphics.Canvas(composed)
+            val inset = composed.width * 0.30f
+            val pad = composed.width * 0.045f
+            val dst = android.graphics.RectF(
+                composed.width - inset - pad, composed.height - inset - pad,
+                composed.width - pad, composed.height - pad)
+            when {
+                dataSaverDisconnected -> drawInsetGlyph(canvas, dst, "⛔", null)
+                muted -> drawInsetGlyph(canvas, dst, "🔇", if (mins >= 0) "${mins}m" else null)
+                else -> {
+                    val overlayId = resources.getIdentifier("logo_$npArtworkType", "drawable", packageName)
+                    if (overlayId != 0) {
+                        android.graphics.BitmapFactory.decodeResource(resources, overlayId)?.let {
+                            canvas.drawBitmap(it, null, dst, null)
+                        }
                     }
                 }
-                npArtwork = composed
-                updateMetadataSession()
-                updateNotification()
-            } catch (e: Exception) {
-                Log.w(TAG, "artwork composite failed: ${e.message}")
             }
+            npArtwork = composed
+        } catch (e: Exception) {
+            Log.w(TAG, "artwork composite failed: ${e.message}")
+        }
+    }
+
+    private fun drawInsetGlyph(canvas: android.graphics.Canvas, dst: android.graphics.RectF, glyph: String, sub: String?) {
+        val bg = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC101418.toInt() }
+        val r = dst.width() * 0.18f
+        canvas.drawRoundRect(dst, r, r, bg)
+        val tp = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+        if (sub != null) {
+            tp.textSize = dst.height() * 0.40f
+            canvas.drawText(glyph, dst.centerX(), dst.top + dst.height() * 0.46f, tp)
+            tp.textSize = dst.height() * 0.30f
+            tp.isFakeBoldText = true
+            canvas.drawText(sub, dst.centerX(), dst.bottom - dst.height() * 0.12f, tp)
+        } else {
+            tp.textSize = dst.height() * 0.52f
+            canvas.drawText(glyph, dst.centerX(), dst.centerY() + dst.height() * 0.20f, tp)
         }
     }
 
     private fun updateMetadataSession() {
+        refreshArtwork()  // keep the inset glyph/countdown in step with the state
         val b = MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, nowPlayingTitle())
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, nowPlayingArtist())
