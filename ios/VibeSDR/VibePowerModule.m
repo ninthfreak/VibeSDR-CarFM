@@ -5,7 +5,7 @@
 RCT_EXTERN_METHOD(startAudioEngine:(NSString *)baseUrl frequency:(NSInteger)frequency mode:(NSString *)mode uuid:(NSString *)uuid password:(NSString *)password)
 RCT_EXTERN_METHOD(stopAudioEngine)
 RCT_EXTERN_METHOD(startExternalAudio:(nonnull NSNumber *)sampleRate)
-RCT_EXTERN_METHOD(pushExternalPcm:(NSString *)base64)
+RCT_EXTERN_METHOD(pushExternalPcm:(NSString *)base64 sampleRate:(nonnull NSNumber *)sampleRate)
 RCT_EXTERN_METHOD(stopExternalAudio)
 RCT_EXTERN_METHOD(revive)
 RCT_EXTERN_METHOD(sendTuneCommand:(NSInteger)frequency mode:(NSString *)mode)

@@ -229,15 +229,17 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
   }
 
-  /// base64 of little-endian Int16 mono PCM at externalRate → resample → play.
-  @objc func pushExternalPcm(_ base64: String) {
+  /// base64 of little-endian Int16 mono PCM at `sampleRate` → resample → play.
+  /// Per-frame rate so type-2 (12 kHz) and type-4 HD/WFM (48 kHz) both work.
+  @objc func pushExternalPcm(_ base64: String, sampleRate: NSNumber) {
     guard externalAudio, !isMuted,
           let data = Data(base64Encoded: base64), data.count >= 2 else { return }
+    let rate = max(8000, sampleRate.doubleValue)
     audioQ.async { [weak self] in
       guard let self else { return }
       let n = data.count / 2
       guard let inFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                      sampleRate: self.externalRate, channels: 1, interleaved: false),
+                                      sampleRate: rate, channels: 1, interleaved: false),
             let inBuf = AVAudioPCMBuffer(pcmFormat: inFmt, frameCapacity: AVAudioFrameCount(n)) else { return }
       inBuf.frameLength = AVAudioFrameCount(n)
       let ch = inBuf.floatChannelData![0]
@@ -461,6 +463,13 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   @objc func setMuted(_ muted: Bool) {
     isMuted = muted
     sendEvent(withName: "VibeMuted", body: ["muted": muted])
+    // External (OWRX/Kiwi) audio: the WS + decode live in JS, so pause/play is
+    // JUST a mute here (isMuted gates pushExternalPcm) — do NOT run the UberSDR
+    // disconnect/reconnect path or Play resurrects the old UberSDR session.
+    if externalAudio {
+      MPNowPlayingInfoCenter.default().playbackState = muted ? .paused : .playing
+      return
+    }
     // Pause = disconnect, Play = reconnect. The server drops the session almost
     // immediately on suspend anyway, and reconnecting is near-instant, so there's
     // no point keeping a muted-but-streaming state — we just disconnect cleanly

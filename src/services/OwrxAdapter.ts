@@ -24,7 +24,7 @@ import { decodeOwrxFftFrame, OwrxAudioDecoder } from './imaAdpcm';
 
 const Vibe = NativeModules.VibePowerModule as {
   startExternalAudio?: (rate: number) => void;
-  pushExternalPcm?: (b64: string) => void;
+  pushExternalPcm?: (b64: string, rate: number) => void;
   stopExternalAudio?: () => void;
 } | undefined;
 
@@ -43,7 +43,8 @@ function bytesToBase64(b: Uint8Array): string {
   return out;
 }
 
-const OWRX_AUDIO_RATE = 12000;
+const OWRX_AUDIO_RATE = 12000;   // output_rate (type-2)
+const OWRX_HD_RATE = 48000;      // hd_output_rate (type-4 — WFM/wide)
 
 // Internal SDRMode → OWRX wire modulation. Gated on the server `modes` list at
 // runtime; cwu/cwl collapse to 'cw' (offset convention handles the sideband).
@@ -106,7 +107,8 @@ export class OwrxAdapter implements SDRBackend {
 
   private started = false;
   private audioStarted = false;
-  private audioDec = new OwrxAudioDecoder();
+  private audioDec = new OwrxAudioDecoder();    // type-2 (output_rate, 12k)
+  private hdAudioDec = new OwrxAudioDecoder();   // type-4 (hd_output_rate, 48k — WFM)
 
   constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks) {
     this.uuid = uuid;
@@ -224,7 +226,7 @@ export class OwrxAdapter implements SDRBackend {
       this.viewBw = this.cfg.sampRate;
       this.viewInit = true;
       this.lastRow = null;   // clear stale waterfall on profile change
-      if (profileSwitch) this.audioDec.reset();   // ADPCM stream restarts per profile
+      if (profileSwitch) { this.audioDec.reset(); this.hdAudioDec.reset(); }   // ADPCM restarts per profile
     }
 
     // Refine the tunable range to the active profile window so the UI's clamps
@@ -253,21 +255,22 @@ export class OwrxAdapter implements SDRBackend {
     const payload = buf.subarray(1);
     switch (type) {
       case 1: this.onFft(payload); break;
-      case 2: this.onAudio(payload); break;             // primary audio
-      case 4: break;                                    // HD audio — deferred (v3.1)
+      case 2: this.onAudio(payload, OWRX_AUDIO_RATE, this.audioDec); break;   // primary (12k)
+      case 4: this.onAudio(payload, OWRX_HD_RATE, this.hdAudioDec); break;     // HD / WFM (48k)
       case 3: break;                                    // secondary FFT — ignored in v3
       default: this.dbg('unknown binary type ' + type);
     }
   }
 
   /** Decode an audio frame (ADPCM or raw s16 LE) and push the PCM to the native
-   *  player. Foreground-first: the socket+decode live here in JS, the native
-   *  engine just plays — audio stops if JS suspends (native OwrxEngine is later). */
-  private onAudio(payload: Uint8Array): void {
-    if (!this.audioStarted) { Vibe?.startExternalAudio?.(OWRX_AUDIO_RATE); this.audioStarted = true; }
+   *  player at its rate. Foreground-first: socket+decode live here in JS, the
+   *  native engine just plays — audio stops if JS suspends (native engine later).
+   *  type-2 = output_rate (12k); type-4 = hd_output_rate (48k), used for WFM. */
+  private onAudio(payload: Uint8Array, rate: number, dec: OwrxAudioDecoder): void {
+    if (!this.audioStarted) { Vibe?.startExternalAudio?.(rate); this.audioStarted = true; }
     let pcm: Int16Array;
     if (this.cfg?.audioCompression === 'adpcm') {
-      pcm = this.audioDec.decode(payload);
+      pcm = dec.decode(payload);
     } else {
       const m = payload.byteLength & ~1;
       pcm = new Int16Array(m / 2);
@@ -275,7 +278,7 @@ export class OwrxAdapter implements SDRBackend {
       for (let i = 0; i < pcm.length; i++) pcm[i] = dv.getInt16(i * 2, true);
     }
     if (!pcm.length) return;
-    Vibe?.pushExternalPcm?.(bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)));
+    Vibe?.pushExternalPcm?.(bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)), rate);
   }
 
   private onFft(payload: Uint8Array): void {
@@ -391,6 +394,9 @@ export class OwrxAdapter implements SDRBackend {
     // Adopt the server's default passband for this demodulator, if known.
     const info = this.serverModes.find((m) => m.id === (mode as string));
     if (info?.bandpass) { this.bwLow = info.bandpass.low_cut; this.bwHigh = info.bandpass.high_cut; }
+    // The audio stream restarts on a mode change (e.g. NFM type-2 ↔ WFM type-4) —
+    // reset both ADPCM decoders so stale state doesn't corrupt the new stream.
+    this.audioDec.reset(); this.hdAudioDec.reset();
     this.sendDemod();
     this.cb.onStatus(this.getStatus());
   }
