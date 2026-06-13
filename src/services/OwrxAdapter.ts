@@ -19,7 +19,31 @@ import type { SDRMode, SDRStatus } from './UberSDRClient';
 import type {
   SDRBackend, BackendCallbacks, BackendCapabilities, BackendKind, ProfileInfo,
 } from './SDRBackend';
-import { decodeOwrxFftFrame } from './imaAdpcm';
+import { NativeModules } from 'react-native';
+import { decodeOwrxFftFrame, OwrxAudioDecoder } from './imaAdpcm';
+
+const Vibe = NativeModules.VibePowerModule as {
+  startExternalAudio?: (rate: number) => void;
+  pushExternalPcm?: (b64: string) => void;
+  stopExternalAudio?: () => void;
+} | undefined;
+
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+/** Minimal Uint8Array → base64 (no dep; Hermes has no btoa). */
+function bytesToBase64(b: Uint8Array): string {
+  let out = '', i = 0;
+  const n = b.length;
+  for (; i + 2 < n; i += 3) {
+    const v = (b[i] << 16) | (b[i + 1] << 8) | b[i + 2];
+    out += B64[(v >> 18) & 63] + B64[(v >> 12) & 63] + B64[(v >> 6) & 63] + B64[v & 63];
+  }
+  const rem = n - i;
+  if (rem === 1) { const v = b[i] << 16; out += B64[(v >> 18) & 63] + B64[(v >> 12) & 63] + '=='; }
+  else if (rem === 2) { const v = (b[i] << 16) | (b[i + 1] << 8); out += B64[(v >> 18) & 63] + B64[(v >> 12) & 63] + B64[(v >> 6) & 63] + '='; }
+  return out;
+}
+
+const OWRX_AUDIO_RATE = 12000;
 
 // Internal SDRMode → OWRX wire modulation. Gated on the server `modes` list at
 // runtime; cwu/cwl collapse to 'cw' (offset convention handles the sideband).
@@ -81,7 +105,8 @@ export class OwrxAdapter implements SDRBackend {
   private lastRow: Float32Array | null = null;
 
   private started = false;
-  private audioFrameCount = 0;
+  private audioStarted = false;
+  private audioDec = new OwrxAudioDecoder();
 
   constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks) {
     this.uuid = uuid;
@@ -133,6 +158,7 @@ export class OwrxAdapter implements SDRBackend {
 
   destroy(): void {
     this.started = false;
+    if (this.audioStarted) { Vibe?.stopExternalAudio?.(); this.audioStarted = false; }
     const ws = this.ws; this.ws = null;
     if (ws) { try { ws.onclose = null; ws.close(); } catch {} }
   }
@@ -198,6 +224,7 @@ export class OwrxAdapter implements SDRBackend {
       this.viewBw = this.cfg.sampRate;
       this.viewInit = true;
       this.lastRow = null;   // clear stale waterfall on profile change
+      if (profileSwitch) this.audioDec.reset();   // ADPCM stream restarts per profile
     }
 
     // Refine the tunable range to the active profile window so the UI's clamps
@@ -226,10 +253,29 @@ export class OwrxAdapter implements SDRBackend {
     const payload = buf.subarray(1);
     switch (type) {
       case 1: this.onFft(payload); break;
-      case 2: case 4: this.audioFrameCount++; break;   // audio → native engine (next phase)
+      case 2: this.onAudio(payload); break;             // primary audio
+      case 4: break;                                    // HD audio — deferred (v3.1)
       case 3: break;                                    // secondary FFT — ignored in v3
       default: this.dbg('unknown binary type ' + type);
     }
+  }
+
+  /** Decode an audio frame (ADPCM or raw s16 LE) and push the PCM to the native
+   *  player. Foreground-first: the socket+decode live here in JS, the native
+   *  engine just plays — audio stops if JS suspends (native OwrxEngine is later). */
+  private onAudio(payload: Uint8Array): void {
+    if (!this.audioStarted) { Vibe?.startExternalAudio?.(OWRX_AUDIO_RATE); this.audioStarted = true; }
+    let pcm: Int16Array;
+    if (this.cfg?.audioCompression === 'adpcm') {
+      pcm = this.audioDec.decode(payload);
+    } else {
+      const m = payload.byteLength & ~1;
+      pcm = new Int16Array(m / 2);
+      const dv = new DataView(payload.buffer, payload.byteOffset, m);
+      for (let i = 0; i < pcm.length; i++) pcm[i] = dv.getInt16(i * 2, true);
+    }
+    if (!pcm.length) return;
+    Vibe?.pushExternalPcm?.(bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)));
   }
 
   private onFft(payload: Uint8Array): void {

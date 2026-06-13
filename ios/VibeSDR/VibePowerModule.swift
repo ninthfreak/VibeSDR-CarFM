@@ -205,6 +205,58 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     stopEngine()
   }
 
+  // ── External PCM path (OWRX/Kiwi: the WS + decode live in JS; the native
+  //    engine just plays the PCM JS pushes — foreground-first, no WS here) ──
+  private var externalAudio = false
+  private var externalRate: Double = 12000
+
+  @objc func startExternalAudio(_ sampleRate: NSNumber) {
+    NSLog("[VibePowerModule] startExternalAudio %@", sampleRate)
+    stopEngine()
+    externalAudio = true
+    externalRate  = max(8000, sampleRate.doubleValue)
+    isRunning     = true
+    isMuted       = false
+    dataSaverDisconnected = false
+    reconnectFailed = false
+    packetCount   = 0
+    lastPacketAt  = Date()
+    configureAVSession()
+    startEngine()
+    DispatchQueue.main.async {
+      self.setupRemoteCommands()
+      self.updateNowPlaying()
+    }
+  }
+
+  /// base64 of little-endian Int16 mono PCM at externalRate → resample → play.
+  @objc func pushExternalPcm(_ base64: String) {
+    guard externalAudio, !isMuted,
+          let data = Data(base64Encoded: base64), data.count >= 2 else { return }
+    audioQ.async { [weak self] in
+      guard let self else { return }
+      let n = data.count / 2
+      guard let inFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                      sampleRate: self.externalRate, channels: 1, interleaved: false),
+            let inBuf = AVAudioPCMBuffer(pcmFormat: inFmt, frameCapacity: AVAudioFrameCount(n)) else { return }
+      inBuf.frameLength = AVAudioFrameCount(n)
+      let ch = inBuf.floatChannelData![0]
+      data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+        let s16 = raw.bindMemory(to: Int16.self)
+        for i in 0..<n { ch[i] = Float(Int16(littleEndian: s16[i])) / 32768.0 }
+      }
+      self.packetCount += 1
+      self.lastPacketAt = Date()
+      if let out = self.convertTo48k(inBuf) { self.scheduleOut(out) }
+    }
+  }
+
+  @objc func stopExternalAudio() {
+    NSLog("[VibePowerModule] stopExternalAudio")
+    externalAudio = false
+    stopEngine()
+  }
+
   /** Called from JS on app-foreground: instant zombie check instead of
    *  waiting for the next watchdog tick. */
   @objc func revive() {
