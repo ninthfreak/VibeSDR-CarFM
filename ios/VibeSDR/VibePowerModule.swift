@@ -115,14 +115,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var lastSrCycleAt = Date(timeIntervalSince1970: 0)
   private var isRunning     = false
   private var isMuted       = false
-  // Data saver: drop the SDR stream after a spell muted to stop wasting
-  // cellular data + battery. -1 = off, 0 = instant, >0 = seconds of mute before
-  // disconnect. muteSince is wall-clock so a suspension that outlasts the
-  // timeout disconnects on the next wake.
-  private var muteTimeoutSec: Int = -1
-  private var muteSince: Date?
-  private var muteTimer: Timer?
+  // Pause disconnects the SDR (the server drops it almost instantly on suspend
+  // anyway) and Play reconnects; these track the two non-playing media-card
+  // states: cleanly disconnected vs a reconnect that failed (server full /
+  // rate-limited) and needs the user to open the app.
   private var dataSaverDisconnected = false
+  private var reconnectFailed = false
   private var currentFreq:  Int    = 14_074_000
   private var currentMode:  String = "usb"
   private var currentBase:  String = ""
@@ -178,10 +176,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     bypassPassword = password
     isRunning    = true
     isMuted      = false
-    // Fresh session — clear any data-saver disconnect/countdown state.
+    // Fresh session — clear the disconnected / reconnect-failed card state.
     dataSaverDisconnected = false
-    muteSince = nil
-    muteTimer?.invalidate(); muteTimer = nil
+    reconnectFailed = false
     lastArtworkKey = ""
     packetCount  = 0
     lastPacketAt = Date()
@@ -375,89 +372,32 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   @objc func setMuted(_ muted: Bool) {
     isMuted = muted
-    // Pause the whole engine, not just the player: with the engine still running
-    // iOS treats the app as actively playing — the lock-screen pause button
-    // springs back to ▶ and iOS keeps grabbing shared AirPods from the Mac.
-    // Pausing the engine + playbackState=.paused makes the system honour pause
-    // and yield the route. The spectrum/audio WebSockets are unaffected (data
-    // keeps flowing for the waterfall + the data-saver countdown).
-    if muted {
-      playerNode?.pause()
-      audioEngine?.pause()
-    } else {
-      try? audioEngine?.start()
-      playerNode?.play()
-    }
-    // JS shows a MUTED banner — media-control pause (AirPods squeeze) maps to
-    // mute, which is otherwise invisible in the UI.
     sendEvent(withName: "VibeMuted", body: ["muted": muted])
+    // Pause = disconnect, Play = reconnect. The server drops the session almost
+    // immediately on suspend anyway, and reconnecting is near-instant, so there's
+    // no point keeping a muted-but-streaming state — we just disconnect cleanly
+    // and show a "Disconnected" card with a working ▶ button.
     DispatchQueue.main.async {
       if muted {
-        self.armMuteCountdown()
-      } else {
-        self.cancelMuteCountdown()
-        if self.dataSaverDisconnected { self.resumeFromDataSaver() }
+        self.disconnectForPause()
+      } else if self.dataSaverDisconnected {
+        self.resumeFromDataSaver()
       }
-      self.updateNowPlaying()
     }
   }
 
-  // ── Data saver (mute idle timeout) ───────────────────────────────────────
-
-  /// JS pushes the user's choice: -1 off, 0 instant, >0 seconds.
-  @objc func setMuteTimeout(_ seconds: Int) {
-    muteTimeoutSec = seconds
-    DispatchQueue.main.async {
-      if self.isMuted && !self.dataSaverDisconnected { self.armMuteCountdown() }
-      else if !self.isMuted { self.cancelMuteCountdown() }
-    }
-  }
-
-  /// In-app interaction while muted restarts the countdown (don't drop someone
-  /// who's actively tuning on mute).
-  @objc func resetMuteTimer() {
-    guard isMuted, !dataSaverDisconnected else { return }
-    muteSince = Date()
-    DispatchQueue.main.async { self.updateNowPlaying() }
-  }
-
-  private func armMuteCountdown() {
-    muteTimer?.invalidate(); muteTimer = nil
-    guard muteTimeoutSec >= 0, !dataSaverDisconnected else { return }  // off
-    if muteTimeoutSec == 0 { triggerDataSaverDisconnect(); return }    // instant
-    if muteSince == nil { muteSince = Date() }
-    let t = Timer(timeInterval: 15, repeats: true) { [weak self] _ in self?.tickMute() }
-    RunLoop.main.add(t, forMode: .common)
-    muteTimer = t
-  }
-
-  private func tickMute() {
-    guard isMuted, !dataSaverDisconnected, let since = muteSince, muteTimeoutSec > 0 else {
-      muteTimer?.invalidate(); muteTimer = nil; return
-    }
-    if Date().timeIntervalSince(since) >= Double(muteTimeoutSec) { triggerDataSaverDisconnect() }
-    else { updateNowPlaying() }  // refresh the countdown text
-  }
-
-  private func cancelMuteCountdown() {
-    muteTimer?.invalidate(); muteTimer = nil
-    muteSince = nil
-  }
-
-  private func triggerDataSaverDisconnect() {
-    muteTimer?.invalidate(); muteTimer = nil
+  private func disconnectForPause() {
+    guard !dataSaverDisconnected else { return }
     dataSaverDisconnected = true
-    // Tear the session down completely and RELEASE the media controls back to the
-    // OS — a lingering "paused" VibeSDR control with a half-working Play button
-    // is just confusing. The user resumes by reopening the app (full reconnect).
     healthTimer?.invalidate(); healthTimer = nil
     wsTask?.cancel(with: .goingAway, reason: nil); wsTask = nil; wsSession = nil
     isRunning = false
-    playerNode?.stop(); audioEngine?.stop()
-    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    playerNode?.stop(); audioEngine?.stop()   // releases the audio route (AirPods)
+    // KEEP the media session + remote commands so ▶ reconnects; show it as a
+    // clearly "Disconnected" card (handled in updateNowPlaying / refreshArtwork).
     DispatchQueue.main.async {
-      MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-      MPNowPlayingInfoCenter.default().playbackState = .stopped
+      self.updateNowPlaying()
+      MPNowPlayingInfoCenter.default().playbackState = .paused
     }
     sendEvent(withName: "VibeDataSaverDisconnect", body: [:])
   }
@@ -470,6 +410,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // clears our data-saver state). The flag stays set until then so the
     // watchdog won't revive the stale socket.
     sendEvent(withName: "VibeDataSaverResume", body: [:])
+  }
+
+  /// JS calls this when a reconnect attempt fails (server full / rate-limited) so
+  /// the lock-screen card tells the user to open the app.
+  @objc func setReconnectFailed(_ failed: Bool) {
+    reconnectFailed = failed
+    if failed { dataSaverDisconnected = false }
+    DispatchQueue.main.async { self.updateNowPlaying() }
   }
 
   @objc func setVolume(_ volume: Double) {
@@ -964,25 +912,21 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let fallbackArtist = instanceName.isEmpty ? currentBase : instanceName
     let title: String
     let artist: String
-    if dataSaverDisconnected {
-      title  = "Disconnected · Open App to Resume"
-      artist = "VibeSDR: Disconnected"
-    } else if isMuted, muteTimeoutSec > 0, let since = muteSince {
-      // Static "disconnects at HH:MM" (the app may be suspended, so a live tick
-      // can't run) — computed once from when the mute began.
-      let offAt = since.addingTimeInterval(Double(muteTimeoutSec))
-      let f = DateFormatter(); f.timeStyle = .short
-      title  = npTitleOverride ?? fallbackTitle
-      artist = "VibeSDR: Muted · auto-disconnect at \(f.string(from: offAt)) to save data & power"
+    if reconnectFailed {
+      title  = "Failed to reconnect"
+      artist = "Open VibeSDR to reconnect"
+    } else if dataSaverDisconnected {
+      title  = "Disconnected"
+      artist = "VibeSDR — press ▶ to reconnect"
     } else {
-      title  = (npTitleOverride ?? fallbackTitle) + (isMuted ? " ·muted·" : "")
+      title  = npTitleOverride ?? fallbackTitle
       artist = npArtistOverride ?? fallbackArtist
     }
     var info: [String: Any] = [
       MPMediaItemPropertyTitle:             title,
       MPMediaItemPropertyArtist:            artist,
       MPMediaItemPropertyAlbumTitle:        "VibeSDR",
-      MPNowPlayingInfoPropertyPlaybackRate: (isMuted || dataSaverDisconnected) ? 0.0 : 1.0,
+      MPNowPlayingInfoPropertyPlaybackRate: (dataSaverDisconnected || reconnectFailed) ? 0.0 : 1.0,
       MPNowPlayingInfoPropertyIsLiveStream: true,
     ]
     if let art = npArtwork { info[MPMediaItemPropertyArtwork] = art }
@@ -993,7 +937,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // in the info dict. Without this the button springs back to ▶ on pause and
     // iOS keeps grabbing shared AirPods from the Mac because it thinks we're
     // still playing.
-    center.playbackState = (isMuted || dataSaverDisconnected) ? .paused : .playing
+    center.playbackState = (dataSaverDisconnected || reconnectFailed) ? .paused : .playing
   }
 
   /** VTS-aware now-playing strings from JS (empty string clears). */
@@ -1017,8 +961,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var lastArtworkKey = ""
   private func refreshArtwork() {
     guard let base = UIImage(named: "artwork_base") else { return }
-    let key = dataSaverDisconnected ? "disc"
-            : isMuted ? "mute"
+    let key = reconnectFailed ? "fail"
+            : dataSaverDisconnected ? "disc"
             : "play-\(npArtworkType)"
     guard key != lastArtworkKey else { return }
     lastArtworkKey = key
@@ -1028,12 +972,18 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let pad   = size.width * 0.045
     let rect  = CGRect(x: size.width - inset - pad, y: size.height - inset - pad,
                        width: inset, height: inset)
+    let red    = UIColor(red: 0.92, green: 0.32, blue: 0.28, alpha: 1)
+    let amber  = UIColor(red: 1.0, green: 0.74, blue: 0.20, alpha: 1)
     let img = UIGraphicsImageRenderer(size: size).image { _ in
       base.draw(in: CGRect(origin: .zero, size: size))
-      if dataSaverDisconnected {
-        drawSymbol("wifi.slash", in: rect, tint: UIColor(red: 0.92, green: 0.32, blue: 0.28, alpha: 1))
-      } else if isMuted {
-        drawSymbol("speaker.slash.fill", in: rect, tint: UIColor(white: 0.95, alpha: 1))
+      if reconnectFailed {
+        // disconnected glyph + a little exclamation badge bottom-right
+        drawSymbol("wifi.slash", in: rect, tint: red)
+        let b = CGRect(x: rect.maxX - rect.width * 0.5, y: rect.maxY - rect.height * 0.5,
+                       width: rect.width * 0.5, height: rect.height * 0.5)
+        drawSymbol("exclamationmark.circle.fill", in: b, tint: amber)
+      } else if dataSaverDisconnected {
+        drawSymbol("wifi.slash", in: rect, tint: red)
       } else if let overlay = UIImage(named: "logo_\(npArtworkType)") {
         overlay.draw(in: rect)
       }

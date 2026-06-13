@@ -167,6 +167,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (now - lastReconnectAt.current < 2000) return;  // debounce double-triggers
     lastReconnectAt.current = now;
     setConnEpoch((e: number) => e + 1);
+    // If we don't connect within ~12s (server full / rate-limited), flag failure
+    // so the lock-screen card + banner tell the user to open the app.
+    setTimeout(() => {
+      if (!connectedRef.current) {
+        VibePowerModule?.setReconnectFailed?.(true);
+        setReconnectFailedUi(true);
+      }
+    }, 12000);
   }, []);
   const sessionUuid = useMemo(() => uuidv4(), [baseUrl, connEpoch]);
 
@@ -621,29 +629,17 @@ export default function SDRScreen({ route, navigation }: Props) {
     VibePowerModule?.setMediaSkipMode(mediaSkip);
   }, [mediaSkip, connected]);
 
-  // ── Data saver: drop the SDR stream after a spell muted ───────────────────
-  // Seconds of mute before disconnecting to save cellular data + battery:
-  // -1 = off, 0 = instant, else the timeout. Default 10 min. The countdown +
-  // disconnect run NATIVE (JS is suspended in the background); JS just owns the
-  // setting + reconnects the spectrum when native resumes.
-  const [muteTimeout, setMuteTimeout] = useState(600);
+  // ── Pause = disconnect / Play = reconnect ─────────────────────────────────
+  // Pause drops the SDR (the server lets it go on suspend anyway) and Play does
+  // a full reconnect. If that reconnect doesn't land within a few seconds (server
+  // full / rate-limited) we flag it so the lock-screen card + an in-app banner
+  // tell the user to open the app.
+  const [reconnectFailedUi, setReconnectFailedUi] = useState(false);
+  const connectedRef = useRef(false);
   useEffect(() => {
-    AsyncStorage.getItem('lsv_mute_timeout').then((v: string | null) => {
-      const n = v == null ? NaN : parseInt(v, 10);
-      if (!Number.isNaN(n)) setMuteTimeout(n);
-    }).catch(() => {});
-  }, []);
-  const onMuteTimeout = useCallback((sec: number) => {
-    setMuteTimeout(sec);
-    AsyncStorage.setItem('lsv_mute_timeout', String(sec)).catch(() => {});
-  }, []);
-  useEffect(() => {
-    VibePowerModule?.setMuteTimeout?.(muteTimeout);
-  }, [muteTimeout, connected]);
-
-  // markInteract pings native to reset the mute countdown while muted (see below)
-  const isMutedRef = useRef(false);
-  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+    connectedRef.current = connected;
+    if (connected) { VibePowerModule?.setReconnectFailed?.(false); setReconnectFailedUi(false); }
+  }, [connected]);
 
   // Car-connected flag (iOS car-audio route / Android Auto client), updated by
   // the VibeCarConnected native event. Band-aware auto mode/step no longer gates
@@ -1100,12 +1096,14 @@ export default function SDRScreen({ route, navigation }: Props) {
             if (v > peak) peak = v;
             sum += v; count++;
           }
-          // Noise floor from outer 20% of bins
-          const edgeN = Math.floor(len * 0.1);
-          let noiseSum = 0, noiseCount = 0;
-          for (let i = 0; i < edgeN; i++) { noiseSum += newBins[i]; noiseCount++; }
-          for (let i = len - edgeN; i < len; i++) { noiseSum += newBins[i]; noiseCount++; }
-          const noise = noiseCount > 0 ? noiseSum / noiseCount : -130;
+          // Noise floor — robust low percentile of ALL visible bins. The old
+          // outer-10%-edges estimate moved with zoom (the view edges land on
+          // different content as you zoom in/out, so SNR drifted with zoom even
+          // though dBFS/S-meter, which use peak, stayed put). A signal occupies a
+          // minority of bins, so the 20th percentile tracks the true noise floor
+          // independent of span.
+          const sorted = Float32Array.from(newBins).sort();
+          const noise = sorted[Math.floor(sorted.length * 0.2)] ?? -130;
           const snrDb = peak - noise;
           // Bar source follows the meter mode: SNR uses the skin compression
           // curve recalibrated for honest spectrum-derived SNR (upstream's
@@ -1249,9 +1247,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       idleActiveRef.current = false;
       client.current?.setRate(1); // wake: full data rate immediately
     }
-    // Actively tuning on mute → restart the data-saver countdown so we don't
-    // drop someone who's mid-session.
-    if (isMutedRef.current) VibePowerModule?.resetMuteTimer?.();
   }, []);
 
   useEffect(() => {
@@ -2080,19 +2075,20 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {/* Muted banner — media-control pause (AirPods) maps to mute */}
-      {isMuted && !dataSaverOff && (
+      {/* Reconnect failed (server full / rate-limited) — tap retries */}
+      {reconnectFailedUi && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
-          onPress={unmute} activeOpacity={0.85}>
-          <Text style={styles.mutedBannerText}>🔇 MUTED — TAP TO UNMUTE</Text>
+          onPress={() => { setReconnectFailedUi(false); setDataSaverOff(false); unmute(); fullReconnect(); }}
+          activeOpacity={0.85}>
+          <Text style={styles.mutedBannerText}>⚠️ RECONNECT FAILED — TAP TO RETRY</Text>
         </TouchableOpacity>
       )}
 
-      {/* Data saver dropped the stream — tap does a full from-scratch reconnect */}
-      {dataSaverOff && (
+      {/* Paused → disconnected — tap does a full from-scratch reconnect */}
+      {dataSaverOff && !reconnectFailedUi && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
           onPress={() => { setDataSaverOff(false); unmute(); fullReconnect(); }} activeOpacity={0.85}>
-          <Text style={styles.mutedBannerText}>💤 DATA SAVER — TAP TO RECONNECT</Text>
+          <Text style={styles.mutedBannerText}>⏸ PAUSED — TAP TO RECONNECT</Text>
         </TouchableOpacity>
       )}
 
@@ -2249,7 +2245,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         frameRate={frameRate}           onFrameRate={onFrameRate}
         smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
         idleSlow={idleSlow}             onIdleSlow={onIdleSlow}
-        muteTimeout={muteTimeout}       onMuteTimeout={onMuteTimeout}
         drumMode={drumMode}             onDrumMode={onDrumMode}
         mediaSkip={mediaSkip}           onMediaSkip={onMediaSkip}
         hapticsEnabled={hapticsEnabled} onHaptics={onHaptics}

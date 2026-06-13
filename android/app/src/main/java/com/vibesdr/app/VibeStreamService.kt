@@ -169,13 +169,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     // Media skip routing: "step" = native tune±step; "bookmark" = emit
     // VibeSkip and let JS jump bookmarks (it owns the VTS station list)
     @Volatile var skipMode = "step"
-    // Data saver (mute idle timeout): -1 off, 0 instant, >0 seconds muted → drop
-    // the SDR WS to save data/battery. muteSinceMs is wall-clock so a suspension
-    // past the timeout disconnects on the next wake.
-    @Volatile private var muteTimeoutSec = -1
-    @Volatile private var muteSinceMs = 0L
+    // Pause disconnects the SDR (server drops it on suspend anyway) and Play
+    // reconnects; these track the two non-playing notification states: cleanly
+    // disconnected vs a reconnect that failed (server full / rate-limited).
     @Volatile private var dataSaverDisconnected = false
-    private var muteTick: Runnable? = null
+    @Volatile private var reconnectFailed = false
     // Audio focus — when another app takes it (parity with iOS interruption) we
     // register a mute so the UI + data saver reflect it; user presses Play to
     // return (no auto-resume on regain).
@@ -266,10 +264,9 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         bypassPassword = password
         running = true
         muted = false
-        // Fresh session — clear any data-saver disconnect/countdown state.
+        // Fresh session — clear the disconnected / reconnect-failed card state.
         dataSaverDisconnected = false
-        muteSinceMs = 0L
-        muteTick?.let { mainHandler.removeCallbacks(it) }; muteTick = null
+        reconnectFailed = false
         lastArtworkKey = ""
         packetCount = 0
         lastPacketAt = SystemClock.elapsedRealtime()
@@ -354,87 +351,50 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         muted = m
         if (m) packetQueue.clear()
         emitEvent("VibeMuted") { it.putBoolean("muted", m) }
+        // Pause = disconnect, Play = reconnect. The server drops the session on
+        // suspend anyway and reconnecting is near-instant, so we just disconnect
+        // cleanly and show a "Disconnected" card with a working ▶ button.
         mainHandler.post {
-            if (m) {
-                armMuteCountdown()
-            } else {
-                requestAudioFocus()  // re-acquire when the user comes back
-                cancelMuteCountdown()
-                if (dataSaverDisconnected) resumeFromDataSaver()
-            }
-            updatePlaybackState(
-                if (m) PlaybackStateCompat.STATE_PAUSED else PlaybackStateCompat.STATE_PLAYING
-            )
-            updateMetadataSession()
-            updateNotification()
+            if (m) disconnectForPause()
+            else if (dataSaverDisconnected) resumeFromDataSaver()
         }
     }
 
-    // ── Data saver (mute idle timeout) ───────────────────────────────────────
+    // ── Pause = disconnect / Play = reconnect ────────────────────────────────
 
-    /** JS pushes the user's choice: -1 off, 0 instant, >0 seconds. */
-    fun setMuteTimeoutNative(seconds: Int) {
-        muteTimeoutSec = seconds
-        mainHandler.post {
-            if (muted && !dataSaverDisconnected) armMuteCountdown()
-            else if (!muted) cancelMuteCountdown()
-        }
-    }
-
-    /** In-app interaction while muted restarts the countdown. */
-    fun resetMuteTimerNative() {
-        if (muted && !dataSaverDisconnected) {
-            muteSinceMs = System.currentTimeMillis()
-            mainHandler.post { updateMetadataSession(); updateNotification() }
-        }
-    }
-
-    private fun armMuteCountdown() {
-        muteTick?.let { mainHandler.removeCallbacks(it) }; muteTick = null
-        if (muteTimeoutSec < 0 || dataSaverDisconnected) return     // off
-        if (muteTimeoutSec == 0) { triggerDataSaverDisconnect(); return }  // instant
-        if (muteSinceMs == 0L) muteSinceMs = System.currentTimeMillis()
-        val r = object : Runnable {
-            override fun run() {
-                if (!muted || dataSaverDisconnected || muteTimeoutSec <= 0) { muteTick = null; return }
-                val elapsed = (System.currentTimeMillis() - muteSinceMs) / 1000
-                if (elapsed >= muteTimeoutSec) {
-                    triggerDataSaverDisconnect()
-                } else {
-                    updateMetadataSession(); updateNotification()
-                    muteTick = this
-                    mainHandler.postDelayed(this, 15_000)
-                }
-            }
-        }
-        muteTick = r
-        updateMetadataSession(); updateNotification()  // immediate countdown text
-        mainHandler.postDelayed(r, 15_000)
-    }
-
-    private fun cancelMuteCountdown() {
-        muteTick?.let { mainHandler.removeCallbacks(it) }; muteTick = null
-        muteSinceMs = 0L
-    }
-
-    private fun triggerDataSaverDisconnect() {
-        muteTick?.let { mainHandler.removeCallbacks(it) }; muteTick = null
+    private fun disconnectForPause() {
+        if (dataSaverDisconnected) return
         dataSaverDisconnected = true
-        // Tear the session down and RELEASE the media controls back to the OS —
-        // a lingering "paused" VibeSDR notification with a half-working Play
-        // button is just confusing. The user resumes by reopening the app (full
-        // reconnect via fresh startAudioEngine).
+        abandonAudioFocus()                       // release the audio route
+        ws?.close(1001, "paused"); ws = null
+        packetQueue.clear()
+        // Keep the foreground notification + session so ▶ reconnects; show it as
+        // a clearly "Disconnected" card (see nowPlaying* / refreshArtwork).
+        mainHandler.post {
+            updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
+            updateMetadataSession(); updateNotification()
+        }
         emitEvent("VibeDataSaverDisconnect") { }
-        stopEngine()  // closes WS, abandons audio focus, stops foreground + notification
     }
 
     private fun resumeFromDataSaver() {
         if (!dataSaverDisconnected) return
         // Don't reopen the old session — a partial reopen lands in a broken
         // half-state. Hand off to JS for a full from-scratch reconnect (new uuid
-        // → fresh startAudioEngine, which clears our data-saver state). The flag
+        // → fresh startAudioEngine, which clears the disconnected state). The flag
         // stays set until then so the watchdog won't revive the stale socket.
         emitEvent("VibeDataSaverResume") { }
+    }
+
+    /** JS calls this when a reconnect attempt fails (server full / rate-limited)
+     *  so the notification tells the user to open the app. */
+    fun setReconnectFailedNative(failed: Boolean) {
+        reconnectFailed = failed
+        if (failed) dataSaverDisconnected = false
+        mainHandler.post {
+            updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
+            updateMetadataSession(); updateNotification()
+        }
     }
 
     private fun requestAudioFocus() {
@@ -1215,22 +1175,17 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     // ── Notification / MediaSession ──────────────────────────────────────────
 
     private fun nowPlayingTitle(): String {
-        if (dataSaverDisconnected) return "Disconnected · Open App to Resume"
-        val base = npTitle ?: run {
+        if (reconnectFailed) return "Failed to reconnect"
+        if (dataSaverDisconnected) return "Disconnected"
+        return npTitle ?: run {
             val mhz = String.format("%.3f MHz", currentFreq / 1_000_000.0)
             "$mhz ${currentMode.uppercase()}"
         }
-        return base + (if (muted) " ·muted·" else "")
     }
 
     private fun nowPlayingArtist(): String {
-        if (dataSaverDisconnected) return "VibeSDR: Disconnected"
-        if (muted && muteTimeoutSec > 0 && muteSinceMs > 0L) {
-            // Static "auto-disconnect at HH:MM" computed from when the mute began.
-            val offAt = java.util.Date(muteSinceMs + muteTimeoutSec * 1000L)
-            val t = android.text.format.DateFormat.getTimeFormat(this).format(offAt)
-            return "VibeSDR: Muted · auto-disconnect at $t to save data & power"
-        }
+        if (reconnectFailed) return "Open VibeSDR to reconnect"
+        if (dataSaverDisconnected) return "VibeSDR — press ▶ to reconnect"
         return npArtist ?: instanceName.ifEmpty { currentBase }
     }
 
@@ -1255,8 +1210,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private var lastArtworkKey = ""
     private fun refreshArtwork() {
         val key = when {
+            reconnectFailed -> "fail"
             dataSaverDisconnected -> "disc"
-            muted -> "mute"
             else -> "play-$npArtworkType"
         }
         if (key == lastArtworkKey) return
@@ -1272,8 +1227,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 composed.width - inset - pad, composed.height - inset - pad,
                 composed.width - pad, composed.height - pad)
             when {
+                reconnectFailed -> { drawInsetGlyph(canvas, dst, "⛔", null); drawBadge(canvas, dst, "❗") }
                 dataSaverDisconnected -> drawInsetGlyph(canvas, dst, "⛔", null)
-                muted -> drawInsetGlyph(canvas, dst, "🔇", null)
                 else -> {
                     val overlayId = resources.getIdentifier("logo_$npArtworkType", "drawable", packageName)
                     if (overlayId != 0) {
@@ -1307,6 +1262,15 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             tp.textSize = dst.height() * 0.52f
             canvas.drawText(glyph, dst.centerX(), dst.centerY() + dst.height() * 0.20f, tp)
         }
+    }
+
+    /** Small exclamation badge in the bottom-right of the inset (reconnect failed). */
+    private fun drawBadge(canvas: android.graphics.Canvas, dst: android.graphics.RectF, glyph: String) {
+        val tp = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textAlign = android.graphics.Paint.Align.CENTER
+            textSize = dst.height() * 0.34f
+        }
+        canvas.drawText(glyph, dst.right - dst.width() * 0.16f, dst.bottom - dst.height() * 0.04f, tp)
     }
 
     private fun updateMetadataSession() {
