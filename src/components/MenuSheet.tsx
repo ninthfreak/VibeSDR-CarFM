@@ -448,6 +448,7 @@ export default function MenuSheet({
         right: undefined, borderTopLeftRadius: 16, borderTopRightRadius: 16 }
     : { height: sheetH };
   const backdropOp = useRef(new Animated.Value(0)).current;
+  const [profileOpen, setProfileOpen] = useState(false);   // OWRX profile dropdown
   const [dispSettingsOpen, setDispSettingsOpen] = useState(false);
 
   // Bookmarks pane (replaces menu content like DISPLAY SETTINGS)
@@ -540,21 +541,31 @@ export default function MenuSheet({
             {/* ── PROFILE (OWRX only — hidden unless the backend reports profiles) ── */}
             {profiles.length > 0 && (<>
               <SectionLabel label="PROFILE" first />
-              <View style={styles.profileWrap}>
-                {profiles.map((p) => {
-                  const active = p.id === activeProfileId;
-                  return (
-                    <TouchableOpacity
-                      key={p.id}
-                      style={[styles.profileChip, active && styles.profileChipActive]}
-                      onPress={() => onSelectProfile?.(p.id)}
-                      activeOpacity={0.7}>
-                      <Text style={[styles.profileChipText, active && styles.profileChipTextActive]} numberOfLines={1}>
-                        {p.name}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
+              <View style={styles.profileDrop}>
+                <TouchableOpacity style={styles.profileDropHead} onPress={() => setProfileOpen((o) => !o)} activeOpacity={0.7}>
+                  <Text style={styles.profileDropHeadText} numberOfLines={1}>
+                    {profiles.find((p) => p.id === activeProfileId)?.name ?? 'Select profile'}
+                  </Text>
+                  <Text style={styles.profileDropChevron}>{profileOpen ? '▴' : '▾'}</Text>
+                </TouchableOpacity>
+                {profileOpen && (
+                  <View style={styles.profileDropList}>
+                    {profiles.map((p) => {
+                      const active = p.id === activeProfileId;
+                      return (
+                        <TouchableOpacity
+                          key={p.id}
+                          style={styles.profileDropItem}
+                          onPress={() => { onSelectProfile?.(p.id); setProfileOpen(false); }}
+                          activeOpacity={0.7}>
+                          <Text style={[styles.profileDropItemText, active && styles.profileChipTextActive]} numberOfLines={1}>
+                            {active ? '✓ ' : ''}{p.name}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
               </View>
             </>)}
 
@@ -1360,13 +1371,20 @@ const styles = StyleSheet.create({
   btnTextActive: { color: C.gold },
   btnTextDanger: { color: '#ff6666' },
 
-  profileWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingVertical: 6 },
-  profileChip: {
-    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8,
+  profileDrop: { paddingVertical: 6 },
+  profileDropHead: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 12, paddingVertical: 9, borderRadius: 8,
     borderWidth: 1, borderColor: C.border, backgroundColor: C.btnBg,
   },
-  profileChipActive: { borderColor: C.active, backgroundColor: C.btnBg },
-  profileChipText: { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 13 },
+  profileDropHeadText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14, flex: 1 },
+  profileDropChevron: { color: C.muted, fontSize: 14, marginLeft: 8 },
+  profileDropList: {
+    marginTop: 4, borderRadius: 8, borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.btnBg, overflow: 'hidden',
+  },
+  profileDropItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.divider },
+  profileDropItemText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14 },
   profileChipTextActive: { color: C.active },
   vtsRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
   vtsArrow: {
