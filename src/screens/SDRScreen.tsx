@@ -363,6 +363,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   // was ~a third of all JS time in the CPU profile) — leaf widgets subscribe.
   const meterBus    = useRef(createMeterBus());
   const meterSmooth = useRef({ level: 0, peak: 0, hold: 0 });
+  // SNR from radiod's channel status (basebandPower − noiseDensity), pushed by
+  // native per audio packet. This is the demodulator's own measurement (zoom-
+  // independent, unlike the spectrum). −30 corrects radiod's known +30 dB
+  // audio-stream floor offset (madpsy/ka9q_ubersdr#77) so it's honest 0–50 dB,
+  // NOT the buggy 30–80 dB UberSDR shows. null until the first reading arrives.
+  const audioSnrRef = useRef<number | null>(null);
   const [signalMode,   setSignalMode]   = useState<'snr' | 'smeter' | 'dbfs'>('snr');
   const signalModeRef = useRef<'snr' | 'smeter' | 'dbfs'>('snr');
   useEffect(() => { signalModeRef.current = signalMode; }, [signalMode]);
@@ -968,6 +974,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     const subMute = emitter.addListener('VibeMuted', (e: { muted: boolean }) => {
       setIsMuted(!!e.muted);
     });
+    // radiod channel SNR (basebandPower − noiseDensity); −30 corrects the +30 dB
+    // audio-stream floor offset so the meter reads honest dB.
+    const subSig = emitter.addListener('VibeSignal', (e: { snr: number }) => {
+      audioSnrRef.current = e.snr - 30;
+    });
     // Bookmark-skip mode: native ⏮⏭ defer to JS (it owns the station list)
     const subSkip = emitter.addListener('VibeSkip', (e: { direction: string }) => {
       onVtsJumpRef.current?.(e.direction === 'prev' ? 'left' : 'right');
@@ -1031,7 +1042,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       }
     });
     return () => {
-      sub.remove(); subMute.remove(); subSkip.remove(); subWs.remove();
+      sub.remove(); subMute.remove(); subSig.remove(); subSkip.remove(); subWs.remove();
       subCar.remove(); subCarTune.remove(); subDsOff.remove(); subDsOn.remove();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1086,32 +1097,22 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Find peak bin power in the current bandwidth window
         if (newBins.length > 0) {
           const len = newBins.length;
-          // Bandwidth window — centre ±bw fraction of bins
+          // Peak in the audio passband window — feeds the dBFS / S-meter modes.
           const bwFrac = Math.min(1, (s.bandwidthHigh - s.bandwidthLow) / Math.max(1, s.bwHz));
           const half = Math.floor((bwFrac * len) / 2);
           const mid = Math.floor(len / 2);
-          const lo = Math.max(0, mid - half);
-          const hi = Math.min(len - 1, mid + half);
-          let peak = -200, sum = 0, count = 0;
-          for (let i = lo; i <= hi; i++) {
-            const v = newBins[i];
-            if (v > peak) peak = v;
-            sum += v; count++;
+          let peak = -200;
+          for (let i = Math.max(0, mid - half); i <= Math.min(len - 1, mid + half); i++) {
+            if (newBins[i] > peak) peak = newBins[i];
           }
-          // Noise floor — robust low percentile of ALL visible bins. The old
-          // outer-10%-edges estimate moved with zoom (the view edges land on
-          // different content as you zoom in/out, so SNR drifted with zoom even
-          // though dBFS/S-meter, which use peak, stayed put). A signal occupies a
-          // minority of bins, so the 20th percentile tracks the true noise floor
-          // independent of span.
-          const sorted = Float32Array.from(newBins).sort();
-          const noise = sorted[Math.floor(sorted.length * 0.2)] ?? -130;
-          const snrDb = peak - noise;
-          // Bar source follows the meter mode: SNR uses the skin compression
-          // curve recalibrated for honest spectrum-derived SNR (upstream's
-          // 30-80dB calibration compensated for radiod's broken +30dB audio-
-          // stream floor, madpsy/ka9q_ubersdr#77 — ours doesn't have it);
-          // S-meter/dBFS use the absolute level mapping.
+          // SNR comes from radiod's channel status (audioSnrRef), NOT the spectrum
+          // — the demodulator's own measurement of the tuned channel, so it's
+          // independent of zoom (this is how UberSDR's meter works). 0 until the
+          // first reading lands.
+          const snrDb = audioSnrRef.current ?? 0;
+          // Bar source follows the meter mode: SNR uses the compression curve
+          // (sigNorm, calibrated for honest 0–50 dB); S-meter/dBFS use the
+          // absolute level mapping off the spectrum peak.
           const norm = signalModeRef.current === 'snr'
             ? sigNorm(snrDb)
             : Math.max(0, Math.min(1, (peak + 130) / 90));

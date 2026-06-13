@@ -47,7 +47,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   override func supportedEvents() -> [String]! {
     return ["VibeTuned", "VibeMuted", "VibeWsText", "VibeSkip", "VibeCarConnected", "VibeCarTune",
-            "VibeDataSaverDisconnect", "VibeDataSaverResume"]
+            "VibeDataSaverDisconnect", "VibeDataSaverResume", "VibeSignal"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
@@ -121,6 +121,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // rate-limited) and needs the user to open the app.
   private var dataSaverDisconnected = false
   private var reconnectFailed = false
+  private var lastSignalEmit: TimeInterval = 0   // throttle the SNR (VibeSignal) event
   private var currentFreq:  Int    = 14_074_000
   private var currentMode:  String = "usb"
   private var currentBase:  String = ""
@@ -789,6 +790,19 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let sr = Int32(bytes[8]) | Int32(bytes[9]) << 8 | Int32(bytes[10]) << 16 | Int32(bytes[11]) << 24
     let ch = Int32(bytes[12])
     guard sr >= 8000, sr <= 96000, ch == 1 || ch == 2 else { return }
+
+    // SNR meter = radiod channel SNR = basebandPower − noiseDensity (both dBFS),
+    // carried per-packet. This is the demodulator's own channel measurement, so
+    // it's independent of the spectrum/zoom — same as UberSDR's meter.
+    let bb = Float(bitPattern: UInt32(bytes[13]) | UInt32(bytes[14]) << 8 | UInt32(bytes[15]) << 16 | UInt32(bytes[16]) << 24)
+    let nd = Float(bitPattern: UInt32(bytes[17]) | UInt32(bytes[18]) << 8 | UInt32(bytes[19]) << 16 | UInt32(bytes[20]) << 24)
+    if bb > -900, nd > -900 {
+      let now = ProcessInfo.processInfo.systemUptime
+      if now - lastSignalEmit > 0.2 {
+        lastSignalEmit = now
+        sendEvent(withName: "VibeSignal", body: ["snr": Double(bb - nd), "dbfs": Double(bb)])
+      }
+    }
 
     let opusLen = data.count - headerLen
     if opusLen < 3 { return }
