@@ -20,6 +20,7 @@ export type RootStackParamList = {
     instanceName?:   string;
     viewMode:        ViewMode;
     serverLongitude?: number | null;
+    serverType?:     'ubersdr' | 'kiwi' | 'owrx';   // v3 multi-backend; default ubersdr
   };
 };
 

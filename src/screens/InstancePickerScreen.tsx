@@ -27,7 +27,7 @@ import {
   isVersionOld,
   MIN_RECOMMENDED_VERSION,
 } from '../services/instancesApi';
-import { checkConnection } from '../services/sdrTypes';
+import { checkConnection, detectServerType } from '../services/sdrTypes';
 import {
   DefaultInstance,
   clearDefaultInstance,
@@ -152,7 +152,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
     setFavourites(next);
   }, [favourites]);
 
-  const connect = useCallback(async (url: string, name: string, password?: string, serverLongitude?: number | null) => {
+  const connect = useCallback(async (url: string, name: string, password?: string, serverLongitude?: number | null, serverType?: 'ubersdr' | 'kiwi' | 'owrx') => {
     if (!url) return;
     const cleaned = url.trim().replace(/\/$/, '');
     setConnecting(true);
@@ -169,14 +169,14 @@ export default function InstancePickerScreen({ navigation }: Props) {
         return;
       }
       setConnecting(false);
-      navigation.navigate('SDR', { baseUrl: cleaned, instanceName: name, password, viewMode, serverLongitude });
+      navigation.navigate('SDR', { baseUrl: cleaned, instanceName: name, password, viewMode, serverLongitude, serverType });
     } catch (e: any) {
       setConnecting(false);
       Alert.alert('Connection Error', e.message ?? 'Could not reach server');
     }
   }, [navigation, viewMode]);
 
-  const connectCustom = useCallback(() => {
+  const connectCustom = useCallback(async () => {
     if (!customUrl.trim()) return;
     let url = customUrl.trim();
     if (!url.startsWith('http://') && !url.startsWith('https://')) url = 'http://' + url;
@@ -194,12 +194,14 @@ export default function InstancePickerScreen({ navigation }: Props) {
         'unencrypted connections to the web.',
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Try HTTPS', onPress: () => connect(url.replace(/^http:/, 'https:'), url.replace(/^http:/, 'https:')) },
+          { text: 'Try HTTPS', onPress: async () => { const u = url.replace(/^http:/, 'https:'); connect(u, u, undefined, null, await detectServerType(u)); } },
         ],
       );
       return;
     }
-    connect(url, url);
+    // v3: sniff the backend type (OpenWebRX / KiwiSDR / UberSDR) for manual adds.
+    const type = await detectServerType(url);
+    connect(url, url, undefined, null, type);
   }, [customUrl, connect]);
 
   const handleSetDefault = useCallback((inst: DefaultInstance) => {

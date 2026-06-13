@@ -1209,7 +1209,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   useEffect(() => {
     destroyed.current = false;
-    const c = createBackend('ubersdr', baseUrl, sessionUuid, {
+    const c = createBackend(route.params.serverType ?? 'ubersdr', baseUrl, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
       onConnect:    () => { if (!destroyed.current) setConnected(true); },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
@@ -2071,7 +2071,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         context = bands.length ? bands[0].name : 'HF Radio';
       }
       VibePowerModule?.setNowPlaying(title, `VibeSDR: ${context}`);
-      VibePowerModule?.setArtwork('ubersdr');  // native caches per type
+      VibePowerModule?.setArtwork(route.params.serverType ?? 'ubersdr');  // native caches per type
     }, 300);
     return () => clearTimeout(t);
   }, [status.frequency, status.mode, step, freqUnit, ituRegion, mediaSkip,
@@ -2522,7 +2522,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Audio player (renderless) — held until the saved tune is restored
           so the audio WS opens on the CORRECT freq/mode (no race) */}
       <AudioPlayer
-        baseUrl={tuneLoaded ? baseUrl : null}
+        // v3: the native UberSDR Opus engine only speaks UberSDR. OWRX/Kiwi audio
+        // moves into their own native engines in a later phase — until then the
+        // OWRX waterfall works but audio is off (don't point the Opus engine at it).
+        baseUrl={tuneLoaded && (route.params.serverType ?? 'ubersdr') === 'ubersdr' ? baseUrl : null}
         password={password}
         frequency={status.frequency}
         mode={status.mode}

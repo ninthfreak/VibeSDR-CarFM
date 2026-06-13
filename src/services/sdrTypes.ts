@@ -31,3 +31,20 @@ export async function checkConnection(_url: string, _password?: string): Promise
   // Optimistically allow — UberSDRClient will surface auth errors on connect.
   return { allowed: true, passwordRequired: false };
 }
+
+export type ServerType = 'ubersdr' | 'kiwi' | 'owrx';
+
+/** Probe a manually-entered host to pick the backend (v3). Fetches the landing
+ *  page and sniffs for OpenWebRX / KiwiSDR markers; defaults to ubersdr. */
+export async function detectServerType(url: string): Promise<ServerType> {
+  const base = url.trim().replace(/\/+$/, '');
+  try {
+    const r = await fetch(base + '/', { signal: AbortSignal.timeout(5000) });
+    const body = (await r.text()).toLowerCase();
+    if (body.includes('openwebrx')) return 'owrx';
+    if (body.includes('kiwisdr') || body.includes('kiwi sdr')) return 'kiwi';
+  } catch {
+    // unreachable / CORS — fall through to ubersdr default
+  }
+  return 'ubersdr';
+}
