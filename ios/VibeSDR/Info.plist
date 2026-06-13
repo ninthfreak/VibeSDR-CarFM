@@ -54,7 +54,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>VibeSDR needs local network access to connect to SDR hardware.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>VibeSDR uses your location to show distance to each SDR instance and sort by nearest first.</string>
+	<string>VibeSDR uses your location only to sort and filter the SDR instance list by distance (nearest first). Location is optional — if you deny it, every other feature still works and you can browse and use all instances normally.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UIFileSharingEnabled</key>

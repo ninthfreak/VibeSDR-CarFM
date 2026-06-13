@@ -145,4 +145,10 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 Full licence: <https://www.gnu.org/licenses/gpl-3.0.html>
 
+The official App Store / Google Play / TestFlight builds are covered by an additional permission under GPLv3 §7 — see [`APPSTORE-EXCEPTION.md`](APPSTORE-EXCEPTION.md). The complete source for every released build remains available here under the GPLv3.
+
 UberSDR and KiwiSDR are the property of their respective creators and subject to their own licence terms.
+
+## Privacy
+
+VibeSDR collects no personal data and has no analytics, ads, or tracking. Location is optional (used only to sort instances by distance). See [`PRIVACY.md`](PRIVACY.md).
