@@ -204,6 +204,9 @@ export class OwrxAdapter implements SDRBackend {
     // (which read caps.freqRange) don't peg VHF/UHF tunes to a 30 MHz ceiling.
     if (this.cfg.sampRate) {
       this.caps.freqRange = [this.cfg.centerFreq - this.cfg.sampRate / 2, this.cfg.centerFreq + this.cfg.sampRate / 2];
+      // Filter edge can be as wide as the profile IF allows — WFM (~±100 kHz),
+      // DAB (~±0.8 MHz), ADSB (~±1 MHz) need far more than the UberSDR ±6 kHz.
+      this.caps.maxBandwidth = { default: Math.max(6000, Math.floor(this.cfg.sampRate / 2)) };
     }
     this.dbg(`cfg cf=${this.cfg.centerFreq} sr=${this.cfg.sampRate} fft=${this.cfg.fftSize} freq=${this.freq} fftcomp=${this.cfg.fftCompression}`);
     // Send (or resend) the demod params now we know the profile window.
@@ -296,12 +299,10 @@ export class OwrxAdapter implements SDRBackend {
       if (mod === 'sam') mod = 'am';                 // clamp per brief §4
       else if (mod === 'nfm' && this.modes.includes('fm')) mod = 'fm';
     }
-    const params: Record<string, number | string> = {
+    this.send({ type: 'dspcontrol', params: {
       offset_freq: Math.round(offset), mod, squelch_level: -150,
-    };
-    // Broadcast/wide FM bandwidth is server-controlled — don't force cuts.
-    if (mod !== 'wfm') { params.low_cut = this.bwLow; params.high_cut = this.bwHigh; }
-    this.send({ type: 'dspcontrol', params });
+      low_cut: this.bwLow, high_cut: this.bwHigh,
+    } });
   }
 
   tune(frequency: number, mode?: SDRMode): void {
