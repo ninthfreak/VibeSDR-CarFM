@@ -48,7 +48,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   override func supportedEvents() -> [String]! {
     return ["VibeTuned", "VibeMuted", "VibeWsText", "VibeSkip", "VibeCarConnected", "VibeCarTune",
-            "VibeDataSaverDisconnect", "VibeDataSaverResume", "VibeSignal", "VibeVoiceQuery"]
+            "VibeDataSaverDisconnect", "VibeDataSaverResume", "VibeSignal",
+            "VibeVoiceQuery", "VibeVoiceTune"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
@@ -370,6 +371,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   /// and App Store/TestFlight distribution are in place. See VibeCarPlay.swift.
   @objc func setBrowseItems(_ json: String) {
     VibeCarPlayData.shared.payloadJSON = json
+    VibeVoice.setBrowse(json)   // persist for Siri entity resolution (incl. cold)
   }
 
   // ── Siri voice control ───────────────────────────────────────────────────
@@ -393,9 +395,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     NotificationCenter.default.addObserver(
       forName: VibeVoice.note, object: nil, queue: .main
     ) { [weak self] n in
-      guard let q = n.userInfo?["query"] as? String else { return }
-      let kind = (n.userInfo?["kind"] as? String) ?? "tune"
-      self?.sendEvent(withName: "VibeVoiceQuery", body: ["query": q, "kind": kind])
+      guard let event = n.userInfo?["event"] as? String,
+            let body = n.userInfo?["body"] as? [String: Any] else { return }
+      self?.sendEvent(withName: event, body: body)
     }
   }
 
@@ -1145,56 +1147,258 @@ final class VibeCarPlayData {
 enum VibeVoice {
   static let note = Notification.Name("VibeVoiceCommand")
   private static let d = UserDefaults.standard
-  private static let kPending = "vibeVoicePending"
+  private static let kPending = "vibeVoicePending"     // JSON {kind, query} for cold launch
   private static let kDefault = "vibeDefaultInstance"
   private static let kConnected = "vibeVoiceConnected"
+  private static let kBookmarks = "vibeVoiceBookmarks"  // JSON [{name,frequency,mode}] for Siri disambiguation
 
   static func setDefaultInstance(_ name: String) { d.set(name, forKey: kDefault) }
   static func setConnected(_ c: Bool) { d.set(c, forKey: kConnected) }
+  /// Cache the bookmark list (from the car-browse payload) so the Tune intent can
+  /// match a spoken name against it natively and, on multiple hits, drive a Siri
+  /// spoken pick-list. Persisted to UserDefaults so it survives a cold launch.
+  static func setBrowse(_ json: String) {
+    guard let data = json.data(using: .utf8),
+          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let bms = obj["bookmarks"] as? [[String: Any]] else { return }
+    if let out = try? JSONSerialization.data(withJSONObject: bms) {
+      d.set(out, forKey: kBookmarks)
+    }
+  }
   static var hasDefault: Bool { !(d.string(forKey: kDefault) ?? "").isEmpty }
   static var isConnected: Bool { d.bool(forKey: kConnected) }
 
-  /// Returns the Siri dialog. Emits now (app live) or stashes for cold launch.
+  /// Fuzzy-match a spoken station name against the cached bookmarks: every word of
+  /// the query must appear in the bookmark name (case-insensitive). Frequencies
+  /// ("7150") won't match a name, so they fall through to the JS resolver.
+  static func allBookmarks() -> [VibeBookmarkEntity] {
+    guard let data = d.data(forKey: kBookmarks),
+          let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+    return arr.compactMap { b in
+      guard let name = b["name"] as? String,
+            let freq = (b["frequency"] as? NSNumber)?.intValue else { return nil }
+      return VibeBookmarkEntity(id: "\(name)|\(freq)", name: name, freq: freq, mode: b["mode"] as? String)
+    }
+  }
+
+  static func bookmark(id: String) -> VibeBookmarkEntity? { allBookmarks().first { $0.id == id } }
+
+  /// Parse an explicit frequency hint ("11mhz", "909 khz", "at 11 mhz") → Hz. Only
+  /// fires when a unit is present, so "Radio 5" is never read as a frequency.
+  private static func freqHint(_ s: String) -> Int? {
+    guard let re = try? NSRegularExpression(pattern: #"(\d+(?:\.\d+)?)\s*(mhz|khz|hz)\b"#),
+          let m = re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
+          let nr = Range(m.range(at: 1), in: s), let n = Double(s[nr]) else { return nil }
+    let unit = Range(m.range(at: 2), in: s).map { String(s[$0]) } ?? ""
+    switch unit {
+    case "mhz": return Int(n * 1_000_000)
+    case "khz": return Int(n * 1000)
+    default:    return Int(n)
+    }
+  }
+
+  /// Fuzzy-match a spoken station name against the cached bookmarks: every name
+  /// word of the query must appear in the bookmark name (case-insensitive). An
+  /// explicit frequency hint ("China Radio at 11MHz") narrows the matches to ±1
+  /// MHz of that frequency. Returns the matches and whether a hint was present.
+  /// Frequencies alone ("7150") won't match a name → fall through to JS.
+  static func matchBookmarks(_ query: String) -> (matches: [VibeBookmarkEntity], hinted: Bool) {
+    let lower = query.lowercased()
+    let hint = freqHint(lower)
+    let stop: Set<String> = ["at", "around", "near", "on", "about", "of", "the", "to", "mhz", "khz", "hz"]
+    let words = lower.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+      .filter { w in
+        if stop.contains(w) { return false }
+        // When a frequency hint is present, drop bare numbers (they're the hint,
+        // not part of the name); otherwise keep them ("Radio 5").
+        if hint != nil && w.allSatisfy({ $0.isNumber }) { return false }
+        return true
+      }
+    guard !words.isEmpty else { return ([], hint != nil) }
+    var out = allBookmarks().filter { e in
+      let ln = e.name.lowercased()
+      return words.allSatisfy { ln.contains($0) }
+    }
+    if let h = hint { out = out.filter { abs($0.freq - h) <= 1_000_000 } }
+    return (out, hint != nil)
+  }
+
+  // Candidate list persisted across the "which frequency?" re-prompt so the spoken
+  // answer always has the right options to match (the intent's `target` may not
+  // survive the re-run).
+  private static let kCandidates = "vibeVoiceCandidates"
+  static func setCandidates(_ list: [VibeBookmarkEntity]) {
+    let arr = list.map { ["id": $0.id, "name": $0.name, "frequency": $0.freq, "mode": ($0.mode ?? "") as Any] }
+    if let data = try? JSONSerialization.data(withJSONObject: arr) { d.set(data, forKey: kCandidates) }
+  }
+  static func takeCandidates() -> [VibeBookmarkEntity] {
+    guard let data = d.data(forKey: kCandidates),
+          let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+    return arr.compactMap { b in
+      guard let id = b["id"] as? String, let name = b["name"] as? String,
+            let f = (b["frequency"] as? NSNumber)?.intValue else { return nil }
+      let mode = (b["mode"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+      return VibeBookmarkEntity(id: id, name: name, freq: f, mode: mode)
+    }
+  }
+
+  /// Parse a spoken frequency answer → Hz. Mirrors the JS bare-number rule (< 30 =
+  /// MHz, else kHz) so "909"→909 kHz, "11.650"→11.650 MHz, "11650"→11650 kHz.
+  /// Spaces inside a number ("11 650") are collapsed first.
+  static func spokenToHz(_ s: String) -> Int? {
+    var lower = s.lowercased()
+    // Collapse "11 650" / "11,650" thousands grouping into "11650".
+    if let re = try? NSRegularExpression(pattern: #"(\d)[\s,](?=\d{3}\b)"#) {
+      lower = re.stringByReplacingMatches(in: lower, range: NSRange(lower.startIndex..., in: lower), withTemplate: "$1")
+    }
+    guard let re = try? NSRegularExpression(pattern: #"(\d+(?:[.,]\d+)?)\s*(mhz|khz|hz)?"#),
+          let m = re.firstMatch(in: lower, range: NSRange(lower.startIndex..., in: lower)),
+          let nr = Range(m.range(at: 1), in: lower),
+          let n = Double(lower[nr].replacingOccurrences(of: ",", with: ".")) else { return nil }
+    let unit = Range(m.range(at: 2), in: lower).map { String(lower[$0]) } ?? ""
+    switch unit {
+    case "mhz": return Int(n * 1_000_000)
+    case "khz": return Int(n * 1000)
+    case "hz":  return Int(n)
+    default:    return Int(n < 30 ? n * 1_000_000 : n * 1000)
+    }
+  }
+
+  /// Match the user's spoken frequency to the nearest candidate in the list — we
+  /// own this matching because Siri's AppEntity voice disambiguation mis-picks.
+  static func pickBySpokenFreq(_ ans: String, among: [VibeBookmarkEntity]) -> VibeBookmarkEntity? {
+    guard let hz = spokenToHz(ans) else { return nil }
+    return among.min(by: { abs($0.freq - hz) < abs($1.freq - hz) })
+  }
+
+  /// Spoken text + kind ("tune" | "mode" | "step"). All resolution (frequency
+  /// parse, bookmark/band match, mode/step synonyms) is in JS — the intent just
+  /// passes the text. Live commands emit now; cold launch stashes for JS.
   static func handle(query: String, kind: String) -> String {
     let q = query.trimmingCharacters(in: .whitespaces)
     if isConnected {
       NotificationCenter.default.post(name: note, object: nil,
-                                      userInfo: ["query": q, "kind": kind])
+        userInfo: ["event": "VibeVoiceQuery", "body": ["query": q, "kind": kind]])
       switch kind {
       case "step": return "Setting step to \(q)"
       case "mode": return "Switching to \(q)"
       default:     return "Tuning to \(q)"
       }
     }
+    // Not running/connected: stash so it applies when VibeSDR is next opened (we
+    // no longer foreground the app, to keep tuning unlock-free while listening).
     if hasDefault {
-      d.set(q, forKey: kPending)   // JS applies after it connects to the default
-      return kind == "tune" ? "Opening VibeSDR and tuning to \(q)" : "Opening VibeSDR"
+      if let data = try? JSONSerialization.data(withJSONObject: ["kind": kind, "query": q]),
+         let s = String(data: data, encoding: .utf8) { d.set(s, forKey: kPending) }
+      return "Open VibeSDR to \(kind == "tune" ? "tune to \(q)" : "apply that")."
     }
-    return "No default instance set. Please set a default instance in VibeSDR to use this feature."
+    return "Open VibeSDR and connect to an instance first to use voice control."
+  }
+
+  /// Dispatch a specific picked bookmark as an explicit Hz+mode tune (reuses the
+  /// JS frequency path) but speaks the friendly station name back.
+  static func handleBookmark(_ b: VibeBookmarkEntity) -> String {
+    // Space before "hz" is required: JS parses "\(freq) hz" but a glued "\(freq)hz"
+    // fails its \bhz\b boundary and misroutes to the band search.
+    let q = "\(b.freq) hz" + (b.mode.map { " \($0)" } ?? "")
+    if isConnected {
+      NotificationCenter.default.post(name: note, object: nil,
+        userInfo: ["event": "VibeVoiceQuery", "body": ["query": q, "kind": "tune"]])
+      return "Tuning to \(b.name)"
+    }
+    if hasDefault {
+      if let data = try? JSONSerialization.data(withJSONObject: ["kind": "tune", "query": q]),
+         let s = String(data: data, encoding: .utf8) { d.set(s, forKey: kPending) }
+      return "Open VibeSDR to tune to \(b.name)."
+    }
+    return "Open VibeSDR and connect to an instance first to use voice control."
   }
 
   static func takePending() -> String? {
-    guard let q = d.string(forKey: kPending) else { return nil }
+    guard let s = d.string(forKey: kPending) else { return nil }
     d.removeObject(forKey: kPending)
-    return q
+    return s
   }
+}
+
+/// A bookmark surfaced to Siri for native spoken disambiguation when a name hits
+/// several entries (e.g. "Radio 5"). The title is frequency-forward ("909 kHz")
+/// so Siri reliably matches the spoken number; the picked entity tunes exactly.
+@available(iOS 16.0, *)
+struct VibeBookmarkEntity: AppEntity, Identifiable {
+  let id: String
+  let name: String
+  let freq: Int
+  let mode: String?
+
+  var freqLabel: String {
+    let mhz = Double(freq) / 1_000_000.0
+    return mhz >= 1 ? String(format: "%.3f MHz", mhz)
+                    : String(format: "%.0f kHz", Double(freq) / 1000.0)
+  }
+
+  static var typeDisplayRepresentation: TypeDisplayRepresentation = "Frequency"
+  static var defaultQuery = VibeBookmarkQuery()
+  var displayRepresentation: DisplayRepresentation {
+    DisplayRepresentation(title: "\(freqLabel)", subtitle: "\(name)")
+  }
+}
+
+@available(iOS 16.0, *)
+struct VibeBookmarkQuery: EntityQuery {
+  func entities(for identifiers: [String]) async throws -> [VibeBookmarkEntity] {
+    identifiers.compactMap { VibeVoice.bookmark(id: $0) }
+  }
+  func suggestedEntities() async throws -> [VibeBookmarkEntity] { [] }
 }
 
 @available(iOS 16.0, *)
 struct TuneIntent: AppIntent {
   static var title: LocalizedStringResource = "Tune VibeSDR"
-  static var openAppWhenRun = true
+  // false = run in the background without foregrounding the app, so Siri can tune
+  // from the lock screen / headphones / CarPlay WITHOUT an unlock (the app is
+  // already alive playing audio and receives the command via NotificationCenter).
+  static var openAppWhenRun = false
   @Parameter(title: "Station or frequency",
              requestValueDialog: "What frequency or station?") var target: String
+  // Set only via native disambiguation when the spoken name matched several
+  // bookmarks. Optional so Siri doesn't auto-prompt for it on every invocation.
+  @Parameter(title: "Frequency") var pick: VibeBookmarkEntity?
+
   func perform() async throws -> some IntentResult & ProvidesDialog {
-    .result(dialog: IntentDialog(stringLiteral: VibeVoice.handle(query: target, kind: "tune")))
+    // If the user already picked from a spoken list, tune that exact bookmark.
+    if let chosen = pick {
+      let full = VibeVoice.bookmark(id: chosen.id) ?? chosen
+      return .result(dialog: IntentDialog(stringLiteral: VibeVoice.handleBookmark(full)))
+    }
+    // A spoken station name can hit multiple bookmarks (e.g. "Radio 5"). A
+    // frequency hint ("China Radio at 11MHz") narrows the list to that vicinity.
+    // A frequency or band (no name match) falls through to the JS resolver.
+    let (matches, _) = VibeVoice.matchBookmarks(target)
+    if matches.count > 1 {
+      // Apple-native spoken pick-list — Siri reads the frequencies and the user
+      // picks by voice; it manages the multi-turn session cleanly.
+      let name = matches.first?.name ?? target
+      let chosen = try await $pick.requestDisambiguation(
+        among: matches,
+        dialog: IntentDialog(stringLiteral: "\(name) has \(matches.count). Which frequency?"))
+      let full = VibeVoice.bookmark(id: chosen.id) ?? chosen
+      return .result(dialog: IntentDialog(stringLiteral: VibeVoice.handleBookmark(full)))
+    }
+    if matches.count == 1 {
+      return .result(dialog: IntentDialog(stringLiteral: VibeVoice.handleBookmark(matches[0])))
+    }
+    return .result(dialog: IntentDialog(stringLiteral: VibeVoice.handle(query: target, kind: "tune")))
   }
 }
 
 @available(iOS 16.0, *)
 struct StepIntent: AppIntent {
   static var title: LocalizedStringResource = "Set VibeSDR step rate"
-  static var openAppWhenRun = true
+  // false = run in the background without foregrounding the app, so Siri can tune
+  // from the lock screen / headphones / CarPlay WITHOUT an unlock (the app is
+  // already alive playing audio and receives the command via NotificationCenter).
+  static var openAppWhenRun = false
   @Parameter(title: "Step rate", requestValueDialog: "What step rate?") var rate: String
   func perform() async throws -> some IntentResult & ProvidesDialog {
     .result(dialog: IntentDialog(stringLiteral: VibeVoice.handle(query: rate, kind: "step")))
@@ -1204,8 +1408,11 @@ struct StepIntent: AppIntent {
 @available(iOS 16.0, *)
 struct ModeIntent: AppIntent {
   static var title: LocalizedStringResource = "Set VibeSDR mode"
-  static var openAppWhenRun = true
-  @Parameter(title: "Demodulator", requestValueDialog: "Which mode?") var mode: String
+  // false = run in the background without foregrounding the app, so Siri can tune
+  // from the lock screen / headphones / CarPlay WITHOUT an unlock (the app is
+  // already alive playing audio and receives the command via NotificationCenter).
+  static var openAppWhenRun = false
+  @Parameter(title: "Mode", requestValueDialog: "Which mode?") var mode: String
   func perform() async throws -> some IntentResult & ProvidesDialog {
     .result(dialog: IntentDialog(stringLiteral: VibeVoice.handle(query: mode, kind: "mode")))
   }
@@ -1214,9 +1421,12 @@ struct ModeIntent: AppIntent {
 @available(iOS 16.0, *)
 struct VibeShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
+    // Two-step (Siri prompts for the value) — same pattern as the working Mode
+    // shortcut. App name MUST be in the phrase (Apple rule).
     AppShortcut(intent: TuneIntent(), phrases: [
       "Tune \(.applicationName)",
-      "Tune in \(.applicationName)",
+      "Tune with \(.applicationName)",
+      "\(.applicationName) tune",
     ], shortTitle: "Tune", systemImageName: "dot.radiowaves.left.and.right")
     AppShortcut(intent: ModeIntent(), phrases: [
       "Change \(.applicationName) mode",
