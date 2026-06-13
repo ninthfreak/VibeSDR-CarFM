@@ -748,7 +748,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     ) { [weak self] note in
       guard let self, self.isRunning else { return }
       let type = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
-      if type == AVAudioSession.InterruptionType.ended.rawValue {
+      if type == AVAudioSession.InterruptionType.began.rawValue {
+        // Another app took the audio session (e.g. a Mac grabbed the shared
+        // AirPods). iOS pauses us, but only the SYSTEM knows — sync our own
+        // state so the UI shows muted and the data-saver countdown starts.
+        // We do NOT auto-resume on .ended (the user chose to play elsewhere);
+        // they press Play to come back.
+        DispatchQueue.main.async { if !self.isMuted { self.setMuted(true) } }
+      } else if type == AVAudioSession.InterruptionType.ended.rawValue {
         try? AVAudioSession.sharedInstance().setActive(true)
         DispatchQueue.main.async {
           if !self.isMuted { try? self.audioEngine?.start(); self.playerNode?.play() }

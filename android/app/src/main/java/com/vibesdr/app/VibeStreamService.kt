@@ -6,7 +6,9 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaFormat
@@ -174,6 +176,19 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     @Volatile private var muteSinceMs = 0L
     @Volatile private var dataSaverDisconnected = false
     private var muteTick: Runnable? = null
+    // Audio focus — when another app takes it (parity with iOS interruption) we
+    // register a mute so the UI + data saver reflect it; user presses Play to
+    // return (no auto-resume on regain).
+    private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK ->
+                mainHandler.post { if (running && !muted && !dataSaverDisconnected) setMutedNative(true) }
+        }
+    }
     // Composited album art (app icon + server-type logo inset), cached
     private var npArtwork: android.graphics.Bitmap? = null
     private var npArtworkType = ""
@@ -254,6 +269,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         packetCount = 0
         lastPacketAt = SystemClock.elapsedRealtime()
         packetQueue.clear()
+        requestAudioFocus()
         startDecodeThread()
         openWs()
         startWatchdog()
@@ -265,6 +281,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     fun stopEngine() {
         running = false
+        abandonAudioFocus()
         watchdog?.let { mainHandler.removeCallbacks(it) }
         watchdog = null
         tuneFlush?.let { mainHandler.removeCallbacks(it) }
@@ -336,6 +353,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             if (m) {
                 armMuteCountdown()
             } else {
+                requestAudioFocus()  // re-acquire when the user comes back
                 cancelMuteCountdown()
                 if (dataSaverDisconnected) resumeFromDataSaver()
             }
@@ -420,6 +438,35 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             updateMetadataSession(); updateNotification()
         }
         emitEvent("VibeDataSaverResume") { }
+    }
+
+    private fun requestAudioFocus() {
+        val attrs = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+            .build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(attrs)
+                .setOnAudioFocusChangeListener(focusListener, mainHandler)
+                .build()
+            audioFocusRequest = req
+            audioManager.requestAudioFocus(req)
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.requestAudioFocus(
+                focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+        }
+    }
+
+    private fun abandonAudioFocus() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+            audioFocusRequest = null
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.abandonAudioFocus(focusListener)
+        }
     }
 
     fun setVolumeNative(v: Float) {
