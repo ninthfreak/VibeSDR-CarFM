@@ -38,6 +38,7 @@ import { Favourite, getFavourites, toggleFavourite } from '../services/favourite
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
 import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
 import PasswordModal from '../components/PasswordModal';
+import { APP_VERSION } from '../constants/version';
 
 /** ISO 3166-1 alpha-2 → 🇬🇧-style emoji flag (regional indicators, no assets). */
 function flagEmoji(code: string | null): string {
@@ -412,7 +413,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
               textShadowColor: C.amberGlow, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 8 }}>
               VibeSDR
             </Text>
-            <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim, letterSpacing: 1 }}>V2</Text>
+            <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim, letterSpacing: 1 }}>v{APP_VERSION}</Text>
           </View>
           {/* ⚙ = factory reset (the mode-change badge is gone — single skin now) */}
           <TouchableOpacity style={{ padding: 10 }} onPress={handleMasterReset} hitSlop={8}>

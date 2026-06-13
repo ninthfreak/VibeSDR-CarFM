@@ -100,6 +100,12 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.skipMode = mode
     }
 
+    /** Car browse tree payload (bookmarks + band plan) for Android Auto. */
+    @ReactMethod
+    fun setBrowseItems(json: String) {
+        VibeStreamService.instance?.setBrowseItemsNative(json)
+    }
+
     /** One-shot coarse location for nearest-first instance sorting. JS must
      *  request ACCESS_COARSE_LOCATION via PermissionsAndroid first. */
     @ReactMethod

@@ -24,6 +24,7 @@ export const VibePowerModule = NativeModules.VibePowerModule as
       setNowPlaying:     (title: string, artist: string) => void;
       setArtwork:        (serverType: string) => void;
       setMediaSkipMode:  (mode: 'step' | 'bookmark') => void;
+      setBrowseItems?:   (json: string) => void;
       getDebugInfoSync:  () => string;
       addListener:       (name: string) => void;
       removeListeners:   (count: number) => void;

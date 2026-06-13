@@ -32,6 +32,7 @@ import {
   type ServerBookmark, type ServerBand, type SearchResult,
 } from '../services/stations';
 import { type UserBookmark } from '../services/userBookmarks';
+import { APP_VERSION } from '../constants/version';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -123,7 +124,7 @@ export interface MenuSheetProps {
   onVtsPrev?:  () => void;
   searchBookmarks?: ServerBookmark[];
   searchBands?:     ServerBand[];
-  onSearchTune?:    (hz: number, mode?: string | null) => void;
+  onSearchTune?:    (hz: number, mode?: string | null, isBand?: boolean) => void;
   userBookmarks?:     UserBookmark[];
   currentFreq?:       number;
   currentMode?:       string;
@@ -579,7 +580,7 @@ export default function MenuSheet({
                         activeOpacity={0.7}
                         onPress={() => {
                           setSearchQuery('');
-                          if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode);
+                          if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode, true);
                           else if (r.bm) onSearchTune?.(r.bm.frequency, r.bm.mode);
                         }}
                       >
@@ -1218,7 +1219,7 @@ export default function MenuSheet({
                 KiwiSDR/OpenWebRX later), so it's keyed by server type. ── */}
             <View style={styles.footerRow}>
               <TouchableOpacity onPress={onAbout} hitSlop={8}>
-                <Text style={styles.footerBrand}>VibeSDR V2</Text>
+                <Text style={styles.footerBrand}>VibeSDR v{APP_VERSION}</Text>
                 <Text style={styles.footerAboutHint}>ABOUT</Text>
               </TouchableOpacity>
               <View style={styles.footerServer}>
