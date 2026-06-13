@@ -45,7 +45,7 @@ import { DecoderClient, RTTY_PRESETS,
          type SpotRow, type SpotsKind,
          type ChatUserRow }                            from '../services/DecoderClient';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
-import { MIN_HZ, MAX_HZ, STEPS }                       from '../services/sdrTypes';
+import { MIN_HZ, MAX_HZ, STEPS, stepsForFreq }         from '../services/sdrTypes';
 import { v4 as uuidv4 }                                from 'uuid';
 import AsyncStorage                                    from '@react-native-async-storage/async-storage';
 import { setDefaultInstance, getDefaultInstance,
@@ -2461,6 +2461,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       <StepPicker
         visible={stepOpen}
         currentStep={step}
+        steps={stepsForFreq(status.frequency)}
         onSelect={hz => { setStep(hz); }}
         onClose={() => setStepOpen(false)}
       />

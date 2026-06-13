@@ -9,6 +9,13 @@ export const MODE_LABELS: Record<SDRMode, string> = {
 };
 
 export const STEPS = [10, 100, 500, 1000, 9000, 10000];
+// VHF/UHF tuning steps — 10 kHz is uselessly small for broadcast FM (100 kHz),
+// NFM repeaters (12.5/25 kHz) and air/marine. Used above 30 MHz (e.g. OWRX VHF
+// profiles). 12.5k/25k shown as "12.5k"/"25k" by formatStep.
+export const STEPS_VHF = [1000, 5000, 12500, 25000, 50000, 100000];
+export function stepsForFreq(hz: number): number[] {
+  return hz >= 30_000_000 ? STEPS_VHF : STEPS;
+}
 export const STEP_LABELS: Record<number, string> = {
   10: '10Hz', 100: '100Hz', 500: '500Hz',
   1000: '1kHz', 9000: '9kHz', 10000: '10kHz',

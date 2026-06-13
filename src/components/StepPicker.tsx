@@ -20,11 +20,13 @@ function stepLabel(hz: number): string {
 interface StepPickerProps {
   visible:     boolean;
   currentStep: number;
+  steps?:      number[];   // band-aware list (VHF/UHF gets larger steps); defaults to HF
   onSelect:    (hz: number) => void;
   onClose:     () => void;
 }
 
-export default function StepPicker({ visible, currentStep, onSelect, onClose }: StepPickerProps) {
+export default function StepPicker({ visible, currentStep, steps, onSelect, onClose }: StepPickerProps) {
+  const stepList = steps && steps.length ? steps : STEPS_HZ;
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
 
@@ -40,7 +42,7 @@ export default function StepPicker({ visible, currentStep, onSelect, onClose }: 
             TUNING STEP
           </Text>
           <View style={st.grid}>
-            {STEPS_HZ.map(hz => (
+            {stepList.map(hz => (
               <TouchableOpacity
                 key={hz}
                 style={[

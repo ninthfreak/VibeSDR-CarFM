@@ -41,7 +41,7 @@ import {
 import DrumWheel from './DrumWheel';
 import { useTheme } from '../contexts/ThemeContext';
 import { useUiScale } from '../hooks/useUiScale';
-import { STEPS, type SDRMode } from '../services/sdrTypes';
+import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -723,9 +723,10 @@ function ControlsBar({
   const clock     = useClock();
 
   const cycleStep = useCallback(() => {
-    const idx = STEPS.indexOf(step);
-    onStep(STEPS[(idx + 1) % STEPS.length]);
-  }, [step, onStep]);
+    const list = stepsForFreq(frequency);
+    const idx = list.indexOf(step);
+    onStep(list[(idx + 1) % list.length] ?? list[0]);
+  }, [step, onStep, frequency]);
 
   // Parent supplies the deep-link share (instance URL + freq/mode/bw/zoom
   // params — tappable straight into the station); plain text is the fallback
