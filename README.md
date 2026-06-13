@@ -1,110 +1,101 @@
 # VibeSDR
 
-A mobile-first SDR receiver app for iOS and Android, built with Expo / React Native. VibeSDR wraps the [UberSDR](https://ubersdr.org) web interface and applies a full custom mobile skin so you get a genuinely great SDR experience on any phone — no matter which UberSDR instance you connect to.
+A mobile-first SDR receiver app for iOS and Android. VibeSDR is a fully native client for [UberSDR](https://ubersdr.org) receivers, with its own GPU-rendered waterfall, native background audio, and on-device decoders — so you get a genuinely great SDR experience on any phone, no matter which UberSDR instance you connect to and whether or not its owner has installed any mobile UI.
 
 > Built by Stuart Carr (Stuey3D) with AI assistance from Claude (Anthropic).
+> Free software under the GNU GPL-3.0.
 
----
-
-> [!WARNING]
-> **Android background audio is not working in the current release.** Audio stops when the app is backgrounded and media controls do not appear in the notification shade. This is a known issue caused by Android WebView suspending JavaScript execution when the app is not in the foreground. We are actively working on a fix (v1.1) that routes audio through a native player outside the WebView — this will resolve both background playback and media controls on Android. iOS is unaffected.
+**Latest release: [v2.0.1](https://github.com/Stuey3D/VibeSDR/releases/latest)** — iOS `.ipa` and Android `.apk`.
 
 ---
 
 ## Screenshots
 
+> The images below live in [`screenshots/`](screenshots/). To refresh them, capture the current build on-device and replace the files in place (same filenames).
+
 | | | |
 |---|---|---|
 | ![Instance picker](screenshots/01-instance-picker.png) | ![Waterfall portrait](screenshots/02-waterfall-portrait.png) | ![RTTY decoder](screenshots/04-rtty-decoder.png) |
-| *Instance picker — sorted by distance* | *Default skin — Radio Caroline 648 kHz AM* | *RTTY decoder — DWD weather bulletin* |
+| *Instance picker — sorted by distance* | *GPU waterfall — portrait* | *On-device RTTY decoder* |
 | ![LSB — The Pip](screenshots/06-lsb-the-pip.png) | ![Speech-to-text](screenshots/07-speech-to-text.png) | ![HFDL aircraft map](screenshots/08-hfdl-aircraft-map.png) |
-| *LSB — tuned to The Pip (Kaplya), Rostov* | *Speech-to-text decoder — BBC Radio 5* | *HFDL aircraft tracking map — 179 aircraft* |
+| *Bandwidth / passband tuning* | *Speech-to-text decoder* | *HFDL aircraft tracking map* |
 
 | | |
 |---|---|
 | ![Landscape](screenshots/03-waterfall-landscape.png) | ![Landscape wide](screenshots/05-waterfall-landscape-wide.png) |
-| *Landscape — Radio Caroline* | *Landscape wide zoom — AM broadcast band* |
+| *Landscape waterfall* | *Landscape wide zoom* |
 
 ---
 
 ## Features
 
-### Interface & Skins
-- **Two skins** selectable on first launch:
-  - **Default** — Nixie-tube amber glow meets 60s–70s valve radio, with 80s–90s green/red LED accents
-  - **Accessibility** — larger touch targets, Atkinson Hyperlegible font, colours optimised for small or zoomed displays
-- All fonts (Nixie One, Atkinson Hyperlegible) and Leaflet maps are embedded in the app — no external CDN requests
-- Tested down to 4-inch screens (iPhone SE in Display Zoom mode)
+### Display & waterfall
+- **Custom GPU waterfall and spectrum** — rendered with a Skia runtime shader, with in-shader temporal line synthesis for a smooth, high-frame-rate display independent of the server's own waterfall
+- **Portrait and landscape** layouts, ProMotion 120 Hz rendering, haptic tuning feedback
+- **Colour palettes** (GQRX, KiwiSDR, CuteSDR, SdrDx, OpenWebRX, matplotlib origins), VFO glow and frost controls, S-meter calibration and selectable signal-meter modes
+- **Spectrum backdrop image** with opacity control and station-ID overlay
+- **Power saving** — half-rate spectrum, idle timeout, and the waterfall fully disconnects when backgrounded or when a map overlay is active
 
-### SDR Controls
-- **VFO drum** — smooth inertia scrolling with friction decay; cancel threshold prevents accidental jumps
-- **Precise / Normal tuning mode** — tap to switch resolution on the VFO drum
-- **Zoom control** — pinch-style dual-drum waterfall zoom
-- **Band / mode / filter selectors** — full access to all UberSDR demodulation modes and filter widths
-- **Mute pill** — floating overlay shows mute state; tap to toggle
-- **Volume control**
-- **Noise reduction** — server-side NR accessible from the mobile UI
-- **AGC controls**
+### Tuning & SDR controls
+- **VFO drum** with inertia scrolling and friction decay; precise / normal resolution toggle
+- **Dual-drum waterfall zoom**
+- **Full mode set** — USB, LSB, AM, SAM, FM, NFM, CW (upper/lower)
+- **Bandwidth / passband sliders** mirrored around the carrier, matched to the server's limits
+- **Noise reduction** — on-device NR, NR2 and noise blanker, plus server-side NR with a dynamic filter list and live parameter control
+- **Squelch** (SNR and FM), AGC, volume and mute
 
 ### Audio
-- **Audio-only mode** — disables the waterfall to save battery; all radio controls remain active; landscape layout keeps message and button fully visible
-- **Background audio** — app continues receiving when backgrounded (iOS background audio entitlement)
-- **iOS Now Playing / AirPods** — Media Session metadata (frequency + station name) shown on lock screen and in Control Centre; next/previous track buttons mapped to VTS station arrows
-- **Android media notification** — foreground service with play/pause/next/prev controls; notification updates live as frequency and station change
+- **Native audio engines** on both iOS and Android (Opus over WebSocket) running outside any WebView, so playback survives JS suspension
+- **Background audio** — keeps receiving when backgrounded on **both** platforms
+- **Lock-screen / Now Playing / car / watch controls** — media-session metadata (frequency + station) with next/previous mapped to station or bookmark skip
+- **AAC recorder** with share sheet
 
-### Maps & Decoders
-- **Digital Spots viewer** — live digital mode activity map
-- **CW Spots viewer** — CW activity overlay
-- **HFDL aircraft tracking** — live aircraft positions on map (Leaflet, fully embedded)
-- **PSKReporter badge** — stats tracking and graphs widget
+### Decoders & maps
+- **On-device decoders** — RTTY, NAVTEX, WEFAX, SSTV, Morse, and speech-to-text
+- **Server maps** — HFDL aircraft, digital, and CW activity maps (Leaflet, fully embedded — no external CDN)
+- **Spots tables** for digital and CW activity
 
-### Station Management
-- **Instance list** — browse and connect to public UberSDR instances
-- **Set as default** — auto-connect to a chosen instance on every startup
-- **Location sorting** — instances sorted by distance (requires location permission)
-- **VTS station arrows** — skip between stations on the current instance
+### Stations, bookmarks & social
+- **Instance picker** — browse public UberSDR receivers, location-aware sorting, country flags, favourites, and an auto-connect default
+- **Bookmark & band-plan search** with live (session-dynamic) EiBi schedules, in a scrollable result list
+- **User bookmarks** — per-instance or global, UberSDR-compatible import/export
+- **Voice Tuning System (VTS)** — spoken station/band announcements and bookmark skipping
+- **Live chat** with user list, mute, and zoom/tune sync
+- **Share** a tuned station as a tappable deep link
+- **Admin pages in-app** — Admin, Noise Floor, Band Conditions, Listeners
 
-### Menu & Settings
-- **Skin settings panel** — switch skin, toggle haptics, adjust preferences
-- **Haptic feedback** — configurable; VFO movement uses Rigid impact, zoom uses Light; toggle persists between sessions; shows ❌ icon when off
-- **About VibeSDR** — full story, version history, future plans, credits and GPL-3 licence info accessible from the menu
-- **Waterfall power saving** — spectrum runs at half-rate; 30-second idle timeout; waterfall fully disconnects when app is backgrounded or a map overlay is active
-
-### Technical
-- Expo SDK 56 / React Native 0.85
-- Custom skin injected via `injectedJavaScriptBeforeContentLoaded` (WKUserScript on iOS, WebView on Android) — avoids bridge size limits
-- Version-guarded injection (`window.__vibeSdrInjected`) prevents double-injection on hot reload
-- expo-haptics for native haptic feedback
-- expo-keep-awake prevents screen sleep while receiving
+### Accessibility
+- Atkinson Hyperlegible UI typeface and an accessibility-oriented menu with larger touch targets
+- Tested down to 4-inch screens (iPhone SE in Display Zoom mode)
 
 ---
 
 ## Building
 
-### Prerequisites
-- Node.js 18+
-- Xcode 16+ (iOS)
-- EAS CLI (`npm install -g eas-cli`)
-- CocoaPods
+VibeSDR is an Expo (SDK 56 / React Native 0.85) app with custom native modules, built directly from the native projects — **do not run `expo prebuild --clean`** (it wipes the custom native code).
 
-### iOS (direct device install)
+### Prerequisites
+- Node.js 18+ and `npm install`
+- Xcode 16+ and CocoaPods (iOS)
+- Android SDK / JDK 17 (Android)
+
+### iOS (release archive + device install)
 ```bash
 cd ios && pod install && cd ..
-xcodebuild -workspace ios/VibeSDR.xcworkspace \
-  -scheme VibeSDR \
-  -configuration Release \
-  -sdk iphoneos \
-  -derivedDataPath ios/build \
-  -allowProvisioningUpdates \
-  CODE_SIGN_STYLE=Automatic \
-  DEVELOPMENT_TEAM=<YOUR_TEAM_ID>
+xcodebuild -workspace ios/VibeSDR.xcworkspace -scheme VibeSDR \
+  -configuration Release -sdk iphoneos \
+  -archivePath /tmp/VibeSDR.xcarchive archive \
+  CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=<YOUR_TEAM_ID>
+xcodebuild -exportArchive -archivePath /tmp/VibeSDR.xcarchive \
+  -exportPath /tmp/VibeSDR-export -exportOptionsPlist <your-export-options.plist>
 xcrun devicectl device install app --device <DEVICE_UUID> \
-  ios/build/Build/Products/Release-iphoneos/VibeSDR.app
+  /tmp/VibeSDR-export/VibeSDR.ipa
 ```
 
-### Android (EAS APK)
+### Android (release APK)
 ```bash
-eas build --platform android --profile preview --non-interactive
+cd android && ./gradlew assembleRelease
+adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
 ---
@@ -114,12 +105,15 @@ eas build --platform android --profile preview --non-interactive
 | Name | Role |
 |---|---|
 | **Stuart Carr (Stuey3D)** | UI/UX design, concept & testing |
-| **M9PSY** | Creator of UberSDR, whose open architecture made this UI possible |
-| **John Seamons (ZL/KF6VO)** | Creator of KiwiSDR, the platform UberSDR is built upon |
+| **madpsy (M9PSY)** | Creator of UberSDR — protocol, DSP algorithms (NR2 / noise blanker / WebSDR-NR), colour palettes, band plans and bookmark format |
+| **Phil Karn (KA9Q)** | ka9q-radio (radiod), the SDR engine underneath UberSDR |
+| **John Seamons (ZL/KF6VO)** | Creator of KiwiSDR |
+| **Xiph.Org Foundation** | Opus audio codec |
+| **EiBi** | Shortwave broadcast schedules for live station bookmarks |
+| **Leaflet, OpenStreetMap & CARTO** | Map rendering and tiles |
+| **Braille Institute** | Atkinson Hyperlegible typeface |
 | **Claude (Anthropic)** | AI coding and development assistant |
-| **Expo & React Native** | Cross-platform app framework |
-| **Leaflet.js** | Open-source mapping library |
-| **Google Fonts** | Nixie One & Atkinson Hyperlegible typefaces |
+| **Expo, React Native, Hermes, Skia, Reanimated, Gesture Handler, OkHttp** | App framework and native stack |
 
 ---
 
