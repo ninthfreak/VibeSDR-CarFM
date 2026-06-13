@@ -969,7 +969,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
    *  converter and the very next packet is already correct. */
   private func convertTo48k(_ inBuf: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
     guard let fmt = audioFormat else { return nil }
-    if inBuf.format.sampleRate == fmt.sampleRate { return inBuf }
+    // Only skip conversion when BOTH rate and channel count match — a 48 kHz MONO
+    // input (OWRX WFM HD audio) has the engine's rate but not its stereo layout;
+    // returning it unconverted scheduled a mono buffer on the stereo node → crash.
+    if inBuf.format.sampleRate == fmt.sampleRate && inBuf.format.channelCount == fmt.channelCount { return inBuf }
     if converter == nil || converterInFmt != inBuf.format {
       converter      = AVAudioConverter(from: inBuf.format, to: fmt)
       converterInFmt = inBuf.format
