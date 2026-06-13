@@ -8,13 +8,17 @@ import { useTheme } from '../contexts/ThemeContext';
 interface ModeSelectorProps {
   visible:  boolean;
   current:  Mode;
+  /** Gated demodulator list (OWRX reports its own, incl. WFM/digital). When
+   *  absent, the default UberSDR MODES are shown. */
+  modes?:   { id: string; label: string }[];
   onSelect: (mode: Mode) => void;
   onClose:  () => void;
 }
 
-export default function ModeSelector({ visible, current, onSelect, onClose }: ModeSelectorProps) {
+export default function ModeSelector({ visible, current, modes, onSelect, onClose }: ModeSelectorProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
+  const list = modes && modes.length ? modes : MODES.map(m => ({ id: m, label: m.toUpperCase() }));
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
@@ -24,24 +28,24 @@ export default function ModeSelector({ visible, current, onSelect, onClose }: Mo
           DEMODULATOR
         </Text>
         <View style={st.grid}>
-          {MODES.map(m => (
+          {list.map(m => (
             <TouchableOpacity
-              key={m}
+              key={m.id}
               style={[
                 st.btn,
                 { borderColor: isWhite ? 'rgba(255,255,255,0.20)' : 'rgba(80,50,0,0.40)',
                   paddingVertical: isWhite ? 12 : 10 },
-                m === current && { backgroundColor: t.btnActiveBg, borderColor: t.btnActiveBdr },
+                m.id === current && { backgroundColor: t.btnActiveBg, borderColor: t.btnActiveBdr },
               ]}
-              onPress={() => { onSelect(m); onClose(); }}
+              onPress={() => { onSelect(m.id as Mode); onClose(); }}
             >
               <Text style={[
                 st.btnText,
                 { fontFamily: t.font, fontSize: isWhite ? 15 : 14,
                   color: isWhite ? 'rgba(255,255,255,0.55)' : 'rgba(150,100,30,0.70)' },
-                m === current && { color: t.btnActiveText },
+                m.id === current && { color: t.btnActiveText },
               ]}>
-                {m.toUpperCase()}
+                {m.label.toUpperCase()}
               </Text>
             </TouchableOpacity>
           ))}

@@ -39,7 +39,7 @@ import type { RootStackParamList }     from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { createBackend } from '../services/UberSDRAdapter';
-import { filterEdgeMax, type SDRBackend, type ProfileInfo } from '../services/SDRBackend';
+import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind,
@@ -320,6 +320,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [connected, setConnected] = useState(false);
   const [profiles, setProfiles]   = useState<ProfileInfo[]>([]);  // OWRX only
   const [activeProfileId, setActiveProfileId] = useState<string | undefined>(undefined);
+  const [serverModes, setServerModes] = useState<BackendMode[]>([]);  // OWRX gated demod list
   const [status, setStatus]       = useState<SDRStatus>({
     frequency: 14_074_000, mode: 'usb',
     bandwidthLow: -3000, bandwidthHigh: 3000,
@@ -1222,6 +1223,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onStatus:     (s) => { if (!destroyed.current) setStatus(s); },
       onProfiles:   (list) => { if (!destroyed.current) setProfiles(list); },
+      onModes:      (list) => { if (!destroyed.current) setServerModes(list); },
       onSpectrum:   (newBins, s) => {
         if (destroyed.current) return;
         // Waterfall/spectrum render imperatively — no React state per frame.
@@ -2471,6 +2473,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       <ModeSelector
         visible={modeSelOpen}
         current={status.mode}
+        modes={route.params.serverType === 'owrx' ? serverModes : undefined}
         onSelect={onMode}
         onClose={() => setModeSelOpen(false)}
       />

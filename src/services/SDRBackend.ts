@@ -23,6 +23,13 @@ export interface ProfileInfo {
   bwHz?:     number;
 }
 
+/** A demodulator the backend offers (OWRX reports these; UI gates the picker). */
+export interface BackendMode {
+  id:    string;            // wire modulation name (usb, wfm, dmr, dab…)
+  label: string;            // display name ("Broadcast FM")
+  digital?: boolean;        // true for DMR/DStar/DAB/etc. (no SSB sideband concept)
+}
+
 export interface BackendCapabilities {
   /** OWRX: true (profile pill). UberSDR/Kiwi: false. */
   profiles: boolean;
@@ -89,6 +96,8 @@ export interface BackendCallbacks extends SDRCallbacks {
   onSMeter?: (rssiDbm: number) => void;
   /** OWRX: profile list arrived/changed. */
   onProfiles?: (list: ProfileInfo[]) => void;
+  /** OWRX: server's available demodulators — gate the mode picker to these. */
+  onModes?: (list: BackendMode[]) => void;
 }
 
 export type { SDRStatus, SDRMode, SDRCallbacks };

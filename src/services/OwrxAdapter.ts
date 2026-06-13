@@ -62,7 +62,8 @@ export class OwrxAdapter implements SDRBackend {
   // server/profile state
   private cfg: OwrxConfig | null = null;
   private profiles: ProfileInfo[] = [];
-  private modes: string[] | null = null;     // server-reported mode list (gating)
+  private modes: string[] | null = null;     // server-reported mode ids (gating)
+  private serverModes: { id: string; name: string; digital: boolean; bandpass?: { low_cut: number; high_cut: number } }[] = [];
   private serverVersion = '';
 
   // tuned state (absolute Hz / internal model)
@@ -156,7 +157,18 @@ export class OwrxAdapter implements SDRBackend {
     switch (json.type) {
       case 'config':   this.onConfig(json.value || {}); break;
       case 'profiles': this.onProfiles(json.value || []); break;
-      case 'modes':    this.modes = (json.value || []).map((m: any) => m.modulation ?? m.id ?? m); break;
+      case 'modes': {
+        const arr = (json.value || []) as any[];
+        this.serverModes = arr.map((m) => ({
+          id: m.modulation ?? m.id ?? String(m),
+          name: m.name ?? String(m.modulation ?? m.id ?? m).toUpperCase(),
+          digital: (m.type ?? 'analog') !== 'analog',
+          bandpass: m.bandpass,
+        }));
+        this.modes = this.serverModes.map((m) => m.id);
+        this.cb.onModes?.(this.serverModes.map((m) => ({ id: m.id, label: m.name, digital: m.digital })));
+        break;
+      }
       case 'smeter':   if (typeof json.value === 'number') this.cb.onSMeter?.(json.value); break;
       case 'sdr_error':
       case 'demodulator_error': this.cb.onError(String(json.value ?? 'OpenWebRX error')); break;
@@ -277,15 +289,19 @@ export class OwrxAdapter implements SDRBackend {
   private sendDemod(): void {
     if (!this.started || !this.cfg) return;
     const offset = this.freq - this.cfg.centerFreq;
-    let mod = MODE_TO_WIRE[this.mode] ?? 'am';
+    // The mode may be a known SDRMode (mapped) or a server modulation passed
+    // straight through (wfm, dmr, dab, …) selected from the gated picker.
+    let mod = MODE_TO_WIRE[this.mode] ?? String(this.mode);
     if (this.modes && !this.modes.includes(mod)) {
       if (mod === 'sam') mod = 'am';                 // clamp per brief §4
       else if (mod === 'nfm' && this.modes.includes('fm')) mod = 'fm';
     }
-    this.send({ type: 'dspcontrol', params: {
-      low_cut: this.bwLow, high_cut: this.bwHigh,
+    const params: Record<string, number | string> = {
       offset_freq: Math.round(offset), mod, squelch_level: -150,
-    } });
+    };
+    // Broadcast/wide FM bandwidth is server-controlled — don't force cuts.
+    if (mod !== 'wfm') { params.low_cut = this.bwLow; params.high_cut = this.bwHigh; }
+    this.send({ type: 'dspcontrol', params });
   }
 
   tune(frequency: number, mode?: SDRMode): void {
@@ -323,7 +339,14 @@ export class OwrxAdapter implements SDRBackend {
     this.freq = frequency; if (mode) this.mode = mode;
   }
 
-  setMode(mode: SDRMode): void { this.mode = mode; this.sendDemod(); this.cb.onStatus(this.getStatus()); }
+  setMode(mode: SDRMode): void {
+    this.mode = mode;
+    // Adopt the server's default passband for this demodulator, if known.
+    const info = this.serverModes.find((m) => m.id === (mode as string));
+    if (info?.bandpass) { this.bwLow = info.bandpass.low_cut; this.bwHigh = info.bandpass.high_cut; }
+    this.sendDemod();
+    this.cb.onStatus(this.getStatus());
+  }
 
   setBandwidth(low: number, high: number): void {
     this.bwLow = low; this.bwHigh = high; this.sendDemod(); this.cb.onStatus(this.getStatus());
