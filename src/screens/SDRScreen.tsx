@@ -135,14 +135,16 @@ function parseVoiceFreq(q: string): { hz: number; mode?: string } | null {
   const lower = q.toLowerCase();
   const modeM = lower.match(/\b(usb|lsb|sam|am|nfm|fm|cwu|cwl|cw)\b/);
   const mode  = modeM ? (modeM[1] === 'cw' ? 'cwu' : modeM[1]) : undefined;
-  const numM  = lower.match(/(\d+(?:[.,]\d+)?)\s*(mhz|khz|hz|m|k)?/);
+  // NB: only spell out units (mhz/khz/hz). A bare "m"/"k" is NOT treated as a
+  // unit — "20m"/"40m" are ham *bands* (metres), not 20 MHz; band routing below.
+  const numM  = lower.match(/(\d+(?:[.,]\d+)?)\s*(mhz|khz|hz)?/);
   if (!numM) return null;
   const n = parseFloat(numM[1].replace(',', '.'));
   if (Number.isNaN(n)) return null;
   const unit = numM[2];
   let hz: number;
-  if (unit === 'mhz' || unit === 'm')      hz = n * 1e6;
-  else if (unit === 'khz' || unit === 'k') hz = n * 1e3;
+  if (unit === 'mhz')      hz = n * 1e6;
+  else if (unit === 'khz') hz = n * 1e3;
   else if (unit === 'hz')                  hz = n;
   else                                     hz = n < 30 ? n * 1e6 : n * 1e3;
   hz = Math.round(hz);
@@ -156,15 +158,71 @@ function parseVoiceFreq(q: string): { hz: number; mode?: string } | null {
 function resolveVoiceQuery(
   q: string, bms: ServerBookmark[], bands: ServerBand[],
 ): { hz: number; mode: string | null; isBand: boolean } | null {
-  const f = parseVoiceFreq(q);
-  if (f) return { hz: f.hz, mode: f.mode ?? null, isBand: false };
+  const lower = q.toLowerCase();
+  // "N metre" amateur band — match the band by its wavelength label directly,
+  // ahead of the fuzzy search. This is robust to Siri mishearing "ham" as "hand"
+  // (we key off the number) and stops a "20 MHz" bookmark like WWV from winning
+  // over the 20m band (bookmarks otherwise always rank before bands). Excludes a
+  // bare "20 MHz"/"20 mhz" (the m must be metres, not a MHz unit prefix).
+  // A spoken mode anywhere in the phrase ("7150 lower sideband", "40m upper
+  // side band") — parseVoiceMode knows every synonym; it overrides band defaults.
+  const spokenMode = parseVoiceMode(q);
+  // CB / "citizens band" — the server's band label is usually just "11m", so the
+  // word "CB" alone finds nothing. Map it onto the 11m band (by label or the
+  // 26.9–27.4 MHz range) so "CB band" and "11m band" both work.
+  if (/\b(c\.?\s?b\.?|citizens?\s*band)\b/i.test(q)) {
+    const band = bands.find((b) => {
+      const l = (b.label || '').toLowerCase();
+      return l.includes('cb') || l.includes('11m') ||
+             ((b.start || 0) <= 27000000 && (b.end || 0) >= 26960000);
+    });
+    if (band) return { hz: band.start, mode: spokenMode ?? band.mode ?? null, isBand: true };
+  }
+  // "N metre" amateur band — match the band by its wavelength label directly,
+  // ahead of the fuzzy search. This is robust to Siri mishearing "ham" as "hand"
+  // (we key off the number) and stops a "20 MHz" bookmark like WWV from winning
+  // over the 20m band (bookmarks otherwise always rank before bands). Excludes a
+  // bare "20 MHz"/"20 mhz" (the m must be metres, not a MHz unit prefix).
+  const meterM = lower.match(/\b(\d{1,4})\s*m(?:et(?:er|re)s?)?\b/);
+  if (meterM && !/\b\d+\s*mhz\b/.test(lower)) {
+    const n = meterM[1];
+    const band = bands.find((b) => {
+      const l = (b.label || '').toLowerCase().replace(/\s+/g, '');
+      return l === `${n}m` || l.startsWith(`${n}m`);
+    });
+    if (band) return { hz: band.start, mode: spokenMode ?? band.mode ?? null, isBand: true };
+  }
   const norm = q.replace(/\b(amateur|voice|ssb|phone)\b/gi, 'ham');
-  const res = searchStations(bms, bands, norm, 1);
-  if (!res.length) return null;
-  const r = res[0];
-  if (r.isBand && r.band) return { hz: r.band.start, mode: r.band.mode ?? null, isBand: true };
-  if (r.bm)               return { hz: r.bm.frequency, mode: r.bm.mode ?? null, isBand: false };
-  return null;
+  const bandSearch = () => {
+    const res = searchStations(bms, bands, norm, 1);
+    if (!res.length) return null;
+    const r = res[0];
+    if (r.isBand && r.band) return { hz: r.band.start, mode: spokenMode ?? r.band.mode ?? null, isBand: true };
+    if (r.bm)               return { hz: r.bm.frequency, mode: spokenMode ?? r.bm.mode ?? null, isBand: false };
+    return null;
+  };
+  // Only treat the phrase as a numeric tune when it's *purely* a frequency:
+  // a number + optional unit + optional mode words, nothing else. Strip the freq
+  // units AND every spoken-mode phrase — crucially WITHOUT word boundaries and
+  // with \s* between words, so Siri's mashed forms ("lowersideband", "side band")
+  // are all removed; otherwise "7150 lowersideband" keeps letters, gets routed to
+  // the band search, and 7150 (inside 40m) snaps to the band start 7000. If any
+  // letters survive it's a name ("BBC Radio 5", "20m ham band") → search first.
+  const residue = lower
+    // Remove numbers AND any trailing unit first — even glued ("909000hz",
+    // "7150khz"), which a \b-anchored unit strip would miss.
+    .replace(/\d+(?:[.,]\d+)?\s*(?:mhz|khz|hz)?/g, ' ')
+    .replace(/(?:upper|lower)\s*side\s*band|side\s*band|synchron\w*(?:\s*(?:a\.?m|amplitude))?|amplitude\s*modulation|frequency\s*modulation|narrow\s*f\.?m|continuous\s*wave|\b(?:usb|lsb|sam|am|nfm|fm|cwu|cwl|cw|morse)\b/g, ' ')
+    .replace(/[^a-z]/g, '');
+  if (residue.length === 0) {
+    const f = parseVoiceFreq(q);
+    if (f) return { hz: f.hz, mode: spokenMode ?? f.mode ?? null, isBand: false };
+    return bandSearch();
+  }
+  const b = bandSearch();
+  if (b) return b;
+  const f = parseVoiceFreq(q);
+  return f ? { hz: f.hz, mode: spokenMode ?? f.mode ?? null, isBand: false } : null;
 }
 
 /** Spoken demodulator with synonyms → SDRMode. "synchronous AM"/"SAM"→sam,
@@ -1071,20 +1129,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       (e: { frequency: number; mode?: string | null; isBand?: boolean }) => {
         onSearchTuneRef.current?.(e.frequency, e.mode ?? null, !!e.isBand);
       });
-    // Siri voice command — native passes the spoken query + kind ('tune' default,
-    // or 'step'). JS resolves and applies it (tune reuses searchStations + band
-    // mode/step; step snaps to the nearest supported rate).
+    // Siri voice command — native passes the spoken text + kind; JS resolves and
+    // applies (tune: frequency/bookmark/band via searchStations + band mode/step;
+    // mode: synonyms; step: nearest supported rate).
     const subVoice = emitter.addListener('VibeVoiceQuery', (e: { query: string; kind?: string }) => {
-      if (e.kind === 'step') {
-        const s = parseVoiceStep(e.query);
-        if (s != null) setStep(s);
-        return;
-      }
-      if (e.kind === 'mode') {
-        const m = parseVoiceMode(e.query);
-        if (m) onModeRef.current?.(m);
-        return;
-      }
+      if (e.kind === 'step') { const s = parseVoiceStep(e.query); if (s != null) setStep(s); return; }
+      if (e.kind === 'mode') { const m = parseVoiceMode(e.query); if (m) onModeRef.current?.(m); return; }
       const r = resolveVoiceQuery(e.query, vtsBookmarks.current, searchBandsRef.current);
       if (r) onSearchTuneRef.current?.(r.hz, r.mode, r.isBand, true);
     });
@@ -1758,12 +1808,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!connected || pendingVoiceDone.current) return;
     pendingVoiceDone.current = true;
-    VibePowerModule?.getPendingVoiceQuery?.().then((q: string | null) => {
-      if (!q) return;
-      setTimeout(() => {
-        const r = resolveVoiceQuery(q, vtsBookmarks.current, searchBandsRef.current);
-        if (r) onSearchTuneRef.current?.(r.hz, r.mode, r.isBand, true);
-      }, 1500);  // bookmarks land shortly after connect
+    VibePowerModule?.getPendingVoiceQuery?.().then((json: string | null) => {
+      if (!json) return;
+      let cmd: { kind?: string; query?: string };
+      try { cmd = JSON.parse(json); } catch { return; }
+      const q = cmd.query ?? '';
+      setTimeout(() => {   // bookmarks land shortly after connect
+        if (cmd.kind === 'step') { const s = parseVoiceStep(q); if (s != null) setStep(s); }
+        else if (cmd.kind === 'mode') { const m = parseVoiceMode(q); if (m) onModeRef.current?.(m); }
+        else {
+          const r = resolveVoiceQuery(q, vtsBookmarks.current, searchBandsRef.current);
+          if (r) onSearchTuneRef.current?.(r.hz, r.mode, r.isBand, true);
+        }
+      }, 1500);
     }).catch(() => {});
   }, [connected]);
   const [vtsNotif,        setVtsNotif]        = useState<VtsNotifData | null>(null);
