@@ -1,9 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
-  Modal, Pressable, StyleSheet, Text, TouchableOpacity, View,
+  Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { Mode, MODES } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
+
+// Common analog/voice demodulators shown as buttons; everything else the server
+// offers (digital, decoders, sondes…) goes into the in-popup dropdown.
+const COMMON_IDS = ['nfm', 'fm', 'wfm', 'am', 'sam', 'lsb', 'usb', 'cw', 'cwu', 'cwl', 'data'];
 
 interface ModeSelectorProps {
   visible:  boolean;
@@ -18,7 +22,15 @@ interface ModeSelectorProps {
 export default function ModeSelector({ visible, current, modes, onSelect, onClose }: ModeSelectorProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
+  const [moreOpen, setMoreOpen] = useState(false);
+
   const list = modes && modes.length ? modes : MODES.map(m => ({ id: m, label: m.toUpperCase() }));
+  const common = list.filter(m => COMMON_IDS.includes(m.id.toLowerCase()));
+  const others = list.filter(m => !COMMON_IDS.includes(m.id.toLowerCase()));
+  const currentInOthers = others.find(m => m.id === current);
+
+  const pick = (id: string) => { onSelect(id as Mode); onClose(); };
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
@@ -28,7 +40,7 @@ export default function ModeSelector({ visible, current, modes, onSelect, onClos
           DEMODULATOR
         </Text>
         <View style={st.grid}>
-          {list.map(m => (
+          {common.map(m => (
             <TouchableOpacity
               key={m.id}
               style={[
@@ -37,7 +49,7 @@ export default function ModeSelector({ visible, current, modes, onSelect, onClos
                   paddingVertical: isWhite ? 12 : 10 },
                 m.id === current && { backgroundColor: t.btnActiveBg, borderColor: t.btnActiveBdr },
               ]}
-              onPress={() => { onSelect(m.id as Mode); onClose(); }}
+              onPress={() => pick(m.id)}
             >
               <Text style={[
                 st.btnText,
@@ -50,6 +62,40 @@ export default function ModeSelector({ visible, current, modes, onSelect, onClos
             </TouchableOpacity>
           ))}
         </View>
+
+        {/* Combo dropdown: all the digital / decoder modes the server offers */}
+        {others.length > 0 && (
+          <View style={st.moreWrap}>
+            <TouchableOpacity
+              style={[st.moreHead, { borderColor: t.btnBorder },
+                      currentInOthers && { borderColor: t.btnActiveBdr, backgroundColor: t.btnActiveBg }]}
+              onPress={() => setMoreOpen(o => !o)}
+              activeOpacity={0.8}>
+              <Text style={[st.moreHeadText, { fontFamily: t.font },
+                            { color: currentInOthers ? t.btnActiveText : t.btnText }]} numberOfLines={1}>
+                {currentInOthers ? currentInOthers.label.toUpperCase() : `DIGITAL / DECODERS (${others.length})`}
+              </Text>
+              <Text style={[st.moreChevron, { color: t.btnText }]}>{moreOpen ? '▴' : '▾'}</Text>
+            </TouchableOpacity>
+            {moreOpen && (
+              <ScrollView style={[st.moreList, { borderColor: t.btnBorder }]} keyboardShouldPersistTaps="handled">
+                {others.map(m => (
+                  <TouchableOpacity
+                    key={m.id}
+                    style={[st.moreItem, { borderBottomColor: t.barBorder }]}
+                    onPress={() => pick(m.id)}
+                    activeOpacity={0.7}>
+                    <Text style={[st.moreItemText, { fontFamily: t.font },
+                                  { color: m.id === current ? t.btnActiveText : t.btnText }]}>
+                      {m.id === current ? '✓ ' : ''}{m.label.toUpperCase()}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        )}
+
         <TouchableOpacity
           style={[st.closeBtn, { borderColor: t.btnBorder }]}
           onPress={onClose}
@@ -75,6 +121,16 @@ const st = StyleSheet.create({
     borderWidth: 1, borderRadius: 3, paddingHorizontal: 4, alignItems: 'center',
   },
   btnText:      { textAlign: 'center' },
+  moreWrap:     { marginTop: 12 },
+  moreHead: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderWidth: 1, borderRadius: 3, paddingVertical: 10, paddingHorizontal: 12,
+  },
+  moreHeadText: { fontSize: 13, flex: 1 },
+  moreChevron:  { fontSize: 13, marginLeft: 8 },
+  moreList:     { marginTop: 4, maxHeight: 260, borderWidth: 1, borderRadius: 3 },
+  moreItem:     { paddingVertical: 11, paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  moreItemText: { fontSize: 14 },
   closeBtn: {
     marginTop: 14, alignSelf: 'center', borderWidth: 1,
     borderRadius: 3, paddingVertical: 7, paddingHorizontal: 24,
