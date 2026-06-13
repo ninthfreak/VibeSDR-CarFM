@@ -126,6 +126,7 @@ export interface MenuSheetProps {
   profiles?:        { id: string; name: string }[];
   activeProfileId?: string;
   onSelectProfile?: (id: string) => void;
+  serverType?:      string;   // 'ubersdr' | 'owrx' | 'kiwi' — picks the footer logo
   searchBookmarks?: ServerBookmark[];
   searchBands?:     ServerBand[];
   onSearchTune?:    (hz: number, mode?: string | null, isBand?: boolean) => void;
@@ -199,6 +200,7 @@ export interface MenuSheetProps {
 // user can see what they're connected to (KiwiSDR/OpenWebRX to come).
 const SERVER_LOGOS: Record<string, any> = {
   ubersdr: require('../../assets/logo_ubersdr.png'),
+  owrx:    require('../../assets/logo_owrx.png'),
 };
 
 // Accessibility skin (reference body.lsv-a11y) — the single style going
@@ -398,7 +400,7 @@ export default function MenuSheet({
   hapticsEnabled = false, onHaptics,
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
-  profiles = [], activeProfileId, onSelectProfile,
+  profiles = [], activeProfileId, onSelectProfile, serverType = 'ubersdr',
   searchBookmarks = [], searchBands = [], onSearchTune,
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks,
@@ -1260,7 +1262,7 @@ export default function MenuSheet({
                 <Text style={styles.footerAboutHint}>ABOUT</Text>
               </TouchableOpacity>
               <View style={styles.footerServer}>
-                <Image source={SERVER_LOGOS.ubersdr} style={styles.footerLogo} resizeMode="contain" />
+                <Image source={SERVER_LOGOS[serverType] ?? SERVER_LOGOS.ubersdr} style={styles.footerLogo} resizeMode="contain" />
                 <View>
                   <Text style={styles.footerServerName}>UberSDR</Text>
                   {serverVersion ? (

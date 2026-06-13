@@ -2326,6 +2326,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Menu sheet */}
       <MenuSheet
         visible={menuOpen}
+        serverType={route.params.serverType ?? 'ubersdr'}
         profiles={profiles}
         activeProfileId={activeProfileId}
         onSelectProfile={(id) => { client.current?.selectProfile?.(id); setActiveProfileId(id); }}

@@ -10,6 +10,7 @@
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		AA000001000000000000AAC3 /* artwork_base.png in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAC1 /* artwork_base.png */; };
 		AA000001000000000000AAC4 /* logo_ubersdr.png in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAC2 /* logo_ubersdr.png */; };
+		AA000001000000000000AAD4 /* logo_owrx.png in Resources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAD2 /* logo_owrx.png */; };
 		348205C0D459110F2ED2BA3D /* libPods-VibeSDR.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BA976CDAEC029F7C8C1E8873 /* libPods-VibeSDR.a */; };
 		3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */; };
 		59A08D71697B2308CF571DCA /* ExpoModulesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD80C701468F7B7CD5EBF40E /* ExpoModulesProvider.swift */; };
@@ -26,6 +27,7 @@
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = VibeSDR/Images.xcassets; sourceTree = "<group>"; };
 		AA000001000000000000AAC1 /* artwork_base.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = artwork_base.png; path = VibeSDR/artwork_base.png; sourceTree = "<group>"; };
 		AA000001000000000000AAC2 /* logo_ubersdr.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = logo_ubersdr.png; path = VibeSDR/logo_ubersdr.png; sourceTree = "<group>"; };
+		AA000001000000000000AAD2 /* logo_owrx.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = logo_owrx.png; path = VibeSDR/logo_owrx.png; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = VibeSDR/Info.plist; sourceTree = "<group>"; };
 		5E9EF05888A2A290F1181236 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = VibeSDR/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		A4E2299D81CB8EA18B6F9962 /* Pods-VibeSDR.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-VibeSDR.release.xcconfig"; path = "Target Support Files/Pods-VibeSDR/Pods-VibeSDR.release.xcconfig"; sourceTree = "<group>"; };
@@ -66,6 +68,7 @@
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				AA000001000000000000AAC1 /* artwork_base.png */,
 				AA000001000000000000AAC2 /* logo_ubersdr.png */,
+				AA000001000000000000AAD2 /* logo_owrx.png */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */,
 				5E9EF05888A2A290F1181236 /* PrivacyInfo.xcprivacy */,
@@ -212,6 +215,7 @@
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 				AA000001000000000000AAC3 /* artwork_base.png in Resources */,
 				AA000001000000000000AAC4 /* logo_ubersdr.png in Resources */,
+				AA000001000000000000AAD4 /* logo_owrx.png in Resources */,
 				3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */,
 				A9F1D878FBB71E5FB735A713 /* PrivacyInfo.xcprivacy in Resources */,
 			);
