@@ -955,7 +955,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       MPNowPlayingInfoPropertyIsLiveStream: true,
     ]
     if let art = npArtwork { info[MPMediaItemPropertyArtwork] = art }
-    MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    let center = MPNowPlayingInfoCenter.default()
+    center.nowPlayingInfo = info
+    // The lock-screen / Control-Center play-pause button and route arbitration
+    // (which device owns the AirPods) follow playbackState, NOT the playbackRate
+    // in the info dict. Without this the button springs back to ▶ on pause and
+    // iOS keeps grabbing shared AirPods from the Mac because it thinks we're
+    // still playing.
+    center.playbackState = (isMuted || dataSaverDisconnected) ? .paused : .playing
   }
 
   /** VTS-aware now-playing strings from JS (empty string clears). */
