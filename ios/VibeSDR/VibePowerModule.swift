@@ -46,7 +46,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // MARK: - RCTEventEmitter
 
   override func supportedEvents() -> [String]! {
-    return ["VibeTuned", "VibeMuted", "VibeWsText", "VibeSkip"]
+    return ["VibeTuned", "VibeMuted", "VibeWsText", "VibeSkip", "VibeCarConnected", "VibeCarTune"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
@@ -345,6 +345,13 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   @objc func setMediaSkipMode(_ mode: String) {
     skipMode = mode
+  }
+
+  /// Car browse tree (bookmarks + band plan) pushed from JS. Cached here for the
+  /// CarPlay scene (CPListTemplate) — inert until the CarPlay-audio entitlement
+  /// and App Store/TestFlight distribution are in place. See VibeCarPlay.swift.
+  @objc func setBrowseItems(_ json: String) {
+    VibeCarPlayData.shared.payloadJSON = json
   }
 
   @objc func setInstanceName(_ name: String) {
@@ -654,6 +661,27 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         }
       }
     }
+    // Car-audio route → gates band-aware auto mode/step on iPhone. Works through
+    // the normal media route (CarPlay or car Bluetooth) with no CarPlay
+    // entitlement; emits VibeCarConnected on every route change.
+    NotificationCenter.default.addObserver(
+      forName: AVAudioSession.routeChangeNotification, object: nil, queue: nil
+    ) { [weak self] _ in self?.emitCarConnected() }
+    emitCarConnected()
+  }
+
+  private func isCarAudioRoute() -> Bool {
+    return AVAudioSession.sharedInstance().currentRoute.outputs.contains {
+      $0.portType == .carAudio
+    }
+  }
+
+  private var lastCarConnected: Bool?
+  private func emitCarConnected() {
+    let connected = isCarAudioRoute()
+    if connected == lastCarConnected { return }   // de-dupe route-change spam
+    lastCarConnected = connected
+    sendEvent(withName: "VibeCarConnected", body: ["connected": connected])
   }
 
   private func startEngine() {
@@ -925,4 +953,21 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       return .success
     }
   }
+}
+
+/// Holds the car browse payload pushed from JS (bookmarks + band plan) so a
+/// future CarPlay scene (CPListTemplate) can render it. Inert today: VibeSDR
+/// ships as a dev-signed sideload, and CarPlay browsing needs Apple's
+/// `com.apple.developer.carplay-audio` entitlement + App Store/TestFlight
+/// distribution. When that lands, add a CPTemplateApplicationSceneDelegate that
+/// reads `payloadJSON` and calls `onTune` (wire it to emit "VibeCarTune" the
+/// same way Android Auto's onPlayFromMediaId does). Band-aware auto mode/step
+/// already works in the car today via the AVAudioSession car-audio route — it
+/// does NOT depend on this.
+final class VibeCarPlayData {
+  static let shared = VibeCarPlayData()
+  private init() {}
+  var payloadJSON: String = "{}"
+  /// Set by the CarPlay scene once it exists: (frequency, mode, isBand).
+  var onTune: ((Double, String?, Bool) -> Void)?
 }

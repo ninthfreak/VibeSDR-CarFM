@@ -121,7 +121,7 @@ export interface MenuSheetProps {
   onVtsPrev?:  () => void;
   searchBookmarks?: ServerBookmark[];
   searchBands?:     ServerBand[];
-  onSearchTune?:    (hz: number, mode?: string | null) => void;
+  onSearchTune?:    (hz: number, mode?: string | null, isBand?: boolean) => void;
   userBookmarks?:     UserBookmark[];
   currentFreq?:       number;
   currentMode?:       string;
@@ -574,7 +574,7 @@ export default function MenuSheet({
                         activeOpacity={0.7}
                         onPress={() => {
                           setSearchQuery('');
-                          if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode);
+                          if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode, true);
                           else if (r.bm) onSearchTune?.(r.bm.frequency, r.bm.mode);
                         }}
                       >

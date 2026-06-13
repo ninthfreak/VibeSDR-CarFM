@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Declares VibeSDR as an Android Auto media app (browsable Bookmarks +
+     Band Plan via VibeStreamService / MediaBrowserServiceCompat). -->
+<automotiveApp>
+    <uses name="media"/>
+</automotiveApp>

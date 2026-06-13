@@ -79,7 +79,7 @@ import {
   loadUserBookmarks, saveUserBookmarks, bookmarksForInstance, withoutInstance,
   exportBookmarksJSON, parseBookmarksJSON, mergeBookmarks, type UserBookmark,
 } from '../services/userBookmarks';
-import { getBandsAtRegion, type Band } from '../constants/bandPlan';
+import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -587,6 +587,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onModeRef      = useRef<((m: SDRMode) => void) | null>(null);
   const onFilterBothRef = useRef<((low: number, high: number) => void) | null>(null);
   const onVtsJumpRef   = useRef<((d: 'left' | 'right') => void) | null>(null);
+  const onSearchTuneRef = useRef<((hz: number, mode?: string | null, isBand?: boolean) => void) | null>(null);
 
   // ── Media skip mode: lock-screen ⏮⏭ tune by step or jump bookmarks ───────
   const [mediaSkip, setMediaSkip] = useState<'step' | 'bookmark'>('step');
@@ -603,6 +604,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     VibePowerModule?.setMediaSkipMode(mediaSkip);
   }, [mediaSkip, connected]);
+
+  // Car-connected flag (iOS car-audio route / Android Auto client) — read via a
+  // ref inside vtsCheck so band-crossing auto mode/step never re-creates the
+  // callback. Updated by the VibeCarConnected native event (see emitter below).
+  const carConnected = useRef(false);
 
   // Chat drawer doesn't fit landscape even on a 17 Pro Max (let alone SE) —
   // the button stays live for the unread pulse, but opening demands portrait.
@@ -927,6 +933,17 @@ export default function SDRScreen({ route, navigation }: Props) {
     const subSkip = emitter.addListener('VibeSkip', (e: { direction: string }) => {
       onVtsJumpRef.current?.(e.direction === 'prev' ? 'left' : 'right');
     });
+    // Car audio route / Android Auto client connect — gates band-aware auto
+    // mode/step (handheld use is never auto-switched).
+    const subCar = emitter.addListener('VibeCarConnected', (e: { connected: boolean }) => {
+      carConnected.current = !!e.connected;
+    });
+    // Car browse list pick (Android Auto / CarPlay) — tune via the shared
+    // onSearchTune path so band-aware mode/step + region logic stay in one place.
+    const subCarTune = emitter.addListener('VibeCarTune',
+      (e: { frequency: number; mode?: string | null; isBand?: boolean }) => {
+        onSearchTuneRef.current?.(e.frequency, e.mode ?? null, !!e.isBand);
+      });
     // Server-NR protocol messages arrive as text on the native audio WS
     const subWs = emitter.addListener('VibeWsText', (e: { text: string }) => {
       let msg: { type?: string; info?: Record<string, unknown> };
@@ -960,7 +977,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         setTimeout(() => setDspError(null), 4000);
       }
     });
-    return () => { sub.remove(); subMute.remove(); subSkip.remove(); subWs.remove(); };
+    return () => {
+      sub.remove(); subMute.remove(); subSkip.remove(); subWs.remove();
+      subCar.remove(); subCarTune.remove();
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1525,6 +1545,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     onModeRef.current      = onMode;
     onFilterBothRef.current = onFilterBoth;
     onVtsJumpRef.current   = onVtsJump;
+    onSearchTuneRef.current = onSearchTune;
   });
 
   // ── Share — deep link into this station (web-UI URL params; skin parity:
@@ -1615,7 +1636,31 @@ export default function SDRScreen({ route, navigation }: Props) {
     ];
     vtsBookmarks.current = merged;
     setSearchBookmarks(merged);
-  }, [serverBookmarks, userBookmarks, baseUrl]);
+    pushCarBrowse(merged);
+  }, [serverBookmarks, userBookmarks, baseUrl, ituRegion]);
+
+  // Push the car browse tree (Bookmarks + Band Plan folders) to the native
+  // media-browser service. Bookmarks come from the merged list; the band plan is
+  // region-deduped. Native caches it and serves Android Auto / CarPlay; a no-op
+  // until a car connects. mediaId encodes freq|mode|step|isBand for the tap.
+  const pushCarBrowse = useCallback((bookmarks: ServerBookmark[]) => {
+    const bandSeen = new Set<string>();
+    const bands = BAND_PLAN.filter((b: Band) => {
+      if (b.regions && b.regions.length && ituRegion && !b.regions.includes(ituRegion)) return false;
+      if (bandSeen.has(b.name)) return false;
+      bandSeen.add(b.name);
+      return true;
+    }).map((b: Band) => ({
+      name: b.name, frequency: b.lo, mode: b.mode ?? null, step: b.step ?? 0,
+    }));
+    const payload = {
+      bookmarks: bookmarks.map((b: ServerBookmark) => ({
+        name: b.name, frequency: b.frequency, mode: b.mode ?? null,
+      })),
+      bands,
+    };
+    VibePowerModule?.setBrowseItems?.(JSON.stringify(payload));
+  }, [ituRegion]);
 
   // ── User bookmark management (menu BOOKMARKS pane) ────────────────────────
   const persistUserBookmarks = useCallback((next: UserBookmark[]) => {
@@ -1713,6 +1758,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           showBandNotif(bands);
         }
       }
+      // Band-aware tuning on boundary crossing — CAR ONLY. Handheld tuning never
+      // auto-switches mode/step; this fires only when connected to a car.
+      if (carConnected.current) {
+        const d = bandTuneDefaults(hz, ituRegion);
+        if (d.mode && d.mode in MODE_BANDWIDTHS) onMode(d.mode);
+        if (d.step) setStep(d.step);
+      }
     }
     // Nearest station
     const nearest = findNearest(vtsBookmarks.current, hz);
@@ -1736,7 +1788,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       vtsKey.current++;
       setVtsNotif({ key: vtsKey.current, name: nearest.name, kind: 'station-on' });
     }
-  }, [ituRegion, showBandNotif]);
+  }, [ituRegion, showBandNotif, onMode]);
 
   // Watch the tuned frequency (debounced — the drum emits many per second)
   useEffect(() => {
@@ -1799,12 +1851,24 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onVtsNext = useCallback(() => onVtsJump('right'), [onVtsJump]);
 
   // Search result tap: tune (+mode when the bookmark has one) and close menu
-  const onSearchTune = useCallback((hz: number, mode?: string | null) => {
+  // Tune from a search/list tap. For an explicit BAND selection we also apply
+  // that band's demodulator + tune step (band-aware tuning) — a deliberate user
+  // action, so it applies handheld too. Bookmark taps keep the bookmark's own
+  // mode and leave the step untouched.
+  const onSearchTune = useCallback((hz: number, mode?: string | null, isBand?: boolean) => {
     setMenuOpen(false);
-    onTuneHz(Math.round(hz));
-    const m = mode?.toLowerCase();
-    if (m && m in MODE_BANDWIDTHS) onMode(m as SDRMode);
-  }, [onTuneHz, onMode]);
+    const target = Math.round(hz);
+    onTuneHz(target);
+    if (isBand) {
+      const d = bandTuneDefaults(target, ituRegion);
+      const m = d.mode ?? (mode?.toLowerCase() as SDRMode | undefined);
+      if (m && m in MODE_BANDWIDTHS) onMode(m);
+      if (d.step) setStep(d.step);
+    } else {
+      const m = mode?.toLowerCase();
+      if (m && m in MODE_BANDWIDTHS) onMode(m as SDRMode);
+    }
+  }, [onTuneHz, onMode, ituRegion]);
 
   // Menu INSTANCE row — ← BACK returns to the instance picker (it previously
   // fell back to just closing the menu). The ⟳ RECONNECT button was removed

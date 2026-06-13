@@ -4,7 +4,6 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.app.Service
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -12,15 +11,20 @@ import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
-import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.support.v4.media.MediaBrowserCompat
+import android.support.v4.media.MediaDescriptionCompat
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
+import androidx.car.app.connection.CarConnection
 import androidx.core.app.NotificationCompat
+import androidx.lifecycle.Observer
+import androidx.media.MediaBrowserServiceCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.modules.core.DeviceEventManagerModule
@@ -63,11 +67,15 @@ import kotlin.math.min
  *    the SAME session uuid (a fresh one orphans decoders/spectrum WS
  *    server-side — "no active audio session").
  */
-class VibeStreamService : Service() {
+class VibeStreamService : MediaBrowserServiceCompat() {
 
     companion object {
         const val CHANNEL_ID = "vibesdr_audio"
         const val NOTIF_ID = 1
+        // Media-browser node ids (Android Auto / CarPlay-style browse tree)
+        const val MEDIA_ROOT_ID = "vibesdr_root"
+        const val BOOKMARKS_ID = "bookmarks"
+        const val BANDS_ID = "bands"
         const val ACTION_PLAY = "com.vibesdr.app.PLAY"
         const val ACTION_PAUSE = "com.vibesdr.app.PAUSE"
         const val ACTION_STOP = "com.vibesdr.app.STOP"
@@ -163,6 +171,18 @@ class VibeStreamService : Service() {
     private var npArtwork: android.graphics.Bitmap? = null
     private var npArtworkType = ""
 
+    // ── Car browse tree (Android Auto) ───────────────────────────────────────
+    // Bookmarks + Band Plan lists pushed from JS (setBrowseItems) and served via
+    // MediaBrowserServiceCompat. Cached to prefs so a cold service start (Android
+    // Auto connecting before the app has run) still shows the last known list.
+    private data class BrowseItem(
+        val name: String, val freq: Long, val mode: String, val step: Long, val isBand: Boolean,
+    )
+    @Volatile private var browseBookmarks: List<BrowseItem> = emptyList()
+    @Volatile private var browseBands: List<BrowseItem> = emptyList()
+    private var carConnection: CarConnection? = null
+    private var carObserver: Observer<Int>? = null
+
     private var watchdog: Runnable? = null
     // Tune coalescing: the velocity drum can emit 20+ steps/s; one WS tune
     // per step thrashes radiod. Leading send + 80ms trailing timer.
@@ -179,6 +199,10 @@ class VibeStreamService : Service() {
         instance = this
         createNotificationChannel()
         setupMediaSession()
+        // Required so MediaBrowserServiceCompat can serve Android Auto / Wear.
+        sessionToken = mediaSession?.sessionToken
+        loadCachedBrowse()
+        startCarConnectionWatch()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -200,10 +224,9 @@ class VibeStreamService : Service() {
         return START_STICKY
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
-
     override fun onDestroy() {
         stopEngine()
+        stopCarConnectionWatch()
         mediaSession?.release()
         instance = null
         super.onDestroy()
@@ -926,6 +949,126 @@ class VibeStreamService : Service() {
         }
     }
 
+    // ── Car browse tree (MediaBrowserServiceCompat) ──────────────────────────
+
+    override fun onGetRoot(
+        clientPackageName: String, clientUid: Int, rootHints: Bundle?,
+    ): BrowserRoot {
+        // Any caller may browse — the tree is just public bookmarks + the band
+        // plan (no user data). Android Auto / Wear connect here.
+        return BrowserRoot(MEDIA_ROOT_ID, null)
+    }
+
+    override fun onLoadChildren(
+        parentId: String, result: Result<MutableList<MediaBrowserCompat.MediaItem>>,
+    ) {
+        val items = ArrayList<MediaBrowserCompat.MediaItem>()
+        when (parentId) {
+            MEDIA_ROOT_ID -> {
+                items.add(browsableFolder(BOOKMARKS_ID, "Bookmarks"))
+                items.add(browsableFolder(BANDS_ID, "Band Plan"))
+            }
+            BOOKMARKS_ID -> browseBookmarks.forEach { items.add(playableItem(it)) }
+            BANDS_ID -> browseBands.forEach { items.add(playableItem(it)) }
+        }
+        result.sendResult(items)
+    }
+
+    private fun browsableFolder(id: String, title: String): MediaBrowserCompat.MediaItem {
+        val desc = MediaDescriptionCompat.Builder().setMediaId(id).setTitle(title).build()
+        return MediaBrowserCompat.MediaItem(desc, MediaBrowserCompat.MediaItem.FLAG_BROWSABLE)
+    }
+
+    private fun playableItem(it: BrowseItem): MediaBrowserCompat.MediaItem {
+        val mhz = String.format(java.util.Locale.US, "%.3f MHz", it.freq / 1_000_000.0)
+        val sub = if (it.mode.isNotEmpty()) "$mhz · ${it.mode.uppercase()}" else mhz
+        val desc = MediaDescriptionCompat.Builder()
+            // id = freq|mode|step|isBand — parsed back in playFromBrowseId
+            .setMediaId("${it.freq}|${it.mode}|${it.step}|${if (it.isBand) 1 else 0}")
+            .setTitle(it.name)
+            .setSubtitle(sub)
+            .build()
+        return MediaBrowserCompat.MediaItem(desc, MediaBrowserCompat.MediaItem.FLAG_PLAYABLE)
+    }
+
+    private fun playFromBrowseId(mediaId: String?) {
+        val parts = mediaId?.split("|") ?: return
+        if (parts.size < 4) return
+        val freq = parts[0].toLongOrNull() ?: return
+        val mode = parts[1]
+        val isBand = parts[3] == "1"
+        emitEvent("VibeCarTune") {
+            it.putDouble("frequency", freq.toDouble())
+            it.putString("mode", mode.ifEmpty { null })
+            it.putBoolean("isBand", isBand)
+        }
+    }
+
+    /** JS pushes the browse payload ({bookmarks:[{name,frequency,mode}],
+     *  bands:[{name,frequency,mode,step}]}). Cached to prefs + Auto refreshed. */
+    fun setBrowseItemsNative(json: String) {
+        try {
+            val obj = JSONObject(json)
+            browseBookmarks = parseBrowseArr(obj.optJSONArray("bookmarks"), isBand = false)
+            browseBands = parseBrowseArr(obj.optJSONArray("bands"), isBand = true)
+            getSharedPreferences("vibesdr_browse", MODE_PRIVATE)
+                .edit().putString("payload", json).apply()
+            mainHandler.post {
+                notifyChildrenChanged(BOOKMARKS_ID)
+                notifyChildrenChanged(BANDS_ID)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "setBrowseItems parse failed: ${e.message}")
+        }
+    }
+
+    private fun parseBrowseArr(arr: org.json.JSONArray?, isBand: Boolean): List<BrowseItem> {
+        if (arr == null) return emptyList()
+        val out = ArrayList<BrowseItem>(arr.length())
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val name = o.optString("name")
+            val freq = o.optDouble("frequency", 0.0).toLong()
+            if (name.isEmpty() || freq <= 0) continue
+            out.add(BrowseItem(name, freq, o.optString("mode", ""), o.optLong("step", 0), isBand))
+        }
+        return out
+    }
+
+    private fun loadCachedBrowse() {
+        val json = getSharedPreferences("vibesdr_browse", MODE_PRIVATE)
+            .getString("payload", null) ?: return
+        try {
+            val obj = JSONObject(json)
+            browseBookmarks = parseBrowseArr(obj.optJSONArray("bookmarks"), isBand = false)
+            browseBands = parseBrowseArr(obj.optJSONArray("bands"), isBand = true)
+        } catch (_: Exception) {}
+    }
+
+    // ── Car-connected signal (Android Auto projection/native) ────────────────
+
+    private fun startCarConnectionWatch() {
+        try {
+            val cc = CarConnection(this)
+            val obs = Observer<Int> { type ->
+                val connected = type == CarConnection.CONNECTION_TYPE_PROJECTION ||
+                    type == CarConnection.CONNECTION_TYPE_NATIVE
+                emitEvent("VibeCarConnected") { it.putBoolean("connected", connected) }
+            }
+            cc.type.observeForever(obs)
+            carConnection = cc
+            carObserver = obs
+        } catch (e: Exception) {
+            Log.w(TAG, "CarConnection watch failed: ${e.message}")
+        }
+    }
+
+    private fun stopCarConnectionWatch() {
+        carObserver?.let { carConnection?.type?.removeObserver(it) }
+        carObserver = null
+        carConnection = null
+    }
+
     // ── Notification / MediaSession ──────────────────────────────────────────
 
     private fun nowPlayingTitle(): String {
@@ -1019,6 +1162,10 @@ class VibeStreamService : Service() {
                 override fun onStop() { stopEngine(); stopSelf() }
                 override fun onSkipToNext() { tuneByStep(+1) }
                 override fun onSkipToPrevious() { tuneByStep(-1) }
+                // Car browse-list pick → hand the tune to JS (owns region logic)
+                override fun onPlayFromMediaId(mediaId: String?, extras: Bundle?) {
+                    playFromBrowseId(mediaId)
+                }
             })
         }
         updatePlaybackState(PlaybackStateCompat.STATE_NONE)
