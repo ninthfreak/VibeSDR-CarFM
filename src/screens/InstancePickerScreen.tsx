@@ -38,6 +38,7 @@ import { Favourite, getFavourites, toggleFavourite } from '../services/favourite
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
 import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
 import PasswordModal from '../components/PasswordModal';
+import { VibePowerModule } from '../components/AudioPlayer';
 import { APP_VERSION } from '../constants/version';
 
 /** ISO 3166-1 alpha-2 → 🇬🇧-style emoji flag (regional indicators, no assets). */
@@ -64,6 +65,9 @@ export default function InstancePickerScreen({ navigation }: Props) {
   const [connecting,  setConnecting]    = useState(false);
   const [filter,      setFilter]        = useState('');
   const [defaultInst, setDefaultInst]   = useState<DefaultInstance | null>(null);
+  // Tell native the default-instance name (or '' = none) so the Siri "open and
+  // tune" intent can auto-connect, or prompt the user to set a default.
+  useEffect(() => { VibePowerModule?.setDefaultInstance?.(defaultInst?.name ?? ''); }, [defaultInst]);
   const [viewMode,    setViewModeState] = useState<ViewMode>('default');
   const [modeReady,   setModeReady]     = useState(false);
   const [sortMode,    setSortMode]      = useState<SortMode>('nearest');

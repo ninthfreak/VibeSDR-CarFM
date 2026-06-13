@@ -3,6 +3,7 @@ import AVFoundation
 import CoreLocation
 import MediaPlayer
 import UIKit
+import AppIntents
 
 // Classic RCT bridge module — accessible via NativeModules.VibePowerModule.
 // Owns the audio WebSocket natively so audio survives JS suspension (background).
@@ -47,10 +48,15 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   override func supportedEvents() -> [String]! {
     return ["VibeTuned", "VibeMuted", "VibeWsText", "VibeSkip", "VibeCarConnected", "VibeCarTune",
-            "VibeDataSaverDisconnect", "VibeDataSaverResume", "VibeSignal"]
+            "VibeDataSaverDisconnect", "VibeDataSaverResume", "VibeSignal", "VibeVoiceQuery"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
+
+  override init() {
+    super.init()
+    startVoiceObserver()
+  }
 
   // MARK: - State
 
@@ -364,6 +370,33 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   /// and App Store/TestFlight distribution are in place. See VibeCarPlay.swift.
   @objc func setBrowseItems(_ json: String) {
     VibeCarPlayData.shared.payloadJSON = json
+  }
+
+  // ── Siri voice control ───────────────────────────────────────────────────
+
+  /// JS pushes the default-instance name ('' = none) so the Siri intent can
+  /// auto-connect (or tell the user to set a default). Persisted in VibeVoice.
+  @objc func setDefaultInstance(_ name: String) { VibeVoice.setDefaultInstance(name) }
+
+  /// JS pushes whether the SDR is connected (app open + live), so the intent can
+  /// emit the command now vs stash it for a cold launch.
+  @objc func setVoiceConnected(_ connected: Bool) { VibeVoice.setConnected(connected) }
+
+  /// Cold-launch: JS reads the spoken query the intent stashed, once connected.
+  @objc func getPendingVoiceQuery(_ resolve: @escaping RCTPromiseResolveBlock,
+                                  rejecter _: @escaping RCTPromiseRejectBlock) {
+    resolve(VibeVoice.takePending())
+  }
+
+  /// Bridge the Siri intent (which runs separately) to JS via a notification.
+  private func startVoiceObserver() {
+    NotificationCenter.default.addObserver(
+      forName: VibeVoice.note, object: nil, queue: .main
+    ) { [weak self] n in
+      guard let q = n.userInfo?["query"] as? String else { return }
+      let kind = (n.userInfo?["kind"] as? String) ?? "tune"
+      self?.sendEvent(withName: "VibeVoiceQuery", body: ["query": q, "kind": kind])
+    }
   }
 
   @objc func setInstanceName(_ name: String) {
@@ -1099,4 +1132,99 @@ final class VibeCarPlayData {
   var payloadJSON: String = "{}"
   /// Set by the CarPlay scene once it exists: (frequency, mode, isBand).
   var onTune: ((Double, String?, Bool) -> Void)?
+}
+
+// MARK: - Siri voice control (App Intents)
+
+/// UserDefaults-backed glue between the Siri intents (which can run before/around
+/// the React layer) and JS. All resolution (frequency parse, bookmark/band match,
+/// step/mode synonyms) happens in JS (reusing searchStations); the intent only
+/// passes the spoken text + a kind. Live commands post a notification that
+/// VibePowerModule forwards to JS; cold-launch commands are stashed for JS to read
+/// after it connects to the default instance.
+enum VibeVoice {
+  static let note = Notification.Name("VibeVoiceCommand")
+  private static let d = UserDefaults.standard
+  private static let kPending = "vibeVoicePending"
+  private static let kDefault = "vibeDefaultInstance"
+  private static let kConnected = "vibeVoiceConnected"
+
+  static func setDefaultInstance(_ name: String) { d.set(name, forKey: kDefault) }
+  static func setConnected(_ c: Bool) { d.set(c, forKey: kConnected) }
+  static var hasDefault: Bool { !(d.string(forKey: kDefault) ?? "").isEmpty }
+  static var isConnected: Bool { d.bool(forKey: kConnected) }
+
+  /// Returns the Siri dialog. Emits now (app live) or stashes for cold launch.
+  static func handle(query: String, kind: String) -> String {
+    let q = query.trimmingCharacters(in: .whitespaces)
+    if isConnected {
+      NotificationCenter.default.post(name: note, object: nil,
+                                      userInfo: ["query": q, "kind": kind])
+      switch kind {
+      case "step": return "Setting step to \(q)"
+      case "mode": return "Switching to \(q)"
+      default:     return "Tuning to \(q)"
+      }
+    }
+    if hasDefault {
+      d.set(q, forKey: kPending)   // JS applies after it connects to the default
+      return kind == "tune" ? "Opening VibeSDR and tuning to \(q)" : "Opening VibeSDR"
+    }
+    return "No default instance set. Please set a default instance in VibeSDR to use this feature."
+  }
+
+  static func takePending() -> String? {
+    guard let q = d.string(forKey: kPending) else { return nil }
+    d.removeObject(forKey: kPending)
+    return q
+  }
+}
+
+@available(iOS 16.0, *)
+struct TuneIntent: AppIntent {
+  static var title: LocalizedStringResource = "Tune VibeSDR"
+  static var openAppWhenRun = true
+  @Parameter(title: "Station or frequency",
+             requestValueDialog: "What frequency or station?") var target: String
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    .result(dialog: IntentDialog(stringLiteral: VibeVoice.handle(query: target, kind: "tune")))
+  }
+}
+
+@available(iOS 16.0, *)
+struct StepIntent: AppIntent {
+  static var title: LocalizedStringResource = "Set VibeSDR step rate"
+  static var openAppWhenRun = true
+  @Parameter(title: "Step rate", requestValueDialog: "What step rate?") var rate: String
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    .result(dialog: IntentDialog(stringLiteral: VibeVoice.handle(query: rate, kind: "step")))
+  }
+}
+
+@available(iOS 16.0, *)
+struct ModeIntent: AppIntent {
+  static var title: LocalizedStringResource = "Set VibeSDR mode"
+  static var openAppWhenRun = true
+  @Parameter(title: "Demodulator", requestValueDialog: "Which mode?") var mode: String
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    .result(dialog: IntentDialog(stringLiteral: VibeVoice.handle(query: mode, kind: "mode")))
+  }
+}
+
+@available(iOS 16.0, *)
+struct VibeShortcuts: AppShortcutsProvider {
+  static var appShortcuts: [AppShortcut] {
+    AppShortcut(intent: TuneIntent(), phrases: [
+      "Tune \(.applicationName)",
+      "Tune in \(.applicationName)",
+    ], shortTitle: "Tune", systemImageName: "dot.radiowaves.left.and.right")
+    AppShortcut(intent: ModeIntent(), phrases: [
+      "Change \(.applicationName) mode",
+      "Set \(.applicationName) mode",
+    ], shortTitle: "Mode", systemImageName: "waveform")
+    AppShortcut(intent: StepIntent(), phrases: [
+      "Set \(.applicationName) step rate",
+      "Change \(.applicationName) step rate",
+    ], shortTitle: "Step", systemImageName: "arrow.left.and.right")
+  }
 }

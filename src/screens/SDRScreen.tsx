@@ -74,7 +74,7 @@ import {
   fetchBookmarks, fetchBands, findNearest, findNextBookmark,
   fmtBandFreq, deriveItuRegion, refreshBandSnr, getBandSnrDb, propCondition,
   fetchUiConfig, fetchReceiverInfo,
-  VTS_ON_HZ, type ServerBookmark, type ServerBand,
+  VTS_ON_HZ, searchStations, type ServerBookmark, type ServerBand,
   type ServerUiConfig, type ReceiverInfo,
 } from '../services/stations';
 import {
@@ -128,6 +128,83 @@ function nowUTCStr() {
 let _msgId = 0;
 function mkMsg(type: ChatMessage['type'], text: string, user?: string): ChatMessage {
   return { id: String(++_msgId), type, text, user, ts: nowUTCStr() };
+}
+
+// ── Voice (Siri) query resolution ───────────────────────────────────────────
+// Parse a spoken frequency: "7150", "7.15 MHz", "648 khz", "7150 usb". Bare
+// numbers ≥ 30 are kHz (7150 → 7150 kHz), < 30 are MHz (7.15 / 14 → MHz).
+function parseVoiceFreq(q: string): { hz: number; mode?: string } | null {
+  const lower = q.toLowerCase();
+  const modeM = lower.match(/\b(usb|lsb|sam|am|nfm|fm|cwu|cwl|cw)\b/);
+  const mode  = modeM ? (modeM[1] === 'cw' ? 'cwu' : modeM[1]) : undefined;
+  const numM  = lower.match(/(\d+(?:[.,]\d+)?)\s*(mhz|khz|hz|m|k)?/);
+  if (!numM) return null;
+  const n = parseFloat(numM[1].replace(',', '.'));
+  if (Number.isNaN(n)) return null;
+  const unit = numM[2];
+  let hz: number;
+  if (unit === 'mhz' || unit === 'm')      hz = n * 1e6;
+  else if (unit === 'khz' || unit === 'k') hz = n * 1e3;
+  else if (unit === 'hz')                  hz = n;
+  else                                     hz = n < 30 ? n * 1e6 : n * 1e3;
+  hz = Math.round(hz);
+  if (hz < MIN_HZ || hz > MAX_HZ) return null;
+  return { hz, mode };
+}
+
+/** Resolve a spoken query to a tune. Frequency first, else the bookmark/band
+ *  search (reusing searchStations). Band synonyms (amateur/voice → ham) are
+ *  normalised so "40m ham", "40m amateur", "40m voice" all hit the 40m band. */
+function resolveVoiceQuery(
+  q: string, bms: ServerBookmark[], bands: ServerBand[],
+): { hz: number; mode: string | null; isBand: boolean } | null {
+  const f = parseVoiceFreq(q);
+  if (f) return { hz: f.hz, mode: f.mode ?? null, isBand: false };
+  const norm = q.replace(/\b(amateur|voice|ssb|phone)\b/gi, 'ham');
+  const res = searchStations(bms, bands, norm, 1);
+  if (!res.length) return null;
+  const r = res[0];
+  if (r.isBand && r.band) return { hz: r.band.start, mode: r.band.mode ?? null, isBand: true };
+  if (r.bm)               return { hz: r.bm.frequency, mode: r.bm.mode ?? null, isBand: false };
+  return null;
+}
+
+/** Spoken demodulator with synonyms → SDRMode. "synchronous AM"/"SAM"→sam,
+ *  "lower side band"/"LSB"→lsb, "amplitude modulation"/"AM"→am, etc. Ordered so
+ *  the specific phrases win (sam before am, nfm before fm, sideband before am). */
+function parseVoiceMode(q: string): SDRMode | null {
+  const s = q.toLowerCase();
+  const map: [RegExp, SDRMode][] = [
+    [/synchron\w*\s*(a\.?m|amplitude)|\bsync\s*am\b|\bsam\b/, 'sam'],
+    [/upper\s*side\s*?band|\busb\b/, 'usb'],
+    [/lower\s*side\s*?band|\blsb\b/, 'lsb'],
+    [/narrow\w*\s*(f\.?m|frequency)|\bnfm\b/, 'nfm'],
+    [/frequency\s*modulation|\bf\.?m\b/, 'fm'],
+    [/amplitude\s*modulation|\ba\.?m\b/, 'am'],
+    [/\bcwl\b|cw\s*lower/, 'cwl'],
+    [/\bcwu\b|cw\s*upper|\bcw\b|morse|continuous\s*wave/, 'cwu'],
+  ];
+  for (const [re, m] of map) if (re.test(s) && m in MODE_BANDWIDTHS) return m as SDRMode;
+  return null;
+}
+
+/** Spoken step → nearest supported step (Hz). "100Hz"→100, "1kHz"/"1000"→1000. */
+function parseVoiceStep(q: string): number | null {
+  const f = parseVoiceFreq(q.toLowerCase().replace(/\bstep\b/g, ''));
+  // parseVoiceFreq clamps to the tuning range; a bare "100"/"500" wouldn't pass,
+  // so parse a plain Hz/kHz value here too.
+  let hz: number | null = null;
+  const m = q.toLowerCase().match(/(\d+(?:[.,]\d+)?)\s*(khz|hz|k)?/);
+  if (m) {
+    const n = parseFloat(m[1].replace(',', '.'));
+    if (!Number.isNaN(n)) hz = (m[2] === 'khz' || m[2] === 'k') ? n * 1000 : n;
+  }
+  if (hz == null && f) hz = f.hz;
+  if (hz == null) return null;
+  // snap to the nearest supported step
+  let best = STEPS[0], bestD = Infinity;
+  for (const s of STEPS) { const d = Math.abs(s - hz); if (d < bestD) { bestD = d; best = s; } }
+  return best;
 }
 
 /** RFC3339 server timestamp → "HHMMz" (falls back to now) */
@@ -619,7 +696,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onModeRef      = useRef<((m: SDRMode) => void) | null>(null);
   const onFilterBothRef = useRef<((low: number, high: number) => void) | null>(null);
   const onVtsJumpRef   = useRef<((d: 'left' | 'right') => void) | null>(null);
-  const onSearchTuneRef = useRef<((hz: number, mode?: string | null, isBand?: boolean) => void) | null>(null);
+  const onSearchTuneRef = useRef<((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean) => void) | null>(null);
 
   // ── Media skip mode: lock-screen ⏮⏭ tune by step or jump bookmarks ───────
   const [mediaSkip, setMediaSkip] = useState<'step' | 'bookmark'>('step');
@@ -647,6 +724,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     connectedRef.current = connected;
     if (connected) { VibePowerModule?.setReconnectFailed?.(false); setReconnectFailedUi(false); }
+    // Siri: when live, the intent emits the command now; otherwise it stashes it.
+    VibePowerModule?.setVoiceConnected?.(connected);
   }, [connected]);
 
   // Car-connected flag (iOS car-audio route / Android Auto client), updated by
@@ -994,6 +1073,23 @@ export default function SDRScreen({ route, navigation }: Props) {
       (e: { frequency: number; mode?: string | null; isBand?: boolean }) => {
         onSearchTuneRef.current?.(e.frequency, e.mode ?? null, !!e.isBand);
       });
+    // Siri voice command — native passes the spoken query + kind ('tune' default,
+    // or 'step'). JS resolves and applies it (tune reuses searchStations + band
+    // mode/step; step snaps to the nearest supported rate).
+    const subVoice = emitter.addListener('VibeVoiceQuery', (e: { query: string; kind?: string }) => {
+      if (e.kind === 'step') {
+        const s = parseVoiceStep(e.query);
+        if (s != null) setStep(s);
+        return;
+      }
+      if (e.kind === 'mode') {
+        const m = parseVoiceMode(e.query);
+        if (m) onModeRef.current?.(m);
+        return;
+      }
+      const r = resolveVoiceQuery(e.query, vtsBookmarks.current, searchBandsRef.current);
+      if (r) onSearchTuneRef.current?.(r.hz, r.mode, r.isBand, true);
+    });
     // Data saver dropped the stream — tear down the spectrum too (native already
     // closed the audio WS) and surface the reconnect prompt.
     const subDsOff = emitter.addListener('VibeDataSaverDisconnect', () => {
@@ -1043,7 +1139,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     });
     return () => {
       sub.remove(); subMute.remove(); subSig.remove(); subSkip.remove(); subWs.remove();
-      subCar.remove(); subCarTune.remove(); subDsOff.remove(); subDsOn.remove();
+      subCar.remove(); subCarTune.remove(); subVoice.remove(); subDsOff.remove(); subDsOn.remove();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1656,6 +1752,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   const vtsBookmarks = useRef<ServerBookmark[]>([]);
   const [searchBookmarks, setSearchBookmarks] = useState<ServerBookmark[]>([]);
   const [searchBands,     setSearchBands]     = useState<ServerBand[]>([]);
+  const searchBandsRef = useRef<ServerBand[]>([]);
+  useEffect(() => { searchBandsRef.current = searchBands; }, [searchBands]);
+  // Cold-launch Siri ("open VibeSDR and tune to …"): once connected + bookmarks
+  // loaded, apply the pending spoken query the native intent stashed.
+  const pendingVoiceDone = useRef(false);
+  useEffect(() => {
+    if (!connected || pendingVoiceDone.current) return;
+    pendingVoiceDone.current = true;
+    VibePowerModule?.getPendingVoiceQuery?.().then((q: string | null) => {
+      if (!q) return;
+      setTimeout(() => {
+        const r = resolveVoiceQuery(q, vtsBookmarks.current, searchBandsRef.current);
+        if (r) onSearchTuneRef.current?.(r.hz, r.mode, r.isBand, true);
+      }, 1500);  // bookmarks land shortly after connect
+    }).catch(() => {});
+  }, [connected]);
   const [vtsNotif,        setVtsNotif]        = useState<VtsNotifData | null>(null);
   const vtsKey            = useRef(0);
   const vtsLastStation    = useRef('');
@@ -1930,18 +2042,24 @@ export default function SDRScreen({ route, navigation }: Props) {
   // that band's demodulator + tune step (band-aware tuning) — a deliberate user
   // action, so it applies handheld too. Bookmark taps keep the bookmark's own
   // mode and leave the step untouched.
-  const onSearchTune = useCallback((hz: number, mode?: string | null, isBand?: boolean) => {
+  const onSearchTune = useCallback((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean) => {
     setMenuOpen(false);
     const target = Math.round(hz);
     onTuneHz(target);
+    const d = bandTuneDefaults(target, ituRegion);
+    const explicit = mode?.toLowerCase() as SDRMode | undefined;
     if (isBand) {
-      const d = bandTuneDefaults(target, ituRegion);
-      const m = d.mode ?? (mode?.toLowerCase() as SDRMode | undefined);
+      const m = d.mode ?? explicit;
       if (m && m in MODE_BANDWIDTHS) onMode(m);
       if (d.step) setStep(d.step);
-    } else {
-      const m = mode?.toLowerCase();
-      if (m && m in MODE_BANDWIDTHS) onMode(m as SDRMode);
+    } else if (voiceStep) {
+      // Voice/bookmark tune: explicit (spoken) mode wins, else the band default;
+      // and adopt the band step too (e.g. Radio Caroline → MW 9 kHz).
+      const m = (explicit && explicit in MODE_BANDWIDTHS) ? explicit : d.mode;
+      if (m && m in MODE_BANDWIDTHS) onMode(m);
+      if (d.step) setStep(d.step);
+    } else if (explicit && explicit in MODE_BANDWIDTHS) {
+      onMode(explicit);  // plain bookmark tap — mode only, step untouched
     }
   }, [onTuneHz, onMode, ituRegion]);
 
