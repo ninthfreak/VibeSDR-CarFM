@@ -266,6 +266,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         bypassPassword = password
         running = true
         muted = false
+        // Fresh session — clear any data-saver disconnect/countdown state.
+        dataSaverDisconnected = false
+        muteSinceMs = 0L
+        muteTick?.let { mainHandler.removeCallbacks(it) }; muteTick = null
+        lastArtworkKey = ""
         packetCount = 0
         lastPacketAt = SystemClock.elapsedRealtime()
         packetQueue.clear()
@@ -429,14 +434,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     private fun resumeFromDataSaver() {
         if (!dataSaverDisconnected) return
-        dataSaverDisconnected = false
-        muteSinceMs = 0L
-        lastPacketAt = SystemClock.elapsedRealtime()
-        openWs()
-        mainHandler.post {
-            updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
-            updateMetadataSession(); updateNotification()
-        }
+        // Don't reopen the old session — a partial reopen lands in a broken
+        // half-state. Hand off to JS for a full from-scratch reconnect (new uuid
+        // → fresh startAudioEngine, which clears our data-saver state). The flag
+        // stays set until then so the watchdog won't revive the stale socket.
         emitEvent("VibeDataSaverResume") { }
     }
 

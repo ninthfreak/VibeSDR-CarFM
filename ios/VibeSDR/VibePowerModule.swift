@@ -178,6 +178,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     bypassPassword = password
     isRunning    = true
     isMuted      = false
+    // Fresh session — clear any data-saver disconnect/countdown state.
+    dataSaverDisconnected = false
+    muteSince = nil
+    muteTimer?.invalidate(); muteTimer = nil
+    lastArtworkKey = ""
     packetCount  = 0
     lastPacketAt = Date()
     startHealthTimer()
@@ -453,12 +458,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   private func resumeFromDataSaver() {
     guard dataSaverDisconnected else { return }
-    dataSaverDisconnected = false
-    muteSince = nil
-    lastPacketAt = Date()
-    startHealthTimer()
-    openAudioWs(baseUrl: currentBase, frequency: currentFreq, mode: currentMode, uuid: currentUuid)
-    DispatchQueue.main.async { self.updateNowPlaying() }
+    // Don't reopen the old session here — a partial reopen lands in a broken
+    // half-state (frozen waterfall/zoom, no audio). Hand off to JS, which does a
+    // full from-scratch reconnect (new uuid → fresh startAudioEngine, which
+    // clears our data-saver state). The flag stays set until then so the
+    // watchdog won't revive the stale socket.
     sendEvent(withName: "VibeDataSaverResume", body: [:])
   }
 

@@ -156,7 +156,19 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const client    = useRef<UberSDRClient | null>(null);
   const destroyed = useRef(false);
-  const sessionUuid = useMemo(() => uuidv4(), [baseUrl]);
+  // Bumping connEpoch mints a fresh session uuid and re-runs the whole connect
+  // path (spectrum client + native audio engine + decoder) from scratch — used
+  // to recover from a data-saver disconnect, where reopening the old session's
+  // sockets lands in a broken half-state (frozen waterfall/zoom, no audio).
+  const [connEpoch, setConnEpoch] = useState(0);
+  const lastReconnectAt = useRef(0);
+  const fullReconnect = useCallback(() => {
+    const now = Date.now();
+    if (now - lastReconnectAt.current < 2000) return;  // debounce double-triggers
+    lastReconnectAt.current = now;
+    setConnEpoch((e: number) => e + 1);
+  }, []);
+  const sessionUuid = useMemo(() => uuidv4(), [baseUrl, connEpoch]);
 
   // ── SDR state ─────────────────────────────────────────────────────────────
 
@@ -175,6 +187,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [isMuted, setIsMuted] = useState(false);
   // True when the data saver has dropped the SDR stream after a muted spell.
   const [dataSaverOff, setDataSaverOff] = useState(false);
+  const dataSaverOffRef = useRef(false);
+  useEffect(() => { dataSaverOffRef.current = dataSaverOff; }, [dataSaverOff]);
   const unmute = useCallback(() => {
     (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })?.setMuted?.(false);
     setIsMuted(false);
@@ -977,11 +991,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       setDataSaverOff(true);
       client.current?.pauseSpectrum();
     });
-    // Native resumed the audio WS (Play / unmute) — reopen the spectrum after the
-    // session re-registers, same audio-first ordering as the foreground revive.
+    // Resume from a data-saver disconnect (Play / unmute / banner tap). Reopening
+    // the old session's sockets lands in a broken half-state (frozen waterfall +
+    // zoom, no audio), so do a FULL from-scratch reconnect with a fresh uuid.
     const subDsOn = emitter.addListener('VibeDataSaverResume', () => {
       setDataSaverOff(false);
-      setTimeout(() => client.current?.resumeSpectrum(), 1200);
+      fullReconnect();
     });
     // Server-NR protocol messages arrive as text on the native audio WS
     const subWs = emitter.addListener('VibeWsText', (e: { text: string }) => {
@@ -1161,7 +1176,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     });
     return () => { cancelled = true; destroyed.current = true; c.destroy(); client.current = null; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl]);
+  }, [baseUrl, connEpoch]);
 
   // Persist the tune (debounced — the drum changes frequency rapidly) so the
   // next visit to this instance resumes where you left off.
@@ -1193,6 +1208,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (state !== 'active') {
         if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
         client.current?.pauseSpectrum();
+      } else if (dataSaverOffRef.current) {
+        // Opened the app after a data-saver disconnect (the Play event may not
+        // survive suspension): do a full from-scratch reconnect.
+        setDataSaverOff(false);
+        fullReconnect();
       } else {
         // Instant zombie-socket check — after a background suspension the
         // audio WS can be half-open (server reaped the session, socket never
@@ -2066,10 +2086,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         </TouchableOpacity>
       )}
 
-      {/* Data saver dropped the stream — tap reconnects (native reopens the WS) */}
+      {/* Data saver dropped the stream — tap does a full from-scratch reconnect */}
       {dataSaverOff && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
-          onPress={unmute} activeOpacity={0.85}>
+          onPress={() => { setDataSaverOff(false); unmute(); fullReconnect(); }} activeOpacity={0.85}>
           <Text style={styles.mutedBannerText}>💤 DATA SAVER — TAP TO RECONNECT</Text>
         </TouchableOpacity>
       )}

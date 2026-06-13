@@ -50,9 +50,11 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
   const activeMode = useRef<string>('');
   const uuid       = useRef<string>(propUuid ?? uuidv4());
 
-  // Start/stop when baseUrl changes
+  // Start/stop when baseUrl OR the session uuid changes. A new uuid means a
+  // full from-scratch reconnect (e.g. the data saver resuming): the old engine
+  // is torn down and a fresh native session is opened.
   useEffect(() => {
-    if (baseUrl === activeUrl.current) return;
+    if (baseUrl === activeUrl.current && propUuid === uuid.current) return;
     activeUrl.current = baseUrl;
 
     if (!VibePowerModule) {
@@ -71,7 +73,7 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
 
     return () => { VibePowerModule?.stopAudioEngine(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl]);
+  }, [baseUrl, propUuid]);
 
   // Sync tune when frequency or mode changes (native owns now-playing metadata)
   useEffect(() => {
