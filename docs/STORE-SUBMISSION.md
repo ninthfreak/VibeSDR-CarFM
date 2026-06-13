@@ -50,7 +50,7 @@ github.com/Stuey3D/VibeSDR/blob/main/APPSTORE-EXCEPTION.md).
 PRIVACY: No data is collected; no analytics, ads, or tracking. The microphone is
 NOT used ("recording" records the radio stream you are listening to).
 
-Contact: stuey99@googlemail.com
+Contact: stuey3dttb@icloud.com
 ```
 
 ### Apple — other fields
