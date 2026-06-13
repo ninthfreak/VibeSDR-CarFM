@@ -607,9 +607,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     VibePowerModule?.setMediaSkipMode(mediaSkip);
   }, [mediaSkip, connected]);
 
-  // Car-connected flag (iOS car-audio route / Android Auto client) — read via a
-  // ref inside vtsCheck so band-crossing auto mode/step never re-creates the
-  // callback. Updated by the VibeCarConnected native event (see emitter below).
+  // Car-connected flag (iOS car-audio route / Android Auto client), updated by
+  // the VibeCarConnected native event. Band-aware auto mode/step no longer gates
+  // on this (it now fires for all non-hands-on tuning — see vtsCheck); kept for
+  // potential car-specific behaviour later.
   const carConnected = useRef(false);
 
   // Chat drawer doesn't fit landscape even on a 17 Pro Max (let alone SE) —
@@ -1760,9 +1761,14 @@ export default function SDRScreen({ route, navigation }: Props) {
           showBandNotif(bands);
         }
       }
-      // Band-aware tuning on boundary crossing — CAR ONLY. Handheld tuning never
-      // auto-switches mode/step; this fires only when connected to a car.
-      if (carConnected.current) {
+      // Band-aware tuning on boundary crossing. Fires for any tuning that ISN'T
+      // the user hands-on in the app — lock-screen / Apple Watch / headphone /
+      // car media-control skips all trigger it. Suppressed only while the user
+      // is actively tuning in-app (recent markInteract: VFO drum, waterfall tap,
+      // any touch) so the demod/step they're dialling in isn't yanked away.
+      // 1.5s window comfortably covers the drum's inertia glide after release.
+      const handsOn = Date.now() - lastInteractRef.current < 1500;
+      if (!handsOn) {
         const d = bandTuneDefaults(hz, ituRegion);
         if (d.mode && d.mode in MODE_BANDWIDTHS) onMode(d.mode);
         if (d.step) setStep(d.step);
