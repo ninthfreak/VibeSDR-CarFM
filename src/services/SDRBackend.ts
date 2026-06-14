@@ -98,6 +98,10 @@ export interface SDRBackend {
   /** OWRX: send a chat message on the main WS (basic text chat, no tune/zoom sync).
    *  name = the user's chosen handle, prefixed to each message server-side. */
   sendChat?(text: string, name: string): void;
+  /** OWRX: squelch level in dB (−150 = off/open). */
+  setSquelch?(level: number): void;
+  /** OWRX: noise reduction — threshold ≤ 0 = off, higher = more NR. */
+  setNr?(threshold: number): void;
   /** DAB: switch the audio service (programme) within the tuned ensemble. */
   setAudioServiceId?(id: number): void;
   /** DAB: speed-correction factor for the dablin chipmunk (1 = off). */
@@ -144,6 +148,8 @@ export interface BackendCallbacks extends SDRCallbacks {
   onChatMessage?: (name: string, text: string, color?: string) => void;
   /** OWRX: whether the server has chat enabled (config `allow_chat`). */
   onChatEnabled?: (enabled: boolean) => void;
+  /** OWRX: server software name (OpenWebRX / OpenWebRX+) + version, for the menu. */
+  onServerInfo?: (info: { name: string; version: string }) => void;
   /** OWRX: server's available demodulators — gate the mode picker to these. */
   onModes?: (list: BackendMode[]) => void;
   /** OWRX: live RDS (FM) / DAB station metadata. Cleared with empty fields. */

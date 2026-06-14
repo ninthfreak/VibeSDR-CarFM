@@ -89,6 +89,11 @@ export interface MenuSheetProps {
   fmSquelch?:     number;
   onFmSquelch?:   (v: number) => void;
   isFmMode?:      boolean;
+  // OWRX squelch (dB, -150=off) + NR (threshold dB, 0=off) — replace the UberSDR
+  // SNR/FM squelch + NR/NB controls (which do nothing on OWRX).
+  serverLabel?:   string | null;
+  onOwrxSquelch?: (db: number) => void;
+  onOwrxNr?:      (threshold: number) => void;
 
   // Server DSP
   serverDspEnabled?:   boolean;
@@ -398,6 +403,7 @@ export default function MenuSheet({
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
+  serverLabel = null, onOwrxSquelch, onOwrxNr,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
   dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam,
   signalMode = 'snr', onSignalMode,
@@ -461,6 +467,9 @@ export default function MenuSheet({
   const backdropOp = useRef(new Animated.Value(0)).current;
   const [profileOpen, setProfileOpen] = useState(false);   // OWRX profile dropdown
   const [dabOpen, setDabOpen] = useState(false);           // OWRX DAB programme dropdown
+  const [owrxSql, setOwrxSql] = useState(-150);            // OWRX squelch dB (-150 = off)
+  const [owrxNr,  setOwrxNr]  = useState(0);               // OWRX NR threshold dB (0 = off)
+  const isOwrx = serverType === 'owrx';
   const [dispSettingsOpen, setDispSettingsOpen] = useState(false);
 
   // Palette list alphabetised (it ships in table order); profiles are LEFT in
@@ -1185,15 +1194,18 @@ export default function MenuSheet({
               <Text style={styles.bwEdgeVal}>{filterHigh < 0 ? '−' : '+'}{fmtHz(Math.abs(filterHigh))}</Text>
             </View>
 
-            {/* NR cycles off→NR→NR2. Shows SERV (green, locked) when server DSP active. */}
+            {/* NR/NB are UberSDR client-side DSP — hidden for OWRX (its NR is a
+                server slider, below). REC stays for both. */}
             <BtnRow>
-              <Btn
-                label={nrMode === 'serv' ? 'SERV' : nrMode === 'nr2' ? 'NR2' : 'NR'}
-                active={nrMode !== 'off'}
-                style={nrMode === 'serv' ? { borderColor: 'rgba(50,210,100,0.60)', backgroundColor: 'rgba(50,210,100,0.10)' } : undefined}
-                onPress={cycleNr}
-              />
-              <Btn label="NB"      active={nb}        onPress={() => onNb?.(!nb)} />
+              {!isOwrx && (
+                <Btn
+                  label={nrMode === 'serv' ? 'SERV' : nrMode === 'nr2' ? 'NR2' : 'NR'}
+                  active={nrMode !== 'off'}
+                  style={nrMode === 'serv' ? { borderColor: 'rgba(50,210,100,0.60)', backgroundColor: 'rgba(50,210,100,0.10)' } : undefined}
+                  onPress={cycleNr}
+                />
+              )}
+              {!isOwrx && <Btn label="NB" active={nb} onPress={() => onNb?.(!nb)} />}
               <Btn label="⏺ REC"  active={recording} onPress={onRec} />
             </BtnRow>
             {recording && (
@@ -1203,9 +1215,36 @@ export default function MenuSheet({
               </View>
             )}
 
-            {/* SNR Squelch — audio gate, always visible. Slider 0–50 dB in OUR
-                meter's units (SDRScreen shifts +30 for the server's raw SNR
-                scale), left = Off */}
+            {/* OWRX squelch (dB) + NR (threshold dB) — server-side. Squelch left =
+                Off (open); NR left = Off, slides up for more reduction. */}
+            {isOwrx && (<>
+              <View style={styles.bwRow}>
+                <Text style={styles.bwLabel}>SQUELCH</Text>
+                <Slider style={styles.bwSlider}
+                  minimumValue={-130} maximumValue={-20} step={1}
+                  value={owrxSql <= -130 ? -130 : owrxSql}
+                  onValueChange={(v: number) => { const db = v <= -130 ? -150 : v; setOwrxSql(db); onOwrxSquelch?.(db); }}
+                  minimumTrackTintColor={owrxSql > -130 ? C.gold : C.muted}
+                  maximumTrackTintColor={C.muted}
+                  thumbTintColor={C.gold} />
+                <Text style={styles.bwVal}>{owrxSql <= -130 ? 'Off' : `${owrxSql}dB`}</Text>
+              </View>
+              <View style={styles.bwRow}>
+                <Text style={styles.bwLabel}>NR</Text>
+                <Slider style={styles.bwSlider}
+                  minimumValue={0} maximumValue={30} step={1}
+                  value={owrxNr}
+                  onValueChange={(v: number) => { setOwrxNr(v); onOwrxNr?.(v); }}
+                  minimumTrackTintColor={owrxNr > 0 ? C.gold : C.muted}
+                  maximumTrackTintColor={C.muted}
+                  thumbTintColor={C.gold} />
+                <Text style={styles.bwVal}>{owrxNr <= 0 ? 'Off' : `${owrxNr}dB`}</Text>
+              </View>
+            </>)}
+
+            {/* SNR Squelch — UberSDR audio gate. Slider 0–50 dB in OUR meter's
+                units (SDRScreen shifts +30 for the server's raw SNR scale). */}
+            {!isOwrx && (
             <View style={styles.bwRow}>
               <Text style={styles.bwLabel}>SNR SQL</Text>
               <Slider style={styles.bwSlider}
@@ -1217,9 +1256,10 @@ export default function MenuSheet({
                 thumbTintColor={C.gold} />
               <Text style={styles.bwVal}>{snrSquelch <= -999 ? 'Off' : `≥${snrSquelch.toFixed(0)}`}</Text>
             </View>
+            )}
 
             {/* FM Squelch — only shown for fm/nfm. Currently feature-flagged off in UberSDR. */}
-            {isFmMode && (
+            {!isOwrx && isFmMode && (
               <View style={styles.bwRow}>
                 <Text style={styles.bwLabel}>FM SQL</Text>
                 <Slider style={styles.bwSlider}
@@ -1444,7 +1484,7 @@ export default function MenuSheet({
               <View style={styles.footerServer}>
                 <Image source={SERVER_LOGOS[serverType] ?? SERVER_LOGOS.ubersdr} style={styles.footerLogo} resizeMode="contain" />
                 <View>
-                  <Text style={styles.footerServerName}>UberSDR</Text>
+                  <Text style={styles.footerServerName}>{serverLabel ?? (isOwrx ? 'OpenWebRX' : 'UberSDR')}</Text>
                   {serverVersion ? (
                     <Text style={styles.footerServerVer}>v{serverVersion}</Text>
                   ) : null}

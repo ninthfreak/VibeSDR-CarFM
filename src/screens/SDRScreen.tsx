@@ -458,6 +458,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [stationId,     setStationId]     = useState<{ line1: string; line2?: string; color: string } | null>(null);
   // Server software version (menu footer — identifies the backend type)
   const [serverVersion, setServerVersion] = useState<string | null>(null);
+  const [serverLabel,   setServerLabel]   = useState<string | null>(null);  // OWRX: OpenWebRX/+
   const [aboutOpen,     setAboutOpen]     = useState(false);
 
   useEffect(() => {
@@ -732,6 +733,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     raw.replace(/[^A-Za-z0-9\-_\/]/g, '').replace(/^[-_\/]+|[-_\/]+$/g, '').slice(0, 15), []);
 
   const isOwrx = route.params.serverType === 'owrx';
+  // OWRX has no SNR meter — default to the S-meter (the 'snr' default reads dead).
+  useEffect(() => { if (isOwrx && signalMode === 'snr') setSignalMode('smeter'); }, [isOwrx, signalMode]);
   const handleChatJoin = useCallback((cs: string) => {
     const clean = sanitizeCallsign(cs);
     if (!clean) return;
@@ -1363,6 +1366,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onSdrUsage:   (m) => { if (!destroyed.current) setSdrUsage(m); },
       onClients:    (n) => { if (!destroyed.current) setClientCount(n); },
       onChatEnabled: (en) => { if (!destroyed.current) setChatEnabled(en); },
+      onServerInfo: (info) => { if (!destroyed.current) { setServerLabel(info.name); setServerVersion(info.version || null); } },
       onChatMessage: (name, text) => {
         // OWRX basic text chat (name + text). Server echoes our own back, so
         // don't local-echo on send — render the broadcast and mark own by name.
@@ -2724,7 +2728,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         onWefaxLpm={onWefaxLpm}
         onNb={onNb}
         onRec={toggleRecording}
-        onSignalMode={setSignalMode}
+        // OWRX has no SNR meter — skip 'snr' in the cycle, stay on S-meter/dBFS.
+        onSignalMode={(m: 'snr' | 'smeter' | 'dbfs') => setSignalMode(isOwrx && m === 'snr' ? 'smeter' : m)}
         onDisplayStyle={handleDisplayStyle}
         onBack={onBackToPicker}
         onAdminLink={onAdminLink}
@@ -2794,6 +2799,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         onServerDspFilter={onServerDspFilter}
         onServerDspParam={onServerDspParam}
         serverVersion={serverVersion}
+        serverLabel={serverLabel}
+        onOwrxSquelch={(db) => client.current?.setSquelch?.(db)}
+        onOwrxNr={(th) => client.current?.setNr?.(th)}
         onAbout={() => { setMenuOpen(false); setAboutOpen(true); }}
       />
 

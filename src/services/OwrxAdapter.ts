@@ -178,6 +178,7 @@ export class OwrxAdapter implements SDRBackend {
   // to 1000 — that's the standard RTTY/digimode audio centre, so tuning the VFO
   // to the carrier (e.g. 4582 kHz USB for DWD) decodes without a passband tuner.
   private secondaryOffset = 1000;
+  private squelchLevel = -150;   // dB; -150 = off (open). dspcontrol squelch_level.
   private bwLow = -4000;
   private bwHigh = 4000;
   private audioServiceId = 0;                 // DAB: selected programme within ensemble
@@ -353,8 +354,11 @@ export class OwrxAdapter implements SDRBackend {
       const params = Object.fromEntries(
         data.slice(17).split(' ').map((p) => { const a = p.split('='); return [a[0], a.slice(1).join('=')]; }),
       );
-      this.serverVersion = params['version'] || '';
+      this.serverVersion = (params['version'] || '').replace(/^v/i, '');   // "v1.2.116" → "1.2.116"
       this.dbg('server ack: ' + (params['server'] || '?') + ' ' + this.serverVersion);
+      // The ack's `server` is "openwebrx" even on the + fork, so sniff the landing
+      // page for the "OpenWebRX+" marker to label it correctly in the menu footer.
+      this.detectServerName();
       // Negotiate, then start the DSP.
       this.send({ type: 'connectionproperties', params: { output_rate: 12000, hd_output_rate: 48000 } });
       this.send({ type: 'dspcontrol', action: 'start' });
@@ -902,7 +906,7 @@ export class OwrxAdapter implements SDRBackend {
       else if (mod === 'nfm' && this.modes.includes('fm')) mod = 'fm';
     }
     const params: Record<string, unknown> = {
-      offset_freq: Math.round(offset), mod, squelch_level: -150,
+      offset_freq: Math.round(offset), mod, squelch_level: Math.round(this.squelchLevel),
       secondary_mod: secondaryMod,
     };
     if (secondaryMod) params.secondary_offset_freq = this.secondaryOffset;
@@ -1097,6 +1101,30 @@ export class OwrxAdapter implements SDRBackend {
   // ── profiles ─────────────────────────────────────────────────────────────
   getProfiles(): ProfileInfo[] { return this.profiles; }
   selectProfile(id: string): void { this.send({ type: 'selectprofile', params: { profile: id } }); }
+
+  /** Fetch the landing page once to label the server OpenWebRX vs OpenWebRX+
+   *  (the WS ack can't tell them apart) and report name + version to the UI. */
+  private async detectServerName(): Promise<void> {
+    let plus = false;
+    try {
+      const res = await fetch(this.httpBase + '/');
+      if (res.ok) { const html = await res.text(); plus = /openwebrx\+/i.test(html); }
+    } catch { /* offline — fall back to plain OpenWebRX */ }
+    this.cb.onServerInfo?.({ name: plus ? 'OpenWebRX+' : 'OpenWebRX', version: this.serverVersion });
+  }
+
+  /** Squelch level in dB (−150 = off/open). Re-sends the demod. */
+  setSquelch(level: number): void {
+    this.squelchLevel = level;
+    this.sendDemod();
+  }
+
+  /** Noise reduction. threshold ≤ 0 = off (slider fully open); higher = more NR.
+   *  OWRX takes nr via connectionproperties {nr_enabled, nr_threshold(dB)}. */
+  setNr(threshold: number): void {
+    const enabled = threshold > 0;
+    this.send({ type: 'connectionproperties', params: { nr_enabled: enabled, nr_threshold: Math.max(0, Math.round(threshold)) } });
+  }
 
   /** Basic text chat on the main WS. The server broadcasts to all clients incl.
    *  us (our own message echoes back as a chat_message). */
