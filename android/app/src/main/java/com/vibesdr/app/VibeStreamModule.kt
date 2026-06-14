@@ -50,6 +50,27 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         )
     }
 
+    // External PCM audio (OWRX/Kiwi): start the foreground service in external
+    // mode; pushExternalPcm/stopExternalAudio go straight to the live instance.
+    @ReactMethod
+    fun startExternalAudio(sampleRate: Double) {
+        VibeStreamService.reactContext = reactContext
+        val intent = Intent(reactContext, VibeStreamService::class.java).apply {
+            action = VibeStreamService.ACTION_START_EXTERNAL
+            putExtra(VibeStreamService.EXTRA_RATE, sampleRate.toInt())
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) reactContext.startForegroundService(intent)
+        else reactContext.startService(intent)
+    }
+
+    @ReactMethod
+    fun pushExternalPcm(base64: String, sampleRate: Double) {
+        VibeStreamService.instance?.pushExternalPcm(base64, sampleRate.toInt())
+    }
+
+    @ReactMethod
+    fun stopExternalAudio() { VibeStreamService.instance?.stopExternalAudio() }
+
     @ReactMethod
     fun revive() { VibeStreamService.instance?.revive() }
 

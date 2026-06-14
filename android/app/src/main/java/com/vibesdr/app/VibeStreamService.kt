@@ -17,6 +17,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Base64
 import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaDescriptionCompat
 import android.support.v4.media.MediaMetadataCompat
@@ -84,6 +85,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         const val ACTION_NEXT = "com.vibesdr.app.NEXT"
         const val ACTION_PREV = "com.vibesdr.app.PREV"
         const val ACTION_START = "com.vibesdr.app.START"
+        const val ACTION_START_EXTERNAL = "com.vibesdr.app.START_EXTERNAL"
+        const val EXTRA_RATE = "rate"
         const val EXTRA_BASE_URL = "baseUrl"
         const val EXTRA_FREQUENCY = "frequency"
         const val EXTRA_MODE = "mode"
@@ -102,6 +105,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     // ── Engine state ─────────────────────────────────────────────────────────
     @Volatile private var running = false
+    @Volatile private var externalAudio = false   // OWRX/Kiwi: raw PCM pushed from JS
     @Volatile private var muted = false
     @Volatile private var volume = 1f
     @Volatile private var currentFreq = 14_074_000L
@@ -236,6 +240,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 val pw = intent.getStringExtra(EXTRA_PASSWORD) ?: ""
                 startAudioEngine(base, freq, mode, uuid, pw)
             }
+            ACTION_START_EXTERNAL -> startExternalAudio(intent.getIntExtra(EXTRA_RATE, 48000))
             ACTION_PLAY -> setMutedNative(false)
             ACTION_PAUSE -> setMutedNative(true)
             ACTION_STOP -> { stopEngine(); stopSelf(); return START_NOT_STICKY }
@@ -352,9 +357,16 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         muted = m
         if (m) packetQueue.clear()
         emitEvent("VibeMuted") { it.putBoolean("muted", m) }
-        // Pause = disconnect, Play = reconnect. The server drops the session on
-        // suspend anyway and reconnecting is near-instant, so we just disconnect
-        // cleanly and show a "Disconnected" card with a working ▶ button.
+        // OWRX/Kiwi (external): an OWRX reconnect resets the server to its default
+        // profile, so we don't offer play-to-reconnect. PAUSE fully releases the
+        // media controls (stopExternalAudio clears the notification); JS closes its
+        // WS on the VibeMuted event and shows an in-app reconnect prompt, so a
+        // (profile-resetting) reconnect is always a deliberate user action.
+        if (externalAudio) {
+            if (m) mainHandler.post { stopExternalAudio() }
+            return
+        }
+        // UberSDR — Pause = disconnect, Play = reconnect (disconnect card + ▶).
         mainHandler.post {
             if (m) disconnectForPause()
             else if (dataSaverDisconnected) resumeFromDataSaver()
@@ -427,9 +439,113 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         }
     }
 
+    // ── External PCM audio (OWRX/Kiwi) ───────────────────────────────────────
+    // The WS + decode live in JS; JS pushes raw 16-bit mono PCM and we just play
+    // it. A dedicated AudioTrack (recreated when the rate changes) plays at the
+    // pushed rate — Android resamples to the device rate, so the DAB speed
+    // correction (JS under-states the rate) works the same as on iOS. Background
+    // audio survives because the foreground service keeps the app + JS alive.
+    @Volatile private var extTrack: AudioTrack? = null
+    private var extRate = 0
+    private var extThread: Thread? = null
+    private val extQueue = LinkedBlockingDeque<Pair<Int, ShortArray>>(64)
+
+    fun startExternalAudio(rate: Int) {
+        Log.i(TAG, "startExternalAudio $rate")
+        stopEngine()                       // tear down any opus path
+        externalAudio = true
+        running = true
+        muted = false
+        dataSaverDisconnected = false
+        reconnectFailed = false
+        lastArtworkKey = ""
+        packetCount = 0
+        lastPacketAt = SystemClock.elapsedRealtime()
+        extQueue.clear()
+        requestAudioFocus()
+        startExtWriter()
+        mediaSession?.isActive = true
+        updateMetadataSession()
+        updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
+        startForeground(NOTIF_ID, buildNotification())
+    }
+
+    fun pushExternalPcm(base64: String, rate: Int) {
+        if (!externalAudio || muted) return
+        val bytes = try { Base64.decode(base64, Base64.DEFAULT) } catch (e: Exception) { return }
+        val n = bytes.size / 2
+        if (n == 0) return
+        val shorts = ShortArray(n)
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts)
+        lastPacketAt = SystemClock.elapsedRealtime()
+        packetCount++
+        extQueue.offer(Pair(rate, shorts))   // drop when full (backpressure)
+    }
+
+    fun stopExternalAudio() {
+        Log.i(TAG, "stopExternalAudio")
+        externalAudio = false
+        running = false
+        extThread?.interrupt(); extThread = null
+        extQueue.clear()
+        abandonAudioFocus()
+        mediaSession?.isActive = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
+        else { @Suppress("DEPRECATION") stopForeground(true) }
+    }
+
+    private fun startExtWriter() {
+        val t = Thread({
+            try {
+                while (running && externalAudio) {
+                    val item = extQueue.poll(250, TimeUnit.MILLISECONDS) ?: continue
+                    ensureExtTrack(item.first)
+                    if (!muted) extTrack?.write(item.second, 0, item.second.size)  // blocking = backpressure
+                }
+            } catch (e: InterruptedException) {
+                // normal shutdown
+            } finally {
+                extTrack?.release(); extTrack = null; extRate = 0
+            }
+        }, "vibesdr-ext")
+        t.priority = Thread.MAX_PRIORITY
+        extThread = t
+        t.start()
+    }
+
+    private fun ensureExtTrack(rate: Int) {
+        if (extTrack != null && extRate == rate) return
+        extTrack?.release()
+        val mask = AudioFormat.CHANNEL_OUT_MONO
+        val minBuf = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT)
+        val t = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(rate)
+                    .setChannelMask(mask)
+                    .build()
+            )
+            .setBufferSizeInBytes(maxOf(minBuf * 2, rate / 5 * 2))  // ≥200ms
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+        t.setVolume(volume)
+        t.play()
+        extTrack = t
+        extRate = rate
+        Log.i(TAG, "ext AudioTrack ${rate}Hz")
+    }
+
     fun setVolumeNative(v: Float) {
         volume = v.coerceIn(0f, 1f)
         track?.setVolume(volume)
+        extTrack?.setVolume(volume)
     }
 
     fun sendRawCommand(json: String) {
@@ -442,7 +558,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     }
 
     private fun tuneByStep(direction: Int) {
-        if (skipMode == "bookmark") {
+        // External (OWRX/Kiwi): tuning lives in JS — delegate so we don't tune the
+        // native UberSDR WS (resurrecting a session). JS handles step vs bookmark
+        // vs DAB-programme cycling from its own state.
+        if (externalAudio || skipMode == "bookmark") {
             emitEvent("VibeSkip") { it.putString("direction", if (direction > 0) "next" else "prev") }
             return
         }
@@ -577,7 +696,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     }
 
     private fun reviveIfDead(staleAfterMs: Long) {
-        if (!running || dataSaverDisconnected) return  // data saver owns the closed WS
+        // External (OWRX/Kiwi) has no native WS to revive — JS owns it.
+        if (!running || externalAudio || dataSaverDisconnected) return  // data saver owns the closed WS
         val stale = SystemClock.elapsedRealtime() - lastPacketAt
         if (stale <= staleAfterMs && ws != null) return
         Log.i(TAG, "watchdog: stale=${stale}ms — reviving audio WS")
