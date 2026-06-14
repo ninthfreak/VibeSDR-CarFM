@@ -342,15 +342,20 @@ export default function SDRScreen({ route, navigation }: Props) {
       try { const m = JSON.parse(j); if (m && typeof m === 'object') dabSpeedMapRef.current = m; } catch {}
     }).catch(() => {});
   }, []);
-  // Menu speed buttons set the factor for the CURRENTLY tuned station + persist it.
+  // Menu speed buttons + fine slider set the factor for the CURRENTLY tuned
+  // station. Applied live; the storage write is debounced so dragging the slider
+  // doesn't hammer AsyncStorage (it fires onValueChange continuously).
+  const dabSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onDabSpeed = useCallback((scale: number) => {
     setDabSpeed(scale);
     client.current?.setDabAudioScale?.(scale);
     const key = dabKeyRef.current;
-    if (key) {
-      dabSpeedMapRef.current = { ...dabSpeedMapRef.current, [key]: scale };
+    if (!key) return;
+    dabSpeedMapRef.current = { ...dabSpeedMapRef.current, [key]: scale };
+    if (dabSaveTimer.current) clearTimeout(dabSaveTimer.current);
+    dabSaveTimer.current = setTimeout(() => {
       AsyncStorage.setItem('owrx_dab_speed_map', JSON.stringify(dabSpeedMapRef.current)).catch(() => {});
-    }
+    }, 400);
   }, []);
   // Called from the DAB metadata handler when the tuned service changes: look up
   // its saved correction (default Off) and apply it automatically.
@@ -797,6 +802,23 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (chatOpenRef.current) setChatUsers(chatUsersRef.current);
   }, []);
 
+  // One-time heads-up about OWRX's profile model: pausing disconnects, and a
+  // later reconnect resets the receiver to its server-side default profile/freq
+  // (we can't persist server profile state across a fresh session without
+  // hijacking it). Shown once per install when first connected to an OWRX server.
+  useEffect(() => {
+    if (!connected || (route.params.serverType ?? 'ubersdr') !== 'owrx') return;
+    AsyncStorage.getItem('owrx_pause_warning_seen').then((seen: string | null) => {
+      if (seen) return;
+      AsyncStorage.setItem('owrx_pause_warning_seen', '1').catch(() => {});
+      Alert.alert(
+        'OpenWebRX — note on pausing',
+        'OpenWebRX receivers use server-side profiles. If you pause from the lock screen, VibeSDR disconnects to free the receiver — and reconnecting resets it to the server’s default profile and frequency. (Locking the screen while playing keeps audio going; this only applies to an explicit pause.)',
+        [{ text: 'Got it' }],
+      );
+    }).catch(() => {});
+  }, [connected]);
+
   // Handler refs — the decoder-client effect below builds its callbacks once
   // per connect, but tune/mode/filter handlers are declared later in the file
   const onTuneHzRef    = useRef<((hz: number) => void) | null>(null);
@@ -807,6 +829,40 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // ── Media skip mode: lock-screen ⏮⏭ tune by step or jump bookmarks ───────
   const [mediaSkip, setMediaSkip] = useState<'step' | 'bookmark'>('step');
+  const mediaSkipRef = useRef(mediaSkip);
+  useEffect(() => { mediaSkipRef.current = mediaSkip; }, [mediaSkip]);
+  // Lock-screen ⏮⏭ step-tune for backends whose tuning lives in JS (OWRX/Kiwi):
+  // native delegates via VibeSkip rather than tuning its own WS. Snaps to the
+  // step grid (matching the native UberSDR path + the VFO drum). Registered in a
+  // ref so the once-mounted native event listener calls the latest closure.
+  // DAB mode: ⏮⏭ cycle the ensemble's programmes instead of tuning (VFO locked).
+  // Reassigned each render so it sees the current programme list + selection.
+  const dabSkipRef = useRef<((dir: 'left' | 'right') => void) | null>(null);
+  dabSkipRef.current = (dir: 'left' | 'right') => {
+    const c = client.current; if (!c || dabProgrammes.length === 0) return;
+    const idx = dabProgrammes.findIndex((p) => p.id === activeDabId);
+    const next = dir === 'right'
+      ? (idx + 1) % dabProgrammes.length
+      : (idx - 1 + dabProgrammes.length) % dabProgrammes.length;
+    const id = dabProgrammes[next].id;
+    c.setAudioServiceId?.(id);
+    setActiveDabId(id);
+  };
+  const mediaStepSkipRef = useRef<((dir: 'left' | 'right') => void) | null>(null);
+  mediaStepSkipRef.current = (dir: 'left' | 'right') => {
+    const c = client.current; if (!c) return;
+    if (String(c.getStatus().mode) === 'dab') return;   // DAB locked to its ensemble
+    const s = stepRef.current; if (!(s > 0)) return;
+    const cur = c.getStatus().frequency;
+    const snapped = dir === 'right'
+      ? (Math.floor(cur / s) + 1) * s
+      : (Math.ceil(cur / s) - 1) * s;
+    const [loHz, hiHz] = c.caps.freqRange;
+    const newHz = Math.max(loHz, Math.min(hiHz, snapped));
+    if (newHz === cur) return;
+    c.tune(newHz);
+    setStatus((prev: SDRStatus) => ({ ...prev, frequency: newHz }));
+  };
   useEffect(() => {
     AsyncStorage.getItem('lsv_media_skip').then((v: string | null) => {
       if (v === 'bookmark' || v === 'step') setMediaSkip(v);
@@ -1159,15 +1215,28 @@ export default function SDRScreen({ route, navigation }: Props) {
     });
     const subMute = emitter.addListener('VibeMuted', (e: { muted: boolean }) => {
       setIsMuted(!!e.muted);
+      // OWRX: pause releases the lock-screen controls (native) and disconnects —
+      // there's no play-to-reconnect because an OWRX reconnect resets the server
+      // profile. Close the WS and show the in-app reconnect prompt so the user
+      // reconnects deliberately (the warning explains the reset).
+      if (e.muted && (route.params.serverType ?? 'ubersdr') === 'owrx') {
+        client.current?.disconnectSocket?.();
+        setDataSaverOff(true);
+      }
     });
     // radiod channel SNR (basebandPower − noiseDensity); −30 corrects the +30 dB
     // audio-stream floor offset so the meter reads honest dB.
     const subSig = emitter.addListener('VibeSignal', (e: { snr: number }) => {
       audioSnrRef.current = e.snr - 30;
     });
-    // Bookmark-skip mode: native ⏮⏭ defer to JS (it owns the station list)
+    // Native ⏮⏭ defer to JS. Bookmark mode jumps the station list; step mode
+    // (used by OWRX/Kiwi, whose tuning lives in JS) snaps by the tune step.
     const subSkip = emitter.addListener('VibeSkip', (e: { direction: string }) => {
-      onVtsJumpRef.current?.(e.direction === 'prev' ? 'left' : 'right');
+      const dir = e.direction === 'prev' ? 'left' : 'right';
+      // DAB: cycle programmes within the ensemble (the VFO is locked there).
+      if (String(client.current?.getStatus().mode) === 'dab') { dabSkipRef.current?.(dir); return; }
+      if (mediaSkipRef.current === 'bookmark') onVtsJumpRef.current?.(dir);
+      else mediaStepSkipRef.current?.(dir);
     });
     // Car audio route / Android Auto client connect — gates band-aware auto
     // mode/step (handheld use is never auto-switched).
@@ -1193,7 +1262,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     // closed the audio WS) and surface the reconnect prompt.
     const subDsOff = emitter.addListener('VibeDataSaverDisconnect', () => {
       setDataSaverOff(true);
-      client.current?.pauseSpectrum();
+      // UberSDR: native already closed the audio WS; just pause the spectrum WS.
+      // OWRX/Kiwi: close the WS to free the server slot but KEEP the native audio
+      // session (so the lock-screen disconnect card shows); a fresh adapter is
+      // built on resume via fullReconnect. (destroy() would drop the card.)
+      if ((route.params.serverType ?? 'ubersdr') === 'ubersdr') client.current?.pauseSpectrum();
+      else client.current?.disconnectSocket?.();
     });
     // Resume from a data-saver disconnect (Play / unmute / banner tap). Reopening
     // the old session's sockets lands in a broken half-state (frozen waterfall +

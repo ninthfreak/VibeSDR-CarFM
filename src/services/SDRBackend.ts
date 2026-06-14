@@ -67,6 +67,9 @@ export interface SDRBackend {
 
   connect(frequency?: number, mode?: SDRMode): Promise<void>;
   destroy(): void;
+  /** Pause-disconnect: close the connection but keep the native audio session
+   *  (lock-screen card) intact. OWRX/Kiwi only; UberSDR uses pauseSpectrum. */
+  disconnectSocket?(): void;
 
   tune(frequency: number, mode?: SDRMode): void;
   /** Adopt an externally-confirmed tune (native audio WS echo) without re-sending. */

@@ -33,9 +33,10 @@ Plugins.dab_speed._key = '';           // current station key
 
 Plugins.dab_speed.PRESETS = [
   { v: 1,      l: 'Normal (48 kHz)' },
-  { v: 0.9375, l: 'x0.94 (DAB+ 960/1024)' },
   { v: 0.6667, l: 'x0.67 (32 kHz)' },
-  { v: 0.5,    l: 'x0.50 (24 kHz)' }
+  { v: 0.5,    l: 'x0.50 (24 kHz)' },
+  { v: 0.3333, l: 'x0.33 (16 kHz)' },
+  { v: 0.25,   l: 'x0.25 (12 kHz)' }
 ];
 
 // Linear time-stretch an Int16Array by 1/factor (factor<1 => more samples = slower).
@@ -75,10 +76,15 @@ Plugins.dab_speed._tryWrap = function () {
   return true;
 };
 
+// Reflect the current factor in the dropdown.
+Plugins.dab_speed._syncUI = function () {
+  var sel = document.getElementById('dab-speed-select');
+  if (sel) sel.value = String(Plugins.dab_speed.factor);
+};
+
 Plugins.dab_speed._applyFactor = function (f, persist) {
   Plugins.dab_speed.factor = (f > 0) ? f : 1;
-  var $sel = $('#dab-speed-select');
-  if ($sel.length) $sel.val(String(Plugins.dab_speed.factor));
+  Plugins.dab_speed._syncUI();
   if (persist && Plugins.dab_speed._key) {
     Plugins.dab_speed._store[Plugins.dab_speed._key] = Plugins.dab_speed.factor;
     try { localStorage.setItem('dab_speed_store', JSON.stringify(Plugins.dab_speed._store)); } catch (e) {}
@@ -102,11 +108,11 @@ Plugins.dab_speed._buildUI = function () {
       '<select id="dab-speed-select" style="width:100%;box-sizing:border-box;">' + opts + '</select>' +
     '</div>'
   );
-  $wrap.find('select').on('change', function () {
+  $wrap.find('#dab-speed-select').on('change', function () {
     Plugins.dab_speed._applyFactor(parseFloat($(this).val()), true);
   });
   $target.append($wrap);
-  $('#dab-speed-select').val(String(Plugins.dab_speed.factor));
+  Plugins.dab_speed._syncUI();
 };
 
 // Track the tuned service from the DAB panel and auto-apply its saved factor.

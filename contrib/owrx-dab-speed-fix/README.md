@@ -49,15 +49,24 @@ fast**. A 24 kHz service → 48000/24000 = **2× too fast**.
 We added a manual per-station speed control and confirmed the exact ratios on
 real UK muxes:
 
-| Correction factor | Implied true rate | Example                        |
-|-------------------|-------------------|--------------------------------|
-| ×1.000 (none)     | 48 kHz            | most services — already fine   |
-| ×0.6667           | 32 kHz            | confirmed on UK DAB+ services  |
-| ×0.5000           | 24 kHz            | confirmed on a UK DAB+ service |
-| ×0.9375 (opt.)    | 960/1024 AAC fr.  | subtle drift, kept as an option|
+| Correction factor | Implied true rate | Example                          |
+|-------------------|-------------------|----------------------------------|
+| ×1.000 (none)     | 48 kHz            | most services — already fine     |
+| ×0.6667           | 32 kHz            | confirmed on UK DAB+ services    |
+| ×0.5000           | 24 kHz            | confirmed on a UK DAB+ service   |
+| ×0.3333           | 16 kHz            | confirmed on a UK DAB+ service   |
+| ×0.2500           | 12 kHz            | confirmed (a low-bitrate HE-AACv2 service) |
 
 `factor = trueRate / 48000`. The fix is simply to honour the service's real
-sampling rate instead of assuming 48 kHz.
+sampling rate instead of assuming 48 kHz. All four lower rates (32/24/16/12 kHz)
+are HE-AAC core/output rates that occur at lower DAB+ bitrates.
+
+> Note on HE-AAC v2 / Parametric Stereo: very-low-bitrate services use PS, where
+> a mono core carries side-parameters to rebuild stereo. If the decoder mishandles
+> PS the audio is structurally corrupted (not merely sped up), and a speed factor
+> can only get it *close*. Those are a decoder-correctness issue, separate from the
+> rate-labelling bug above — but most affected services are plain rate misreads
+> that this fixes exactly.
 
 ---
 

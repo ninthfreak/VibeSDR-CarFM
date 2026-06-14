@@ -180,6 +180,17 @@ export class OwrxAdapter implements SDRBackend {
     if (ws) { try { ws.onclose = null; ws.close(); } catch {} }
   }
 
+  /** Pause-disconnect: close the WS to free the server slot, but DON'T tear down
+   *  the native audio session — the native engine keeps showing the paused /
+   *  disconnected card (disconnectForPause manages it). A fresh adapter is built
+   *  on resume via the JS fullReconnect, which is what stops the native engine.
+   *  (destroy() here would call stopExternalAudio and drop the lock-screen card.) */
+  disconnectSocket(): void {
+    this.started = false;
+    const ws = this.ws; this.ws = null;
+    if (ws) { try { ws.onclose = null; ws.close(); } catch {} }
+  }
+
   // ── inbound: text/JSON ───────────────────────────────────────────────────
   private onText(data: string, onReady: () => void): void {
     if (data.startsWith('CLIENT DE SERVER')) {

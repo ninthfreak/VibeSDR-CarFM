@@ -615,9 +615,10 @@ export default function MenuSheet({
               <View style={styles.dabSpeedRow}>
                 {[
                   { v: 1,       l: 'Off' },
-                  { v: 0.9375,  l: '×0.94' },
                   { v: 0.6667,  l: '×0.67' },
                   { v: 0.5,     l: '×0.50' },
+                  { v: 0.3333,  l: '×0.33' },
+                  { v: 0.25,    l: '×0.25' },
                 ].map((o) => {
                   const active = Math.abs((dabSpeed ?? 1) - o.v) < 0.001;
                   return (

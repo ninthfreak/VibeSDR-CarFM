@@ -467,11 +467,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   @objc func setMuted(_ muted: Bool) {
     isMuted = muted
     sendEvent(withName: "VibeMuted", body: ["muted": muted])
-    // External (OWRX/Kiwi) audio: the WS + decode live in JS, so pause/play is
-    // JUST a mute here (isMuted gates pushExternalPcm) — do NOT run the UberSDR
-    // disconnect/reconnect path or Play resurrects the old UberSDR session.
+    // OWRX/Kiwi (external): tuning + WS live in JS, and an OWRX reconnect RESETS
+    // the server to its default profile — so we deliberately do NOT offer a
+    // play-to-reconnect card here. PAUSE fully releases the media controls
+    // (stopExternalAudio → stopEngine clears the now-playing card); JS closes its
+    // WS on the VibeMuted event and shows an in-app reconnect prompt instead, so
+    // reconnection (and the profile reset) is always a deliberate user action.
     if externalAudio {
-      MPNowPlayingInfoCenter.default().playbackState = muted ? .paused : .playing
+      if muted { DispatchQueue.main.async { self.stopExternalAudio() } }
       return
     }
     // Pause = disconnect, Play = reconnect. The server drops the session almost
@@ -1153,7 +1156,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     cc.nextTrackCommand.removeTarget(nil)
     cc.nextTrackCommand.addTarget { [weak self] _ in
       guard let self else { return .commandFailed }
-      if self.skipMode == "bookmark" {
+      // External (OWRX/Kiwi): tuning lives in JS — delegate the skip so we don't
+      // tune the native UberSDR WS (which resurrects a UberSDR session). JS
+      // handles step vs bookmark from its own media-skip setting.
+      if self.externalAudio || self.skipMode == "bookmark" {
         self.sendEvent(withName: "VibeSkip", body: ["direction": "next"])
         return .success
       }
@@ -1172,7 +1178,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     cc.previousTrackCommand.removeTarget(nil)
     cc.previousTrackCommand.addTarget { [weak self] _ in
       guard let self else { return .commandFailed }
-      if self.skipMode == "bookmark" {
+      if self.externalAudio || self.skipMode == "bookmark" {
         self.sendEvent(withName: "VibeSkip", body: ["direction": "prev"])
         return .success
       }
