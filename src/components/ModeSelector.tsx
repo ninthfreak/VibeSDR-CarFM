@@ -27,6 +27,10 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   const [moreOpen, setMoreOpen] = useState(false);
+  // Collapse the decoder dropdown when the sheet closes, so reopening it lands on
+  // the current decoder (the scroll-to-active effect only fires on open) instead
+  // of staying open scrolled to the top.
+  useEffect(() => { if (!visible) setMoreOpen(false); }, [visible]);
 
   const list = modes && modes.length ? modes : MODES.map(m => ({ id: m, label: m.toUpperCase() }));
   const common = list.filter(m => COMMON_IDS.includes(m.id.toLowerCase()));
@@ -47,10 +51,16 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const moreScroll = useRef<ScrollView | null>(null);
   const itemY = useRef<Record<string, number>>({});
   useEffect(() => {
-    if (!moreOpen || !currentInOthers) return;
-    const y = itemY.current[currentInOthers.id];
-    if (y != null) requestAnimationFrame(() => moreScroll.current?.scrollTo({ y: Math.max(0, y - 8), animated: false }));
-  }, [moreOpen, currentInOthers]);
+    if (!moreOpen) return;
+    const target = activeDecInOthers ?? currentInOthers;   // active decoder, else current mode
+    if (!target) return;
+    // Read the captured y INSIDE the delay so onLayout has populated it first.
+    const id = setTimeout(() => {
+      const y = itemY.current[target.id];
+      if (y != null) moreScroll.current?.scrollTo({ y: Math.max(0, y - 8), animated: false });
+    }, 60);
+    return () => clearTimeout(id);
+  }, [moreOpen, currentInOthers, activeDecInOthers]);
 
   const pick = (id: string) => { onSelect(id as Mode); onClose(); };
 

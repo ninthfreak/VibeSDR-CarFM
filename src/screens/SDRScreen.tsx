@@ -1370,8 +1370,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         setDecoding(true);
         if (replace) { setDecoderText(line); return; }
+        // Append raw — the adapter newline-terminates records and char-stream
+        // decoders (RTTY/CW) carry their own line breaks.
         setDecoderText((prev: string) => {
-          const next = (prev ? prev + '\n' : '') + line;
+          const next = prev + line;
           return next.length > 4000 ? next.slice(next.length - 4000) : next;
         });
       },

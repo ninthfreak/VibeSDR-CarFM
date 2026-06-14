@@ -527,7 +527,13 @@ export default function MenuSheet({
   const [bmImportText,   setBmImportText]   = useState('');
   const [bmImportMsg,    setBmImportMsg]    = useState('');
   useEffect(() => {
-    if (!visible) { setBookmarksOpen(false); setBmImportOpen(false); setBmImportMsg(''); }
+    if (!visible) {
+      setBookmarksOpen(false); setBmImportOpen(false); setBmImportMsg('');
+      // Collapse the dropdowns on close — MenuSheet stays mounted (returns null),
+      // so an open dropdown would persist and reopen scrolled to the top instead
+      // of the current item (the open-at-current effect only fires on open).
+      setProfileOpen(false); setDabOpen(false); setCmapOpen(false);
+    }
   }, [visible]);
   const [bwSync,           setBwSync]           = useState(false);
 

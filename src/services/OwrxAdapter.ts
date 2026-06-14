@@ -609,11 +609,19 @@ export class OwrxAdapter implements SDRBackend {
    *   • TEXT RECORDS (Packet/POCSAG/FLEX/DSC/ISM/HFDL/ACARS/ADSB/WSJT) — one JSON
    *     record per decode, keyed by `mode` → formatted to a line (onDecoderText). */
   private onSecondaryDemod(v: any): void {
-    if (!v || typeof v !== 'object' || 'message' in v) return;   // debug text → ignore
+    // Character-stream decoders (RTTY, CW skimmer, BPSK/PSK, etc.) send the
+    // decoded output as a plain STRING (OWRX secondary_demod_push_data), not a
+    // record. Append it raw (printable + newlines only, like the web client).
+    if (typeof v === 'string') {
+      const txt = v.replace(/[^\n\x20-\x7e]/g, '');
+      if (txt) this.cb.onDecoderText?.(txt, false);
+      return;
+    }
+    if (!v || typeof v !== 'object' || 'message' in v) return;   // debug object → ignore
     const kind: 'sstv' | 'fax' | null = v.mode === 'SSTV' ? 'sstv' : v.mode === 'Fax' ? 'fax' : null;
     if (!kind) {
       const rec = this.secondaryRecordToText(v);
-      if (rec) this.cb.onDecoderText?.(rec.text, rec.replace);
+      if (rec) this.cb.onDecoderText?.(rec.replace ? rec.text : rec.text + '\n', rec.replace);
       return;
     }
     // Header: dimensions, no scanline → start a fresh image.
