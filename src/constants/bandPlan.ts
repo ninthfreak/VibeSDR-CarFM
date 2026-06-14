@@ -59,6 +59,29 @@ export const BAND_PLAN: Band[] = [
   { lo: 26965000,  hi: 27405000,  name: '11m CB Band',                type: 'utility', regions: [1, 3], mode: 'nfm', step: 10000 },
   { lo: 26965000,  hi: 27405000,  name: '11m CB Band',                type: 'utility', regions: [2], mode: 'am', step: 10000 },
   { lo: 28000000,  hi: 29700000,  name: '10m Ham Band',               type: 'ham',  bandLabel: '10m', mode: 'usb', step: 500 },
+
+  // ── VHF / UHF (OWRX & other wideband backends; UberSDR caps at 30 MHz) ──────
+  // Steps here come from STEPS_VHF [1k,5k,12.5k,25k,50k,100k] (sdrTypes.ts) since
+  // getStepsFor(hz) switches at 30 MHz. Broadcast-FM and DAB leave `mode` unset:
+  // WFM/DAB are server-side demods (the OWRX profile's start_mod selects WFM, and
+  // DAB is chosen from the digital picker) — pinning them to narrow nfm/am here
+  // would yank the audio to the wrong demodulator on a boundary cross.
+  { lo: 30000000,  hi: 50000000,   name: 'VHF Low / Public Service',   type: 'utility', mode: 'nfm', step: 12500 },
+  { lo: 50000000,  hi: 54000000,   name: '6m Ham Band',                type: 'ham',  bandLabel: '6m',  mode: 'usb', step: 1000 },
+  { lo: 70000000,  hi: 70500000,   name: '4m Ham Band',                type: 'ham',  bandLabel: '4m',  regions: [1], mode: 'usb', step: 1000 },
+  { lo: 87500000,  hi: 108000000,  name: 'FM Broadcast Band',          type: 'broadcast', step: 100000 },
+  { lo: 108000000, hi: 137000000,  name: 'Airband (VHF Air)',          type: 'utility', mode: 'am',  step: 25000 },
+  { lo: 144000000, hi: 146000000,  name: '2m Ham Band',                type: 'ham',  bandLabel: '2m',  regions: [1], mode: 'nfm', step: 12500 },
+  { lo: 144000000, hi: 148000000,  name: '2m Ham Band',                type: 'ham',  bandLabel: '2m',  regions: [2, 3], mode: 'nfm', step: 12500 },
+  { lo: 156000000, hi: 162050000,  name: 'Marine VHF',                 type: 'utility', mode: 'nfm', step: 25000 },
+  { lo: 162400000, hi: 162550000,  name: 'NOAA Weather Radio',         type: 'utility', regions: [2], mode: 'nfm', step: 25000 },
+  { lo: 174000000, hi: 240000000,  name: 'DAB / DAB+ (Band III)',      type: 'broadcast', step: 1000 },
+  { lo: 222000000, hi: 225000000,  name: '1.25m Ham Band',             type: 'ham',  bandLabel: '1.25m', regions: [2], mode: 'nfm', step: 12500 },
+  { lo: 420000000, hi: 450000000,  name: '70cm Ham Band',              type: 'ham',  bandLabel: '70cm', regions: [2], mode: 'nfm', step: 25000 },
+  { lo: 430000000, hi: 440000000,  name: '70cm Ham Band',              type: 'ham',  bandLabel: '70cm', regions: [1, 3], mode: 'nfm', step: 25000 },
+  { lo: 446000000, hi: 446200000,  name: 'PMR446',                     type: 'utility', regions: [1], mode: 'nfm', step: 12500 },
+  { lo: 462000000, hi: 468000000,  name: 'FRS / GMRS',                 type: 'utility', regions: [2], mode: 'nfm', step: 12500 },
+  { lo: 1240000000, hi: 1300000000, name: '23cm Ham Band',            type: 'ham',  bandLabel: '23cm', mode: 'nfm', step: 25000 },
 ];
 
 export function getBandsAt(hz: number): Band[] {

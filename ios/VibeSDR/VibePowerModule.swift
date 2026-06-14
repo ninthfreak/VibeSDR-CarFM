@@ -279,7 +279,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   private func reviveIfDead(staleAfter: TimeInterval) {
-    guard isRunning, !dataSaverDisconnected else { return }  // data saver owns the closed WS
+    // externalAudio (OWRX/Kiwi) has NO native WS to revive — the socket + decode
+    // live in JS, which drives its own resume. Reviving here would (re)open a
+    // UberSDR audio WS to the stale currentBase = UberSDR audio under the OWRX
+    // stream. Only the native Opus engine (startAudioEngine) is the watchdog's.
+    guard isRunning, !externalAudio, !dataSaverDisconnected else { return }  // data saver owns the closed WS
     let stale  = Date().timeIntervalSince(lastPacketAt)
     let wsDead = (wsTask?.state != .running)
     guard stale > staleAfter || wsDead else { return }

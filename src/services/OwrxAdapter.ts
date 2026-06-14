@@ -96,6 +96,11 @@ export class OwrxAdapter implements SDRBackend {
   private mode: SDRMode = 'am';
   private bwLow = -4000;
   private bwHigh = 4000;
+  private audioServiceId = 0;                 // DAB: selected programme within ensemble
+  private dabProgrammes: { id: number; name: string }[] = [];
+  private dabEnsemble = '';                    // DAB: ensemble (multiplex) label, cached
+  private lastDabSig = '';                      // dedupe key for per-second DAB metadata
+  private dabRateScale = 1;                      // DAB speed-correction factor (1 = off)
 
   // current view (client-side); defaults to whole profile on first config
   private viewCenter = 0;
@@ -105,7 +110,16 @@ export class OwrxAdapter implements SDRBackend {
   // last full FFT row (full profile span) — re-sliced on local view changes
   private lastRow: Float32Array | null = null;
 
+  // Link-quality (connection signal meter): OWRX has no ping/RTT, so we score
+  // the connection from FFT frame inter-arrival timing — steady frames = strong,
+  // stalls/gaps = weak. Mirrors the UberSDR 0–3 bar indicator.
+  private gapHist: number[] = [];
+  private lastFrameAt = 0;
+  private connectedAt = 0;
+  private lastLink: -1 | 0 | 1 | 2 | 3 = -1;
+
   private started = false;
+  private dspStarted = false;     // dspcontrol start re-asserted after demod (web-client order)
   private audioStarted = false;
   private audioDec = new OwrxAudioDecoder();    // type-2 (output_rate, 12k)
   private hdAudioDec = new OwrxAudioDecoder();   // type-4 (hd_output_rate, 48k — WFM)
@@ -152,6 +166,7 @@ export class OwrxAdapter implements SDRBackend {
       ws.onerror = () => { this.dbg('WS error'); if (!settled) { settled = true; reject(new Error('OpenWebRX WebSocket error')); } };
       ws.onclose = (ev) => {
         this.dbg('WS close ' + ev.code);
+        this.lastLink = 0; this.cb.onLink?.(0);   // drop the connection signal meter
         this.cb.onDisconnect();
         if (!settled) { settled = true; reject(new Error('OpenWebRX closed (' + ev.code + ')')); }
       };
@@ -176,7 +191,9 @@ export class OwrxAdapter implements SDRBackend {
       // Negotiate, then start the DSP.
       this.send({ type: 'connectionproperties', params: { output_rate: 12000, hd_output_rate: 48000 } });
       this.send({ type: 'dspcontrol', action: 'start' });
+      this.connectedAt = Date.now();
       this.cb.onConnect();
+      this.evalLink();          // seed the connection signal meter (tentative bars)
       onReady();
       return;
     }
@@ -204,7 +221,14 @@ export class OwrxAdapter implements SDRBackend {
         }
         break;
       }
-      case 'smeter':   if (typeof json.value === 'number') this.cb.onSMeter?.(json.value); break;
+      case 'smeter':
+        // The wire value is LINEAR power (from csdr squelch_and_smeter_cc); the
+        // OWRX UI shows 10·log10(value) dB. Convert here so onSMeter is in dB.
+        if (typeof json.value === 'number' && json.value > 0) {
+          this.cb.onSMeter?.(10 * Math.log10(json.value));
+        }
+        break;
+      case 'metadata': this.onMetadata(json.value || {}); break;
       case 'sdr_error':
       case 'demodulator_error': this.cb.onError(String(json.value ?? 'OpenWebRX error')); break;
       case 'backoff': this.dbg('server backoff ' + json.value); break;
@@ -233,7 +257,12 @@ export class OwrxAdapter implements SDRBackend {
       this.viewBw = this.cfg.sampRate;
       this.viewInit = true;
       this.lastRow = null;   // clear stale waterfall on profile change
-      if (profileSwitch) { this.audioDec.reset(); this.hdAudioDec.reset(); }   // ADPCM restarts per profile
+      if (profileSwitch) {
+        this.audioDec.reset(); this.hdAudioDec.reset();   // ADPCM restarts per profile
+        this.gapHist = []; this.lastFrameAt = 0;          // frame rate may change — reset link timing
+        this.audioServiceId = 0; this.dabProgrammes = []; this.dabEnsemble = ''; this.lastDabSig = '';  // new ensemble/station
+        this.cb.onMetadata?.({ programmes: [] });          // clear stale RDS/DAB labels + picker
+      }
     }
 
     // Refine the tunable range to the active profile window so the UI's clamps
@@ -251,12 +280,71 @@ export class OwrxAdapter implements SDRBackend {
     // Send (or resend) the demod params now we know the profile window.
     this.started = true;
     this.sendDemod();
+    // Match the OWRX web client: it sends the demod params THEN dspcontrol start
+    // (Demodulator.start = set()+start), and re-runs that on every profile select.
+    // Our single start at connect fires before the profile/mod exist, so the DSP
+    // chain isn't (re)built around the profile's demod — fatal for DAB, where the
+    // dablin chain must be assembled with mod=dab. Re-assert start after the demod
+    // on first config and every profile switch.
+    if (profileSwitch || !this.dspStarted) {
+      this.send({ type: 'dspcontrol', action: 'start' });
+      this.dspStarted = true;
+      this.dbg('dspcontrol start (after demod)');
+    }
     this.cb.onStatus(this.getStatus());
   }
 
   private onProfiles(list: any[]): void {
     this.profiles = list.map((p) => ({ id: String(p.id ?? p), name: String(p.name ?? p.id ?? p) }));
     this.cb.onProfiles?.(this.profiles);
+  }
+
+  /** RDS (broadcast FM) and DAB ensemble/programme metadata → normalised
+   *  StationMeta. Both arrive on the same `metadata` message; RDS is keyed by
+   *  protocol:'WFM' (ps = station name, radiotext = scrolling text), DAB by
+   *  mode:'DAB' (ensemble_label + programmes map). */
+  private onMetadata(v: any): void {
+    if (v && v.mode === 'DAB') {
+      // DAB metadata is INCREMENTAL — the server sends partial updates (a
+      // timestamp every second, programmes once, ensemble once). Cache the
+      // programme list + ensemble so a timestamp-only message doesn't wipe them.
+      if (v.programmes && typeof v.programmes === 'object') {
+        this.dabProgrammes = Object.entries(v.programmes).map(([id, name]) => ({ id: Number(id), name: String(name) }));
+        // OWRX does NOT auto-play a DAB service — the web client selects the first
+        // programme once the list lands (MetaPanel.js:707). Without an
+        // audio_service_id the server outputs NO audio, so adopt the first and
+        // RE-SEND the demod to actually start it.
+        if (this.dabProgrammes.length && !this.dabProgrammes.some((p) => p.id === this.audioServiceId)) {
+          this.audioServiceId = this.dabProgrammes[0].id;
+          this.dbg('DAB adopt service ' + this.audioServiceId + ' (' + this.dabProgrammes[0].name + ')');
+          this.audioDec.reset(); this.hdAudioDec.reset();
+          this.sendDemod();
+        }
+      }
+      if (typeof v.ensemble_label === 'string') this.dabEnsemble = v.ensemble_label;
+      // The selected programme's label is the "station name"; fall back to ensemble.
+      const selName = this.dabProgrammes.find((p) => p.id === this.audioServiceId)?.name;
+      // Dedupe — DAB resends metadata every second (timestamp ticks); only emit
+      // when the parts the UI cares about actually change, to avoid per-second
+      // React churn (the picker + station readout re-rendering needlessly).
+      const sig = (selName ?? '') + '|' + this.dabEnsemble + '|' + this.dabProgrammes.map((p) => p.id + ':' + p.name).join(',');
+      if (sig !== this.lastDabSig) {
+        this.lastDabSig = sig;
+        this.cb.onMetadata?.({
+          ensemble: this.dabEnsemble || undefined,
+          stationName: selName,
+          programmes: this.dabProgrammes,   // always the full cached list
+        });
+      }
+      return;
+    }
+    // RDS (WFM). ps = programme service name (8 chars), radiotext = scrolling.
+    if (v && (v.protocol === 'WFM' || 'ps' in v || 'radiotext' in v)) {
+      this.cb.onMetadata?.({
+        stationName: typeof v.ps === 'string' ? v.ps.trim() || undefined : undefined,
+        text: typeof v.radiotext === 'string' ? v.radiotext.trim() || undefined : undefined,
+      });
+    }
   }
 
   // ── inbound: binary frames ───────────────────────────────────────────────
@@ -277,7 +365,13 @@ export class OwrxAdapter implements SDRBackend {
    *  native engine just plays — audio stops if JS suspends (native engine later).
    *  type-2 = output_rate (12k); type-4 = hd_output_rate (48k), used for WFM. */
   private onAudio(payload: Uint8Array, rate: number, dec: OwrxAudioDecoder): void {
-    if (!this.audioStarted) { Vibe?.startExternalAudio?.(rate); this.audioStarted = true; }
+    // DAB speed correction (the dablin/OWRX chipmunk: UK DAB+ stations whose true
+    // sample rate is misread, played 1.5×/1.07× fast). We can't know the true rate
+    // from the headerless type-4 stream, so the user picks a ratio; we under-state
+    // the PCM rate by that factor and let the native resampler stretch it back to
+    // correct speed + pitch. Only DAB (type-4) is scaled; WFM (also type-4) isn't.
+    const playRate = String(this.mode) === 'dab' ? Math.round(rate * this.dabRateScale) : rate;
+    if (!this.audioStarted) { Vibe?.startExternalAudio?.(playRate); this.audioStarted = true; }
     let pcm: Int16Array;
     if (this.cfg?.audioCompression === 'adpcm') {
       pcm = dec.decode(payload);
@@ -288,7 +382,13 @@ export class OwrxAdapter implements SDRBackend {
       for (let i = 0; i < pcm.length; i++) pcm[i] = dv.getInt16(i * 2, true);
     }
     if (!pcm.length) return;
-    Vibe?.pushExternalPcm?.(bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)), rate);
+    Vibe?.pushExternalPcm?.(bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)), playRate);
+  }
+
+  /** DAB speed correction factor (1 = off). e.g. 0.6667 plays a 32 kHz-as-48 kHz
+   *  station at correct speed; 0.9375 fixes the DAB+ 960-vs-1024 framing drift. */
+  setDabAudioScale(scale: number): void {
+    this.dabRateScale = scale > 0 ? scale : 1;
   }
 
   private onFft(payload: Uint8Array): void {
@@ -303,7 +403,39 @@ export class OwrxAdapter implements SDRBackend {
       for (let i = 0; i < row.length; i++) row[i] = dv.getFloat32(i * 4, true);
     }
     this.lastRow = row;
+    // Track frame inter-arrival for the connection signal meter.
+    const now = Date.now();
+    if (this.lastFrameAt > 0) {
+      this.gapHist.push(now - this.lastFrameAt);
+      if (this.gapHist.length > 40) this.gapHist.shift();
+    }
+    this.lastFrameAt = now;
+    this.evalLink();
     this.emitSlice(row);
+  }
+
+  /** Score the connection like a phone signal indicator (0–3 bars) from FFT
+   *  frame timing. Stalls are judged against the MEDIAN gap so a profile's
+   *  natural frame rate (whatever it is) reads as full bars when steady. */
+  private evalLink(): void {
+    let q: 0 | 1 | 2 | 3;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      q = 0;
+    } else {
+      const now = Date.now();
+      const h = this.gapHist;
+      let med = 100;
+      if (h.length >= 5) { const s = [...h].sort((a, b) => a - b); med = s[s.length >> 1]; }
+      let stalls = 0;
+      for (let i = 0; i < h.length; i++) if (h[i] > med * 2.5 + 50) stalls++;
+      const starving = this.lastFrameAt > 0 && now - this.lastFrameAt > Math.max(2000, med * 4);
+      // Just (re)connected and few frames yet — show a tentative two bars.
+      if (now - this.connectedAt < 4000 && h.length < 5) q = 2;
+      else if (stalls >= 3 || starving) q = 1;
+      else if (stalls >= 1) q = 2;
+      else q = 3;
+    }
+    if (q !== this.lastLink) { this.lastLink = q; this.cb.onLink?.(q); }
   }
 
   /** Slice the full-profile FFT row to the current view window and emit. The
@@ -358,10 +490,33 @@ export class OwrxAdapter implements SDRBackend {
       if (mod === 'sam') mod = 'am';                 // clamp per brief §4
       else if (mod === 'nfm' && this.modes.includes('fm')) mod = 'fm';
     }
-    this.send({ type: 'dspcontrol', params: {
+    const params: Record<string, unknown> = {
       offset_freq: Math.round(offset), mod, squelch_level: -150,
-      low_cut: this.bwLow, high_cut: this.bwHigh,
-    } });
+    };
+    // Full-IF fixed-rate decoders (DAB/Dablin runs on the raw 2.048 MHz IF) must
+    // get null cuts — matching the OWRX web client (Demodulator.js sends
+    // low_cut/high_cut = null when a mode has no bandpass). Sending numeric cuts
+    // inserts a bandpass/resampler that starves the fixed-IF decoder → no decode,
+    // no metadata, no audio. AM/SSB also lack an explicit bandpass but DO want
+    // our cuts, so this is keyed to the specific full-IF modes, not !bandpass.
+    const FULL_IF = ['dab', 'drm'];
+    const serverControlsBw = FULL_IF.includes(mod);
+    params.low_cut = serverControlsBw ? null : this.bwLow;
+    params.high_cut = serverControlsBw ? null : this.bwHigh;
+    // DAB: which programme (audio service) within the ensemble to decode.
+    if (mod === 'dab') params.audio_service_id = this.audioServiceId;
+    this.send({ type: 'dspcontrol', params });
+  }
+
+  /** DAB: pick a programme within the tuned ensemble (re-sends the demod). */
+  setAudioServiceId(id: number): void {
+    if (id === this.audioServiceId) return;
+    this.audioServiceId = id;
+    this.audioDec.reset(); this.hdAudioDec.reset();   // audio service swap = new stream
+    this.sendDemod();
+    // Re-emit metadata so the UI's station name follows the new selection.
+    const selName = this.dabProgrammes.find((p) => p.id === id)?.name;
+    if (selName) this.cb.onMetadata?.({ stationName: selName, programmes: this.dabProgrammes });
   }
 
   tune(frequency: number, mode?: SDRMode): void {
@@ -403,10 +558,21 @@ export class OwrxAdapter implements SDRBackend {
   private applyModeBandpass(): void {
     const info = this.serverModes.find((m) => m.id === (this.mode as string));
     if (info?.bandpass) { this.bwLow = info.bandpass.low_cut; this.bwHigh = info.bandpass.high_cut; }
+    else if (String(this.mode) === 'dab') {
+      // DAB has no mode bandpass (server-controlled, ~1.536 MHz channel). Show a
+      // wide span so the UI/VFO overlay matches what's actually decoded — the
+      // cuts aren't sent (see sendDemod), this is display-only.
+      this.bwLow = -768_000; this.bwHigh = 768_000;
+    }
   }
 
   setMode(mode: SDRMode): void {
     this.mode = mode;
+    // Leaving DAB/WFM: the RDS/DAB labels no longer apply, clear them.
+    if (String(mode) !== 'dab' && String(mode) !== 'wfm') {
+      this.dabProgrammes = []; this.dabEnsemble = ''; this.lastDabSig = '';
+      this.cb.onMetadata?.({ programmes: [] });
+    }
     this.applyModeBandpass();
     // The audio stream restarts on a mode change (e.g. NFM type-2 ↔ WFM type-4) —
     // reset both ADPCM decoders so stale state doesn't corrupt the new stream.
@@ -416,6 +582,9 @@ export class OwrxAdapter implements SDRBackend {
   }
 
   setBandwidth(low: number, high: number): void {
+    // DAB's passband is server-controlled and fixed-wide — ignore UI bandwidth
+    // edits so the displayed span (and the unsent cuts) stay correct.
+    if (String(this.mode) === 'dab') return;
     this.bwLow = low; this.bwHigh = high; this.sendDemod(); this.cb.onStatus(this.getStatus());
   }
 

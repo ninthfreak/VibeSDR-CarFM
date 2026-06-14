@@ -126,6 +126,12 @@ export interface MenuSheetProps {
   profiles?:        { id: string; name: string }[];
   activeProfileId?: string;
   onSelectProfile?: (id: string) => void;
+  // OWRX DAB ensemble — programme picker (hidden unless a DAB ensemble is tuned)
+  dabProgrammes?:   { id: number; name: string }[];
+  activeDabId?:     number;
+  onSelectDab?:     (id: number) => void;
+  dabSpeed?:        number;            // DAB speed-correction factor (1 = off)
+  onDabSpeed?:      (scale: number) => void;
   serverType?:      string;   // 'ubersdr' | 'owrx' | 'kiwi' — picks the footer logo
   searchBookmarks?: ServerBookmark[];
   searchBands?:     ServerBand[];
@@ -401,6 +407,7 @@ export default function MenuSheet({
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
   profiles = [], activeProfileId, onSelectProfile, serverType = 'ubersdr',
+  dabProgrammes = [], activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
   searchBookmarks = [], searchBands = [], onSearchTune,
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks,
@@ -451,6 +458,7 @@ export default function MenuSheet({
     : { height: sheetH };
   const backdropOp = useRef(new Animated.Value(0)).current;
   const [profileOpen, setProfileOpen] = useState(false);   // OWRX profile dropdown
+  const [dabOpen, setDabOpen] = useState(false);           // OWRX DAB programme dropdown
   const [dispSettingsOpen, setDispSettingsOpen] = useState(false);
 
   // Bookmarks pane (replaces menu content like DISPLAY SETTINGS)
@@ -571,8 +579,62 @@ export default function MenuSheet({
               </View>
             </>)}
 
+            {/* ── DAB PROGRAMME (OWRX — only when a DAB ensemble is tuned) ── */}
+            {dabProgrammes.length > 0 && (<>
+              <SectionLabel label="DAB PROGRAMME" />
+              <View style={styles.profileDrop}>
+                <TouchableOpacity style={styles.profileDropHead} onPress={() => setDabOpen((o) => !o)} activeOpacity={0.7}>
+                  <Text style={styles.profileDropHeadText} numberOfLines={1}>
+                    {dabProgrammes.find((p) => p.id === activeDabId)?.name ?? 'Select programme'}
+                  </Text>
+                  <Text style={styles.profileDropChevron}>{dabOpen ? '▴' : '▾'}</Text>
+                </TouchableOpacity>
+                {dabOpen && (
+                  <View style={styles.profileDropList}>
+                    {dabProgrammes.map((p) => {
+                      const active = p.id === activeDabId;
+                      return (
+                        <TouchableOpacity
+                          key={p.id}
+                          style={styles.profileDropItem}
+                          onPress={() => { onSelectDab?.(p.id); setDabOpen(false); }}
+                          activeOpacity={0.7}>
+                          <Text style={[styles.profileDropItemText, active && styles.profileChipTextActive]} numberOfLines={1}>
+                            {active ? '✓ ' : ''}{p.name}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+              {/* DAB speed correction — works around the dablin/OWRX chipmunk
+                  (UK DAB+ stations whose sample rate is misread). Presets match
+                  the common rate misreads; the user picks what sounds right. */}
+              <Text style={styles.dabSpeedLabel}>Speed fix · remembered per station</Text>
+              <View style={styles.dabSpeedRow}>
+                {[
+                  { v: 1,       l: 'Off' },
+                  { v: 0.9375,  l: '×0.94' },
+                  { v: 0.6667,  l: '×0.67' },
+                  { v: 0.5,     l: '×0.50' },
+                ].map((o) => {
+                  const active = Math.abs((dabSpeed ?? 1) - o.v) < 0.001;
+                  return (
+                    <TouchableOpacity
+                      key={o.l}
+                      style={[styles.dabSpeedChip, active && styles.dabSpeedChipActive]}
+                      onPress={() => onDabSpeed?.(o.v)}
+                      activeOpacity={0.7}>
+                      <Text style={[styles.dabSpeedChipText, active && styles.profileChipTextActive]}>{o.l}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>)}
+
             {/* ── NEARBY STATION ─────────────────────────────────── */}
-            <SectionLabel label="NEARBY STATION" first={profiles.length === 0} />
+            <SectionLabel label="NEARBY STATION" first={profiles.length === 0 && dabProgrammes.length === 0} />
             <View style={styles.vtsRow}>
               <TouchableOpacity style={styles.vtsArrow} onPress={onVtsPrev} hitSlop={8}>
                 <Text style={styles.vtsArrowText}>◂</Text>
@@ -1388,6 +1450,14 @@ const styles = StyleSheet.create({
   profileDropItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.divider },
   profileDropItemText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14 },
   profileChipTextActive: { color: C.active },
+  dabSpeedLabel: { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, marginTop: 8, marginBottom: 4 },
+  dabSpeedRow: { flexDirection: 'row', gap: 8 },
+  dabSpeedChip: {
+    flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 8,
+    borderWidth: 1, borderColor: C.border, backgroundColor: C.btnBg,
+  },
+  dabSpeedChipActive: { borderColor: C.active },
+  dabSpeedChipText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 13 },
   vtsRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
   vtsArrow: {
     backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border,

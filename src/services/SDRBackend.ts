@@ -88,6 +88,30 @@ export interface SDRBackend {
   // Profiles — present only when caps.profiles (OWRX)
   getProfiles?(): ProfileInfo[];
   selectProfile?(id: string): void;
+
+  /** DAB: switch the audio service (programme) within the tuned ensemble. */
+  setAudioServiceId?(id: number): void;
+  /** DAB: speed-correction factor for the dablin chipmunk (1 = off). */
+  setDabAudioScale?(scale: number): void;
+}
+
+/** A DAB programme (audio service) within the tuned ensemble. */
+export interface DabProgramme { id: number; name: string; }
+
+/**
+ * Live station metadata decoded by the backend — RDS on broadcast FM and the
+ * DAB ensemble/programme labels. Normalised so the UI shows ONE station name
+ * uniformly, whether it came from RDS, DAB, or a bookmark match.
+ */
+export interface StationMeta {
+  /** WFM RDS programme service (station) name, or the selected DAB programme. */
+  stationName?: string;
+  /** WFM RDS radiotext (scrolling now-playing/info), if any. */
+  text?: string;
+  /** DAB ensemble (multiplex) label. */
+  ensemble?: string;
+  /** DAB programmes in the ensemble — drives the programme picker. */
+  programmes?: DabProgramme[];
 }
 
 /** Additive callbacks for v3 backends — UI ignores when absent. */
@@ -98,6 +122,8 @@ export interface BackendCallbacks extends SDRCallbacks {
   onProfiles?: (list: ProfileInfo[]) => void;
   /** OWRX: server's available demodulators — gate the mode picker to these. */
   onModes?: (list: BackendMode[]) => void;
+  /** OWRX: live RDS (FM) / DAB station metadata. Cleared with empty fields. */
+  onMetadata?: (meta: StationMeta) => void;
 }
 
 export type { SDRStatus, SDRMode, SDRCallbacks };

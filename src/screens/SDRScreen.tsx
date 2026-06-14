@@ -39,7 +39,7 @@ import type { RootStackParamList }     from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { createBackend } from '../services/UberSDRAdapter';
-import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode } from '../services/SDRBackend';
+import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind,
@@ -321,6 +321,47 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [profiles, setProfiles]   = useState<ProfileInfo[]>([]);  // OWRX only
   const [activeProfileId, setActiveProfileId] = useState<string | undefined>(undefined);
   const [serverModes, setServerModes] = useState<BackendMode[]>([]);  // OWRX gated demod list
+  // Live RDS (FM) / DAB station metadata (OWRX). liveStationRef mirrors the name
+  // for the VTS resolver (reads in a debounced callback, avoids stale closures).
+  const [dabProgrammes, setDabProgrammes] = useState<DabProgramme[]>([]);  // OWRX DAB ensemble
+  const [activeDabId, setActiveDabId] = useState<number>(0);
+  // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
+  const [dabSpeed, setDabSpeed] = useState<number>(1);
+  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string }>({});
+  const liveStationRef = useRef<string>('');
+
+  // DAB speed correction is remembered PER STATION (ensemble + programme), since
+  // the chipmunk is per-service: you set ×0.67 on a bad station once and it
+  // auto-applies every time you return, while good stations stay Off. dabSpeed
+  // is the CURRENT station's factor (for the menu highlight); the map is the store.
+  const dabSpeedMapRef = useRef<Record<string, number>>({});
+  const dabKeyRef = useRef<string>('');   // "<ensemble>|<programme>" of the tuned service
+  useEffect(() => {
+    AsyncStorage.getItem('owrx_dab_speed_map').then((j: string | null) => {
+      if (!j) return;
+      try { const m = JSON.parse(j); if (m && typeof m === 'object') dabSpeedMapRef.current = m; } catch {}
+    }).catch(() => {});
+  }, []);
+  // Menu speed buttons set the factor for the CURRENTLY tuned station + persist it.
+  const onDabSpeed = useCallback((scale: number) => {
+    setDabSpeed(scale);
+    client.current?.setDabAudioScale?.(scale);
+    const key = dabKeyRef.current;
+    if (key) {
+      dabSpeedMapRef.current = { ...dabSpeedMapRef.current, [key]: scale };
+      AsyncStorage.setItem('owrx_dab_speed_map', JSON.stringify(dabSpeedMapRef.current)).catch(() => {});
+    }
+  }, []);
+  // Called from the DAB metadata handler when the tuned service changes: look up
+  // its saved correction (default Off) and apply it automatically.
+  const applyDabStation = useCallback((ensemble: string, programme: string) => {
+    const key = ensemble + '|' + programme;
+    if (key === dabKeyRef.current) return;
+    dabKeyRef.current = key;
+    const saved = dabSpeedMapRef.current[key] ?? 1;
+    setDabSpeed(saved);
+    client.current?.setDabAudioScale?.(saved);
+  }, []);
   const [status, setStatus]       = useState<SDRStatus>({
     frequency: 14_074_000, mode: 'usb',
     bandwidthLow: -3000, bandwidthHigh: 3000,
@@ -507,6 +548,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   // audio-stream floor offset (madpsy/ka9q_ubersdr#77) so it's honest 0–50 dB,
   // NOT the buggy 30–80 dB UberSDR shows. null until the first reading arrives.
   const audioSnrRef = useRef<number | null>(null);
+  // OWRX reports a real channel S-meter (dBm) over the control WS — the
+  // demodulator's own level reading, zoom-independent like UberSDR's SNR. We
+  // store the latest value and let it drive the absolute (S-meter/dBFS) meter
+  // for OWRX, where there's no native VibeSignal feed. null until first reading.
+  const owrxSmeterRef = useRef<number | null>(null);
   const [signalMode,   setSignalMode]   = useState<'snr' | 'smeter' | 'dbfs'>('snr');
   const signalModeRef = useRef<'snr' | 'smeter' | 'dbfs'>('snr');
   useEffect(() => { signalModeRef.current = signalMode; }, [signalMode]);
@@ -1222,8 +1268,27 @@ export default function SDRScreen({ route, navigation }: Props) {
         b.emit({ ...b.value, link: q });
       },
       onStatus:     (s) => { if (!destroyed.current) setStatus(s); },
+      onSMeter:     (dbm) => { if (!destroyed.current) owrxSmeterRef.current = dbm; },
       onProfiles:   (list) => { if (!destroyed.current) setProfiles(list); },
       onModes:      (list) => { if (!destroyed.current) setServerModes(list); },
+      onMetadata:   (meta) => {
+        if (destroyed.current) return;
+        // RDS (FM) / DAB labels feed the SAME station display as bookmarks (VTS),
+        // so a live station name shows uniformly regardless of source.
+        liveStationRef.current = meta.stationName ?? '';
+        setLiveStation({ name: meta.stationName, text: meta.text });
+        // meta.programmes is the full cached list (DAB) or [] (explicit clear);
+        // RDS messages omit it entirely (undefined) → leave the picker untouched.
+        if (meta.programmes) {
+          setDabProgrammes(meta.programmes);
+          // Mirror the server's default (first programme) so the picker reflects
+          // what's actually playing until the user picks another.
+          setActiveDabId((cur) => meta.programmes!.some((p) => p.id === cur)
+            ? cur : (meta.programmes![0]?.id ?? 0));
+          // Auto-apply this station's remembered speed correction.
+          if (meta.stationName) applyDabStation(meta.ensemble ?? '', meta.stationName);
+        }
+      },
       onSpectrum:   (newBins, s) => {
         if (destroyed.current) return;
         // Waterfall/spectrum render imperatively — no React state per frame.
@@ -1261,12 +1326,22 @@ export default function SDRScreen({ route, navigation }: Props) {
           // independent of zoom (this is how UberSDR's meter works). 0 until the
           // first reading lands.
           const snrDb = audioSnrRef.current ?? 0;
+          // OWRX exposes a real channel S-meter (dBm) over the control WS but no
+          // SNR. When present it's the honest absolute level source (and, lacking
+          // an SNR feed, drives the bar in every mode); otherwise fall back to
+          // the spectrum-derived peak as before.
+          const owrxDbm = owrxSmeterRef.current;
+          const levelDbm = owrxDbm ?? peak;
           // Bar source follows the meter mode: SNR uses the compression curve
           // (sigNorm, calibrated for honest 0–50 dB); S-meter/dBFS use the
-          // absolute level mapping off the spectrum peak.
-          const norm = signalModeRef.current === 'snr'
-            ? sigNorm(snrDb)
-            : Math.max(0, Math.min(1, (peak + 130) / 90));
+          // absolute level mapping off the dBm level. OWRX's smeter dB spans
+          // roughly −110 (noise) … −10 (strong), a different scale to UberSDR's
+          // spectrum, so it gets its own linear mapping.
+          const norm = owrxDbm != null
+            ? Math.max(0, Math.min(1, (owrxDbm + 110) / 100))
+            : signalModeRef.current === 'snr'
+              ? sigNorm(snrDb)
+              : Math.max(0, Math.min(1, (peak + 130) / 90));
           // Skin-feel smoothing rescaled for 10Hz updates (the skin's 0.55/0.18
           // alphas assumed its ~60Hz rAF loop — at 10Hz they felt sluggish).
           const sm = meterSmooth.current;
@@ -1275,8 +1350,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           else if (sm.hold > 0)      { sm.hold--; }
           else                       { sm.peak = Math.max(0, sm.peak - 0.02); }
           meterBus.current.emit({
-            level: sm.level, peak: sm.peak, snr: snrDb, dbfs: peak,
-            active: snrDb > 6, link: meterBus.current.value.link,
+            level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
+            active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,
+            link: meterBus.current.value.link,
           });
         }
       },
@@ -1372,7 +1448,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         // audio WS can be half-open (server reaped the session, socket never
         // errors) leaving audio+spectrum dead until relaunch. The native
         // watchdog also catches this within ~8s; this makes it immediate.
-        (NativeModules.VibePowerModule as { revive?: () => void })?.revive?.();
+        // OWRX/Kiwi audio is JS-owned (no native WS) — revive() would resurrect a
+        // UberSDR audio WS underneath the foreign stream, so only the native Opus
+        // engine (ubersdr) is revived here.
+        if ((route.params.serverType ?? 'ubersdr') === 'ubersdr') {
+          (NativeModules.VibePowerModule as { revive?: () => void })?.revive?.();
+        }
         // Reopen the spectrum only AFTER the audio session re-registers
         // server-side: the spectrum WS subscribes to that same session, so if it
         // reopens first it gets no frames and the waterfall stays frozen (the bug
@@ -1477,6 +1558,9 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onVfoDelta = useCallback((pxDelta: number) => {
     const c = client.current; if (!c) return;
+    // DAB is locked to its ensemble block — VFO tuning just knocks it off the mux
+    // (kills the decode, and the block is hard to re-find). Ignore drum input.
+    if (String(c.getStatus().mode) === 'dab') return;
     markInteract();
     const s = stepRef.current;
     // Velocity-adaptive sensitivity: EMA of |px|/dt. A gesture gap resets to
@@ -1616,6 +1700,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onWfTapTune = useCallback((hz: number) => {
     const c = client.current; if (!c) return;
+    if (String(c.getStatus().mode) === 'dab') return;   // DAB locked to its ensemble block
     markInteract();
     const [loHz, hiHz] = c.caps.freqRange;
     const clamped = Math.max(loHz, Math.min(hiHz, hz));
@@ -1962,7 +2047,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     const range = `${fmtBandFreq(primary.lo)}–${fmtBandFreq(primary.hi)}`;
     let cond: string | null = null;
     let color: string | undefined;
-    if (primary.type === 'ham') {
+    // Band conditions come from UberSDR's /api/noisefloor/latest (ft8_snr); only
+    // UberSDR serves it. Don't attempt it on OWRX/Kiwi — they 404 (and the cache
+    // clear in refreshBandSnr would otherwise be the only thing stopping the
+    // previous instance's numbers leaking through).
+    if (primary.type === 'ham' && (route.params.serverType ?? 'ubersdr') === 'ubersdr') {
       const snr = getBandSnrDb(baseUrl, primary.bandLabel);
       cond = propCondition(snr);
       if (snr !== null) {
@@ -2018,6 +2107,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (d.step) setStep(d.step);
       }
     }
+    // A live RDS/DAB station name (OWRX) owns the station display — it's the
+    // actual decode of what you're hearing, so it wins over a bookmark guess.
+    // The liveStation effect drives the name + popup; just keep the menu freq
+    // pointed at the VFO and skip the bookmark match.
+    if (liveStationRef.current) { setVtsMenuFreq(hz); return; }
     // Nearest station
     const nearest = findNearest(vtsBookmarks.current, hz);
     if (!nearest) {
@@ -2050,6 +2144,23 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearTimeout(t);
   }, [status.frequency, vtsCheck]);
 
+  // Live RDS/DAB station name arrives async (no frequency change to trigger
+  // vtsCheck), so react to it directly: drive the VTS station readout + popup,
+  // uniform with the bookmark-derived station-on notif. Cleared name hands the
+  // display back to the bookmark resolver on the next tune.
+  useEffect(() => {
+    const name = liveStation.name;
+    if (!name) { if (vtsLastStation.current && !liveStationRef.current) vtsLastStation.current = ''; return; }
+    setVtsMenuName(name);
+    setVtsMenuFreq(status.frequency);
+    if (name !== vtsLastStation.current) {
+      vtsLastStation.current = name;
+      vtsKey.current++;
+      setVtsNotif({ key: vtsKey.current, name, kind: 'station-on' });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveStation.name]);
+
   // ── VTS-aware media session ────────────────────────────────────────────────
   // Track  = freq (user's unit) + demod + tune step ("648 kHz AM · 9 kHz step")
   // Artist = "VibeSDR: Radio Caroline" on a station, else the band
@@ -2070,7 +2181,9 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       const nearest = findNearest(vtsBookmarks.current, hz);
       let context: string;
-      if (nearest && Math.abs(nearest.offset) <= 1000) {
+      if (liveStationRef.current) {
+        context = liveStationRef.current;   // live RDS/DAB station name wins
+      } else if (nearest && Math.abs(nearest.offset) <= 1000) {
         context = nearest.name;
       } else {
         const order: Record<string, number> = { ham: 0, broadcast: 1, utility: 2 };
@@ -2083,7 +2196,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     }, 300);
     return () => clearTimeout(t);
   }, [status.frequency, status.mode, step, freqUnit, ituRegion, mediaSkip,
-      serverBookmarks, userBookmarks]);
+      serverBookmarks, userBookmarks, liveStation.name]);
 
   useEffect(() => () => {
     if (vtsDeferredBand.current) clearTimeout(vtsDeferredBand.current);
@@ -2332,6 +2445,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         profiles={profiles}
         activeProfileId={activeProfileId}
         onSelectProfile={(id) => { client.current?.selectProfile?.(id); setActiveProfileId(id); }}
+        dabProgrammes={dabProgrammes}
+        activeDabId={activeDabId}
+        onSelectDab={(id) => { client.current?.setAudioServiceId?.(id); setActiveDabId(id); }}
+        dabSpeed={dabSpeed}
+        onDabSpeed={onDabSpeed}
         vtsName={vtsMenuName}
         vtsFreq={vtsMenuFreq}
         onVtsPrev={onVtsPrev}

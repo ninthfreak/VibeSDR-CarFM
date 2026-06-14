@@ -159,6 +159,12 @@ const SNR_TTL = 60_000;
 
 export function refreshBandSnr(baseUrl: string): void {
   if (baseUrl === _snrBase && Date.now() - _snrCacheTime <= SNR_TTL) return;
+  // Instance changed → drop the previous server's conditions IMMEDIATELY. The
+  // cache is module-global and the fetch below is async (and 404s on servers
+  // without /api/noisefloor/latest, e.g. OpenWebRX), so without this clear the
+  // OLD instance's band SNR leaks onto the new one (showed UberSDR "Conditions:
+  // Fair" while connected to OWRX, which supplies no conditions at all).
+  if (baseUrl !== _snrBase) _snrCache = {};
   _snrBase = baseUrl;
   _snrCacheTime = Date.now();  // debounce concurrent refreshes
   fetch(`${baseUrl.replace(/\/+$/, '')}/api/noisefloor/latest`)
