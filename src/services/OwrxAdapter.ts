@@ -45,6 +45,38 @@ function bytesToBase64(b: Uint8Array): string {
 
 const OWRX_AUDIO_RATE = 12000;   // output_rate (type-2)
 const OWRX_HD_RATE = 48000;      // hd_output_rate (type-4 — WFM/wide)
+// Fixed waterfall row width. Every emitted spectrum slice is resampled to this
+// so the renderer's history texture never reallocates (a length change wipes
+// the whole waterfall — server FFT frames jitter in size on digital profiles).
+const OWRX_OUT_BINS = 1024;
+
+/** Resample a dB FFT row to a fixed bin count. Down-samples with MAX pooling
+ *  (peak-preserving — narrow carriers survive) and up-samples with linear
+ *  interpolation (smooth). Returns the input untouched if already the right size. */
+function resampleRow(src: Float32Array, outN: number): Float32Array {
+  const n = src.length;
+  if (n === outN || n === 0) return n === outN ? src : new Float32Array(outN);
+  const out = new Float32Array(outN);
+  if (n > outN) {
+    // down: each output bin is the peak of its source span
+    for (let i = 0; i < outN; i++) {
+      const a = Math.floor((i * n) / outN);
+      const b = Math.max(a + 1, Math.floor(((i + 1) * n) / outN));
+      let m = -Infinity;
+      for (let j = a; j < b && j < n; j++) if (src[j] > m) m = src[j];
+      out[i] = m;
+    }
+  } else {
+    // up: linear interpolation across source bins
+    const step = (n - 1) / (outN - 1);
+    for (let i = 0; i < outN; i++) {
+      const p = i * step, a = Math.floor(p), t = p - a;
+      const v0 = src[a], v1 = src[Math.min(n - 1, a + 1)];
+      out[i] = v0 + (v1 - v0) * t;
+    }
+  }
+  return out;
+}
 
 // Internal SDRMode → OWRX wire modulation. Gated on the server `modes` list at
 // runtime; cwu/cwl collapse to 'cw' (offset convention handles the sideband).
@@ -101,6 +133,10 @@ export class OwrxAdapter implements SDRBackend {
   private dabEnsemble = '';                    // DAB: ensemble (multiplex) label, cached
   private lastDabSig = '';                      // dedupe key for per-second DAB metadata
   private lastVoiceSpeaker = '';                 // dedupe key for digital-voice callers
+  private rdsPs = '';                            // cached RDS programme-service name
+  private owrxBookmarks: { name: string; frequency: number; mode?: string }[] = [];
+  private owrxDials: { name: string; frequency: number; mode?: string }[] = [];
+  private voiceTimer: ReturnType<typeof setTimeout> | null = null;  // digital-voice idle clear
   private dabRateScale = 1;                      // DAB speed-correction factor (1 = off)
 
   // current view (client-side); defaults to whole profile on first config
@@ -241,6 +277,18 @@ export class OwrxAdapter implements SDRBackend {
         }
         break;
       case 'metadata': this.onMetadata(json.value || {}); break;
+      case 'bookmarks':        // server-configured named bookmarks
+        this.owrxBookmarks = ((json.value || []) as any[])
+          .filter((b) => b && typeof b.frequency === 'number')
+          .map((b) => ({ name: String(b.name ?? b.modulation ?? b.frequency), frequency: b.frequency, mode: b.modulation }));
+        this.emitBookmarks();
+        break;
+      case 'dial_frequencies': // auto-detected mode markers (FT8 etc.) — also tunable
+        this.owrxDials = ((json.value || []) as any[])
+          .filter((d) => d && typeof d.frequency === 'number')
+          .map((d) => ({ name: String(d.mode ?? d.frequency).toUpperCase(), frequency: d.frequency, mode: d.mode }));
+        this.emitBookmarks();
+        break;
       case 'sdr_error':
       case 'demodulator_error': this.cb.onError(String(json.value ?? 'OpenWebRX error')); break;
       case 'backoff': this.dbg('server backoff ' + json.value); break;
@@ -272,7 +320,7 @@ export class OwrxAdapter implements SDRBackend {
       if (profileSwitch) {
         this.audioDec.reset(); this.hdAudioDec.reset();   // ADPCM restarts per profile
         this.gapHist = []; this.lastFrameAt = 0;          // frame rate may change — reset link timing
-        this.audioServiceId = 0; this.dabProgrammes = []; this.dabEnsemble = ''; this.lastDabSig = '';  // new ensemble/station
+        this.audioServiceId = 0; this.dabProgrammes = []; this.dabEnsemble = ''; this.lastDabSig = ''; this.rdsPs = ''; this.lastVoiceSpeaker = '';  // new ensemble/station
         this.cb.onMetadata?.({ programmes: [] });          // clear stale RDS/DAB labels + picker
       }
     }
@@ -330,6 +378,23 @@ export class OwrxAdapter implements SDRBackend {
     }
   }
 
+  /** Drop held live metadata (RDS name / digital-voice caller) and tell the UI to
+   *  clear it — on retune (the old station no longer applies) and on voice idle.
+   *  Only emits when something was cached, so it doesn't spam on every tune tick. */
+  private clearLiveMeta(): void {
+    if (this.voiceTimer) { clearTimeout(this.voiceTimer); this.voiceTimer = null; }
+    if (this.rdsPs || this.lastVoiceSpeaker) {
+      this.rdsPs = '';
+      this.lastVoiceSpeaker = '';
+      this.cb.onMetadata?.({});
+    }
+  }
+
+  /** Merge server bookmarks + dial-frequency markers and push to the UI. */
+  private emitBookmarks(): void {
+    this.cb.onBookmarks?.([...this.owrxBookmarks, ...this.owrxDials]);
+  }
+
   private onProfiles(list: any[]): void {
     this.profiles = list.map((p) => ({ id: String(p.id ?? p), name: String(p.name ?? p.id ?? p) }));
     this.cb.onProfiles?.(this.profiles);
@@ -344,12 +409,18 @@ export class OwrxAdapter implements SDRBackend {
     // callsign (→ talkgroup/target) as the station name, so the VTS pops on each
     // NEW caller — uniform with RDS/DAB. Deduped on the speaker string.
     const speaker = v ? this.digiVoiceSpeaker(v) : undefined;
-    if (speaker !== undefined) {
-      if (speaker && speaker !== this.lastVoiceSpeaker) {
-        this.lastVoiceSpeaker = speaker;
-        this.cb.onMetadata?.({ stationName: speaker });
-      } else if (!speaker) {
-        this.lastVoiceSpeaker = '';   // transmission ended → next key-up re-pops
+    if (speaker !== undefined) {       // a digital-voice protocol message
+      if (speaker) {                   // someone is transmitting
+        if (speaker !== this.lastVoiceSpeaker) {
+          this.lastVoiceSpeaker = speaker;
+          const badge = String(v.protocol).toUpperCase().replace('DSTAR', 'D-STAR');
+          this.cb.onMetadata?.({ stationName: speaker, badge });   // pop on each new caller
+        }
+        // Keep the caller shown while talking; clear ~2s after they stop (the
+        // server stops sending voice frames at key-down), so a stale callsign
+        // doesn't hang around — VTS falls back to the channel's bookmark.
+        if (this.voiceTimer) clearTimeout(this.voiceTimer);
+        this.voiceTimer = setTimeout(() => { this.voiceTimer = null; this.clearLiveMeta(); }, 2000);
       }
       return;
     }
@@ -388,10 +459,15 @@ export class OwrxAdapter implements SDRBackend {
       return;
     }
     // RDS (WFM). ps = programme service name (8 chars), radiotext = scrolling.
+    // Messages are incremental (ps and radiotext arrive separately), so cache ps
+    // — a radiotext-only update must not blank the station name (which would
+    // dismiss the held popup). Cleared on mode/profile change.
     if (v && (v.protocol === 'WFM' || 'ps' in v || 'radiotext' in v)) {
+      if (typeof v.ps === 'string' && v.ps.trim()) this.rdsPs = v.ps.trim();
       this.cb.onMetadata?.({
-        stationName: typeof v.ps === 'string' ? v.ps.trim() || undefined : undefined,
+        stationName: this.rdsPs || undefined,
         text: typeof v.radiotext === 'string' ? v.radiotext.trim() || undefined : undefined,
+        badge: this.rdsPs ? 'RDS' : undefined,
       });
     }
   }
@@ -512,8 +588,15 @@ export class OwrxAdapter implements SDRBackend {
     const n = full.length;
     const loIdx = Math.max(0, Math.min(n, Math.round(((lo - fullLo) / sr) * n)));
     const hiIdx = Math.max(loIdx, Math.min(n, Math.round(((hi - fullLo) / sr) * n)));
-    const out = (loIdx === 0 && hiIdx === n) ? full : full.subarray(loIdx, hiIdx);
-    this.cb.onSpectrum(out, this.statusForSlice(out.length, lo, hi));
+    const win = (loIdx === 0 && hiIdx === n) ? full : full.subarray(loIdx, hiIdx);
+    // ALWAYS emit a FIXED bin count. The waterfall reallocates (and wipes) its
+    // history texture whenever the row length changes — and the server's FFT
+    // frames jitter in length on some (esp. digital/DAB) profiles, which wiped
+    // the waterfall every few seconds. Resampling the window to OUT_BINS keeps
+    // the texture width constant so history is continuous across both that
+    // jitter AND zoom (old rows scroll off instead of a hard reset).
+    const out = resampleRow(win, OWRX_OUT_BINS);
+    this.cb.onSpectrum(out, this.statusForSlice(OWRX_OUT_BINS, lo, hi));
   }
 
   private statusForSlice(binCount: number, viewLo: number, viewHi: number): SDRStatus {
@@ -570,6 +653,10 @@ export class OwrxAdapter implements SDRBackend {
 
   tune(frequency: number, mode?: SDRMode): void {
     if (mode) this.mode = mode;
+    // Retune to a different frequency = a different station/signal → drop the held
+    // RDS name / digital-voice caller so the VTS falls back to bookmarks for the
+    // new spot (was sticking on the old station's RDS/callsign).
+    if (frequency !== this.freq) this.clearLiveMeta();
     if (!this.cfg) { this.freq = frequency; return; }
     const half = this.cfg.sampRate / 2;
     const offset = frequency - this.cfg.centerFreq;
@@ -619,7 +706,7 @@ export class OwrxAdapter implements SDRBackend {
     this.mode = mode;
     // Leaving DAB/WFM: the RDS/DAB labels no longer apply, clear them.
     if (String(mode) !== 'dab' && String(mode) !== 'wfm') {
-      this.dabProgrammes = []; this.dabEnsemble = ''; this.lastDabSig = '';
+      this.dabProgrammes = []; this.dabEnsemble = ''; this.lastDabSig = ''; this.rdsPs = ''; this.lastVoiceSpeaker = '';
       this.cb.onMetadata?.({ programmes: [] });
     }
     this.applyModeBandpass();
@@ -640,9 +727,11 @@ export class OwrxAdapter implements SDRBackend {
   // ── view (client-side slicing) ───────────────────────────────────────────
   zoom(frequency: number, binBandwidth: number): void {
     // binBandwidth is Hz/bin for the requested view; reconstruct total view width.
-    const fftBins = this.cfg?.fftSize ?? 1024;
+    // The view is quantised to OWRX_OUT_BINS bins (the fixed waterfall row width),
+    // so reconstruct against that — NOT the server's fftSize, which would mismatch
+    // the bin count the UI sees and make zoom over/under-shoot.
     this.viewCenter = frequency;
-    this.viewBw = Math.min(this.cfg?.sampRate ?? this.viewBw, binBandwidth * fftBins);
+    this.viewBw = Math.min(this.cfg?.sampRate ?? this.viewBw, binBandwidth * OWRX_OUT_BINS);
     if (this.lastRow) this.emitSlice(this.lastRow);
   }
   pan(frequency: number): void { this.viewCenter = frequency; if (this.lastRow) this.emitSlice(this.lastRow); }
@@ -665,7 +754,9 @@ export class OwrxAdapter implements SDRBackend {
     const sr = this.cfg?.sampRate ?? 0;
     const { lo, hi } = this.window();
     const bw = Math.max(1, hi - lo);
-    const bins = this.cfg?.fftSize ? Math.round((bw / sr) * this.cfg.fftSize) : 0;
+    // The view is always resampled to OWRX_OUT_BINS bins (emitSlice), so report
+    // that as the bin count — the UI's zoom maths must agree with what's drawn.
+    const bins = this.viewInit ? OWRX_OUT_BINS : 0;
     return {
       frequency: this.freq, mode: this.mode,
       bandwidthLow: this.bwLow, bandwidthHigh: this.bwHigh,

@@ -9,7 +9,11 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, ScrollView, StyleSheet, Text } from 'react-native';
+import { Animated, Easing, Image, ScrollView, StyleSheet, Text } from 'react-native';
+
+// Official RDS mark — shown in place of the text badge when the live data is
+// genuine RDS (black logo sits in a white pill against the dark bar).
+const RDS_LOGO = require('../../assets/rds-logo.png');
 
 export interface VtsNotifData {
   key:        number;   // bump to re-trigger even with identical text
@@ -19,6 +23,8 @@ export interface VtsNotifData {
   tuneDir?:   'left' | 'right';  // which way to tune to reach it
   kind:       'station-on' | 'station-off' | 'band';
   color?:     string;   // band-condition override for the primary text
+  hold?:      boolean;  // stay up (no auto-dismiss) — digital-voice caller display
+  badge?:     string;   // source tag (e.g. 'RDS', 'DMR') — shown before the name
 }
 
 const NOTIF_MS = 8000;
@@ -33,34 +39,63 @@ const COL = {
 
 export default function VTSBar({ notif, bottom }: { notif: VtsNotifData | null; bottom: number }) {
   const [shown, setShown] = useState<VtsNotifData | null>(null);
+  const shownRef = useRef<VtsNotifData | null>(null);
   const fade    = useRef(new Animated.Value(0)).current;
   const slide   = useRef(new Animated.Value(0)).current;
   const hideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [areaW, setAreaW] = useState(0);
   const [textW, setTextW] = useState(0);
 
+  const dismiss = () => {
+    if (hideRef.current) { clearTimeout(hideRef.current); hideRef.current = null; }
+    Animated.timing(fade, { toValue: 0, duration: 300, useNativeDriver: true })
+      .start(() => { setShown(null); shownRef.current = null; });
+  };
+
   useEffect(() => {
-    if (!notif) return;
+    if (!notif) {
+      // Explicit clear (e.g. live data ended / mode change) — a held (live) notif
+      // has no auto-dismiss timer, so fade it out here. Timed notifs self-dismiss.
+      if (shownRef.current?.hold) dismiss();
+      return;
+    }
     setShown(notif);
+    shownRef.current = notif;
     setTextW(0);
     slide.setValue(0);
     fade.setValue(0);
     Animated.timing(fade, { toValue: 1, duration: 180, useNativeDriver: true }).start();
-    if (hideRef.current) clearTimeout(hideRef.current);
-    hideRef.current = setTimeout(() => {
-      Animated.timing(fade, { toValue: 0, duration: 300, useNativeDriver: true })
-        .start(() => setShown(null));
-    }, NOTIF_MS);
+    if (hideRef.current) { clearTimeout(hideRef.current); hideRef.current = null; }
+    // Live data (RDS/DMR/DAB) holds on screen; static (bookmark/band) times out.
+    if (!notif.hold) {
+      hideRef.current = setTimeout(() => {
+        Animated.timing(fade, { toValue: 0, duration: 300, useNativeDriver: true })
+          .start(() => { setShown(null); shownRef.current = null; });
+      }, NOTIF_MS);
+    }
     return () => { if (hideRef.current) clearTimeout(hideRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notif?.key]);
+  }, [notif?.key, notif === null]);
 
-  // One-shot slide for overflowing text (skin a11y-scrolling)
+  // Slide for overflowing text. Held (live) notifs loop continuously so the long
+  // RDS radiotext keeps marqueeing; timed notifs do the skin's one-shot a11y slide.
   useEffect(() => {
     if (!shown || !areaW || !textW || textW <= areaW) return;
+    const dist = textW - areaW;
     slide.setValue(0);
+    if (shown.hold) {
+      const dur = Math.max(2200, dist * 16);   // scroll speed scales with length
+      const anim = Animated.loop(Animated.sequence([
+        Animated.delay(1200),
+        Animated.timing(slide, { toValue: -dist, duration: dur, easing: Easing.linear, useNativeDriver: true }),
+        Animated.delay(1500),
+        Animated.timing(slide, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ]));
+      anim.start();
+      return () => anim.stop();
+    }
     Animated.timing(slide, {
-      toValue: -(textW - areaW),
+      toValue: -dist,
       duration: NOTIF_MS - 2500,
       delay: 900,
       easing: Easing.linear,
@@ -84,6 +119,9 @@ export default function VTSBar({ notif, bottom }: { notif: VtsNotifData | null; 
   return (
     <Animated.View style={[styles.wrap, { bottom, opacity: fade }]} pointerEvents="none">
       <Text style={[styles.arrow, { color: leftCol }]}>◄</Text>
+      {shown.badge === 'RDS'
+        ? <Image source={RDS_LOGO} style={styles.rdsLogo} resizeMode="contain" />
+        : !!shown.badge && <Text style={styles.badge}>{shown.badge}</Text>}
       {!!shown.offset && tuneLeft && <Text style={styles.offset}>{shown.offset}</Text>}
       {/* Horizontal ScrollView = unconstrained content width, so the text
           measures at its TRUE size (a plain View clamps Text to the parent
@@ -130,6 +168,27 @@ const styles = StyleSheet.create({
     fontFamily: 'Atkinson Hyperlegible',
     fontSize: 15,
     paddingHorizontal: 4,
+  },
+  badge: {
+    color: '#0a0a0a',
+    backgroundColor: '#52dc64',   // live-data accent (matches on-tune green)
+    fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    overflow: 'hidden',
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    marginRight: 4,
+  },
+  rdsLogo: {
+    width: 46,
+    height: 15,
+    backgroundColor: '#ffffff',
+    borderRadius: 4,
+    paddingHorizontal: 3,
+    marginRight: 5,
   },
   offset: {
     color: 'rgba(255,200,80,0.85)',

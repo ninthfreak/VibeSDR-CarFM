@@ -327,7 +327,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [activeDabId, setActiveDabId] = useState<number>(0);
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
-  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string }>({});
+  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; badge?: string }>({});
+  const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
 
   // DAB speed correction is remembered PER STATION (ensemble + programme), since
@@ -1345,12 +1346,18 @@ export default function SDRScreen({ route, navigation }: Props) {
       onSMeter:     (dbm) => { if (!destroyed.current) owrxSmeterRef.current = dbm; },
       onProfiles:   (list) => { if (!destroyed.current) setProfiles(list); },
       onModes:      (list) => { if (!destroyed.current) setServerModes(list); },
+      onBookmarks:  (list) => {
+        // OWRX server bookmarks/dial markers (over the WS) → same path as
+        // UberSDR's fetched bookmarks: VTS station readout + search bar.
+        if (!destroyed.current) setServerBookmarks(list.map((b) => ({ name: b.name, frequency: b.frequency, mode: b.mode })));
+      },
       onMetadata:   (meta) => {
         if (destroyed.current) return;
         // RDS (FM) / DAB labels feed the SAME station display as bookmarks (VTS),
         // so a live station name shows uniformly regardless of source.
         liveStationRef.current = meta.stationName ?? '';
-        setLiveStation({ name: meta.stationName, text: meta.text });
+        liveBadgeRef.current = meta.badge;
+        setLiveStation({ name: meta.stationName, text: meta.text, badge: meta.badge });
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
         if (meta.programmes) {
@@ -2007,22 +2014,35 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    const load = () => {
-      fetchBookmarks(baseUrl)
-        .then((b: ServerBookmark[]) => { if (!cancelled) setServerBookmarks(b); })
+    const isOwrx = (route.params.serverType ?? 'ubersdr') === 'owrx';
+    // OWRX has no bookmark/band REST API — bookmarks arrive over the WS
+    // (onBookmarks) and bands come from the built-in plan; UberSDR fetches both.
+    if (isOwrx) {
+      setSearchBands(BAND_PLAN.map((b: Band) => ({
+        label: b.bandLabel ?? b.name, start: b.lo, end: b.hi, group: b.type, mode: b.mode,
+      })));
+    } else {
+      const load = () => {
+        fetchBookmarks(baseUrl)
+          .then((b: ServerBookmark[]) => { if (!cancelled) setServerBookmarks(b); })
+          .catch(() => {});
+      };
+      load();
+      fetchBands(baseUrl)
+        .then((b: ServerBand[]) => { if (!cancelled) setSearchBands(b); })
         .catch(() => {});
-    };
-    load();
-    fetchBands(baseUrl)
-      .then((b: ServerBand[]) => { if (!cancelled) setSearchBands(b); })
-      .catch(() => {});
-    refreshBandSnr(baseUrl);
+      refreshBandSnr(baseUrl);
+      // EiBi augmentation is time-of-day dependent — refresh periodically
+      const iv = setInterval(load, 10 * 60_000);
+      loadUserBookmarks()
+        .then((b: UserBookmark[]) => { if (!cancelled) setUserBookmarks(b); })
+        .catch(() => {});
+      return () => { cancelled = true; clearInterval(iv); };
+    }
     loadUserBookmarks()
       .then((b: UserBookmark[]) => { if (!cancelled) setUserBookmarks(b); })
       .catch(() => {});
-    // EiBi augmentation is time-of-day dependent — refresh periodically
-    const iv = setInterval(load, 10 * 60_000);
-    return () => { cancelled = true; clearInterval(iv); };
+    return () => { cancelled = true; };
   }, [baseUrl]);
 
   // Server + user bookmarks (this instance's scope) merged — feeds the VTS
@@ -2206,7 +2226,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     } else if (nearest.name !== vtsLastStation.current) {
       vtsLastStation.current = nearest.name;
       vtsKey.current++;
-      setVtsNotif({ key: vtsKey.current, name: nearest.name, kind: 'station-on' });
+      // On a digital-voice mode (DMR/YSF/…), a repeater bookmark and the live
+      // caller alternate — hold the bookmark too so the pair stays pinned while
+      // the QSO is live (rather than the bookmark timing out under the caller).
+      const voiceMode = ['dmr', 'ysf', 'dstar', 'nxdn', 'm17', 'radel', 'radeu']
+        .includes(String(client.current?.getStatus().mode ?? ''));
+      setVtsNotif({ key: vtsKey.current, name: nearest.name, kind: 'station-on', hold: voiceMode });
     }
   }, [ituRegion, showBandNotif, onMode]);
 
@@ -2224,16 +2249,31 @@ export default function SDRScreen({ route, navigation }: Props) {
   // display back to the bookmark resolver on the next tune.
   useEffect(() => {
     const name = liveStation.name;
-    if (!name) { if (vtsLastStation.current && !liveStationRef.current) vtsLastStation.current = ''; return; }
+    if (!name) {
+      // Live data cleared (tuned away / mode change / voice idle) — dismiss the
+      // held popup and re-evaluate bookmarks for the current spot, so a held RDS
+      // name / DMR caller falls back to the channel's bookmark instead of nothing.
+      if (vtsLastStation.current) {
+        vtsLastStation.current = '';
+        setVtsNotif(null);
+        vtsCheck(status.frequency);
+      }
+      return;
+    }
     setVtsMenuName(name);
     setVtsMenuFreq(status.frequency);
-    if (name !== vtsLastStation.current) {
-      vtsLastStation.current = name;
+    // RDS: append the scrolling radiotext after the station name (the VTS bar
+    // marquees overflow). e.g. "BBC Nhtn — BBC Radio Northampton …We love …".
+    const display = liveStation.text ? `${name} — ${liveStation.text}` : name;
+    if (display !== vtsLastStation.current) {
+      vtsLastStation.current = display;
       vtsKey.current++;
-      setVtsNotif({ key: vtsKey.current, name, kind: 'station-on' });
+      // Live server data (RDS/DMR/DAB) holds on screen until it changes/clears
+      // — only the static bookmark/band notifs time out. Badge flags the source.
+      setVtsNotif({ key: vtsKey.current, name: display, kind: 'station-on', hold: true, badge: liveBadgeRef.current });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveStation.name]);
+  }, [liveStation.name, liveStation.text]);
 
   // ── VTS-aware media session ────────────────────────────────────────────────
   // Track  = freq (user's unit) + demod + tune step ("648 kHz AM · 9 kHz step")

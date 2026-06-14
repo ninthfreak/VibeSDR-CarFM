@@ -115,6 +115,8 @@ export interface StationMeta {
   ensemble?: string;
   /** DAB programmes in the ensemble — drives the programme picker. */
   programmes?: DabProgramme[];
+  /** Short source tag for the UI badge (e.g. 'RDS', 'DMR') — live server data. */
+  badge?: string;
 }
 
 /** Additive callbacks for v3 backends — UI ignores when absent. */
@@ -127,6 +129,9 @@ export interface BackendCallbacks extends SDRCallbacks {
   onModes?: (list: BackendMode[]) => void;
   /** OWRX: live RDS (FM) / DAB station metadata. Cleared with empty fields. */
   onMetadata?: (meta: StationMeta) => void;
+  /** OWRX: server bookmarks + dial-frequency markers arrive over the WS (no REST
+   *  endpoint like UberSDR). Feeds the VTS station readout + the search bar. */
+  onBookmarks?: (list: { name: string; frequency: number; mode?: string }[]) => void;
 }
 
 export type { SDRStatus, SDRMode, SDRCallbacks };
