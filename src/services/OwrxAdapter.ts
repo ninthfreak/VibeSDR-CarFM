@@ -187,8 +187,8 @@ export class OwrxAdapter implements SDRBackend {
   private lastDabSig = '';                      // dedupe key for per-second DAB metadata
   private lastVoiceSpeaker = '';                 // dedupe key for digital-voice callers
   private rdsPs = '';                            // cached RDS programme-service name
-  private owrxBookmarks: { name: string; frequency: number; mode?: string }[] = [];
-  private owrxDials: { name: string; frequency: number; mode?: string }[] = [];
+  private owrxBookmarks: { name: string; frequency: number; mode?: string; repeater?: boolean }[] = [];
+  private owrxDials: { name: string; frequency: number; mode?: string; repeater?: boolean }[] = [];
   private voiceTimer: ReturnType<typeof setTimeout> | null = null;  // digital-voice idle clear
   private dabRateScale = 1;                      // DAB speed-correction factor (1 = off)
 
@@ -413,7 +413,10 @@ export class OwrxAdapter implements SDRBackend {
       case 'bookmarks':        // server-configured named bookmarks
         this.owrxBookmarks = ((json.value || []) as any[])
           .filter((b) => b && typeof b.frequency === 'number')
-          .map((b) => ({ name: String(b.name ?? b.modulation ?? b.frequency), frequency: b.frequency, mode: b.modulation }));
+          // Repeater-DB entries carry an auto-generated "On-air, Nkm away. Last
+          // updated …" description — use that signature to tag them vs user bookmarks.
+          .map((b) => ({ name: String(b.name ?? b.modulation ?? b.frequency), frequency: b.frequency, mode: b.modulation,
+                         repeater: /\bkm away\b|on[- ]air|repeater/i.test(String(b.description ?? '')) }));
         this.emitBookmarks();
         break;
       case 'dial_frequencies': // auto-detected mode markers (FT8 etc.) — also tunable

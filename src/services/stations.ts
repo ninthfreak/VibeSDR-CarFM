@@ -24,6 +24,7 @@ export interface ServerBookmark {
   comment?:        string;
   bandwidth_low?:  number;
   bandwidth_high?: number;
+  repeater?:       boolean;   // OWRX: from the repeater database (vs a plain bookmark)
 }
 
 export interface ServerBand {

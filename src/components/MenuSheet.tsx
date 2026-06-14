@@ -796,6 +796,7 @@ export default function MenuSheet({
                           {r.isBand ? grpAbbr(r.band?.group) : (r.bm?.mode ?? '—').toUpperCase()}
                         </Text>
                         <Text style={styles.searchName} numberOfLines={1}>
+                          {!r.isBand && r.bm?.repeater ? <Text style={styles.searchRpt}>📡 </Text> : null}
                           {r.isBand ? (r.band?.label ?? '') : (r.bm?.name ?? '')}
                         </Text>
                       </TouchableOpacity>
@@ -1700,6 +1701,7 @@ const styles = StyleSheet.create({
   searchName: {
     flex: 1, color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 13,
   },
+  searchRpt: { fontSize: 11 },
 
   sliderRow:   { paddingVertical: 4, gap: 4 },
   sliderLabel: { color: C.sliderLabel, fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 1, width: 90, flexShrink: 0 },

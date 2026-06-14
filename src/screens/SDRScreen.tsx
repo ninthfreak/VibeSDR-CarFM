@@ -672,7 +672,9 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const toggleRecording = useCallback(() => {
     if (!isRecording) {
-      VibePowerModule?.startRecording()
+      // Pass the LIVE freq/mode for the filename — native currentFreq is only
+      // tracked on UberSDR's audio WS, so OWRX would otherwise show a stale freq.
+      (VibePowerModule as any)?.startRecording(Math.round(status.frequency || 0), String(status.mode || ''))
         .then(() => {
           setRecSeconds(0);
           recTimerRef.current = setInterval(() => setRecSeconds((s: number) => s + 1), 1000);
@@ -691,7 +693,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         })
         .catch(() => {});
     }
-  }, [isRecording]);
+  }, [isRecording, status.frequency, status.mode]);
 
   useEffect(() => () => {
     if (recTimerRef.current) clearInterval(recTimerRef.current);
@@ -1382,7 +1384,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onBookmarks:  (list) => {
         // OWRX server bookmarks/dial markers (over the WS) → same path as
         // UberSDR's fetched bookmarks: VTS station readout + search bar.
-        if (!destroyed.current) setServerBookmarks(list.map((b) => ({ name: b.name, frequency: b.frequency, mode: b.mode })));
+        if (!destroyed.current) setServerBookmarks(list.map((b) => ({ name: b.name, frequency: b.frequency, mode: b.mode, repeater: b.repeater })));
       },
       onDecoderText: (line, replace) => {
         // OWRX server-side text decoders (Packet/POCSAG/ADSB/…) → the decoder

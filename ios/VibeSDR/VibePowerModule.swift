@@ -249,7 +249,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       }
       self.packetCount += 1
       self.lastPacketAt = Date()
-      if let out = self.convertTo48k(inBuf) { self.scheduleOut(out) }
+      if let out = self.convertTo48k(inBuf) {
+        if self.recArmed { self.writeRecording(out) }   // OWRX/external audio recording
+        self.scheduleOut(out)
+      }
     }
   }
 
@@ -537,15 +540,21 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   // MARK: - Recording
 
-  @objc func startRecording(_ resolve: @escaping RCTPromiseResolveBlock,
+  @objc func startRecording(_ frequency: NSNumber, mode: NSString,
+                            resolver resolve: @escaping RCTPromiseResolveBlock,
                             rejecter reject: @escaping RCTPromiseRejectBlock) {
     guard isRunning else {
       reject("not_running", "Audio engine is not running", nil); return
     }
+    // JS passes the LIVE freq/mode — the native currentFreq/currentMode are only
+    // tracked on the UberSDR audio-WS path, so for OWRX (external audio) they're
+    // stale; fall back to them only if JS didn't supply a value.
+    let freqHz = frequency.intValue > 0 ? frequency.intValue : currentFreq
+    let modeStr = (mode as String).isEmpty ? currentMode : (mode as String)
     let df = DateFormatter()
     df.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
-    let mhz  = String(format: "%.4fMHz", Double(currentFreq) / 1e6)
-    let name = "VibeSDR_\(df.string(from: Date()))_\(mhz)_\(currentMode.uppercased()).m4a"
+    let mhz  = String(format: "%.4fMHz", Double(freqHz) / 1e6)
+    let name = "VibeSDR_\(df.string(from: Date()))_\(mhz)_\(modeStr.uppercased()).m4a"
     let url  = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
       .appendingPathComponent(name)
     audioQ.async { [weak self] in

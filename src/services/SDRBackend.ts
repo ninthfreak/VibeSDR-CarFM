@@ -160,7 +160,7 @@ export interface BackendCallbacks extends SDRCallbacks {
   onServerLost?: () => void;
   /** OWRX: server bookmarks + dial-frequency markers arrive over the WS (no REST
    *  endpoint like UberSDR). Feeds the VTS station readout + the search bar. */
-  onBookmarks?: (list: { name: string; frequency: number; mode?: string }[]) => void;
+  onBookmarks?: (list: { name: string; frequency: number; mode?: string; repeater?: boolean }[]) => void;
   /** OWRX: server-side secondary-decoder image output (SSTV/Fax). The server
    *  decodes and streams scanlines; the UI just paints them on the decoder
    *  canvas — SSTV pixels are RGB triplets, Fax pixels are greyscale bytes. */
