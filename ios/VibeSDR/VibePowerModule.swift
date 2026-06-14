@@ -774,6 +774,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   private func stopEngine() {
     isRunning = false
+    // Reset external mode so switching OWRX→UberSDR doesn't leave us in external
+    // mode (which made UberSDR pause take the external release path).
+    // startExternalAudio re-sets it true right after its stopEngine() call.
+    externalAudio = false
     healthTimer?.invalidate()
     healthTimer = nil
     wsTask?.cancel(with: .goingAway, reason: nil)

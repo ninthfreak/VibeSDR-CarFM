@@ -289,6 +289,13 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     fun stopEngine() {
         running = false
+        // Reset external state too, so switching OWRX→UberSDR doesn't leave the
+        // engine in external mode (which made UberSDR pause take the external path
+        // → media-control "pause springs back to play").
+        externalAudio = false
+        extThread?.interrupt(); extThread = null
+        extQueue.clear()
+        extTrack?.release(); extTrack = null; extRate = 0
         abandonAudioFocus()
         watchdog?.let { mainHandler.removeCallbacks(it) }
         watchdog = null
@@ -368,8 +375,14 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         }
         // UberSDR — Pause = disconnect, Play = reconnect (disconnect card + ▶).
         mainHandler.post {
-            if (m) disconnectForPause()
-            else if (dataSaverDisconnected) resumeFromDataSaver()
+            if (m) {
+                disconnectForPause()
+            } else if (dataSaverDisconnected) {
+                resumeFromDataSaver()
+            } else {
+                updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
+                updateNotification()
+            }
         }
     }
 
@@ -1192,9 +1205,17 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     override fun onGetRoot(
         clientPackageName: String, clientUid: Int, rootHints: Bundle?,
-    ): BrowserRoot {
-        // Any caller may browse — the tree is just public bookmarks + the band
-        // plan (no user data). Android Auto / Wear connect here.
+    ): BrowserRoot? {
+        // Opt OUT of Android 11+ media resumption (the system "resume" query sets
+        // EXTRA_RECENT). On some skins (HyperOS/MIUI) the resume card hijacks the
+        // LIVE MediaSession when the app is backgrounded — showing a paused card
+        // while audio plays, failing to resume ("Cannot resume"), so the lock-screen
+        // play/pause springs and never reaches our onPause/onPlay. Returning null
+        // here keeps the live session controls in charge. Live SDR isn't a
+        // resumable on-demand stream anyway.
+        if (rootHints?.getBoolean(BrowserRoot.EXTRA_RECENT) == true) return null
+        // Any other caller may browse — the tree is just public bookmarks + the
+        // band plan (no user data). Android Auto / Wear connect here.
         return BrowserRoot(MEDIA_ROOT_ID, null)
     }
 
@@ -1420,12 +1441,16 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     }
 
     private fun updatePlaybackState(state: Int) {
+        // Use a concrete position (0) + current update time, not -1/UNKNOWN: some
+        // system media panels treat "PLAYING with unknown position" as not really
+        // playing and render a play button (→ taps send ACTION_PLAY, the spring).
         mediaSession?.setPlaybackState(
             PlaybackStateCompat.Builder()
-                .setState(state, -1L, 1f)
+                .setState(state, 0L, 1f, SystemClock.elapsedRealtime())
                 .setActions(
                     PlaybackStateCompat.ACTION_PLAY or
                         PlaybackStateCompat.ACTION_PAUSE or
+                        PlaybackStateCompat.ACTION_PLAY_PAUSE or
                         PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
                         PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
                         PlaybackStateCompat.ACTION_STOP

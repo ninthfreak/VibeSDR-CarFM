@@ -2251,21 +2251,30 @@ export default function SDRScreen({ route, navigation }: Props) {
       const st = mediaSkip === 'bookmark'
         ? 'bookmark skip'
         : (step >= 1000 ? `${trim(step / 1e3, 1)} kHz step` : `${step} Hz step`);
-      const title = `${fq} ${status.mode.toUpperCase()} · ${st}`;
-
-      const nearest = findNearest(vtsBookmarks.current, hz);
-      let context: string;
+      const fqLine = `${fq} ${status.mode.toUpperCase()}`;
+      // A live RDS/DAB station name becomes the TITLE (so it's prominent AND so a
+      // DAB programme skip — which doesn't change the frequency — still changes the
+      // now-playing metadata, forcing the lock-screen card to refresh). Otherwise
+      // keep the freq/step title with the band/bookmark as the artist.
+      let title: string, artist: string;
       if (liveStationRef.current) {
-        context = liveStationRef.current;   // live RDS/DAB station name wins
-      } else if (nearest && Math.abs(nearest.offset) <= 1000) {
-        context = nearest.name;
+        title = liveStationRef.current;
+        artist = `VibeSDR · ${fqLine}`;
       } else {
-        const order: Record<string, number> = { ham: 0, broadcast: 1, utility: 2 };
-        const bands = getBandsAtRegion(hz, ituRegion)
-          .sort((a: Band, b: Band) => (order[a.type] ?? 9) - (order[b.type] ?? 9));
-        context = bands.length ? bands[0].name : 'HF Radio';
+        const nearest = findNearest(vtsBookmarks.current, hz);
+        let context: string;
+        if (nearest && Math.abs(nearest.offset) <= 1000) {
+          context = nearest.name;
+        } else {
+          const order: Record<string, number> = { ham: 0, broadcast: 1, utility: 2 };
+          const bands = getBandsAtRegion(hz, ituRegion)
+            .sort((a: Band, b: Band) => (order[a.type] ?? 9) - (order[b.type] ?? 9));
+          context = bands.length ? bands[0].name : 'HF Radio';
+        }
+        title = `${fqLine} · ${st}`;
+        artist = `VibeSDR: ${context}`;
       }
-      VibePowerModule?.setNowPlaying(title, `VibeSDR: ${context}`);
+      VibePowerModule?.setNowPlaying(title, artist);
       VibePowerModule?.setArtwork(route.params.serverType ?? 'ubersdr');  // native caches per type
     }, 300);
     return () => clearTimeout(t);
