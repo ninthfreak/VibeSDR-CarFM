@@ -132,7 +132,7 @@ export interface BackendCallbacks extends SDRCallbacks {
    *  the SDR's display name; inUse = an active source (live user or background
    *  task) is on it (from /status.json polling). Lets the profile picker group
    *  by SDR and badge in-use SDRs so a user doesn't disturb another user. */
-  onSdrUsage?: (sdrs: Record<string, { name: string; inUse: boolean }>) => void;
+  onSdrUsage?: (sdrs: Record<string, { name: string; inUse: boolean; activeProfileId?: string }>) => void;
   /** OWRX: live user count (the WS `clients` broadcast = real connected users,
    *  NOT background tasks). Pairs with onSdrUsage so the user can tell whether an
    *  in-use SDR has real listeners before switching its profile. */

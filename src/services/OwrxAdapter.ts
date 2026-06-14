@@ -235,8 +235,7 @@ export class OwrxAdapter implements SDRBackend {
       const res = await fetch(this.httpBase + '/status.json');
       if (!res.ok) return;
       const j: any = await res.json();
-      const activeNames: string[] = Array.isArray(j?.sdrs)
-        ? j.sdrs.map((s: any) => String(s?.name ?? '').trim()).filter(Boolean) : [];
+      const sdrs: any[] = Array.isArray(j?.sdrs) ? j.sdrs : [];
 
       // Group the WS profiles by sdrId (the id prefix).
       const groups: Record<string, ProfileInfo[]> = {};
@@ -244,17 +243,24 @@ export class OwrxAdapter implements SDRBackend {
         const sid = p.id.includes('|') ? p.id.split('|')[0] : p.id;
         (groups[sid] ??= []).push(p);
       }
-      const map: Record<string, { name: string; inUse: boolean }> = {};
+      const map: Record<string, { name: string; inUse: boolean; activeProfileId?: string }> = {};
       for (const [sid, items] of Object.entries(groups)) {
-        // The SDR name is the LONGEST active source name that prefixes this
-        // group's "{sdrName} {profileName}" entries; if none, it's idle — derive
-        // the name from the group's common prefix instead.
-        let best = '';
-        for (const n of activeNames) {
-          if (items[0].name.startsWith(n + ' ') && n.length > best.length) best = n;
+        // Match this group to a status.json source: the SDR is the one whose
+        // name prefixes the group's "{sdrName} {profileName}" entries (longest
+        // wins). Present in status.json = active/in-use.
+        let match: any = null; let best = '';
+        for (const s of sdrs) {
+          const n = String(s?.name ?? '').trim();
+          if (n && items[0].name.startsWith(n + ' ') && n.length > best.length) { best = n; match = s; }
         }
         const name = best || commonPrefix(items.map((i) => i.name)).replace(/\s+\S*$/, '').trim() || sid;
-        map[sid] = { name, inUse: !!best };
+        // The currently-tuned profile per SDR isn't in upstream status.json, but
+        // our patch (contrib) adds `active_profile` (the profile's display name).
+        // Map it back to the WS profile id: full name = "{sdrName} {activeName}".
+        let activeProfileId: string | undefined;
+        const activeName = match ? String(match.active_profile ?? match.activeProfile ?? '').trim() : '';
+        if (activeName) activeProfileId = items.find((i) => i.name === `${name} ${activeName}` || i.name === activeName)?.id;
+        map[sid] = { name, inUse: !!match, activeProfileId };
       }
       this.cb.onSdrUsage?.(map);
     } catch { /* server may not expose it / be offline — leave usage unknown */ }
@@ -806,9 +812,10 @@ export class OwrxAdapter implements SDRBackend {
     this.audioServiceId = id;
     this.audioDec.reset(); this.hdAudioDec.reset();   // audio service swap = new stream
     this.sendDemod();
-    // Re-emit metadata so the UI's station name follows the new selection.
+    // Re-emit metadata so the UI's station name follows the new selection. Carry
+    // the live-data badge too, else switching programme via the picker clears it.
     const selName = this.dabProgrammes.find((p) => p.id === id)?.name;
-    if (selName) this.cb.onMetadata?.({ stationName: selName, programmes: this.dabProgrammes });
+    if (selName) this.cb.onMetadata?.({ stationName: selName, programmes: this.dabProgrammes, badge: 'RDS' });
   }
 
   tune(frequency: number, mode?: SDRMode): void {

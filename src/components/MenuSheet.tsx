@@ -14,6 +14,7 @@ import {
   Image,
   Modal,
   ScrollView,
+  findNodeHandle,
   StyleSheet,
   Text,
   TextInput,
@@ -125,7 +126,7 @@ export interface MenuSheetProps {
   // OWRX profiles (hidden unless a backend reports them)
   profiles?:        { id: string; name: string }[];
   activeProfileId?: string;
-  sdrUsage?:        Record<string, { name: string; inUse: boolean }>;  // OWRX: per-SDR usage
+  sdrUsage?:        Record<string, { name: string; inUse: boolean; activeProfileId?: string }>;  // OWRX: per-SDR usage
   clientCount?:     number;     // OWRX: live users online
   onSelectProfile?: (id: string) => void;
   // OWRX DAB ensemble — programme picker (hidden unless a DAB ensemble is tuned)
@@ -493,25 +494,27 @@ export default function MenuSheet({
       const info = sdrUsage[sid];
       const sdrName = info?.name || lcp(items.map((i) => i.name)).replace(/\s+\S*$/, '').trim() || sid;
       const strip = (n: string) => (sdrName && n.startsWith(sdrName + ' ') ? n.slice(sdrName.length + 1) : n);
-      return { sid, sdrName, inUse: !!info?.inUse, items: items.map((i) => ({ id: i.id, label: strip(i.name) })) };
+      return { sid, sdrName, inUse: !!info?.inUse, activeProfileId: info?.activeProfileId, items: items.map((i) => ({ id: i.id, label: strip(i.name) })) };
     });
   }, [profiles, sdrUsage]);
-  // Remember the spot: each dropdown jumps to its active row when opened, so a
-  // long list doesn't have to be re-scrolled to find where you were.
-  const cmapScroll = useRef<ScrollView | null>(null);
-  const cmapY = useRef<Record<string, number>>({});
-  const profScroll = useRef<ScrollView | null>(null);
-  const profY = useRef<Record<string, number>>({});
-  useEffect(() => {
-    if (!cmapOpen) return;
-    const y = cmapY.current[colormap];
-    if (y != null) requestAnimationFrame(() => cmapScroll.current?.scrollTo({ y: Math.max(0, y - 8), animated: false }));
-  }, [cmapOpen, colormap]);
-  useEffect(() => {
-    if (!profileOpen || !activeProfileId) return;
-    const y = profY.current[activeProfileId];
-    if (y != null) requestAnimationFrame(() => profScroll.current?.scrollTo({ y: Math.max(0, y - 8), animated: false }));
-  }, [profileOpen, activeProfileId]);
+  // Menu dropdowns render inline (the whole menu scrolls — nesting a bounded
+  // ScrollView inside the menu's own ScrollView fought the parent gesture). To
+  // still "open at the current item", scroll the OUTER menu so the active row is
+  // near the top when a dropdown opens (measureLayout against the menu scroll).
+  const menuScroll = useRef<ScrollView | null>(null);
+  const profRow = useRef<any>(null);
+  const dabRow  = useRef<any>(null);
+  const cmapRow = useRef<any>(null);
+  const scrollRowIntoView = useCallback((row: any) => {
+    const sv = menuScroll.current; const node = sv && findNodeHandle(sv);
+    if (!row || !sv || node == null) return;
+    requestAnimationFrame(() => {
+      try { row.measureLayout(node, (_x: number, y: number) => { sv.scrollTo({ y: Math.max(0, y - 90), animated: true }); }, () => {}); } catch {}
+    });
+  }, []);
+  useEffect(() => { if (profileOpen) scrollRowIntoView(profRow.current); }, [profileOpen, scrollRowIntoView]);
+  useEffect(() => { if (dabOpen)     scrollRowIntoView(dabRow.current);  }, [dabOpen, scrollRowIntoView]);
+  useEffect(() => { if (cmapOpen)    scrollRowIntoView(cmapRow.current); }, [cmapOpen, scrollRowIntoView]);
 
   // Bookmarks pane (replaces menu content like DISPLAY SETTINGS)
   const [bookmarksOpen,  setBookmarksOpen]  = useState(false);
@@ -589,7 +592,7 @@ export default function MenuSheet({
           <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(6,4,2,0.60)' }]} />
           <View style={styles.handle} />
 
-          <ScrollView style={styles.scroll}
+          <ScrollView ref={menuScroll} style={styles.scroll}
             contentContainerStyle={[styles.scrollContent,
               { paddingBottom: sheetInsets.bottom + 16 }]}
             keyboardShouldPersistTaps="handled"
@@ -620,8 +623,7 @@ export default function MenuSheet({
                   <Text style={styles.profileDropChevron}>{profileOpen ? '▴' : '▾'}</Text>
                 </TouchableOpacity>
                 {profileOpen && (
-                  <ScrollView ref={profScroll} style={styles.profileDropList} nestedScrollEnabled
-                              keyboardShouldPersistTaps="handled">
+                  <View style={styles.profileDropList}>
                     {sdrGroups.map((g) => {
                       const isCurrentSdr = g.items.some((it) => it.id === activeProfileId);
                       return (
@@ -633,16 +635,20 @@ export default function MenuSheet({
                             {g.inUse && !isCurrentSdr && <Text style={[styles.sdrBadge, styles.sdrBadgeInUse]}>IN USE</Text>}
                           </View>
                           {g.items.map((it) => {
-                            const active = it.id === activeProfileId;
+                            const active = it.id === activeProfileId;          // our own pick (green)
+                            const serverActive = it.id === g.activeProfileId;  // tuned on the server (amber)
                             return (
                               <TouchableOpacity
                                 key={it.id}
-                                style={styles.profileDropItemSub}
-                                onLayout={e => { profY.current[it.id] = e.nativeEvent.layout.y; }}
+                                ref={active ? profRow : undefined}
+                                style={[styles.profileDropItemSub, serverActive && !active && styles.profileItemInUse]}
                                 onPress={() => { onSelectProfile?.(it.id); setProfileOpen(false); }}
                                 activeOpacity={0.7}>
-                                <Text style={[styles.profileDropItemText, active && styles.profileChipTextActive]} numberOfLines={1}>
-                                  {active ? '✓ ' : ''}{it.label}
+                                <Text style={[styles.profileDropItemText,
+                                              serverActive && !active && styles.profileTextInUse,
+                                              active && styles.profileChipTextActive]} numberOfLines={1}>
+                                  {active ? '✓ ' : serverActive ? '● ' : ''}{it.label}
+                                  {serverActive && !active ? '  (in use)' : ''}
                                 </Text>
                               </TouchableOpacity>
                             );
@@ -650,7 +656,7 @@ export default function MenuSheet({
                         </View>
                       );
                     })}
-                  </ScrollView>
+                  </View>
                 )}
               </View>
             </>)}
@@ -672,6 +678,7 @@ export default function MenuSheet({
                       return (
                         <TouchableOpacity
                           key={p.id}
+                          ref={active ? dabRow : undefined}
                           style={styles.profileDropItem}
                           onPress={() => { onSelectDab?.(p.id); setDabOpen(false); }}
                           activeOpacity={0.7}>
@@ -937,19 +944,18 @@ export default function MenuSheet({
                   <Text style={styles.dropChevron}>{cmapOpen ? '▴' : '▾'}</Text>
                 </TouchableOpacity>
                 {cmapOpen && (
-                  <ScrollView ref={cmapScroll} style={styles.dropList} nestedScrollEnabled
-                              keyboardShouldPersistTaps="handled">
+                  <View style={styles.dropList}>
                     {cmapSorted.map(name => (
                       <TouchableOpacity key={name}
+                        ref={name === colormap ? cmapRow : undefined}
                         style={[styles.dropItem, name === colormap && styles.dropItemActive]}
-                        onLayout={e => { cmapY.current[name] = e.nativeEvent.layout.y; }}
                         onPress={() => { onColormap(name); setCmapOpen(false); }}>
                         <Text style={[styles.dropItemText, name === colormap && styles.dropItemTextActive]}>
                           {name === 'gqrx' ? 'GQRX' : name.charAt(0).toUpperCase() + name.slice(1)}
                         </Text>
                       </TouchableOpacity>
                     ))}
-                  </ScrollView>
+                  </View>
                 )}
 
                 {/* VFO Needle Colour — colour swatches */}
@@ -1519,7 +1525,7 @@ const styles = StyleSheet.create({
   dropHeaderText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 0.5 },
   dropChevron:    { color: C.muted, fontSize: 10 },
   dropList: {
-    borderWidth: 1, borderColor: C.border, borderRadius: 4, maxHeight: 240,
+    borderWidth: 1, borderColor: C.border, borderRadius: 4,
     marginBottom: 6, overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.25)',
   },
   dropItem: {
@@ -1543,13 +1549,15 @@ const styles = StyleSheet.create({
   profileDropHeadText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14, flex: 1 },
   profileDropChevron: { color: C.muted, fontSize: 14, marginLeft: 8 },
   profileDropList: {
-    marginTop: 4, borderRadius: 8, borderWidth: 1, borderColor: C.border, maxHeight: 280,
+    marginTop: 4, borderRadius: 8, borderWidth: 1, borderColor: C.border,
     backgroundColor: C.btnBg, overflow: 'hidden',
   },
   profileDropItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.divider },
   profileDropItemSub: { paddingLeft: 22, paddingRight: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.divider },
   profileDropItemText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14 },
-  profileChipTextActive: { color: C.active },
+  profileChipTextActive: { color: C.gold },
+  profileItemInUse: { backgroundColor: 'rgba(255,184,77,0.10)' },
+  profileTextInUse: { color: '#ffb84d' },
   sdrHeadRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingTop: 11, paddingBottom: 6, backgroundColor: 'rgba(255,255,255,0.04)' },
   sdrHeadText: { flexShrink: 1, color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, fontWeight: '700', letterSpacing: 0.4 },
   sdrBadge: { fontFamily: 'Atkinson Hyperlegible', fontSize: 9, fontWeight: '700', letterSpacing: 0.5, overflow: 'hidden', borderRadius: 3, paddingHorizontal: 5, paddingVertical: 2, color: '#0a0a0a' },

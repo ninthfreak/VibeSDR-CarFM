@@ -320,7 +320,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [connected, setConnected] = useState(false);
   const [profiles, setProfiles]   = useState<ProfileInfo[]>([]);  // OWRX only
   const [activeProfileId, setActiveProfileId] = useState<string | undefined>(undefined);
-  const [sdrUsage, setSdrUsage] = useState<Record<string, { name: string; inUse: boolean }>>({});  // OWRX: per-SDR usage
+  const [sdrUsage, setSdrUsage] = useState<Record<string, { name: string; inUse: boolean; activeProfileId?: string }>>({});  // OWRX: per-SDR usage
   const [clientCount, setClientCount] = useState(0);  // OWRX: live user count
   const [serverModes, setServerModes] = useState<BackendMode[]>([]);  // OWRX gated demod list
   // Live RDS (FM) / DAB station metadata (OWRX). liveStationRef mirrors the name

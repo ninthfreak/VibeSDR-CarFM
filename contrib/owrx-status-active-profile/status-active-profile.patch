@@ -1,0 +1,18 @@
+--- a/owrx/controllers/status.py
++++ b/owrx/controllers/status.py
+@@ -21,6 +21,13 @@ class StatusController(ReceiverIdController):
+     def getReceiverStats(self, receiver):
+         stats = {
+             "name": receiver.getName(),
+             # TODO would be better to have types from the config here
+             "type": type(receiver).__name__,
+             "profiles": [self.getProfileStats(p) for p in receiver.getProfiles().values()],
+         }
++        # Surface the currently-tuned profile so clients can show which profile
++        # (not just which SDR) is in use, and let users join it instead of
++        # switching the SDR out from under another listener.
++        try:
++            stats["active_profile"] = receiver.getProfileName()
++        except Exception:
++            pass
+         return stats
