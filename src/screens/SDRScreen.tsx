@@ -1372,9 +1372,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           ...prev.slice(-99),
           { id: 'c' + String(++chatIdRef.current), type: own ? 'own' : 'other', user: name, text, ts: chatTs(new Date().toISOString()) },
         ]);
-        if (!own && !chatMutedRef.current) {
-          setChatOpen((open: boolean) => { if (!open) setChatUnread(true); return open; });
-        }
+        if (!own && !chatMutedRef.current && !chatOpenRef.current) setChatUnread(true);
       },
       onModes:      (list) => { if (!destroyed.current) setServerModes(list); },
       onBookmarks:  (list) => {
@@ -2870,6 +2868,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onToggleZoomSync={() => setZoomSync((p: boolean) => !p)}
         onUserTap={chatUserTap}
         textOnly={isOwrx}
+        onChangeName={() => setMyCallsign(null)}
       />
 
       {/* Bypass password — rate-limit recovery (replaces the session) */}

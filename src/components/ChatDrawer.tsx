@@ -45,6 +45,8 @@ export interface ChatDrawerProps {
   onJoin:     (callsign: string) => void;
   onSend:     (text: string) => void;
   onClose:    () => void;
+  /** Re-open the name entry to change handle (e.g. after a server rename clash). */
+  onChangeName?: () => void;
   onMute?:    () => void;
   muted?:     boolean;
   /** Active user list (chat_active_users) + tune/zoom sync controls */
@@ -92,7 +94,7 @@ const DRAWER_H = Math.min(SCREEN_H * 0.55, 480);
 
 export default function ChatDrawer({
   visible, messages, myCallsign,
-  onJoin, onSend, onClose,
+  onJoin, onSend, onClose, onChangeName,
   onMute, muted = false,
   users = [], syncedUser = null, zoomSync = false,
   onToggleSync, onToggleZoomSync, onUserTap, textOnly = false,
@@ -194,11 +196,17 @@ export default function ChatDrawer({
 
           {/* Header */}
           <View style={[cd.header, { borderBottomColor: cc.border }]}>
-            <Text style={[cd.title, { color: cc.title, fontFamily: t.font }]}>
-              {showUsers
-                ? `USERS · ${users.length}`
-                : myCallsign ? `CHAT · ${myCallsign}` : 'CHAT'}
-            </Text>
+            {!showUsers && myCallsign && onChangeName ? (
+              <TouchableOpacity onPress={onChangeName} hitSlop={8} activeOpacity={0.6}>
+                <Text style={[cd.title, { color: cc.title, fontFamily: t.font }]}>
+                  CHAT · {myCallsign} <Text style={{ color: cc.btnText }}>✎</Text>
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={[cd.title, { color: cc.title, fontFamily: t.font }]}>
+                {showUsers ? `USERS · ${users.length}` : myCallsign ? `CHAT · ${myCallsign}` : 'CHAT'}
+              </Text>
+            )}
             {!!myCallsign && !textOnly && (
               <TouchableOpacity style={cd.hbtn} onPress={() => setShowUsers((p: boolean) => !p)} hitSlop={8}>
                 <Text style={[cd.hbtnTxt, { color: cc.btnText }, showUsers && cd.hbtnActive]}>👥</Text>
