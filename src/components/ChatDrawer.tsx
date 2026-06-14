@@ -54,6 +54,8 @@ export interface ChatDrawerProps {
   onToggleSync?:     (username: string) => void;
   onToggleZoomSync?: () => void;
   onUserTap?:        (user: ChatUserRow) => void;
+  /** OWRX = basic text chat: hide the active-users panel + tune/zoom-sync UI. */
+  textOnly?:         boolean;
 }
 
 function fmtUserFreq(hz?: number): string {
@@ -93,7 +95,7 @@ export default function ChatDrawer({
   onJoin, onSend, onClose,
   onMute, muted = false,
   users = [], syncedUser = null, zoomSync = false,
-  onToggleSync, onToggleZoomSync, onUserTap,
+  onToggleSync, onToggleZoomSync, onUserTap, textOnly = false,
 }: ChatDrawerProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
@@ -197,7 +199,7 @@ export default function ChatDrawer({
                 ? `USERS · ${users.length}`
                 : myCallsign ? `CHAT · ${myCallsign}` : 'CHAT'}
             </Text>
-            {!!myCallsign && (
+            {!!myCallsign && !textOnly && (
               <TouchableOpacity style={cd.hbtn} onPress={() => setShowUsers((p: boolean) => !p)} hitSlop={8}>
                 <Text style={[cd.hbtnTxt, { color: cc.btnText }, showUsers && cd.hbtnActive]}>👥</Text>
               </TouchableOpacity>

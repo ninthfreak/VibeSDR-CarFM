@@ -371,6 +371,7 @@ export class OwrxAdapter implements SDRBackend {
       case 'config':   this.onConfig(json.value || {}); break;
       case 'profiles': this.onProfiles(json.value || []); break;
       case 'clients': { const n = Number(json.value); if (Number.isFinite(n)) this.cb.onClients?.(n); break; }
+      case 'chat_message': this.cb.onChatMessage?.(String(json.name ?? '?'), String(json.text ?? ''), json.color); break;
       case 'modes': {
         const arr = (json.value || []) as any[];
         this.serverModes = arr.map((m) => ({
@@ -426,6 +427,7 @@ export class OwrxAdapter implements SDRBackend {
 
   private onConfig(c: any): void {
     const profileSwitch = 'sdr_id' in c || 'profile_id' in c;
+    if ('allow_chat' in c) this.cb.onChatEnabled?.(!!c.allow_chat);
     if (!this.cfg) this.cfg = { centerFreq: 0, sampRate: 0, fftSize: 1024, fftCompression: 'none', audioCompression: 'none' };
     if ('center_freq' in c)       this.cfg.centerFreq = c.center_freq;
     if ('samp_rate' in c)         this.cfg.sampRate = c.samp_rate;
@@ -680,9 +682,14 @@ export class OwrxAdapter implements SDRBackend {
    *  web MessagePanels show, condensed to a single line. Returns null to skip. */
   private secondaryRecordToText(v: any): { text: string; replace?: boolean } | null {
     const mode = v?.mode;
-    const hhmmss = (ts: any) =>
-      typeof ts === 'number' ? new Date(ts * 1000).toISOString().slice(11, 19)
-      : typeof ts === 'string' ? ts : '';
+    const hhmmss = (ts: any): string => {
+      // OWRX timestamps are MILLISECOND epochs (e.g. 1781472474000) — the old
+      // code multiplied by 1000 → garbage date. Accept ms or sec epoch + ISO str.
+      let d: Date | null = null;
+      if (typeof ts === 'number' && ts > 0) d = new Date(ts > 1e12 ? ts : ts * 1000);
+      else if (typeof ts === 'string' && ts) { const p = new Date(ts); d = isNaN(p.getTime()) ? null : p; }
+      return d && !isNaN(d.getTime()) ? d.toISOString().slice(11, 19) : '';
+    };
     const j = (...xs: any[]) => xs.filter((x) => x != null && x !== '').join(' ');
     switch (mode) {
       // Packet: APRS / AIS / SONDE
@@ -702,8 +709,16 @@ export class OwrxAdapter implements SDRBackend {
       }
       case 'DSC':
         return { text: j(hhmmss(v.time ?? v.timestamp), v.src, v.dst ? '→ ' + v.dst : '', v.format, v.category, v.data) };
-      case 'ISM': case 'WMBUS':
-        return { text: j(v.id ?? '???', v.model, hhmmss(v.timestamp)) };
+      case 'ISM': case 'WMBUS': {
+        // ISM = sensor telemetry (TPMS tyre sensors, weather stations, …). Show
+        // the device + its readings, like the desktop's attribute table but on a
+        // line: append every extra scalar field (pressure_kPa, temperature_C, …).
+        const skip = new Set(['mode', 'id', 'model', 'timestamp', 'mic', 'flags', 'channel']);
+        const attrs = Object.entries(v)
+          .filter(([k, val]) => !skip.has(k) && (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') && val !== '')
+          .map(([k, val]) => `${k}=${val}`);
+        return { text: j(hhmmss(v.timestamp), v.id ?? '???', v.model, ...attrs) };
+      }
       case 'HFDL': case 'VDL2': case 'ACARS': case 'UAT': case 'ADSB':
         return { text: j(hhmmss(v.timestamp), v.flight ?? v.aircraft ?? v.icao, v.type, v.message ?? v.data) };
       case 'ADSB-LIST': {                                          // live aircraft table → replace
@@ -1082,6 +1097,13 @@ export class OwrxAdapter implements SDRBackend {
   // ── profiles ─────────────────────────────────────────────────────────────
   getProfiles(): ProfileInfo[] { return this.profiles; }
   selectProfile(id: string): void { this.send({ type: 'selectprofile', params: { profile: id } }); }
+
+  /** Basic text chat on the main WS. The server broadcasts to all clients incl.
+   *  us (our own message echoes back as a chat_message). */
+  sendChat(text: string, name: string): void {
+    const t = text.trim(); if (!t) return;
+    this.send({ type: 'sendmessage', text: t, name });
+  }
 
   // ── status ───────────────────────────────────────────────────────────────
   getStatus(): SDRStatus {

@@ -95,6 +95,9 @@ export interface SDRBackend {
   /** OWRX: the active secondary decoder id (SSTV/Fax/…) running on top of the
    *  analog carrier, or null. Lets the UI highlight the carrier AND the decoder. */
   getSecondaryDecoder?(): string | null;
+  /** OWRX: send a chat message on the main WS (basic text chat, no tune/zoom sync).
+   *  name = the user's chosen handle, prefixed to each message server-side. */
+  sendChat?(text: string, name: string): void;
   /** DAB: switch the audio service (programme) within the tuned ensemble. */
   setAudioServiceId?(id: number): void;
   /** DAB: speed-correction factor for the dablin chipmunk (1 = off). */
@@ -137,6 +140,10 @@ export interface BackendCallbacks extends SDRCallbacks {
    *  NOT background tasks). Pairs with onSdrUsage so the user can tell whether an
    *  in-use SDR has real listeners before switching its profile. */
   onClients?: (count: number) => void;
+  /** OWRX: an inbound chat message (server broadcasts incl. our own echo). */
+  onChatMessage?: (name: string, text: string, color?: string) => void;
+  /** OWRX: whether the server has chat enabled (config `allow_chat`). */
+  onChatEnabled?: (enabled: boolean) => void;
   /** OWRX: server's available demodulators — gate the mode picker to these. */
   onModes?: (list: BackendMode[]) => void;
   /** OWRX: live RDS (FM) / DAB station metadata. Cleared with empty fields. */

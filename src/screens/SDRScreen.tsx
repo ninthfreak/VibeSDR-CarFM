@@ -704,6 +704,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [myCallsign,   setMyCallsign]   = useState<string | null>(null);
   const [chatMuted,    setChatMuted]    = useState(false);
   const [chatUsers,    setChatUsers]    = useState<ChatUserRow[]>([]);
+  const [chatEnabled,  setChatEnabled]  = useState(false);   // OWRX: from config allow_chat
   const [syncedUser,   setSyncedUser]   = useState<string | null>(null);
   const [zoomSync,     setZoomSync]     = useState(false);
   const myCallsignRef = useRef<string | null>(null);
@@ -730,25 +731,28 @@ export default function SDRScreen({ route, navigation }: Props) {
   const sanitizeCallsign = useCallback((raw: string): string =>
     raw.replace(/[^A-Za-z0-9\-_\/]/g, '').replace(/^[-_\/]+|[-_\/]+$/g, '').slice(0, 15), []);
 
+  const isOwrx = route.params.serverType === 'owrx';
   const handleChatJoin = useCallback((cs: string) => {
     const clean = sanitizeCallsign(cs);
     if (!clean) return;
     setMyCallsign(clean);
-    decoderClient.current?.joinChat(clean);
+    // OWRX has no join handshake — the name rides on each message; UberSDR joins.
+    if (!isOwrx) decoderClient.current?.joinChat(clean);
     AsyncStorage.setItem('lsv_chat_callsign:' + baseUrl, clean).catch(() => {});
-  }, [sanitizeCallsign, baseUrl]);
+  }, [sanitizeCallsign, baseUrl, isOwrx]);
 
   const handleChatSend = useCallback((text: string) => {
     if (!myCallsign) return;
-    decoderClient.current?.sendChat(text);
+    if (isOwrx) client.current?.sendChat?.(text, myCallsign);
+    else decoderClient.current?.sendChat(text);
     // Own messages echo back via the broadcast — rendered then (deduped),
     // matching the skin: what you see is what the server accepted.
-  }, [myCallsign]);
+  }, [myCallsign, isOwrx]);
 
   // Tune/zoom sync OUT: report our freq/mode/BW edges/zoom to chat so other
   // users can see and sync to us (debounced 1s — the drum emits fast)
   useEffect(() => {
-    if (!myCallsign || !status.frequency) return;
+    if (!myCallsign || !status.frequency || isOwrx) return;   // OWRX = basic text chat, no sync
     const t = setTimeout(() => {
       const view = client.current?.getView();
       decoderClient.current?.sendChatStatus({
@@ -1358,6 +1362,20 @@ export default function SDRScreen({ route, navigation }: Props) {
       onProfiles:   (list) => { if (!destroyed.current) setProfiles(list); },
       onSdrUsage:   (m) => { if (!destroyed.current) setSdrUsage(m); },
       onClients:    (n) => { if (!destroyed.current) setClientCount(n); },
+      onChatEnabled: (en) => { if (!destroyed.current) setChatEnabled(en); },
+      onChatMessage: (name, text) => {
+        // OWRX basic text chat (name + text). Server echoes our own back, so
+        // don't local-echo on send — render the broadcast and mark own by name.
+        if (destroyed.current) return;
+        const own = name === myCallsignRef.current;
+        setChatMessages((prev: ChatMessage[]) => [
+          ...prev.slice(-99),
+          { id: 'c' + String(++chatIdRef.current), type: own ? 'own' : 'other', user: name, text, ts: chatTs(new Date().toISOString()) },
+        ]);
+        if (!own && !chatMutedRef.current) {
+          setChatOpen((open: boolean) => { if (!open) setChatUnread(true); return open; });
+        }
+      },
       onModes:      (list) => { if (!destroyed.current) setServerModes(list); },
       onBookmarks:  (list) => {
         // OWRX server bookmarks/dial markers (over the WS) → same path as
@@ -2851,6 +2869,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onToggleSync={toggleUserSync}
         onToggleZoomSync={() => setZoomSync((p: boolean) => !p)}
         onUserTap={chatUserTap}
+        textOnly={isOwrx}
       />
 
       {/* Bypass password — rate-limit recovery (replaces the session) */}
