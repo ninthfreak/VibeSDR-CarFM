@@ -617,13 +617,17 @@ export class OwrxAdapter implements SDRBackend {
       if (txt) this.cb.onDecoderText?.(txt, false);
       return;
     }
-    if (!v || typeof v !== 'object' || 'message' in v) return;   // debug object → ignore
+    if (!v || typeof v !== 'object') return;
     const kind: 'sstv' | 'fax' | null = v.mode === 'SSTV' ? 'sstv' : v.mode === 'Fax' ? 'fax' : null;
     if (!kind) {
+      // NB: text records (POCSAG/FLEX/packet) legitimately carry a `message`
+      // field (the page/comment text) — do NOT treat that as a debug skip.
       const rec = this.secondaryRecordToText(v);
       if (rec) this.cb.onDecoderText?.(rec.replace ? rec.text : rec.text + '\n', rec.replace);
       return;
     }
+    // SSTV/Fax debug messages carry a `message` and no pixels — skip those only.
+    if ('message' in v && v.width == null && v.line == null) return;
     // Header: dimensions, no scanline → start a fresh image.
     if (v.width > 0 && v.height > 0 && v.line == null) {
       this.cb.onDecoderImage?.({ phase: 'start', kind, width: v.width, height: v.height });
@@ -967,7 +971,13 @@ export class OwrxAdapter implements SDRBackend {
     // Normal demod pick = set the carrier/primary mode (analog, digital voice,
     // DAB/WFM, OR a standalone digimode like ADSB that has no underlying).
     this.mode = mode;
-    this.secondaryDecoder = null;   // a primary pick clears any secondary decoder
+    // Keep a running secondary decoder if the new carrier is a sideband it
+    // supports — e.g. RTTY active, user taps USB per the advisory → RTTY stays
+    // and now decodes. Switching to an incompatible mode turns the decoder off.
+    if (this.secondaryDecoder) {
+      const dec = this.serverModes.find((m) => m.id === this.secondaryDecoder);
+      if (!dec?.underlying?.includes(String(mode))) this.secondaryDecoder = null;
+    }
     // Leaving DAB/WFM: the RDS/DAB labels no longer apply, clear them.
     if (String(mode) !== 'dab' && String(mode) !== 'wfm') {
       this.dabProgrammes = []; this.dabEnsemble = ''; this.lastDabSig = ''; this.rdsPs = ''; this.lastVoiceSpeaker = '';
