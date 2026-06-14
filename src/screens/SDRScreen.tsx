@@ -320,6 +320,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [connected, setConnected] = useState(false);
   const [profiles, setProfiles]   = useState<ProfileInfo[]>([]);  // OWRX only
   const [activeProfileId, setActiveProfileId] = useState<string | undefined>(undefined);
+  const [sdrUsage, setSdrUsage] = useState<Record<string, { name: string; inUse: boolean }>>({});  // OWRX: per-SDR usage
+  const [clientCount, setClientCount] = useState(0);  // OWRX: live user count
   const [serverModes, setServerModes] = useState<BackendMode[]>([]);  // OWRX gated demod list
   // Live RDS (FM) / DAB station metadata (OWRX). liveStationRef mirrors the name
   // for the VTS resolver (reads in a debounced callback, avoids stale closures).
@@ -1345,6 +1347,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       onStatus:     (s) => { if (!destroyed.current) setStatus(s); },
       onSMeter:     (dbm) => { if (!destroyed.current) owrxSmeterRef.current = dbm; },
       onProfiles:   (list) => { if (!destroyed.current) setProfiles(list); },
+      onSdrUsage:   (m) => { if (!destroyed.current) setSdrUsage(m); },
+      onClients:    (n) => { if (!destroyed.current) setClientCount(n); },
       onModes:      (list) => { if (!destroyed.current) setServerModes(list); },
       onBookmarks:  (list) => {
         // OWRX server bookmarks/dial markers (over the WS) → same path as
@@ -2590,6 +2594,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         serverType={route.params.serverType ?? 'ubersdr'}
         profiles={profiles}
         activeProfileId={activeProfileId}
+        sdrUsage={sdrUsage}
+        clientCount={clientCount}
         onSelectProfile={(id) => { client.current?.selectProfile?.(id); setActiveProfileId(id); }}
         dabProgrammes={dabProgrammes}
         activeDabId={activeDabId}

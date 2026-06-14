@@ -125,6 +125,8 @@ export interface MenuSheetProps {
   // OWRX profiles (hidden unless a backend reports them)
   profiles?:        { id: string; name: string }[];
   activeProfileId?: string;
+  sdrUsage?:        Record<string, { name: string; inUse: boolean }>;  // OWRX: per-SDR usage
+  clientCount?:     number;     // OWRX: live users online
   onSelectProfile?: (id: string) => void;
   // OWRX DAB ensemble — programme picker (hidden unless a DAB ensemble is tuned)
   dabProgrammes?:   { id: number; name: string }[];
@@ -406,7 +408,7 @@ export default function MenuSheet({
   hapticsEnabled = false, onHaptics,
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
-  profiles = [], activeProfileId, onSelectProfile, serverType = 'ubersdr',
+  profiles = [], activeProfileId, sdrUsage = {}, clientCount = 0, onSelectProfile, serverType = 'ubersdr',
   dabProgrammes = [], activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
   searchBookmarks = [], searchBands = [], onSearchTune,
   userBookmarks = [], currentFreq = 0, currentMode = '',
@@ -468,6 +470,32 @@ export default function MenuSheet({
     () => [...COLORMAP_NAMES].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
     [],
   );
+  // OWRX profiles grouped per SDR (id = `sdrId|profileId`). The SDR name + in-use
+  // flag come from /status.json (sdrUsage); profile order is preserved (server
+  // order). Each profile label has the SDR-name prefix stripped (the wire name is
+  // "{sdrName} {profileName}") so the dropdown reads cleanly under its header.
+  const sdrGroups = useMemo(() => {
+    const order: string[] = [];
+    const byId = new Map<string, { id: string; name: string }[]>();
+    for (const p of profiles) {
+      const sid = p.id.includes('|') ? p.id.split('|')[0] : p.id;
+      if (!byId.has(sid)) { byId.set(sid, []); order.push(sid); }
+      byId.get(sid)!.push(p);
+    }
+    const lcp = (a: string[]) => {
+      if (!a.length) return '';
+      let pre = a[0];
+      for (let i = 1; i < a.length; i++) { let k = 0; while (k < pre.length && k < a[i].length && pre[k] === a[i][k]) k++; pre = pre.slice(0, k); }
+      return pre;
+    };
+    return order.map((sid) => {
+      const items = byId.get(sid)!;
+      const info = sdrUsage[sid];
+      const sdrName = info?.name || lcp(items.map((i) => i.name)).replace(/\s+\S*$/, '').trim() || sid;
+      const strip = (n: string) => (sdrName && n.startsWith(sdrName + ' ') ? n.slice(sdrName.length + 1) : n);
+      return { sid, sdrName, inUse: !!info?.inUse, items: items.map((i) => ({ id: i.id, label: strip(i.name) })) };
+    });
+  }, [profiles, sdrUsage]);
   // Remember the spot: each dropdown jumps to its active row when opened, so a
   // long list doesn't have to be re-scrolled to find where you were.
   const cmapScroll = useRef<ScrollView | null>(null);
@@ -575,6 +603,15 @@ export default function MenuSheet({
             {/* ── PROFILE (OWRX only — hidden unless the backend reports profiles) ── */}
             {profiles.length > 0 && (<>
               <SectionLabel label="PROFILE" first />
+              {sdrGroups.some((g) => g.inUse) && (
+                <View style={styles.etiquette}>
+                  <Text style={styles.etiquetteText}>
+                    <Text style={styles.etiquetteLead}>Etiquette: </Text>
+                    if an SDR shows IN USE, check chat before changing its profile — you may interrupt another listener.
+                    {clientCount > 0 ? `  ${clientCount} user${clientCount === 1 ? '' : 's'} online.` : ''}
+                  </Text>
+                </View>
+              )}
               <View style={styles.profileDrop}>
                 <TouchableOpacity style={styles.profileDropHead} onPress={() => setProfileOpen((o) => !o)} activeOpacity={0.7}>
                   <Text style={styles.profileDropHeadText} numberOfLines={1}>
@@ -585,19 +622,32 @@ export default function MenuSheet({
                 {profileOpen && (
                   <ScrollView ref={profScroll} style={styles.profileDropList} nestedScrollEnabled
                               keyboardShouldPersistTaps="handled">
-                    {profiles.map((p) => {
-                      const active = p.id === activeProfileId;
+                    {sdrGroups.map((g) => {
+                      const isCurrentSdr = g.items.some((it) => it.id === activeProfileId);
                       return (
-                        <TouchableOpacity
-                          key={p.id}
-                          style={styles.profileDropItem}
-                          onLayout={e => { profY.current[p.id] = e.nativeEvent.layout.y; }}
-                          onPress={() => { onSelectProfile?.(p.id); setProfileOpen(false); }}
-                          activeOpacity={0.7}>
-                          <Text style={[styles.profileDropItemText, active && styles.profileChipTextActive]} numberOfLines={1}>
-                            {active ? '✓ ' : ''}{p.name}
-                          </Text>
-                        </TouchableOpacity>
+                        <View key={g.sid}>
+                          {/* SDR group header — name + In Use / Current badges */}
+                          <View style={styles.sdrHeadRow}>
+                            <Text style={styles.sdrHeadText} numberOfLines={1}>{g.sdrName}</Text>
+                            {isCurrentSdr && <Text style={[styles.sdrBadge, styles.sdrBadgeCurrent]}>CURRENT</Text>}
+                            {g.inUse && !isCurrentSdr && <Text style={[styles.sdrBadge, styles.sdrBadgeInUse]}>IN USE</Text>}
+                          </View>
+                          {g.items.map((it) => {
+                            const active = it.id === activeProfileId;
+                            return (
+                              <TouchableOpacity
+                                key={it.id}
+                                style={styles.profileDropItemSub}
+                                onLayout={e => { profY.current[it.id] = e.nativeEvent.layout.y; }}
+                                onPress={() => { onSelectProfile?.(it.id); setProfileOpen(false); }}
+                                activeOpacity={0.7}>
+                                <Text style={[styles.profileDropItemText, active && styles.profileChipTextActive]} numberOfLines={1}>
+                                  {active ? '✓ ' : ''}{it.label}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
                       );
                     })}
                   </ScrollView>
@@ -1497,8 +1547,17 @@ const styles = StyleSheet.create({
     backgroundColor: C.btnBg, overflow: 'hidden',
   },
   profileDropItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.divider },
+  profileDropItemSub: { paddingLeft: 22, paddingRight: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.divider },
   profileDropItemText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14 },
   profileChipTextActive: { color: C.active },
+  sdrHeadRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingTop: 11, paddingBottom: 6, backgroundColor: 'rgba(255,255,255,0.04)' },
+  sdrHeadText: { flexShrink: 1, color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, fontWeight: '700', letterSpacing: 0.4 },
+  sdrBadge: { fontFamily: 'Atkinson Hyperlegible', fontSize: 9, fontWeight: '700', letterSpacing: 0.5, overflow: 'hidden', borderRadius: 3, paddingHorizontal: 5, paddingVertical: 2, color: '#0a0a0a' },
+  sdrBadgeInUse: { backgroundColor: '#ffb84d' },     // amber — busy, switching may disturb
+  sdrBadgeCurrent: { backgroundColor: '#52dc64' },   // green — this is where you are
+  etiquette: { marginBottom: 8, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,184,77,0.45)', backgroundColor: 'rgba(255,184,77,0.10)' },
+  etiquetteText: { color: 'rgba(255,225,180,0.92)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11.5, lineHeight: 16 },
+  etiquetteLead: { color: '#ffb84d', fontWeight: '700' },
   dabSpeedLabel: { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, marginTop: 8, marginBottom: 4 },
   dabSpeedRow: { flexDirection: 'row', gap: 8 },
   dabSpeedChip: {

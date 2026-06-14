@@ -43,6 +43,20 @@ function bytesToBase64(b: Uint8Array): string {
   return out;
 }
 
+/** Longest common leading substring across the strings (for deriving an SDR's
+ *  name from its profiles' "{sdrName} {profileName}" labels). */
+function commonPrefix(strs: string[]): string {
+  if (!strs.length) return '';
+  let pre = strs[0];
+  for (let i = 1; i < strs.length; i++) {
+    let k = 0;
+    while (k < pre.length && k < strs[i].length && pre[k] === strs[i][k]) k++;
+    pre = pre.slice(0, k);
+    if (!pre) break;
+  }
+  return pre;
+}
+
 const B64_INV = (() => { const t = new Int8Array(128).fill(-1); for (let i = 0; i < B64.length; i++) t[B64.charCodeAt(i)] = i; return t; })();
 /** Minimal base64 → Uint8Array (Hermes has no atob). Ignores '=' padding/whitespace. */
 function base64ToBytes(s: string): Uint8Array {
@@ -143,6 +157,8 @@ export class OwrxAdapter implements SDRBackend {
   private ws: WebSocket | null = null;
   private cb: BackendCallbacks;
   private wsUrl: string;
+  private httpBase: string;   // http(s)://host:port — for /status.json polling
+  private statusTimer: ReturnType<typeof setInterval> | null = null;
 
   // server/profile state
   private cfg: OwrxConfig | null = null;
@@ -197,6 +213,60 @@ export class OwrxAdapter implements SDRBackend {
     this.uuid = uuid;
     this.cb = callbacks;
     this.wsUrl = OwrxAdapter.toWsUrl(baseUrl);
+    this.httpBase = OwrxAdapter.toHttpBase(baseUrl);
+  }
+
+  /** ws(s)/http(s)://host:port[/path] → http(s)://host:port (for /status.json). */
+  static toHttpBase(baseUrl: string): string {
+    let u = baseUrl.trim().replace(/\/+$/, '');
+    if (u.startsWith('wss://'))        u = 'https://' + u.slice('wss://'.length);
+    else if (u.startsWith('ws://'))    u = 'http://'  + u.slice('ws://'.length);
+    else if (!/^https?:\/\//.test(u))  u = 'http://'  + u;
+    return u.replace(/\/ws\/?$/, '');
+  }
+
+  /** Poll /status.json (public, no admin) and build per-SDR usage keyed by sdrId.
+   *  An SDR appears in status.json only when ACTIVE (a live user or a background
+   *  task is on it), so presence = in-use. Profile ids are `sdrId|profileId` and
+   *  WS profile names are `"{sdrName} {profileName}"`, so the SDR name is the
+   *  status.json source name that prefixes a group's profile names. */
+  private async pollStatus(): Promise<void> {
+    try {
+      const res = await fetch(this.httpBase + '/status.json');
+      if (!res.ok) return;
+      const j: any = await res.json();
+      const activeNames: string[] = Array.isArray(j?.sdrs)
+        ? j.sdrs.map((s: any) => String(s?.name ?? '').trim()).filter(Boolean) : [];
+
+      // Group the WS profiles by sdrId (the id prefix).
+      const groups: Record<string, ProfileInfo[]> = {};
+      for (const p of this.profiles) {
+        const sid = p.id.includes('|') ? p.id.split('|')[0] : p.id;
+        (groups[sid] ??= []).push(p);
+      }
+      const map: Record<string, { name: string; inUse: boolean }> = {};
+      for (const [sid, items] of Object.entries(groups)) {
+        // The SDR name is the LONGEST active source name that prefixes this
+        // group's "{sdrName} {profileName}" entries; if none, it's idle — derive
+        // the name from the group's common prefix instead.
+        let best = '';
+        for (const n of activeNames) {
+          if (items[0].name.startsWith(n + ' ') && n.length > best.length) best = n;
+        }
+        const name = best || commonPrefix(items.map((i) => i.name)).replace(/\s+\S*$/, '').trim() || sid;
+        map[sid] = { name, inUse: !!best };
+      }
+      this.cb.onSdrUsage?.(map);
+    } catch { /* server may not expose it / be offline — leave usage unknown */ }
+  }
+
+  private startStatusPoll(): void {
+    if (this.statusTimer) return;
+    this.pollStatus();
+    this.statusTimer = setInterval(() => this.pollStatus(), 15000);
+  }
+  private stopStatusPoll(): void {
+    if (this.statusTimer) { clearInterval(this.statusTimer); this.statusTimer = null; }
   }
 
   /** http(s)://host:port[/path] → ws(s)://host:port/ws/ (trailing slash required;
@@ -244,6 +314,7 @@ export class OwrxAdapter implements SDRBackend {
 
   destroy(): void {
     this.started = false;
+    this.stopStatusPoll();
     if (this.audioStarted) { Vibe?.stopExternalAudio?.(); this.audioStarted = false; }
     const ws = this.ws; this.ws = null;
     if (ws) { try { ws.onclose = null; ws.close(); } catch {} }
@@ -256,6 +327,7 @@ export class OwrxAdapter implements SDRBackend {
    *  (destroy() here would call stopExternalAudio and drop the lock-screen card.) */
   disconnectSocket(): void {
     this.started = false;
+    this.stopStatusPoll();
     const ws = this.ws; this.ws = null;
     if (ws) { try { ws.onclose = null; ws.close(); } catch {} }
   }
@@ -274,6 +346,7 @@ export class OwrxAdapter implements SDRBackend {
       this.connectedAt = Date.now();
       this.cb.onConnect();
       this.evalLink();          // seed the connection signal meter (tentative bars)
+      this.startStatusPoll();   // begin polling which SDRs are in use
       onReady();
       return;
     }
@@ -282,6 +355,7 @@ export class OwrxAdapter implements SDRBackend {
     switch (json.type) {
       case 'config':   this.onConfig(json.value || {}); break;
       case 'profiles': this.onProfiles(json.value || []); break;
+      case 'clients': { const n = Number(json.value); if (Number.isFinite(n)) this.cb.onClients?.(n); break; }
       case 'modes': {
         const arr = (json.value || []) as any[];
         this.serverModes = arr.map((m) => ({
@@ -436,6 +510,7 @@ export class OwrxAdapter implements SDRBackend {
   private onProfiles(list: any[]): void {
     this.profiles = list.map((p) => ({ id: String(p.id ?? p), name: String(p.name ?? p.id ?? p) }));
     this.cb.onProfiles?.(this.profiles);
+    if (this.statusTimer) this.pollStatus();   // now we can map sdrId → name/usage
   }
 
   /** RDS (broadcast FM) and DAB ensemble/programme metadata → normalised

@@ -128,6 +128,15 @@ export interface BackendCallbacks extends SDRCallbacks {
   onSMeter?: (rssiDbm: number) => void;
   /** OWRX: profile list arrived/changed. */
   onProfiles?: (list: ProfileInfo[]) => void;
+  /** OWRX: per-SDR usage, keyed by sdrId (the `sdrId|profileId` prefix). name =
+   *  the SDR's display name; inUse = an active source (live user or background
+   *  task) is on it (from /status.json polling). Lets the profile picker group
+   *  by SDR and badge in-use SDRs so a user doesn't disturb another user. */
+  onSdrUsage?: (sdrs: Record<string, { name: string; inUse: boolean }>) => void;
+  /** OWRX: live user count (the WS `clients` broadcast = real connected users,
+   *  NOT background tasks). Pairs with onSdrUsage so the user can tell whether an
+   *  in-use SDR has real listeners before switching its profile. */
+  onClients?: (count: number) => void;
   /** OWRX: server's available demodulators — gate the mode picker to these. */
   onModes?: (list: BackendMode[]) => void;
   /** OWRX: live RDS (FM) / DAB station metadata. Cleared with empty fields. */
