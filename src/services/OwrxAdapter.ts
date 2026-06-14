@@ -43,6 +43,34 @@ function bytesToBase64(b: Uint8Array): string {
   return out;
 }
 
+const B64_INV = (() => { const t = new Int8Array(128).fill(-1); for (let i = 0; i < B64.length; i++) t[B64.charCodeAt(i)] = i; return t; })();
+/** Minimal base64 → Uint8Array (Hermes has no atob). Ignores '=' padding/whitespace. */
+function base64ToBytes(s: string): Uint8Array {
+  const out: number[] = [];
+  let acc = 0, bits = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    const v = c < 128 ? B64_INV[c] : -1;
+    if (v < 0) continue;                     // '=' / newline / stray char
+    acc = (acc << 6) | v; bits += 6;
+    if (bits >= 8) { bits -= 8; out.push((acc >> bits) & 0xff); }
+  }
+  return Uint8Array.from(out);
+}
+
+/** Unpack OWRX's WEFAX run-length-encoded scanline (MessagePanel.js port):
+ *  byte<128 → literal run of (n+1) following bytes; byte>=128 → repeat the next
+ *  byte (n-128+2) times. */
+function faxRleDecode(rle: Uint8Array): Uint8Array {
+  const out: number[] = [];
+  for (let x = 0; x < rle.length; ) {
+    const c = rle[x];
+    if (c < 128) { for (let k = 0; k <= c; k++) out.push(rle[x + 1 + k] ?? 0); x += c + 2; }
+    else { const b = rle[x + 1] ?? 0; for (let k = 0; k < c - 128 + 2; k++) out.push(b); x += 2; }
+  }
+  return Uint8Array.from(out);
+}
+
 const OWRX_AUDIO_RATE = 12000;   // output_rate (type-2)
 const OWRX_HD_RATE = 48000;      // hd_output_rate (type-4 — WFM/wide)
 // Fixed waterfall row width. Every emitted spectrum slice is resampled to this
@@ -120,7 +148,7 @@ export class OwrxAdapter implements SDRBackend {
   private cfg: OwrxConfig | null = null;
   private profiles: ProfileInfo[] = [];
   private modes: string[] | null = null;     // server-reported mode ids (gating)
-  private serverModes: { id: string; name: string; digital: boolean; bandpass?: { low_cut: number; high_cut: number } }[] = [];
+  private serverModes: { id: string; name: string; digital: boolean; type?: string; underlying?: string[]; bandpass?: { low_cut: number; high_cut: number } }[] = [];
   private serverVersion = '';
 
   // tuned state (absolute Hz / internal model)
@@ -256,6 +284,10 @@ export class OwrxAdapter implements SDRBackend {
           id: m.modulation ?? m.id ?? String(m),
           name: m.name ?? String(m.modulation ?? m.id ?? m).toUpperCase(),
           digital: (m.type ?? 'analog') !== 'analog',
+          // 'digimode' = a SECONDARY decoder (SSTV/Fax/Packet/…) that runs on top
+          // of an analog `underlying` mode via secondary_mod — not a primary demod.
+          type: m.type,
+          underlying: Array.isArray(m.underlying) ? m.underlying.map(String) : undefined,
           bandpass: m.bandpass,
         }));
         this.modes = this.serverModes.map((m) => m.id);
@@ -277,6 +309,7 @@ export class OwrxAdapter implements SDRBackend {
         }
         break;
       case 'metadata': this.onMetadata(json.value || {}); break;
+      case 'secondary_demod': this.onSecondaryDemod(json.value); break;
       case 'bookmarks':        // server-configured named bookmarks
         this.owrxBookmarks = ((json.value || []) as any[])
           .filter((b) => b && typeof b.frequency === 'number')
@@ -454,6 +487,7 @@ export class OwrxAdapter implements SDRBackend {
           ensemble: this.dabEnsemble || undefined,
           stationName: selName,
           programmes: this.dabProgrammes,   // always the full cached list
+          badge: selName ? 'RDS' : undefined,  // live broadcast-data mark (same as FM RDS)
         });
       }
       return;
@@ -469,6 +503,47 @@ export class OwrxAdapter implements SDRBackend {
         text: typeof v.radiotext === 'string' ? v.radiotext.trim() || undefined : undefined,
         badge: this.rdsPs ? 'RDS' : undefined,
       });
+    }
+  }
+
+  /** Secondary-demod output (SSTV / Fax images so far). OWRX streams the decoded
+   *  result over the SAME WS once secondary_mod is set: a header message (size),
+   *  then per-scanline pixel messages, then (Fax) an end marker. We translate the
+   *  wire pixels into the DecoderImageCanvas contract (SSTV = RGB triplets, Fax =
+   *  greyscale bytes) and hand them up via onDecoderImage. Text decoders
+   *  (packet/pocsag/…) are deferred — ignored here for now. */
+  private onSecondaryDemod(v: any): void {
+    if (!v || typeof v !== 'object' || 'message' in v) return;   // debug text → ignore
+    const kind: 'sstv' | 'fax' | null = v.mode === 'SSTV' ? 'sstv' : v.mode === 'Fax' ? 'fax' : null;
+    if (!kind) return;
+    // Header: dimensions, no scanline → start a fresh image.
+    if (v.width > 0 && v.height > 0 && v.line == null) {
+      this.cb.onDecoderImage?.({ phase: 'start', kind, width: v.width, height: v.height });
+      return;
+    }
+    // Fax end-of-image (crop to received lines).
+    if (v.line >= 0 && v.ended && v.pixels == null) {
+      this.cb.onDecoderImage?.({ phase: 'done', kind });
+      return;
+    }
+    // Scanline.
+    if (v.line >= 0 && v.width > 0 && typeof v.pixels === 'string') {
+      let bytes = base64ToBytes(v.pixels);
+      let px: Uint8Array;
+      if (kind === 'sstv') {
+        // OWRX sends BMP BGR triplets; the canvas wants RGB triplets.
+        const w = v.width as number;
+        px = new Uint8Array(w * 3);
+        for (let x = 0; x < w; x++) {
+          px[x * 3]     = bytes[x * 3 + 2] ?? 0;
+          px[x * 3 + 1] = bytes[x * 3 + 1] ?? 0;
+          px[x * 3 + 2] = bytes[x * 3]     ?? 0;
+        }
+      } else {
+        // Fax: greyscale, optionally RLE-compressed → one byte per pixel.
+        px = v.rle ? faxRleDecode(bytes) : bytes;
+      }
+      this.cb.onDecoderImage?.({ phase: 'line', kind, line: v.line, width: v.width, pixels: px });
     }
   }
 
@@ -618,13 +693,25 @@ export class OwrxAdapter implements SDRBackend {
     // The mode may be a known SDRMode (mapped) or a server modulation passed
     // straight through (wfm, dmr, dab, …) selected from the gated picker.
     let mod = MODE_TO_WIRE[this.mode] ?? String(this.mode);
+    // Secondary decoders (SSTV/Fax/Packet/… = type 'digimode') don't run as the
+    // primary demod — OWRX runs them on top of an `underlying` analog mode via
+    // `secondary_mod`. Carry the decoder as secondary_mod and demod the analog
+    // carrier underneath it; clear secondary_mod for any normal demod.
+    const sel = this.serverModes.find((m) => m.id === String(this.mode));
+    let secondaryMod: string | false = false;
+    if (sel?.type === 'digimode') {
+      secondaryMod = sel.id;
+      mod = sel.underlying?.[0] ?? 'usb';
+    }
     if (this.modes && !this.modes.includes(mod)) {
       if (mod === 'sam') mod = 'am';                 // clamp per brief §4
       else if (mod === 'nfm' && this.modes.includes('fm')) mod = 'fm';
     }
     const params: Record<string, unknown> = {
       offset_freq: Math.round(offset), mod, squelch_level: -150,
+      secondary_mod: secondaryMod,
     };
+    if (secondaryMod) params.secondary_offset_freq = 0;
     // Full-IF fixed-rate decoders (DAB/Dablin runs on the raw 2.048 MHz IF) must
     // get null cuts — matching the OWRX web client (Demodulator.js sends
     // low_cut/high_cut = null when a mode has no bandpass). Sending numeric cuts

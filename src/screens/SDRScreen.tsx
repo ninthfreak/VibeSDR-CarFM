@@ -1351,6 +1351,18 @@ export default function SDRScreen({ route, navigation }: Props) {
         // UberSDR's fetched bookmarks: VTS station readout + search bar.
         if (!destroyed.current) setServerBookmarks(list.map((b) => ({ name: b.name, frequency: b.frequency, mode: b.mode })));
       },
+      onDecoderImage: (ev) => {
+        // OWRX decodes SSTV/Fax server-side and streams scanlines — paint them
+        // on the SAME decoder canvas UberSDR uses (Fax → 'wefax' greyscale path).
+        if (destroyed.current) return;
+        const dt: DecoderType = ev.kind === 'sstv' ? 'sstv' : 'wefax';
+        if (activeDecRef.current !== dt) { activeDecRef.current = dt; setActiveDecoder(dt); }
+        if (ev.phase === 'start') { decoderImageRef.current?.imageStart(ev.width, ev.height); setDecoderStatus(`receiving ${ev.width}x${ev.height}`); }
+        else if (ev.phase === 'line') {
+          if (ev.kind === 'sstv') decoderImageRef.current?.sstvLine(ev.line, ev.width, ev.pixels);
+          else                    decoderImageRef.current?.wefaxLine(ev.line, ev.width, ev.pixels);
+        } else { decoderImageRef.current?.imageDone(); }
+      },
       onMetadata:   (meta) => {
         if (destroyed.current) return;
         // RDS (FM) / DAB labels feed the SAME station display as bookmarks (VTS),
@@ -1795,7 +1807,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     const c = client.current; if (!c) return;
     c.setMode(m); // client mirrors the server's per-mode bandwidth defaults
     setStatus({ ...c.getStatus() });
-  }, []);
+    // OWRX image decoders (SSTV/Fax) are selected from the demodulator picker —
+    // open the decoder canvas on select (output then streams in via
+    // onDecoderImage), and close it when switching to any other mode.
+    if (route.params.serverType === 'owrx') {
+      const dt: DecoderType = String(m) === 'sstv' ? 'sstv' : String(m) === 'fax' ? 'wefax' : null;
+      if (dt) {
+        decoderImageRef.current?.reset();
+        activeDecRef.current = dt; setActiveDecoder(dt);
+        setDecoderStatus('listening…');
+      } else if (activeDecRef.current) {
+        activeDecRef.current = null; setActiveDecoder(null);
+      }
+    }
+  }, [route.params.serverType]);
 
   // Atomic both-edges setter — single setBandwidth, no stale-closure edge
   const onFilterBoth = useCallback((low: number, high: number) => {

@@ -19,6 +19,10 @@
           "_http._tcp",
           "_https._tcp"
         ],
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSAllowsLocalNetworking": true
+        },
         "ITSAppUsesNonExemptEncryption": false
       }
     },
