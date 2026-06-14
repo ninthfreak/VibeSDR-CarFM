@@ -179,15 +179,26 @@ export default function InstancePickerScreen({ navigation }: Props) {
   // Connect a saved favourite: use its stored backend type, or detect it once
   // (and remember it) so an OpenWebRX/Kiwi favourite doesn't reconnect as UberSDR.
   const connectFav = useCallback(async (fav: Favourite) => {
-    const type = fav.serverType ?? await detectServerType(fav.url);
-    if (!fav.serverType) { setFavouriteServerType(fav.url, type).catch(() => {}); }
+    // Re-detect on every connect so a favourite first saved while detection was
+    // failing (e.g. cleartext blocked) self-heals instead of being stuck as
+    // ubersdr. But detection returns ubersdr on ANY failure (timeout/unreachable),
+    // so don't downgrade a previously-known OWRX/Kiwi favourite on a transient
+    // miss — keep the stored type in that case.
+    const detected = await detectServerType(fav.url);
+    const type = (detected === 'ubersdr' && fav.serverType && fav.serverType !== 'ubersdr')
+      ? fav.serverType : detected;
+    if (type !== fav.serverType) setFavouriteServerType(fav.url, type).catch(() => {});
     connect(fav.url, fav.name, undefined, null, type);
   }, [connect]);
 
   const connectCustom = useCallback(async () => {
     if (!customUrl.trim()) return;
     let url = customUrl.trim();
-    if (!url.startsWith('http://') && !url.startsWith('https://')) url = 'http://' + url;
+    // Accept ws://, wss://, http(s)://, or a bare host. Normalise ws→http so the
+    // host parses correctly (typing "ws://192.168.x.x" used to become
+    // "http://ws://…", parsing the host as "ws" → bogus "not local" rejection).
+    url = url.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
+    if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
     // App Store security policy (ATS): plain HTTP is only allowed to LOCAL
     // network addresses — public-internet servers must use HTTPS. iOS blocks
     // the connection at the OS level, so warn instead of failing silently.

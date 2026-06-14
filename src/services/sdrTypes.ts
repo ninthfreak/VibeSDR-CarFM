@@ -44,14 +44,22 @@ export type ServerType = 'ubersdr' | 'kiwi' | 'owrx';
 /** Probe a manually-entered host to pick the backend (v3). Fetches the landing
  *  page and sniffs for OpenWebRX / KiwiSDR markers; defaults to ubersdr. */
 export async function detectServerType(url: string): Promise<ServerType> {
-  const base = url.trim().replace(/\/+$/, '');
+  const base = url.trim().replace(/\/+$/, '')
+    .replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
+  // Manual AbortController + setTimeout — AbortSignal.timeout() isn't reliably
+  // available in Android's Hermes runtime and throws before the fetch even runs,
+  // which used to make detection fail → default to ubersdr → 404 on OWRX servers.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 5000);
   try {
-    const r = await fetch(base + '/', { signal: AbortSignal.timeout(5000) });
+    const r = await fetch(base + '/', { signal: ctrl.signal });
     const body = (await r.text()).toLowerCase();
     if (body.includes('openwebrx')) return 'owrx';
     if (body.includes('kiwisdr') || body.includes('kiwi sdr')) return 'kiwi';
   } catch {
-    // unreachable / CORS — fall through to ubersdr default
+    // unreachable / CORS / timeout — fall through to ubersdr default
+  } finally {
+    clearTimeout(timer);
   }
   return 'ubersdr';
 }
