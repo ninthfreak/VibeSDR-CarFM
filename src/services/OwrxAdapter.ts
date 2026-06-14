@@ -380,6 +380,7 @@ export class OwrxAdapter implements SDRBackend {
           bandpass: m.bandpass,
         }));
         this.modes = this.serverModes.map((m) => m.id);
+        this.buildBandwidthCaps();   // per-mode slider caps from each mode's bandpass
         this.cb.onModes?.(this.serverModes.map((m) => ({ id: m.id, label: m.name, digital: m.digital })));
         // If the modes list lands after config (so the start_mod passband wasn't
         // known yet), apply it now and resend so the filter widens to match.
@@ -426,7 +427,19 @@ export class OwrxAdapter implements SDRBackend {
     if ('fft_size' in c)          this.cfg.fftSize = c.fft_size;
     if ('fft_compression' in c)   this.cfg.fftCompression = c.fft_compression;
     if ('audio_compression' in c) this.cfg.audioCompression = c.audio_compression;
-    if ('start_mod' in c)         this.mode = (c.start_mod as SDRMode) || this.mode;
+    if ('start_mod' in c && c.start_mod) {
+      // A profile can default to a digimode (e.g. the ADSB profile starts on adsb).
+      // Set it up as a secondary decoder so it auto-decodes on profile load, with
+      // a real underlying carrier where one applies (else keep the digimode itself).
+      const sm = this.serverModes.find((m) => m.id === c.start_mod);
+      if (sm?.type === 'digimode' && sm.underlying?.length) {
+        this.secondaryDecoder = c.start_mod;
+        const real = sm.underlying.filter((u) => u !== 'empty');
+        this.mode = (real[0] ?? c.start_mod) as SDRMode;
+      } else {
+        this.mode = c.start_mod as SDRMode;
+      }
+    }
     if ('start_offset_freq' in c && this.cfg.centerFreq) this.freq = this.cfg.centerFreq + c.start_offset_freq;
     // Ensure we have a tuned frequency inside the profile before centring the view.
     if ((this.freq === 0 || Math.abs(this.freq - this.cfg.centerFreq) > this.cfg.sampRate / 2) && this.cfg.centerFreq) {
@@ -452,9 +465,7 @@ export class OwrxAdapter implements SDRBackend {
     // (which read caps.freqRange) don't peg VHF/UHF tunes to a 30 MHz ceiling.
     if (this.cfg.sampRate) {
       this.caps.freqRange = [this.cfg.centerFreq - this.cfg.sampRate / 2, this.cfg.centerFreq + this.cfg.sampRate / 2];
-      // Filter edge can be as wide as the profile IF allows — WFM (~±100 kHz),
-      // DAB (~±0.8 MHz), ADSB (~±1 MHz) need far more than the UberSDR ±6 kHz.
-      this.caps.maxBandwidth = { default: Math.max(6000, Math.floor(this.cfg.sampRate / 2)) };
+      this.buildBandwidthCaps();
     }
     this.dbg(`cfg cf=${this.cfg.centerFreq} sr=${this.cfg.sampRate} fft=${this.cfg.fftSize} freq=${this.freq} fftcomp=${this.cfg.fftCompression}`);
     // Profile's start_mod may be a wide mode (broadcast-FM profile → WFM): adopt
@@ -941,6 +952,26 @@ export class OwrxAdapter implements SDRBackend {
     this.freq = frequency; if (mode) this.mode = mode;
   }
 
+  /** Per-mode bandwidth-slider caps (per-edge half-width) so the slider is
+   *  DEMODULATOR-AWARE: USB tops out ~7 kHz (fine control around 2.7 kHz) instead
+   *  of the whole multi-MHz IF. Derived from each mode's server bandpass with
+   *  headroom; DAB/DRM stay wide (server-controlled). Was sampRate/2 for all. */
+  private buildBandwidthCaps(): void {
+    const sr = this.cfg?.sampRate ?? 0;
+    const caps: Record<string, number> = {};
+    for (const m of this.serverModes) {
+      const id = m.id.toLowerCase();
+      if (id === 'dab' || id === 'drm') { caps[m.id] = sr ? Math.floor(sr / 2) : 1_000_000; continue; }
+      if (m.bandpass) {
+        const half = Math.max(Math.abs(m.bandpass.low_cut), Math.abs(m.bandpass.high_cut));
+        caps[m.id] = Math.max(3000, Math.round(half * 2.5));   // headroom for fine tuning
+      } else if (id.includes('wfm')) caps[m.id] = 150_000;
+      else if (id === 'usb' || id === 'lsb' || id === 'cw' || id.startsWith('cw')) caps[m.id] = 6000;
+      else caps[m.id] = 8000;                                   // adsb/ism/raw — passband n/a
+    }
+    this.caps.maxBandwidth = { default: 8000, ...(caps as Partial<Record<SDRMode, number>>) };
+  }
+
   /** Adopt the server's default passband for the current demodulator, if known. */
   private applyModeBandpass(): void {
     const info = this.serverModes.find((m) => m.id === (this.mode as string));
@@ -955,13 +986,18 @@ export class OwrxAdapter implements SDRBackend {
 
   setMode(mode: SDRMode): void {
     const sel = this.serverModes.find((m) => m.id === String(mode));
-    // SECONDARY decoder = a digimode that runs ON TOP of an analog demod (it has
-    // `underlying` sidebands, e.g. RTTY/WEFAX/SSTV on USB/LSB). We do NOT force the
-    // carrier — OWRX keeps whatever sideband the user is on; the UI just advises
-    // them to set USB/LSB. Digimodes WITHOUT `underlying` (ADSB/POCSAG/…) are
-    // standalone primary demods and fall through to the normal path below.
+    // ALL digimodes are SECONDARY demods (DIG dropdown) — verified on the wire:
+    // ADSB needs mod=empty + secondary_mod=adsb (mod=adsb alone decodes nothing).
+    // RTTY/WEFAX/SSTV ride usb/lsb, Packet/Page ride nfm, ACARS rides am, and
+    // ADSB/ISM ride the special "empty" (raw-IF) carrier. So always set
+    // secondary_mod; only auto-pick a REAL carrier sideband (never "empty" — for
+    // ADSB we keep the profile's mode, which works as mod=adsb + secondary_mod=adsb).
+    const realUnderlying = (sel?.underlying ?? []).filter((u) => u !== 'empty');
     if (sel?.type === 'digimode' && sel.underlying?.length) {
       this.secondaryDecoder = this.secondaryDecoder === sel.id ? null : sel.id;  // toggle
+      if (this.secondaryDecoder && realUnderlying.length && !realUnderlying.includes(String(this.mode))) {
+        this.mode = realUnderlying[0] as SDRMode;   // RTTY→usb, Page→nfm, … (skip "empty")
+      }
       this.applyModeBandpass();
       this.audioDec.reset(); this.hdAudioDec.reset();
       this.sendDemod();

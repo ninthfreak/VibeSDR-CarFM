@@ -199,25 +199,9 @@ export default function InstancePickerScreen({ navigation }: Props) {
     // "http://ws://…", parsing the host as "ws" → bogus "not local" rejection).
     url = url.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
     if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
-    // App Store security policy (ATS): plain HTTP is only allowed to LOCAL
-    // network addresses — public-internet servers must use HTTPS. iOS blocks
-    // the connection at the OS level, so warn instead of failing silently.
-    const host = url.replace(/^https?:\/\//, '').split(/[/:]/)[0];
-    const isLocal = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)
-      || host.endsWith('.local');
-    if (url.startsWith('http://') && !isLocal) {
-      Alert.alert(
-        'HTTP Not Supported',
-        'Plain HTTP is only supported for local network addresses (e.g. 192.168.x.x). ' +
-        'Internet servers must use https:// — App Store security policy blocks ' +
-        'unencrypted connections to the web.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Try HTTPS', onPress: async () => { const u = url.replace(/^http:/, 'https:'); connect(u, u, undefined, null, await detectServerType(u)); } },
-        ],
-      );
-      return;
-    }
+    // Plain HTTP to public-internet servers IS allowed (NSAllowsArbitraryLoads in
+    // Info.plist/app.json) — most KiwiSDR/OpenWebRX receivers are hobbyist HTTP
+    // boxes with no TLS, so we don't block them (same as Echo SDR et al.).
     // v3: sniff the backend type (OpenWebRX / KiwiSDR / UberSDR) for manual adds.
     const type = await detectServerType(url);
     connect(url, url, undefined, null, type);
