@@ -418,7 +418,13 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         reconnectFailed = failed
         if (failed) dataSaverDisconnected = false
         mainHandler.post {
-            updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
+            // COMPUTE the state (matching iOS updateNowPlaying) — don't hardcode
+            // PAUSED. JS calls setReconnectFailed(false) on every successful
+            // connect, which used to flip a freshly-PLAYING session to PAUSED
+            // (the media card stuck on a play button / pause-play spring). Only
+            // pause when actually failed / disconnected / muted.
+            val playing = !reconnectFailed && !dataSaverDisconnected && !muted
+            updatePlaybackState(if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED)
             updateMetadataSession(); updateNotification()
         }
     }

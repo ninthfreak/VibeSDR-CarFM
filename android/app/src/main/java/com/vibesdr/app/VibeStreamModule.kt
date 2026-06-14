@@ -34,7 +34,15 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
             putExtra(VibeStreamService.EXTRA_UUID, uuid)
             putExtra(VibeStreamService.EXTRA_PASSWORD, password)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        // If the service is already running (the reconnect case: AudioPlayer does
+        // stopAudioEngine then startAudioEngine on a fresh session uuid), use
+        // startService so this START stays FIFO-ordered with stopAudioEngine's
+        // startService(ACTION_STOP). startForegroundService uses a different,
+        // prioritised queue, so the START jumped ahead of the STOP and the STOP
+        // then killed the just-started engine → frozen "go back to instances" state.
+        if (VibeStreamService.instance != null) {
+            reactContext.startService(intent)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             reactContext.startForegroundService(intent)
         } else {
             reactContext.startService(intent)
