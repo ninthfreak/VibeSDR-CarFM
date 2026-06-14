@@ -1202,20 +1202,27 @@ export default function MenuSheet({
             )}
             </>)}
 
-            {/* ── SERVER MAPS — full-screen Leaflet overlays (skin parity) ── */}
-            <SectionLabel label="SERVER MAPS" />
-            <BtnRow>
-              <Btn label="✈ HFDL"     onPress={() => onServerMap?.('hfdl')} />
-              <Btn label="📡 DIGITAL"  onPress={() => onServerMap?.('digi')} />
-              <Btn label="⊟ CW"       onPress={() => onServerMap?.('cw')} />
-            </BtnRow>
+            {/* ── SERVER MAPS — UberSDR's per-feed Leaflet overlays (skin parity).
+                   OWRX has its own combined map (opened from the OPENWEBRX section
+                   below), so these UberSDR-specific feeds are hidden for it. ── */}
+            {serverType !== 'owrx' && (<>
+              <SectionLabel label="SERVER MAPS" />
+              <BtnRow>
+                <Btn label="✈ HFDL"     onPress={() => onServerMap?.('hfdl')} />
+                <Btn label="📡 DIGITAL"  onPress={() => onServerMap?.('digi')} />
+                <Btn label="⊟ CW"       onPress={() => onServerMap?.('cw')} />
+              </BtnRow>
+            </>)}
 
             {/* ── CLIENT DECODERS — skin: toggle start/stop, menu stays open;
                    settings for the selected mode appear underneath.
                    Landscape: hidden — the decoder panel needs vertical space
                    that landscape (esp. SE-class screens) doesn't have. Maps
-                   stay available; rotate to portrait for decoders. ── */}
-            {!isLandscape && (<>
+                   stay available; rotate to portrait for decoders.
+                   OWRX decodes server-side (results stream back), so the
+                   client-side decoders + UberSDR spot feeds are hidden for it —
+                   replaced by the OPENWEBRX map/files/admin below (Phase 1). ── */}
+            {!isLandscape && serverType !== 'owrx' && (<>
             <SectionLabel label="CLIENT DECODERS" />
             <BtnRow>
               {(['rtty','navtex','wefax','sstv','morse'] as const).map(k => (
@@ -1291,16 +1298,29 @@ export default function MenuSheet({
               </BtnRow>
             </View>
 
-            {/* ── INSTANCE ADMIN — server pages in an in-app browser view ──── */}
-            <SectionLabel label="INSTANCE ADMIN" />
-            <BtnRow>
-              <Btn label="ADMIN"      onPress={() => onAdminLink?.('/admin.html', 'Admin')} />
-              <Btn label="NOISE"      onPress={() => onAdminLink?.('/noisefloor.html', 'Noise Floor')} />
-            </BtnRow>
-            <BtnRow>
-              <Btn label="CONDITIONS" onPress={() => onAdminLink?.('/bandconditions.html', 'Band Conditions')} />
-              <Btn label="LISTENERS"  onPress={() => onAdminLink?.('/session_stats.html', 'Listeners')} />
-            </BtnRow>
+            {/* ── SERVER PAGES — in-app browser view. OWRX bundles map + files
+                   gallery (SSTV/WEFAX/Navtex images) + settings, so we link those
+                   rather than UberSDR's noise/conditions/listeners pages. ──── */}
+            {serverType === 'owrx' ? (<>
+              <SectionLabel label="OPENWEBRX" />
+              <BtnRow>
+                <Btn label="🗺 MAP"   onPress={() => onAdminLink?.('/map', 'Map')} />
+                <Btn label="🖼 FILES" onPress={() => onAdminLink?.('/files', 'Files')} />
+              </BtnRow>
+              <BtnRow>
+                <Btn label="⚙ ADMIN" full onPress={() => onAdminLink?.('/settings', 'Settings')} />
+              </BtnRow>
+            </>) : (<>
+              <SectionLabel label="INSTANCE ADMIN" />
+              <BtnRow>
+                <Btn label="ADMIN"      onPress={() => onAdminLink?.('/admin.html', 'Admin')} />
+                <Btn label="NOISE"      onPress={() => onAdminLink?.('/noisefloor.html', 'Noise Floor')} />
+              </BtnRow>
+              <BtnRow>
+                <Btn label="CONDITIONS" onPress={() => onAdminLink?.('/bandconditions.html', 'Band Conditions')} />
+                <Btn label="LISTENERS"  onPress={() => onAdminLink?.('/session_stats.html', 'Listeners')} />
+              </BtnRow>
+            </>)}
 
             {/* ── INSTANCE ───────────────────────────────────────── */}
             <SectionLabel label="INSTANCE" />

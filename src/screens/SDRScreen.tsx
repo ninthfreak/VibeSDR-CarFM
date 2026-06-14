@@ -2692,6 +2692,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       <BrowserOverlay
         url={adminPage?.url ?? null}
         title={adminPage?.title}
+        allowSave={!!adminPage?.url?.includes('/files')}
+        injectCSS={adminPage?.url?.endsWith('/map')
+          ? '.webrx-top-container{display:none!important}'   // OWRX map: hide header → full-screen map
+          : undefined}
         onClose={() => setAdminPage(null)}
       />
 

@@ -10,7 +10,7 @@
 
 import React, { useRef, useState } from 'react';
 import {
-  Modal, StyleSheet, Text, TouchableOpacity, View,
+  Modal, Share, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -19,13 +19,21 @@ export interface BrowserOverlayProps {
   url:     string | null;
   title?:  string;
   onClose: () => void;
+  /** Show a Save/Share button (OWRX files gallery — save SSTV/WEFAX images). */
+  allowSave?: boolean;
+  /** CSS injected into the page (e.g. hide the OWRX header to enlarge the map). */
+  injectCSS?: string;
 }
 
-export default function BrowserOverlay({ url, title, onClose }: BrowserOverlayProps) {
+export default function BrowserOverlay({ url, title, onClose, allowSave, injectCSS }: BrowserOverlayProps) {
   const webRef = useRef<WebView>(null);
   const [canBack, setCanBack] = useState(false);
   const [canFwd,  setCanFwd]  = useState(false);
+  const [curUrl,  setCurUrl]  = useState(url);
   if (!url) return null;
+  // Hand the currently-open URL to the OS share sheet — for an image (a tapped
+  // file in the OWRX gallery) iOS/Android offer "Save Image" / "Save to Files".
+  const onSave = () => { Share.share({ url: curUrl ?? url }).catch(() => {}); };
   return (
     <Modal
       visible
@@ -46,6 +54,11 @@ export default function BrowserOverlay({ url, title, onClose }: BrowserOverlayPr
             <Text style={styles.back}>← SDR</Text>
           </TouchableOpacity>
           <Text style={styles.title} numberOfLines={1}>{title ?? url}</Text>
+          {allowSave && (
+            <TouchableOpacity onPress={onSave} hitSlop={10} activeOpacity={0.7}>
+              <Text style={styles.save}>⤓ Save</Text>
+            </TouchableOpacity>
+          )}
           {/* Browser history arrows — multi-level admin pages */}
           <TouchableOpacity
             onPress={() => webRef.current?.goBack()}
@@ -65,9 +78,20 @@ export default function BrowserOverlay({ url, title, onClose }: BrowserOverlayPr
           source={{ uri: url }}
           style={styles.web}
           allowsBackForwardNavigationGestures
-          onNavigationStateChange={(nav: { canGoBack: boolean; canGoForward: boolean }) => {
+          // Inject after the page loads (injectedJavaScript-prop timing was
+          // unreliable on the OWRX map). A MutationObserver re-applies it in case
+          // the header mounts after load.
+          onLoadEnd={() => {
+            if (!injectCSS) return;
+            const css = JSON.stringify(injectCSS);
+            webRef.current?.injectJavaScript(
+              `(function(){function a(){var id='vibe-inj';if(!document.getElementById(id)){var s=document.createElement('style');s.id=id;s.textContent=${css};(document.head||document.documentElement).appendChild(s);}}a();new MutationObserver(a).observe(document.documentElement,{childList:true,subtree:true});})();true;`,
+            );
+          }}
+          onNavigationStateChange={(nav: { canGoBack: boolean; canGoForward: boolean; url: string }) => {
             setCanBack(nav.canGoBack);
             setCanFwd(nav.canGoForward);
+            setCurUrl(nav.url);
           }}
         />
       </SafeAreaView>
@@ -84,6 +108,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   back:  { color: '#ffe566', fontFamily: 'Atkinson Hyperlegible', fontSize: 16 },
+  save:  { color: '#ffe566', fontFamily: 'Atkinson Hyperlegible', fontSize: 14, paddingHorizontal: 6 },
   title: {
     flex: 1, textAlign: 'center', paddingHorizontal: 8,
     color: 'rgba(255,255,255,0.85)', fontFamily: 'Atkinson Hyperlegible', fontSize: 15,

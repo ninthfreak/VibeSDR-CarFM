@@ -100,6 +100,7 @@ export class OwrxAdapter implements SDRBackend {
   private dabProgrammes: { id: number; name: string }[] = [];
   private dabEnsemble = '';                    // DAB: ensemble (multiplex) label, cached
   private lastDabSig = '';                      // dedupe key for per-second DAB metadata
+  private lastVoiceSpeaker = '';                 // dedupe key for digital-voice callers
   private dabRateScale = 1;                      // DAB speed-correction factor (1 = off)
 
   // current view (client-side); defaults to whole profile on first config
@@ -305,6 +306,30 @@ export class OwrxAdapter implements SDRBackend {
     this.cb.onStatus(this.getStatus());
   }
 
+  /** Extract the active caller from a digital-voice metadata message, or undefined
+   *  if the message isn't a digital-voice protocol. Returns '' when the protocol
+   *  IS digital voice but nobody is transmitting (idle), so the dedupe resets. */
+  private digiVoiceSpeaker(v: any): string | undefined {
+    const cs = (x: any) => (typeof x === 'string' && x.trim() ? x.trim() : undefined);
+    switch (v?.protocol) {
+      case 'DMR': {
+        if (v.sync !== 'voice') return '';
+        const c = cs(v.additional?.callsign) ?? cs(v.talkeralias) ?? cs(v.source);
+        return c ? (cs(v.target) ? `${c} → ${v.target}` : c) : '';
+      }
+      case 'YSF':
+        return (v.mode && cs(v.source)) ? (cs(v.source) as string) : '';
+      case 'DStar': case 'D-Star':
+        if (v.sync !== 'voice') return '';
+        { const o = cs(v.ourcall); return o ? (cs(v.yourcall) ? `${o} → ${v.yourcall}` : o) : ''; }
+      case 'NXDN': case 'M17': {
+        const c = cs(v.source);
+        return c ? (cs(v.target) ? `${c} → ${v.target}` : c) : '';
+      }
+      default: return undefined;
+    }
+  }
+
   private onProfiles(list: any[]): void {
     this.profiles = list.map((p) => ({ id: String(p.id ?? p), name: String(p.name ?? p.id ?? p) }));
     this.cb.onProfiles?.(this.profiles);
@@ -315,6 +340,19 @@ export class OwrxAdapter implements SDRBackend {
    *  protocol:'WFM' (ps = station name, radiotext = scrolling text), DAB by
    *  mode:'DAB' (ensemble_label + programmes map). */
   private onMetadata(v: any): void {
+    // Digital voice (DMR/YSF/D-Star/NXDN/M17): surface the active caller's
+    // callsign (→ talkgroup/target) as the station name, so the VTS pops on each
+    // NEW caller — uniform with RDS/DAB. Deduped on the speaker string.
+    const speaker = v ? this.digiVoiceSpeaker(v) : undefined;
+    if (speaker !== undefined) {
+      if (speaker && speaker !== this.lastVoiceSpeaker) {
+        this.lastVoiceSpeaker = speaker;
+        this.cb.onMetadata?.({ stationName: speaker });
+      } else if (!speaker) {
+        this.lastVoiceSpeaker = '';   // transmission ended → next key-up re-pops
+      }
+      return;
+    }
     if (v && v.mode === 'DAB') {
       // DAB metadata is INCREMENTAL — the server sends partial updates (a
       // timestamp every second, programmes once, ensemble once). Cache the
