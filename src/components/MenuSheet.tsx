@@ -461,6 +461,30 @@ export default function MenuSheet({
   const [dabOpen, setDabOpen] = useState(false);           // OWRX DAB programme dropdown
   const [dispSettingsOpen, setDispSettingsOpen] = useState(false);
 
+  // Palette list alphabetised (it ships in table order); profiles are LEFT in
+  // server order on purpose — they're SDR-type ordered and re-sorting risks the
+  // user tapping the wrong profile and disturbing an SDR in active use.
+  const cmapSorted = useMemo(
+    () => [...COLORMAP_NAMES].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+    [],
+  );
+  // Remember the spot: each dropdown jumps to its active row when opened, so a
+  // long list doesn't have to be re-scrolled to find where you were.
+  const cmapScroll = useRef<ScrollView | null>(null);
+  const cmapY = useRef<Record<string, number>>({});
+  const profScroll = useRef<ScrollView | null>(null);
+  const profY = useRef<Record<string, number>>({});
+  useEffect(() => {
+    if (!cmapOpen) return;
+    const y = cmapY.current[colormap];
+    if (y != null) requestAnimationFrame(() => cmapScroll.current?.scrollTo({ y: Math.max(0, y - 8), animated: false }));
+  }, [cmapOpen, colormap]);
+  useEffect(() => {
+    if (!profileOpen || !activeProfileId) return;
+    const y = profY.current[activeProfileId];
+    if (y != null) requestAnimationFrame(() => profScroll.current?.scrollTo({ y: Math.max(0, y - 8), animated: false }));
+  }, [profileOpen, activeProfileId]);
+
   // Bookmarks pane (replaces menu content like DISPLAY SETTINGS)
   const [bookmarksOpen,  setBookmarksOpen]  = useState(false);
   const [bmName,         setBmName]         = useState('');
@@ -559,13 +583,15 @@ export default function MenuSheet({
                   <Text style={styles.profileDropChevron}>{profileOpen ? '▴' : '▾'}</Text>
                 </TouchableOpacity>
                 {profileOpen && (
-                  <View style={styles.profileDropList}>
+                  <ScrollView ref={profScroll} style={styles.profileDropList} nestedScrollEnabled
+                              keyboardShouldPersistTaps="handled">
                     {profiles.map((p) => {
                       const active = p.id === activeProfileId;
                       return (
                         <TouchableOpacity
                           key={p.id}
                           style={styles.profileDropItem}
+                          onLayout={e => { profY.current[p.id] = e.nativeEvent.layout.y; }}
                           onPress={() => { onSelectProfile?.(p.id); setProfileOpen(false); }}
                           activeOpacity={0.7}>
                           <Text style={[styles.profileDropItemText, active && styles.profileChipTextActive]} numberOfLines={1}>
@@ -574,7 +600,7 @@ export default function MenuSheet({
                         </TouchableOpacity>
                       );
                     })}
-                  </View>
+                  </ScrollView>
                 )}
               </View>
             </>)}
@@ -861,17 +887,19 @@ export default function MenuSheet({
                   <Text style={styles.dropChevron}>{cmapOpen ? '▴' : '▾'}</Text>
                 </TouchableOpacity>
                 {cmapOpen && (
-                  <View style={styles.dropList}>
-                    {COLORMAP_NAMES.map(name => (
+                  <ScrollView ref={cmapScroll} style={styles.dropList} nestedScrollEnabled
+                              keyboardShouldPersistTaps="handled">
+                    {cmapSorted.map(name => (
                       <TouchableOpacity key={name}
                         style={[styles.dropItem, name === colormap && styles.dropItemActive]}
+                        onLayout={e => { cmapY.current[name] = e.nativeEvent.layout.y; }}
                         onPress={() => { onColormap(name); setCmapOpen(false); }}>
                         <Text style={[styles.dropItemText, name === colormap && styles.dropItemTextActive]}>
                           {name === 'gqrx' ? 'GQRX' : name.charAt(0).toUpperCase() + name.slice(1)}
                         </Text>
                       </TouchableOpacity>
                     ))}
-                  </View>
+                  </ScrollView>
                 )}
 
                 {/* VFO Needle Colour — colour swatches */}
@@ -1441,7 +1469,7 @@ const styles = StyleSheet.create({
   dropHeaderText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 0.5 },
   dropChevron:    { color: C.muted, fontSize: 10 },
   dropList: {
-    borderWidth: 1, borderColor: C.border, borderRadius: 4,
+    borderWidth: 1, borderColor: C.border, borderRadius: 4, maxHeight: 240,
     marginBottom: 6, overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.25)',
   },
   dropItem: {
@@ -1465,7 +1493,7 @@ const styles = StyleSheet.create({
   profileDropHeadText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14, flex: 1 },
   profileDropChevron: { color: C.muted, fontSize: 14, marginLeft: 8 },
   profileDropList: {
-    marginTop: 4, borderRadius: 8, borderWidth: 1, borderColor: C.border,
+    marginTop: 4, borderRadius: 8, borderWidth: 1, borderColor: C.border, maxHeight: 280,
     backgroundColor: C.btnBg, overflow: 'hidden',
   },
   profileDropItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.divider },

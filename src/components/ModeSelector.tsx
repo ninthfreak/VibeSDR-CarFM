@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
@@ -26,8 +26,24 @@ export default function ModeSelector({ visible, current, modes, onSelect, onClos
 
   const list = modes && modes.length ? modes : MODES.map(m => ({ id: m, label: m.toUpperCase() }));
   const common = list.filter(m => COMMON_IDS.includes(m.id.toLowerCase()));
-  const others = list.filter(m => !COMMON_IDS.includes(m.id.toLowerCase()));
+  // Decoder/digital list — OWRX reports these in server-add order (no order at
+  // all), so sort alphabetically by label to make the long list scannable.
+  const others = useMemo(
+    () => list.filter(m => !COMMON_IDS.includes(m.id.toLowerCase()))
+              .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })),
+    [list],
+  );
   const currentInOthers = others.find(m => m.id === current);
+
+  // Remember the spot: when the dropdown opens, jump to the active decoder so
+  // the user lands where they were instead of scrolling a long list.
+  const moreScroll = useRef<ScrollView | null>(null);
+  const itemY = useRef<Record<string, number>>({});
+  useEffect(() => {
+    if (!moreOpen || !currentInOthers) return;
+    const y = itemY.current[currentInOthers.id];
+    if (y != null) requestAnimationFrame(() => moreScroll.current?.scrollTo({ y: Math.max(0, y - 8), animated: false }));
+  }, [moreOpen, currentInOthers]);
 
   const pick = (id: string) => { onSelect(id as Mode); onClose(); };
 
@@ -78,12 +94,13 @@ export default function ModeSelector({ visible, current, modes, onSelect, onClos
               <Text style={[st.moreChevron, { color: t.btnText }]}>{moreOpen ? '▴' : '▾'}</Text>
             </TouchableOpacity>
             {moreOpen && (
-              <ScrollView style={[st.moreList, { borderColor: t.btnBorder }]} keyboardShouldPersistTaps="handled">
+              <ScrollView ref={moreScroll} style={[st.moreList, { borderColor: t.btnBorder }]} keyboardShouldPersistTaps="handled">
                 {others.map(m => (
                   <TouchableOpacity
                     key={m.id}
                     style={[st.moreItem, { borderBottomColor: t.barBorder }]}
                     onPress={() => pick(m.id)}
+                    onLayout={e => { itemY.current[m.id] = e.nativeEvent.layout.y; }}
                     activeOpacity={0.7}>
                     <Text style={[st.moreItemText, { fontFamily: t.font },
                                   { color: m.id === current ? t.btnActiveText : t.btnText }]}>
