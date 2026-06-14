@@ -164,7 +164,7 @@ export class OwrxAdapter implements SDRBackend {
   private cfg: OwrxConfig | null = null;
   private profiles: ProfileInfo[] = [];
   private modes: string[] | null = null;     // server-reported mode ids (gating)
-  private serverModes: { id: string; name: string; digital: boolean; type?: string; underlying?: string[]; bandpass?: { low_cut: number; high_cut: number } }[] = [];
+  private serverModes: { id: string; name: string; digital: boolean; type?: string; underlying?: string[]; ifRate?: number; bandpass?: { low_cut: number; high_cut: number } }[] = [];
   private serverVersion = '';
 
   // tuned state (absolute Hz / internal model)
@@ -174,6 +174,10 @@ export class OwrxAdapter implements SDRBackend {
   // analog carrier in `mode`. null = none. Kept separate so the carrier demod
   // stays user-visible/selectable and audio is never on the wrong sideband.
   private secondaryDecoder: string | null = null;
+  // Where in the audio passband the secondary decoder listens (Hz). OWRX defaults
+  // to 1000 — that's the standard RTTY/digimode audio centre, so tuning the VFO
+  // to the carrier (e.g. 4582 kHz USB for DWD) decodes without a passband tuner.
+  private secondaryOffset = 1000;
   private bwLow = -4000;
   private bwHigh = 4000;
   private audioServiceId = 0;                 // DAB: selected programme within ensemble
@@ -377,6 +381,7 @@ export class OwrxAdapter implements SDRBackend {
           // of an analog `underlying` mode via secondary_mod — not a primary demod.
           type: m.type,
           underlying: Array.isArray(m.underlying) ? m.underlying.map(String) : undefined,
+          ifRate: typeof m.ifRate === 'number' ? m.ifRate : undefined,
           bandpass: m.bandpass,
         }));
         this.modes = this.serverModes.map((m) => m.id);
@@ -885,17 +890,17 @@ export class OwrxAdapter implements SDRBackend {
       offset_freq: Math.round(offset), mod, squelch_level: -150,
       secondary_mod: secondaryMod,
     };
-    if (secondaryMod) params.secondary_offset_freq = 0;
-    // Full-IF fixed-rate decoders (DAB/Dablin runs on the raw 2.048 MHz IF) must
-    // get null cuts — matching the OWRX web client (Demodulator.js sends
-    // low_cut/high_cut = null when a mode has no bandpass). Sending numeric cuts
-    // inserts a bandpass/resampler that starves the fixed-IF decoder → no decode,
-    // no metadata, no audio. AM/SSB also lack an explicit bandpass but DO want
-    // our cuts, so this is keyed to the specific full-IF modes, not !bandpass.
-    const FULL_IF = ['dab', 'drm'];
-    const serverControlsBw = FULL_IF.includes(mod);
-    params.low_cut = serverControlsBw ? null : this.bwLow;
-    params.high_cut = serverControlsBw ? null : this.bwHigh;
+    if (secondaryMod) params.secondary_offset_freq = this.secondaryOffset;
+    // RAW-IF decoders must get NULL cuts — sending numeric low_cut/high_cut inserts
+    // a bandpass/resampler that STARVES a fixed-rate decoder (no decode/audio). This
+    // covers DAB/DRM (dablin/dream on the full IF) AND raw-IF secondary decoders:
+    // ADSB (2.4 MHz IF) and ISM, identified by an "empty" underlying or an ifRate.
+    // SSB/AM-carried decoders (RTTY/Fax/Packet) DO want their carrier's cuts.
+    const decDef = this.secondaryDecoder ? this.serverModes.find((m) => m.id === this.secondaryDecoder) : undefined;
+    const rawIf = ['dab', 'drm'].includes(mod)
+      || !!(decDef && (decDef.underlying?.includes('empty') || (decDef.ifRate ?? 0) > 0));
+    params.low_cut = rawIf ? null : this.bwLow;
+    params.high_cut = rawIf ? null : this.bwHigh;
     // DAB: which programme (audio service) within the ensemble to decode.
     if (mod === 'dab') params.audio_service_id = this.audioServiceId;
     this.send({ type: 'dspcontrol', params });
@@ -962,6 +967,7 @@ export class OwrxAdapter implements SDRBackend {
     for (const m of this.serverModes) {
       const id = m.id.toLowerCase();
       if (id === 'dab' || id === 'drm') { caps[m.id] = sr ? Math.floor(sr / 2) : 1_000_000; continue; }
+      if (m.ifRate) { caps[m.id] = Math.floor(m.ifRate / 2); continue; }   // raw-IF (ADSB 1.2MHz, ISM 125k)
       if (m.bandpass) {
         const half = Math.max(Math.abs(m.bandpass.low_cut), Math.abs(m.bandpass.high_cut));
         caps[m.id] = Math.max(3000, Math.round(half * 2.5));   // headroom for fine tuning
