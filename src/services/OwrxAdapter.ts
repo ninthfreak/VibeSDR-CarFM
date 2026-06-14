@@ -940,30 +940,23 @@ export class OwrxAdapter implements SDRBackend {
 
   setMode(mode: SDRMode): void {
     const sel = this.serverModes.find((m) => m.id === String(mode));
-    if (sel?.type === 'digimode') {
-      // Secondary decoder pick (SSTV/Fax/…): toggle it on/off WITHOUT replacing
-      // the carrier demod. Auto-pick a compatible carrier (e.g. USB) if the
-      // current one isn't supported, so the user never gets silence on the wrong
-      // sideband. The carrier (this.mode) stays highlighted in the picker.
-      this.secondaryDecoder = this.secondaryDecoder === sel.id ? null : sel.id;
-      if (this.secondaryDecoder) {
-        const under = sel.underlying ?? [];
-        if (under.length && !under.includes(String(this.mode))) this.mode = under[0] as SDRMode;
-      }
+    // SECONDARY decoder = a digimode that runs ON TOP of an analog demod (it has
+    // `underlying` sidebands, e.g. RTTY/WEFAX/SSTV on USB/LSB). We do NOT force the
+    // carrier — OWRX keeps whatever sideband the user is on; the UI just advises
+    // them to set USB/LSB. Digimodes WITHOUT `underlying` (ADSB/POCSAG/…) are
+    // standalone primary demods and fall through to the normal path below.
+    if (sel?.type === 'digimode' && sel.underlying?.length) {
+      this.secondaryDecoder = this.secondaryDecoder === sel.id ? null : sel.id;  // toggle
       this.applyModeBandpass();
       this.audioDec.reset(); this.hdAudioDec.reset();
       this.sendDemod();
       this.cb.onStatus(this.getStatus());
       return;
     }
-    // Normal demod pick = set the carrier/primary mode.
+    // Normal demod pick = set the carrier/primary mode (analog, digital voice,
+    // DAB/WFM, OR a standalone digimode like ADSB that has no underlying).
     this.mode = mode;
-    // A running decoder survives a carrier change it supports; switching to an
-    // incompatible primary (or any digital mode) turns the decoder off.
-    if (this.secondaryDecoder) {
-      const dec = this.serverModes.find((m) => m.id === this.secondaryDecoder);
-      if (!dec?.underlying?.includes(String(mode))) this.secondaryDecoder = null;
-    }
+    this.secondaryDecoder = null;   // a primary pick clears any secondary decoder
     // Leaving DAB/WFM: the RDS/DAB labels no longer apply, clear them.
     if (String(mode) !== 'dab' && String(mode) !== 'wfm') {
       this.dabProgrammes = []; this.dabEnsemble = ''; this.lastDabSig = ''; this.rdsPs = ''; this.lastVoiceSpeaker = '';
@@ -977,7 +970,14 @@ export class OwrxAdapter implements SDRBackend {
     this.cb.onStatus(this.getStatus());
   }
 
-  getSecondaryDecoder(): string | null { return this.secondaryDecoder; }
+  /** The active decoder id (for the UI decoder panel + highlight): the secondary
+   *  decoder if one rides on a carrier, else the primary mode itself when it's a
+   *  standalone digimode (ADSB/POCSAG/…). Null for plain analog/voice/DAB modes. */
+  getSecondaryDecoder(): string | null {
+    if (this.secondaryDecoder) return this.secondaryDecoder;
+    const sel = this.serverModes.find((m) => m.id === String(this.mode));
+    return sel?.type === 'digimode' ? sel.id : null;
+  }
 
   setBandwidth(low: number, high: number): void {
     // DAB's passband is server-controlled and fixed-wide — ignore UI bandwidth

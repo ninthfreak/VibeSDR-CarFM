@@ -1368,6 +1368,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         // OWRX server-side text decoders (Packet/POCSAG/ADSB/…) → the decoder
         // text panel. `replace` (ADS-B live list) supersedes the buffer.
         if (destroyed.current) return;
+        // Auto-open the panel if decode output arrives without a manual pick
+        // (e.g. a profile whose start_mod is a standalone decoder like ADSB).
+        if (!activeDecRef.current) {
+          const dec = (client.current as any)?.getSecondaryDecoder?.() ?? null;
+          const dt: DecoderType = dec === 'sstv' ? 'sstv' : dec === 'fax' ? 'wefax' : dec ? (dec as unknown as DecoderType) : null;
+          if (dt) { activeDecRef.current = dt; setActiveDecoder(dt); }
+        }
         setDecoding(true);
         if (replace) { setDecoderText(line); return; }
         // Append raw — the adapter newline-terminates records and char-stream

@@ -130,9 +130,13 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 ))}
               </ScrollView>
             )}
-            {!!activeDecInOthers && (
-              <Text style={[st.decCaption, { fontFamily: t.font }]} numberOfLines={1}>
-                Decoding {activeDecInOthers.label.toUpperCase()} over {carrierLabel} — pick a demodulator above to change the carrier
+            {/* Advisory only for decoders that ride on a carrier (RTTY/WEFAX/SSTV
+                etc., where the decoder id differs from the current demod). OWRX
+                decodes whatever sideband you're on — we don't force it. Standalone
+                decoders (ADSB/POCSAG, where current === the decoder) need nothing. */}
+            {!!activeDecInOthers && activeDecoder !== current && (
+              <Text style={[st.decCaption, { fontFamily: t.font }]}>
+                ⚠ {activeDecInOthers.label.toUpperCase()} decodes your demodulator's audio — set the correct sideband (USB/LSB) above before using it.
               </Text>
             )}
           </View>
