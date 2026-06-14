@@ -674,10 +674,12 @@ export class OwrxAdapter implements SDRBackend {
         const coord = (m.lat != null && m.lon != null) ? `(${(+m.lat).toFixed(3)},${(+m.lon).toFixed(3)})` : '';
         return { text: j(src, coord, m.comment ?? m.message) };
       }
-      case 'Pocsag':
+      case 'Pocsag':                                              // PocsagMessagePanel
         return { text: j((v.address ?? '') + ':', v.message) };
-      case 'FLEX':
-        return { text: j(v.address, j(v.mode, v.baud, v.channel != null ? '/' + v.channel : ''), v.message) };
+      case 'FLEX': case 'POCSAG': {                               // PageMessagePanel (paging)
+        const proto = (v.mode ?? '') + (v.baud ?? '') + (v.channel != null ? '/' + v.channel : '');
+        return { text: j(hhmmss(v.timestamp), v.address, proto, v.message) };
+      }
       case 'DSC':
         return { text: j(hhmmss(v.time ?? v.timestamp), v.src, v.dst ? '→ ' + v.dst : '', v.format, v.category, v.data) };
       case 'ISM': case 'WMBUS':
@@ -693,12 +695,21 @@ export class OwrxAdapter implements SDRBackend {
             a.rssi != null ? a.rssi + 'dB' : ''));
         return { text: `── ADS-B aircraft (${v.aircraft.length}) ──\n${rows.join('\n')}\n`, replace: true };
       }
-      default:
+      default: {
         // WSJT family (FT8/FT4/JT65/JT9/WSPR/…): { mode, msg, db, dt, freq, timestamp }
         if (typeof v?.msg === 'string') {
           return { text: j(hhmmss(v.timestamp), v.db != null ? v.db + 'dB' : '', v.freq != null ? v.freq + 'Hz' : '', v.msg) };
         }
+        // Unmapped record shape — show its scalar fields so the decoder never
+        // reads blank (and the real field names are visible for refinement).
+        if (typeof mode === 'string') {
+          const fields = Object.entries(v)
+            .filter(([k, val]) => k !== 'mode' && k !== 'timestamp' && (typeof val === 'string' || typeof val === 'number') && val !== '')
+            .map(([k, val]) => `${k}=${val}`);
+          if (fields.length) return { text: j(hhmmss(v.timestamp), mode, ...fields) };
+        }
         return null;
+      }
     }
   }
 
