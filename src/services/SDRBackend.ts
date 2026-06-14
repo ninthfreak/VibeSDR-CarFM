@@ -92,6 +92,9 @@ export interface SDRBackend {
   getProfiles?(): ProfileInfo[];
   selectProfile?(id: string): void;
 
+  /** OWRX: the active secondary decoder id (SSTV/Fax/…) running on top of the
+   *  analog carrier, or null. Lets the UI highlight the carrier AND the decoder. */
+  getSecondaryDecoder?(): string | null;
   /** DAB: switch the audio service (programme) within the tuned ensemble. */
   setAudioServiceId?(id: number): void;
   /** DAB: speed-correction factor for the dablin chipmunk (1 = off). */

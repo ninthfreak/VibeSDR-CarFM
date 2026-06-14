@@ -18,7 +18,7 @@
  */
 
 import React, {
-  forwardRef, useCallback, useImperativeHandle, useRef, useState,
+  forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
 } from 'react';
 import { ScrollView, Share, StyleSheet, View, useWindowDimensions } from 'react-native';
 import {
@@ -37,6 +37,18 @@ interface PixBuf {
   data: Uint8Array;   // RGBA
   complete: boolean;
   maxLine: number;    // highest line written (display crop)
+}
+
+// Persistent per-decoder image store. The live/prev buffers live OUTSIDE the
+// component so they survive a remount — rotating the device, minimising the
+// decoder tab, or any re-layout used to drop the buffer and restart the image
+// from the current scanline. Keyed by decoder name; in-place pixel writes
+// persist automatically (the store holds the SAME PixBuf reference). This also
+// gives every image decoder the 1-image PREV buffer for free.
+interface ImgStore { live: PixBuf | null; prev: PixBuf | null }
+const imgStores: Record<string, ImgStore> = {};
+function getImgStore(name: string): ImgStore {
+  return (imgStores[name] ??= { live: null, prev: null });
 }
 
 export interface DecoderImageHandle {
@@ -71,8 +83,9 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     const { width: winW } = useWindowDimensions();
     const panelW = winW - 16 - 24; // wrap margins + body padding
 
-    const live = useRef<PixBuf | null>(null);
-    const prev = useRef<PixBuf | null>(null);
+    const store = getImgStore(decoderName || 'img');
+    const live = useRef<PixBuf | null>(store.live);
+    const prev = useRef<PixBuf | null>(store.prev);
     const [viewingPrev, setViewingPrev] = useState(false);
     const [img, setImg] = useState<SkImage | null>(null);
     const [dispDims, setDispDims] = useState({ w: 1, h: 1 });
@@ -101,10 +114,11 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
 
     const rollToPrev = useCallback(() => {
       if (live.current?.complete) {
-        prev.current = live.current;
+        prev.current = live.current;  store.prev = prev.current;
         onPrevState(true, false);
         setViewingPrev(false);
       }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [onPrevState]);
 
     const growTo = useCallback((buf: PixBuf, newH: number): PixBuf => {
@@ -115,25 +129,36 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       return next;
     }, []);
 
+    // Restore the persisted image on (re)mount — rotation/minimise rebuild this
+    // component, but the buffers live in `store`, so repaint from them instead of
+    // starting blank. In-place pixel writes keep updating the same store buffer.
+    useEffect(() => {
+      live.current = store.live;
+      prev.current = store.prev;
+      if (store.live) { rebuild(store.live, true); onInfo(`${store.live.w}x${store.live.maxLine + 1}`); }
+      onPrevState(!!store.prev, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [store]);
+
     // ── Imperative API (skin _decCtx parity) ────────────────────────────────
     useImperativeHandle(ref, () => ({
       imageStart(w: number, h: number) {
         rollToPrev();
-        live.current = mkBuf(w, h);
+        live.current = mkBuf(w, h); store.live = live.current;
         onInfo(`${w}x${h}`);
         onStatus(`receiving ${w}x${h}`);
         rebuild(live.current, true);
       },
 
       wefaxLine(ln: number, w: number, px: Uint8Array) {
-        if (!live.current) live.current = mkBuf(w, WEFAX_INIT_H);          // lazy init
+        if (!live.current) { live.current = mkBuf(w, WEFAX_INIT_H); store.live = live.current; }  // lazy init
         if (ln === 0 && live.current.complete) {                            // new image
           rollToPrev();
-          live.current = mkBuf(w, WEFAX_INIT_H);
+          live.current = mkBuf(w, WEFAX_INIT_H); store.live = live.current;
         }
         let buf = live.current;
         if (ln >= buf.h) {                                                  // grow +100
-          buf = live.current = growTo(buf, ln + GROW_ROWS);
+          buf = live.current = growTo(buf, ln + GROW_ROWS); store.live = buf;
           onInfo(`${w}x${ln + 1}`);
         }
         const off = ln * buf.w * 4;
@@ -171,8 +196,8 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       },
 
       reset() {
-        live.current = null;
-        prev.current = null;
+        live.current = null;  store.live = null;
+        prev.current = null;  store.prev = null;
         setViewingPrev(false);
         setImg(null);
         onPrevState(false, false);

@@ -8,6 +8,7 @@ import { useTheme } from '../contexts/ThemeContext';
 // Common analog/voice demodulators shown as buttons; everything else the server
 // offers (digital, decoders, sondes…) goes into the in-popup dropdown.
 const COMMON_IDS = ['nfm', 'fm', 'wfm', 'am', 'sam', 'lsb', 'usb', 'cw', 'cwu', 'cwl', 'data'];
+const DEC_COL = '#52dc64';   // active-decoder accent (matches VTS live-data green)
 
 interface ModeSelectorProps {
   visible:  boolean;
@@ -15,11 +16,14 @@ interface ModeSelectorProps {
   /** Gated demodulator list (OWRX reports its own, incl. WFM/digital). When
    *  absent, the default UberSDR MODES are shown. */
   modes?:   { id: string; label: string }[];
+  /** OWRX secondary decoder running on top of the carrier (e.g. 'sstv'/'fax').
+   *  Highlighted separately so the carrier demod (`current`) stays lit too. */
+  activeDecoder?: string;
   onSelect: (mode: Mode) => void;
   onClose:  () => void;
 }
 
-export default function ModeSelector({ visible, current, modes, onSelect, onClose }: ModeSelectorProps) {
+export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose }: ModeSelectorProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   const [moreOpen, setMoreOpen] = useState(false);
@@ -34,6 +38,9 @@ export default function ModeSelector({ visible, current, modes, onSelect, onClos
     [list],
   );
   const currentInOthers = others.find(m => m.id === current);
+  const activeDecInOthers = activeDecoder ? others.find(m => m.id === activeDecoder) : undefined;
+  // The carrier label for the "Decoding X over Y" caption (e.g. USB).
+  const carrierLabel = (common.find(m => m.id === current) ?? list.find(m => m.id === current))?.label.toUpperCase() ?? String(current).toUpperCase();
 
   // Remember the spot: when the dropdown opens, jump to the active decoder so
   // the user lands where they were instead of scrolling a long list.
@@ -84,12 +91,15 @@ export default function ModeSelector({ visible, current, modes, onSelect, onClos
           <View style={st.moreWrap}>
             <TouchableOpacity
               style={[st.moreHead, { borderColor: t.btnBorder },
-                      currentInOthers && { borderColor: t.btnActiveBdr, backgroundColor: t.btnActiveBg }]}
+                      currentInOthers && { borderColor: t.btnActiveBdr, backgroundColor: t.btnActiveBg },
+                      activeDecInOthers && { borderColor: DEC_COL, backgroundColor: 'rgba(80,220,100,0.14)' }]}
               onPress={() => setMoreOpen(o => !o)}
               activeOpacity={0.8}>
               <Text style={[st.moreHeadText, { fontFamily: t.font },
-                            { color: currentInOthers ? t.btnActiveText : t.btnText }]} numberOfLines={1}>
-                {currentInOthers ? currentInOthers.label.toUpperCase() : `DIGITAL / DECODERS (${others.length})`}
+                            { color: activeDecInOthers ? DEC_COL : currentInOthers ? t.btnActiveText : t.btnText }]} numberOfLines={1}>
+                {activeDecInOthers ? activeDecInOthers.label.toUpperCase()
+                  : currentInOthers ? currentInOthers.label.toUpperCase()
+                  : `DIGITAL / DECODERS (${others.length})`}
               </Text>
               <Text style={[st.moreChevron, { color: t.btnText }]}>{moreOpen ? '▴' : '▾'}</Text>
             </TouchableOpacity>
@@ -103,12 +113,17 @@ export default function ModeSelector({ visible, current, modes, onSelect, onClos
                     onLayout={e => { itemY.current[m.id] = e.nativeEvent.layout.y; }}
                     activeOpacity={0.7}>
                     <Text style={[st.moreItemText, { fontFamily: t.font },
-                                  { color: m.id === current ? t.btnActiveText : t.btnText }]}>
-                      {m.id === current ? '✓ ' : ''}{m.label.toUpperCase()}
+                                  { color: m.id === activeDecoder ? DEC_COL : m.id === current ? t.btnActiveText : t.btnText }]}>
+                      {m.id === activeDecoder || m.id === current ? '✓ ' : ''}{m.label.toUpperCase()}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
+            )}
+            {!!activeDecInOthers && (
+              <Text style={[st.decCaption, { fontFamily: t.font }]} numberOfLines={1}>
+                Decoding {activeDecInOthers.label.toUpperCase()} over {carrierLabel} — pick a demodulator above to change the carrier
+              </Text>
             )}
           </View>
         )}
@@ -148,6 +163,7 @@ const st = StyleSheet.create({
   moreList:     { marginTop: 4, maxHeight: 260, borderWidth: 1, borderRadius: 3 },
   moreItem:     { paddingVertical: 11, paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   moreItemText: { fontSize: 14 },
+  decCaption:   { color: DEC_COL, fontSize: 11, marginTop: 7, opacity: 0.85, lineHeight: 15 },
   closeBtn: {
     marginTop: 14, alignSelf: 'center', borderWidth: 1,
     borderRadius: 3, paddingVertical: 7, paddingHorizontal: 24,

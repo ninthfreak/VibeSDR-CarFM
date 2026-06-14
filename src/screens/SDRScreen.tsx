@@ -1807,17 +1807,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     const c = client.current; if (!c) return;
     c.setMode(m); // client mirrors the server's per-mode bandwidth defaults
     setStatus({ ...c.getStatus() });
-    // OWRX image decoders (SSTV/Fax) are selected from the demodulator picker —
-    // open the decoder canvas on select (output then streams in via
-    // onDecoderImage), and close it when switching to any other mode.
+    // OWRX image decoders (SSTV/Fax) ride on top of the analog carrier — sync the
+    // decoder canvas to the adapter's REAL decoder state (it auto-keeps/clears the
+    // decoder when the carrier changes), so changing the carrier doesn't close it.
     if (route.params.serverType === 'owrx') {
-      const dt: DecoderType = String(m) === 'sstv' ? 'sstv' : String(m) === 'fax' ? 'wefax' : null;
-      if (dt) {
-        decoderImageRef.current?.reset();
-        activeDecRef.current = dt; setActiveDecoder(dt);
-        setDecoderStatus('listening…');
-      } else if (activeDecRef.current) {
-        activeDecRef.current = null; setActiveDecoder(null);
+      const dec = c.getSecondaryDecoder?.() ?? null;   // 'sstv' | 'fax' | null
+      const dt: DecoderType = dec === 'sstv' ? 'sstv' : dec === 'fax' ? 'wefax' : null;
+      if (dt !== activeDecRef.current) {
+        if (dt) { decoderImageRef.current?.reset(); activeDecRef.current = dt; setActiveDecoder(dt); setDecoderStatus('listening…'); }
+        else { activeDecRef.current = null; setActiveDecoder(null); }
       }
     }
   }, [route.params.serverType]);
@@ -2740,6 +2738,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         visible={modeSelOpen}
         current={status.mode}
         modes={route.params.serverType === 'owrx' ? serverModes : undefined}
+        activeDecoder={route.params.serverType === 'owrx'
+          ? (activeDecoder === 'sstv' ? 'sstv' : activeDecoder === 'wefax' ? 'fax' : undefined)
+          : undefined}
         onSelect={onMode}
         onClose={() => setModeSelOpen(false)}
       />

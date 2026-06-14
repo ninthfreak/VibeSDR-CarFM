@@ -154,6 +154,10 @@ export class OwrxAdapter implements SDRBackend {
   // tuned state (absolute Hz / internal model)
   private freq = 0;
   private mode: SDRMode = 'am';
+  // Active secondary decoder (SSTV/Fax/… = OWRX 'digimode') running ON TOP of the
+  // analog carrier in `mode`. null = none. Kept separate so the carrier demod
+  // stays user-visible/selectable and audio is never on the wrong sideband.
+  private secondaryDecoder: string | null = null;
   private bwLow = -4000;
   private bwHigh = 4000;
   private audioServiceId = 0;                 // DAB: selected programme within ensemble
@@ -354,6 +358,7 @@ export class OwrxAdapter implements SDRBackend {
         this.audioDec.reset(); this.hdAudioDec.reset();   // ADPCM restarts per profile
         this.gapHist = []; this.lastFrameAt = 0;          // frame rate may change — reset link timing
         this.audioServiceId = 0; this.dabProgrammes = []; this.dabEnsemble = ''; this.lastDabSig = ''; this.rdsPs = ''; this.lastVoiceSpeaker = '';  // new ensemble/station
+        this.secondaryDecoder = null;                      // decoder doesn't carry across profiles
         this.cb.onMetadata?.({ programmes: [] });          // clear stale RDS/DAB labels + picker
       }
     }
@@ -693,16 +698,9 @@ export class OwrxAdapter implements SDRBackend {
     // The mode may be a known SDRMode (mapped) or a server modulation passed
     // straight through (wfm, dmr, dab, …) selected from the gated picker.
     let mod = MODE_TO_WIRE[this.mode] ?? String(this.mode);
-    // Secondary decoders (SSTV/Fax/Packet/… = type 'digimode') don't run as the
-    // primary demod — OWRX runs them on top of an `underlying` analog mode via
-    // `secondary_mod`. Carry the decoder as secondary_mod and demod the analog
-    // carrier underneath it; clear secondary_mod for any normal demod.
-    const sel = this.serverModes.find((m) => m.id === String(this.mode));
-    let secondaryMod: string | false = false;
-    if (sel?.type === 'digimode') {
-      secondaryMod = sel.id;
-      mod = sel.underlying?.[0] ?? 'usb';
-    }
+    // this.mode is always the analog carrier; the secondary decoder (SSTV/Fax/…)
+    // rides on top via secondary_mod (OWRX runs it on the carrier's audio).
+    const secondaryMod: string | false = this.secondaryDecoder ?? false;
     if (this.modes && !this.modes.includes(mod)) {
       if (mod === 'sam') mod = 'am';                 // clamp per brief §4
       else if (mod === 'nfm' && this.modes.includes('fm')) mod = 'fm';
@@ -790,7 +788,31 @@ export class OwrxAdapter implements SDRBackend {
   }
 
   setMode(mode: SDRMode): void {
+    const sel = this.serverModes.find((m) => m.id === String(mode));
+    if (sel?.type === 'digimode') {
+      // Secondary decoder pick (SSTV/Fax/…): toggle it on/off WITHOUT replacing
+      // the carrier demod. Auto-pick a compatible carrier (e.g. USB) if the
+      // current one isn't supported, so the user never gets silence on the wrong
+      // sideband. The carrier (this.mode) stays highlighted in the picker.
+      this.secondaryDecoder = this.secondaryDecoder === sel.id ? null : sel.id;
+      if (this.secondaryDecoder) {
+        const under = sel.underlying ?? [];
+        if (under.length && !under.includes(String(this.mode))) this.mode = under[0] as SDRMode;
+      }
+      this.applyModeBandpass();
+      this.audioDec.reset(); this.hdAudioDec.reset();
+      this.sendDemod();
+      this.cb.onStatus(this.getStatus());
+      return;
+    }
+    // Normal demod pick = set the carrier/primary mode.
     this.mode = mode;
+    // A running decoder survives a carrier change it supports; switching to an
+    // incompatible primary (or any digital mode) turns the decoder off.
+    if (this.secondaryDecoder) {
+      const dec = this.serverModes.find((m) => m.id === this.secondaryDecoder);
+      if (!dec?.underlying?.includes(String(mode))) this.secondaryDecoder = null;
+    }
     // Leaving DAB/WFM: the RDS/DAB labels no longer apply, clear them.
     if (String(mode) !== 'dab' && String(mode) !== 'wfm') {
       this.dabProgrammes = []; this.dabEnsemble = ''; this.lastDabSig = ''; this.rdsPs = ''; this.lastVoiceSpeaker = '';
@@ -803,6 +825,8 @@ export class OwrxAdapter implements SDRBackend {
     this.sendDemod();
     this.cb.onStatus(this.getStatus());
   }
+
+  getSecondaryDecoder(): string | null { return this.secondaryDecoder; }
 
   setBandwidth(low: number, high: number): void {
     // DAB's passband is server-controlled and fixed-wide — ignore UI bandwidth
