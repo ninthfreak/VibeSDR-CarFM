@@ -14,6 +14,7 @@ export interface SDRInstance {
   countryCode:   string | null;  // ISO 3166-1 alpha-2 (directory country_code)
   distance:      number | null;   // km, populated when user location is known
   bestSnr:       number | null;   // best band-condition SNR across all bands
+  serverType?:   'ubersdr' | 'owrx' | 'kiwi';  // directory-tagged backend (skips re-detect)
 }
 
 const BASE_URL = 'https://instances.ubersdr.org/api/instances?conditions=true';

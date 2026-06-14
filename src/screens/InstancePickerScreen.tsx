@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
@@ -40,6 +41,15 @@ import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
 import PasswordModal from '../components/PasswordModal';
 import { VibePowerModule } from '../components/AudioPlayer';
 import { APP_VERSION } from '../constants/version';
+import { DIRECTORIES, fetchDirectory, type DirectoryId } from '../services/directories';
+
+// Per-backend logo for the directory cards + per-instance type icon (receiverbook
+// mixes OWRX + Kiwi, so the row icon tells them apart at a glance).
+const TYPE_LOGOS: Record<string, any> = {
+  ubersdr: require('../../assets/logo_ubersdr.png'),
+  owrx:    require('../../assets/logo_owrx.png'),
+  kiwi:    require('../../assets/logo_kiwi.png'),
+};
 
 /** ISO 3166-1 alpha-2 → 🇬🇧-style emoji flag (regional indicators, no assets). */
 function flagEmoji(code: string | null): string {
@@ -73,7 +83,19 @@ export default function InstancePickerScreen({ navigation }: Props) {
   const [sortMode,    setSortMode]      = useState<SortMode>('nearest');
   const [pwModal,     setPwModal]       = useState<{ url: string; name: string } | null>(null);
   const [favourites,  setFavourites]    = useState<Favourite[]>([]);
+  // null = directory CHOOSER (favourites + directory cards); set = that
+  // directory's instance list.
+  const [selectedDir, setSelectedDir]   = useState<DirectoryId | null>(null);
   const userLocRef = useRef<{ lat: number; lon: number } | null>(null);
+
+  const openDirectory = useCallback((id: DirectoryId) => {
+    setSelectedDir(id);
+    setInstances([]); setFilter(''); setError(null); setLoading(true);
+    fetchDirectory(id, userLocRef.current?.lat, userLocRef.current?.lon)
+      .then((list) => setInstances(list))
+      .catch((e: any) => setError(e?.message || 'Failed to load this directory'))
+      .finally(() => setLoading(false));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,27 +123,15 @@ export default function InstancePickerScreen({ navigation }: Props) {
         splashBridge.updateLabel(dEarly.name || dEarly.url);
       }
 
-      let allInst: typeof instances = [];
-      try {
-        const loc = await getUserLocation();
-        if (!cancelled) userLocRef.current = loc;
-        allInst = await fetchInstances(loc?.lat, loc?.lon);
-        if (!cancelled) setInstances(allInst);
-      } catch (e: any) {
-        const msg = (e.message ?? '');
-        if (!cancelled) setError(
-          msg.includes('429') ? 'Server busy — please try again in a moment' : (msg || 'Failed to load instances')
-        );
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-          splashBridge.dismiss();
-        }
-      }
+      // Learn the user's location for distance sorting (used when a directory is
+      // opened), but DON'T fetch any directory here — the landing view is the
+      // chooser (favourites + directory cards). Directories load on tap.
+      try { const loc = await getUserLocation(); if (!cancelled) userLocRef.current = loc; } catch {}
+      if (!cancelled) { setLoading(false); splashBridge.dismiss(); }
 
+      // A default instance still auto-connects straight through.
       if (!cancelled && dEarly) {
-        const match = allInst.find(i => i.url === dEarly.url);
-        navigation.navigate('SDR', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: match?.longitude ?? null });
+        navigation.navigate('SDR', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: null });
       }
     }
 
@@ -347,11 +357,12 @@ export default function InstancePickerScreen({ navigation }: Props) {
             isDefault && { borderColor: C.borderBright, backgroundColor: 'rgba(255,160,0,0.08)' },
             favoured && !isDefault && { borderColor: 'rgba(255,80,80,0.4)' },
           ]}
-          onPress={() => connect(inst.url, inst.name, undefined, inst.longitude)}
+          onPress={() => connect(inst.url, inst.name, undefined, inst.longitude, inst.serverType)}
           disabled={connecting}
         >
           <View style={styles.rowMain}>
             <View style={styles.nameRow}>
+              <Image source={TYPE_LOGOS[inst.serverType ?? 'ubersdr']} style={styles.typeLogo} resizeMode="contain" />
               <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, flex: 1 }} numberOfLines={1}>
                 {isDefault ? '★ ' : ''}{flagEmoji(inst.countryCode) ? flagEmoji(inst.countryCode) + ' ' : ''}{inst.name}
               </Text>
@@ -441,7 +452,21 @@ export default function InstancePickerScreen({ navigation }: Props) {
           </View>
         )}
 
-        {/* Custom URL */}
+        {/* Directory back row — only inside an open directory */}
+        {selectedDir !== null && (
+          <TouchableOpacity
+            style={[styles.backRow, { borderBottomColor: C.border }]}
+            onPress={() => { setSelectedDir(null); setInstances([]); setFilter(''); setError(null); setLoading(false); }}
+          >
+            <Text style={{ fontFamily: F, fontSize: fs(13), color: C.amber }}>‹ Directories</Text>
+            <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, letterSpacing: 1 }}>
+              {DIRECTORIES.find(d => d.id === selectedDir)?.name ?? ''}
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Custom URL — chooser only */}
+        {selectedDir === null && (
         <View style={styles.customRow}>
           <TextInput
             style={[styles.urlInput, { fontFamily: F, fontSize: fs(12), color: C.amber, borderColor: C.border }]}
@@ -461,9 +486,25 @@ export default function InstancePickerScreen({ navigation }: Props) {
               <TouchableOpacity
                 style={[styles.connectBtn, { borderColor: C.border, paddingHorizontal: 10 }]}
                 onPress={() => {
-                  const url  = normalisedCustomUrl;
-                  const name = url.replace(/^https?:\/\//, '');
-                  handleToggleFav({ name, url });
+                  const url     = normalisedCustomUrl;
+                  const fallback = url.replace(/^https?:\/\//, '');
+                  // Already a favourite → just un-favourite. Otherwise ask for a name.
+                  if (isFav(url)) { handleToggleFav({ name: fallback, url }); return; }
+                  if (Platform.OS === 'ios' && (Alert as any).prompt) {
+                    (Alert as any).prompt(
+                      'Name this favourite',
+                      url,
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Save', onPress: (text?: string) =>
+                            handleToggleFav({ name: (text && text.trim()) || fallback, url }) },
+                      ],
+                      'plain-text',
+                      fallback,
+                    );
+                  } else {
+                    handleToggleFav({ name: fallback, url });
+                  }
                 }}
               >
                 <Text style={{ fontSize: fs(18), color: isFav(normalisedCustomUrl) ? C.red : C.textDim }}>
@@ -506,8 +547,10 @@ export default function InstancePickerScreen({ navigation }: Props) {
             </Text>
           </TouchableOpacity>
         </View>
+        )}
 
-        {/* Filter + Sort toggle */}
+        {/* Filter + Sort toggle — directory view only */}
+        {selectedDir !== null && (
         <View style={styles.filterRow}>
           <TextInput
             style={[styles.filterInput, { fontFamily: F, fontSize: fs(11), color: C.amber, borderColor: C.border, flex: 1 }]}
@@ -527,19 +570,35 @@ export default function InstancePickerScreen({ navigation }: Props) {
             </Text>
           </TouchableOpacity>
         </View>
+        )}
 
-        {/* List */}
-        {loading ? null : error ? (
-          <View style={styles.centred}>
-            <Text style={{ fontFamily: F, fontSize: fs(12), color: C.red, textAlign: 'center' }}>{error}</Text>
-            <TouchableOpacity onPress={() => {
-              setLoading(true); setError(null);
-              fetchInstances(userLocRef.current?.lat, userLocRef.current?.lon)
-                .then(setInstances).catch(e => setError(e.message)).finally(() => setLoading(false));
-            }}>
-              <Text style={{ fontFamily: F, fontSize: fs(12), color: C.amber, textDecorationLine: 'underline' }}>Retry</Text>
-            </TouchableOpacity>
-          </View>
+        {/* Body: directory list when one is open, else the chooser */}
+        {selectedDir !== null ? (
+          loading ? (
+            <View style={styles.centred}>
+              <Text style={{ fontFamily: F, fontSize: fs(12), color: C.textDim }}>Loading…</Text>
+            </View>
+          ) : error ? (
+            <View style={styles.centred}>
+              <Text style={{ fontFamily: F, fontSize: fs(12), color: C.red, textAlign: 'center' }}>{error}</Text>
+              <TouchableOpacity onPress={() => openDirectory(selectedDir)}>
+                <Text style={{ fontFamily: F, fontSize: fs(12), color: C.amber, textDecorationLine: 'underline' }}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <FlatList
+              data={listData}
+              keyExtractor={item => item.kind === 'custom' ? 'custom:' + item.fav.url : item.data.url}
+              renderItem={renderItem}
+              contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
+              ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
+              ListEmptyComponent={
+                <Text style={{ fontFamily: F, fontSize: fs(12), color: C.textDim, textAlign: 'center', marginTop: 40 }}>
+                  No instances found
+                </Text>
+              }
+            />
+          )
         ) : (
           <FlatList
             data={listData}
@@ -547,10 +606,28 @@ export default function InstancePickerScreen({ navigation }: Props) {
             renderItem={renderItem}
             contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
             ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
-            ListEmptyComponent={
-              <Text style={{ fontFamily: F, fontSize: fs(12), color: C.textDim, textAlign: 'center', marginTop: 40 }}>
-                No instances found
-              </Text>
+            ListFooterComponent={
+              <View style={{ marginTop: 14 }}>
+                <SectionHeader label="DIRECTORIES" fs={fs} F={F} C={C} />
+                {DIRECTORIES.map(d => (
+                  <TouchableOpacity
+                    key={d.id}
+                    style={[styles.row, { borderColor: C.border, marginBottom: 6 }]}
+                    onPress={() => openDirectory(d.id)}
+                  >
+                    <View style={styles.rowMain}>
+                      <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>{d.name}</Text>
+                      <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>{d.desc}</Text>
+                    </View>
+                    <View style={styles.rowRight}>
+                      {d.kinds.map(k => (
+                        <Image key={k} source={TYPE_LOGOS[k]} style={styles.typeLogo} resizeMode="contain" />
+                      ))}
+                      <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 4 }}>›</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
             }
           />
         )}
@@ -596,7 +673,9 @@ const styles = StyleSheet.create({
   row:           { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 10, paddingHorizontal: 12, backgroundColor: 'rgba(20,10,0,0.55)', borderWidth: 1, borderRadius: 6 },
   rowMain:       { flex: 1 },
   rowRight:      { alignItems: 'center', gap: 6, flexDirection: 'row', marginLeft: 8 },
-  nameRow:       { flexDirection: 'row', alignItems: 'center' },
+  nameRow:       { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  typeLogo:      { width: 20, height: 20 },
+  backRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1 },
   metaRow:       { flexDirection: 'row', flexWrap: 'wrap', marginTop: 2 },
   centred:       { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 20 },
 });
