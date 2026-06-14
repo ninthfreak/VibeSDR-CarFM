@@ -85,24 +85,27 @@ Plugins.dab_speed._applyFactor = function (f, persist) {
   }
 };
 
-// Build the selector and inject it into the DAB metadata panel.
+// Build the selector and inject it into the DAB metadata panel. Appended INSIDE
+// the .dab-container (below the programme picker) as its own full-width row, so
+// it doesn't overlap the ensemble info.
 Plugins.dab_speed._buildUI = function () {
   if ($('#dab-speed-select').length) return;
-  var $panel = $('#openwebrx-panel-metadata-dab');
-  if (!$panel.length) return;
+  var $container = $('#openwebrx-panel-metadata-dab .dab-container');
+  var $target = $container.length ? $container : $('#openwebrx-panel-metadata-dab');
+  if (!$target.length) return;
   var opts = Plugins.dab_speed.PRESETS.map(function (o) {
     return '<option value="' + o.v + '">' + o.l + '</option>';
   }).join('');
   var $wrap = $(
-    '<div class="dab-speed-row" style="margin-top:6px;">' +
-      '<label for="dab-speed-select">DAB Speed:</label> ' +
-      '<select id="dab-speed-select">' + opts + '</select>' +
+    '<div class="dab-speed-row" style="margin-top:10px;clear:both;">' +
+      '<label for="dab-speed-select" style="display:block;margin-bottom:2px;">DAB Speed:</label>' +
+      '<select id="dab-speed-select" style="width:100%;box-sizing:border-box;">' + opts + '</select>' +
     '</div>'
   );
   $wrap.find('select').on('change', function () {
     Plugins.dab_speed._applyFactor(parseFloat($(this).val()), true);
   });
-  $panel.append($wrap);
+  $target.append($wrap);
   $('#dab-speed-select').val(String(Plugins.dab_speed.factor));
 };
 
