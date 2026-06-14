@@ -730,8 +730,17 @@ export class OwrxAdapter implements SDRBackend {
     // The view is quantised to OWRX_OUT_BINS bins (the fixed waterfall row width),
     // so reconstruct against that — NOT the server's fftSize, which would mismatch
     // the bin count the UI sees and make zoom over/under-shoot.
+    const sr = this.cfg?.sampRate ?? this.viewBw;
+    // Max-zoom floor: cap how far we can zoom in. We slice the server's FFT
+    // (fftSize bins over the full span) and resample to OUT_BINS. Zoom past the
+    // point where the window holds OUT_BINS/MAX_UPSAMPLE real bins and there's
+    // nothing left to show but stretched noise — that degenerate over-zoom is
+    // what broke pan/levels on UberSDR. nativeBinHz = sampRate/fftSize.
+    const fftSize = this.cfg?.fftSize ?? OWRX_OUT_BINS;
+    const MAX_UPSAMPLE = 8;   // allow up to 8× interpolation, then stop zooming
+    const minViewBw = Math.min(sr, (OWRX_OUT_BINS / MAX_UPSAMPLE) * (sr / fftSize));
     this.viewCenter = frequency;
-    this.viewBw = Math.min(this.cfg?.sampRate ?? this.viewBw, binBandwidth * OWRX_OUT_BINS);
+    this.viewBw = Math.max(minViewBw, Math.min(sr, binBandwidth * OWRX_OUT_BINS));
     if (this.lastRow) this.emitSlice(this.lastRow);
   }
   pan(frequency: number): void { this.viewCenter = frequency; if (this.lastRow) this.emitSlice(this.lastRow); }
