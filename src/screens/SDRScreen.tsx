@@ -1364,6 +1364,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         // UberSDR's fetched bookmarks: VTS station readout + search bar.
         if (!destroyed.current) setServerBookmarks(list.map((b) => ({ name: b.name, frequency: b.frequency, mode: b.mode })));
       },
+      onDecoderText: (line, replace) => {
+        // OWRX server-side text decoders (Packet/POCSAG/ADSB/…) → the decoder
+        // text panel. `replace` (ADS-B live list) supersedes the buffer.
+        if (destroyed.current) return;
+        setDecoding(true);
+        if (replace) { setDecoderText(line); return; }
+        setDecoderText((prev: string) => {
+          const next = (prev ? prev + '\n' : '') + line;
+          return next.length > 4000 ? next.slice(next.length - 4000) : next;
+        });
+      },
       onDecoderImage: (ev) => {
         // OWRX decodes SSTV/Fax server-side and streams scanlines — paint them
         // on the SAME decoder canvas UberSDR uses (Fax → 'wefax' greyscale path).
@@ -1826,11 +1837,19 @@ export default function SDRScreen({ route, navigation }: Props) {
     // decoder canvas to the adapter's REAL decoder state (it auto-keeps/clears the
     // decoder when the carrier changes), so changing the carrier doesn't close it.
     if (route.params.serverType === 'owrx') {
-      const dec = c.getSecondaryDecoder?.() ?? null;   // 'sstv' | 'fax' | null
-      const dt: DecoderType = dec === 'sstv' ? 'sstv' : dec === 'fax' ? 'wefax' : null;
+      // Image decoders → the Skia canvas (sstv/wefax); any other secondary
+      // decoder (packet/pocsag/adsb/…) → the text panel, titled by its mode id.
+      const dec = c.getSecondaryDecoder?.() ?? null;
+      const dt: DecoderType = dec === 'sstv' ? 'sstv'
+        : dec === 'fax' ? 'wefax'
+        : dec ? (dec as unknown as DecoderType) : null;
       if (dt !== activeDecRef.current) {
-        if (dt) { decoderImageRef.current?.reset(); activeDecRef.current = dt; setActiveDecoder(dt); setDecoderStatus('listening…'); }
-        else { activeDecRef.current = null; setActiveDecoder(null); }
+        if (dt) {
+          decoderImageRef.current?.reset();
+          setDecoderText('');
+          activeDecRef.current = dt; setActiveDecoder(dt);
+          setDecoderStatus('listening…');
+        } else { activeDecRef.current = null; setActiveDecoder(null); }
       }
     }
   }, [route.params.serverType]);

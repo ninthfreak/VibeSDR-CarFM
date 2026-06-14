@@ -155,6 +155,10 @@ export interface BackendCallbacks extends SDRCallbacks {
     | { phase: 'start'; kind: 'sstv' | 'fax'; width: number; height: number }
     | { phase: 'line';  kind: 'sstv' | 'fax'; line: number; width: number; pixels: Uint8Array }
     | { phase: 'done';  kind: 'sstv' | 'fax' }) => void;
+  /** OWRX: server-side TEXT-decoder output (Packet/POCSAG/FLEX/DSC/ISM/HFDL/
+   *  ACARS/ADSB/WSJT…), one formatted line per record. `replace` true = a live
+   *  snapshot (ADS-B list) that supersedes the previous block rather than appends. */
+  onDecoderText?: (line: string, replace?: boolean) => void;
 }
 
 export type { SDRStatus, SDRMode, SDRCallbacks };

@@ -602,16 +602,20 @@ export class OwrxAdapter implements SDRBackend {
     }
   }
 
-  /** Secondary-demod output (SSTV / Fax images so far). OWRX streams the decoded
-   *  result over the SAME WS once secondary_mod is set: a header message (size),
-   *  then per-scanline pixel messages, then (Fax) an end marker. We translate the
-   *  wire pixels into the DecoderImageCanvas contract (SSTV = RGB triplets, Fax =
-   *  greyscale bytes) and hand them up via onDecoderImage. Text decoders
-   *  (packet/pocsag/…) are deferred — ignored here for now. */
+  /** Secondary-demod output. OWRX decodes server-side and streams the result over
+   *  the SAME WS once secondary_mod is set. Two shapes:
+   *   • IMAGES (SSTV/Fax) — a size header, per-scanline pixel messages, then a Fax
+   *     end marker → translated to the DecoderImageCanvas contract (onDecoderImage).
+   *   • TEXT RECORDS (Packet/POCSAG/FLEX/DSC/ISM/HFDL/ACARS/ADSB/WSJT) — one JSON
+   *     record per decode, keyed by `mode` → formatted to a line (onDecoderText). */
   private onSecondaryDemod(v: any): void {
     if (!v || typeof v !== 'object' || 'message' in v) return;   // debug text → ignore
     const kind: 'sstv' | 'fax' | null = v.mode === 'SSTV' ? 'sstv' : v.mode === 'Fax' ? 'fax' : null;
-    if (!kind) return;
+    if (!kind) {
+      const rec = this.secondaryRecordToText(v);
+      if (rec) this.cb.onDecoderText?.(rec.text, rec.replace);
+      return;
+    }
     // Header: dimensions, no scanline → start a fresh image.
     if (v.width > 0 && v.height > 0 && v.line == null) {
       this.cb.onDecoderImage?.({ phase: 'start', kind, width: v.width, height: v.height });
@@ -640,6 +644,53 @@ export class OwrxAdapter implements SDRBackend {
         px = v.rle ? faxRleDecode(bytes) : bytes;
       }
       this.cb.onDecoderImage?.({ phase: 'line', kind, line: v.line, width: v.width, pixels: px });
+    }
+  }
+
+  /** Format a text-decoder `secondary_demod` record into one readable line (or a
+   *  replacing snapshot for the ADS-B aircraft list). Mirrors the fields the OWRX
+   *  web MessagePanels show, condensed to a single line. Returns null to skip. */
+  private secondaryRecordToText(v: any): { text: string; replace?: boolean } | null {
+    const mode = v?.mode;
+    const hhmmss = (ts: any) =>
+      typeof ts === 'number' ? new Date(ts * 1000).toISOString().slice(11, 19)
+      : typeof ts === 'string' ? ts : '';
+    const j = (...xs: any[]) => xs.filter((x) => x != null && x !== '').join(' ');
+    switch (mode) {
+      // Packet: APRS / AIS / SONDE
+      case 'APRS': case 'AIS': case 'SONDE': {
+        let m = v;
+        if (m.type === 'thirdparty' && m.data) m = m.data;
+        if (m.type === 'nmea') return null;                       // raw AIS NMEA — skip
+        const src = m.source ?? (m.type === 'item' ? m.item : undefined) ?? m.object;
+        const coord = (m.lat != null && m.lon != null) ? `(${(+m.lat).toFixed(3)},${(+m.lon).toFixed(3)})` : '';
+        return { text: j(src, coord, m.comment ?? m.message) };
+      }
+      case 'Pocsag':
+        return { text: j((v.address ?? '') + ':', v.message) };
+      case 'FLEX':
+        return { text: j(v.address, j(v.mode, v.baud, v.channel != null ? '/' + v.channel : ''), v.message) };
+      case 'DSC':
+        return { text: j(hhmmss(v.time ?? v.timestamp), v.src, v.dst ? '→ ' + v.dst : '', v.format, v.category, v.data) };
+      case 'ISM': case 'WMBUS':
+        return { text: j(v.id ?? '???', v.model, hhmmss(v.timestamp)) };
+      case 'HFDL': case 'VDL2': case 'ACARS': case 'UAT': case 'ADSB':
+        return { text: j(hhmmss(v.timestamp), v.flight ?? v.aircraft ?? v.icao, v.type, v.message ?? v.data) };
+      case 'ADSB-LIST': {                                          // live aircraft table → replace
+        if (!Array.isArray(v.aircraft)) return null;
+        const rows = v.aircraft.map((a: any) =>
+          j(a.flight ?? a.aircraft ?? a.icao ?? '?',
+            a.altitude != null ? a.altitude + 'ft' : '',
+            a.speed != null ? a.speed + 'kt' : '',
+            a.rssi != null ? a.rssi + 'dB' : ''));
+        return { text: `── ADS-B aircraft (${v.aircraft.length}) ──\n${rows.join('\n')}\n`, replace: true };
+      }
+      default:
+        // WSJT family (FT8/FT4/JT65/JT9/WSPR/…): { mode, msg, db, dt, freq, timestamp }
+        if (typeof v?.msg === 'string') {
+          return { text: j(hhmmss(v.timestamp), v.db != null ? v.db + 'dB' : '', v.freq != null ? v.freq + 'Hz' : '', v.msg) };
+        }
+        return null;
     }
   }
 

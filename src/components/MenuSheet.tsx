@@ -14,7 +14,6 @@ import {
   Image,
   Modal,
   ScrollView,
-  findNodeHandle,
   StyleSheet,
   Text,
   TextInput,
@@ -506,19 +505,19 @@ export default function MenuSheet({
   const profScroll = useRef<ScrollView | null>(null);
   const dabScroll  = useRef<ScrollView | null>(null);
   const cmapScroll = useRef<ScrollView | null>(null);
-  const profRow = useRef<any>(null);
-  const dabRow  = useRef<any>(null);
-  const cmapRow = useRef<any>(null);
-  const scrollRowIntoView = useCallback((row: any, sv: ScrollView | null) => {
-    const node = sv && findNodeHandle(sv);
-    if (!row || !sv || node == null) return;
-    requestAnimationFrame(() => {
-      try { row.measureLayout(node, (_x: number, y: number) => { sv.scrollTo({ y: Math.max(0, y - 8), animated: false }); }, () => {}); } catch {}
-    });
-  }, []);
-  useEffect(() => { if (profileOpen) scrollRowIntoView(profRow.current, profScroll.current); }, [profileOpen, scrollRowIntoView]);
-  useEffect(() => { if (dabOpen)     scrollRowIntoView(dabRow.current,  dabScroll.current);  }, [dabOpen, scrollRowIntoView]);
-  useEffect(() => { if (cmapOpen)    scrollRowIntoView(cmapRow.current, cmapScroll.current); }, [cmapOpen, scrollRowIntoView]);
+  // content-relative y of each active row (captured via onLayout); the rows are
+  // flat children of their ScrollView so onLayout y == scroll offset.
+  const profY = useRef<Record<string, number>>({});
+  const dabY  = useRef<Record<string, number>>({});
+  const cmapY = useRef<Record<string, number>>({});
+  // Read the position INSIDE the delay (not before) so onLayout has populated it.
+  const openAt = (sv: ScrollView | null, y?: number) => {
+    if (sv == null) return;
+    setTimeout(() => { if (y != null) sv.scrollTo({ y: Math.max(0, y - 8), animated: false }); }, 60);
+  };
+  useEffect(() => { if (profileOpen) openAt(profScroll.current, activeProfileId != null ? profY.current[activeProfileId] : undefined); }, [profileOpen, activeProfileId]);
+  useEffect(() => { if (dabOpen)     openAt(dabScroll.current,  activeDabId != null ? dabY.current[String(activeDabId)] : undefined); }, [dabOpen, activeDabId]);
+  useEffect(() => { if (cmapOpen)    openAt(cmapScroll.current, cmapY.current[colormap]); }, [cmapOpen, colormap]);
 
   // Bookmarks pane (replaces menu content like DISPLAY SETTINGS)
   const [bookmarksOpen,  setBookmarksOpen]  = useState(false);
@@ -630,37 +629,36 @@ export default function MenuSheet({
                 {profileOpen && (
                   <ScrollView ref={profScroll} style={styles.profileDropList} nestedScrollEnabled
                               keyboardShouldPersistTaps="handled">
-                    {sdrGroups.map((g) => {
+                    {/* Flat children (header rows + item rows) so each item's
+                        onLayout y is content-relative → scroll-to-current works. */}
+                    {sdrGroups.flatMap((g) => {
                       const isCurrentSdr = g.items.some((it) => it.id === activeProfileId);
-                      return (
-                        <View key={g.sid}>
-                          {/* SDR group header — name + In Use / Current badges */}
-                          <View style={styles.sdrHeadRow}>
-                            <Text style={styles.sdrHeadText} numberOfLines={1}>{g.sdrName}</Text>
-                            {isCurrentSdr && <Text style={[styles.sdrBadge, styles.sdrBadgeCurrent]}>CURRENT</Text>}
-                            {g.inUse && !isCurrentSdr && <Text style={[styles.sdrBadge, styles.sdrBadgeInUse]}>IN USE</Text>}
-                          </View>
-                          {g.items.map((it) => {
-                            const active = it.id === activeProfileId;          // our own pick (green)
-                            const serverActive = it.id === g.activeProfileId;  // tuned on the server (amber)
-                            return (
-                              <TouchableOpacity
-                                key={it.id}
-                                ref={active ? profRow : undefined}
-                                style={[styles.profileDropItemSub, serverActive && !active && styles.profileItemInUse]}
-                                onPress={() => { onSelectProfile?.(it.id); setProfileOpen(false); }}
-                                activeOpacity={0.7}>
-                                <Text style={[styles.profileDropItemText,
-                                              serverActive && !active && styles.profileTextInUse,
-                                              active && styles.profileChipTextActive]} numberOfLines={1}>
-                                  {active ? '✓ ' : serverActive ? '● ' : ''}{it.label}
-                                  {serverActive && !active ? '  (in use)' : ''}
-                                </Text>
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </View>
-                      );
+                      return [
+                        <View key={'h:' + g.sid} style={styles.sdrHeadRow}>
+                          <Text style={styles.sdrHeadText} numberOfLines={1}>{g.sdrName}</Text>
+                          {isCurrentSdr && <Text style={[styles.sdrBadge, styles.sdrBadgeCurrent]}>CURRENT</Text>}
+                          {g.inUse && !isCurrentSdr && <Text style={[styles.sdrBadge, styles.sdrBadgeInUse]}>IN USE</Text>}
+                        </View>,
+                        ...g.items.map((it) => {
+                          const active = it.id === activeProfileId;          // our own pick (green)
+                          const serverActive = it.id === g.activeProfileId;  // tuned on the server (amber)
+                          return (
+                            <TouchableOpacity
+                              key={it.id}
+                              style={[styles.profileDropItemSub, serverActive && !active && styles.profileItemInUse]}
+                              onLayout={e => { profY.current[it.id] = e.nativeEvent.layout.y; }}
+                              onPress={() => { onSelectProfile?.(it.id); setProfileOpen(false); }}
+                              activeOpacity={0.7}>
+                              <Text style={[styles.profileDropItemText,
+                                            serverActive && !active && styles.profileTextInUse,
+                                            active && styles.profileChipTextActive]} numberOfLines={1}>
+                                {active ? '✓ ' : serverActive ? '● ' : ''}{it.label}
+                                {serverActive && !active ? '  (in use)' : ''}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        }),
+                      ];
                     })}
                   </ScrollView>
                 )}
@@ -685,8 +683,8 @@ export default function MenuSheet({
                       return (
                         <TouchableOpacity
                           key={p.id}
-                          ref={active ? dabRow : undefined}
                           style={styles.profileDropItem}
+                          onLayout={e => { dabY.current[String(p.id)] = e.nativeEvent.layout.y; }}
                           onPress={() => { onSelectDab?.(p.id); setDabOpen(false); }}
                           activeOpacity={0.7}>
                           <Text style={[styles.profileDropItemText, active && styles.profileChipTextActive]} numberOfLines={1}>
@@ -955,8 +953,8 @@ export default function MenuSheet({
                               keyboardShouldPersistTaps="handled">
                     {cmapSorted.map(name => (
                       <TouchableOpacity key={name}
-                        ref={name === colormap ? cmapRow : undefined}
                         style={[styles.dropItem, name === colormap && styles.dropItemActive]}
+                        onLayout={e => { cmapY.current[name] = e.nativeEvent.layout.y; }}
                         onPress={() => { onColormap(name); setCmapOpen(false); }}
                         activeOpacity={0.7}>
                         <Text style={[styles.dropItemText, name === colormap && styles.dropItemTextActive]}>
