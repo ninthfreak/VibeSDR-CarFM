@@ -497,24 +497,28 @@ export default function MenuSheet({
       return { sid, sdrName, inUse: !!info?.inUse, activeProfileId: info?.activeProfileId, items: items.map((i) => ({ id: i.id, label: strip(i.name) })) };
     });
   }, [profiles, sdrUsage]);
-  // Menu dropdowns render inline (the whole menu scrolls — nesting a bounded
-  // ScrollView inside the menu's own ScrollView fought the parent gesture). To
-  // still "open at the current item", scroll the OUTER menu so the active row is
-  // near the top when a dropdown opens (measureLayout against the menu scroll).
-  const menuScroll = useRef<ScrollView | null>(null);
+  // Compact dropdowns: each is a bounded, internally-scrollable box. While one is
+  // open the OUTER menu scroll is DISABLED (see scrollEnabled below) so the inner
+  // box gets all the gestures — that's what fixes the "outer steals the drag"
+  // fight. On open we scroll the inner box to the current row (measureLayout of
+  // the active row against the inner ScrollView → content-relative y, works
+  // through the per-SDR group wrappers).
+  const profScroll = useRef<ScrollView | null>(null);
+  const dabScroll  = useRef<ScrollView | null>(null);
+  const cmapScroll = useRef<ScrollView | null>(null);
   const profRow = useRef<any>(null);
   const dabRow  = useRef<any>(null);
   const cmapRow = useRef<any>(null);
-  const scrollRowIntoView = useCallback((row: any) => {
-    const sv = menuScroll.current; const node = sv && findNodeHandle(sv);
+  const scrollRowIntoView = useCallback((row: any, sv: ScrollView | null) => {
+    const node = sv && findNodeHandle(sv);
     if (!row || !sv || node == null) return;
     requestAnimationFrame(() => {
-      try { row.measureLayout(node, (_x: number, y: number) => { sv.scrollTo({ y: Math.max(0, y - 90), animated: true }); }, () => {}); } catch {}
+      try { row.measureLayout(node, (_x: number, y: number) => { sv.scrollTo({ y: Math.max(0, y - 8), animated: false }); }, () => {}); } catch {}
     });
   }, []);
-  useEffect(() => { if (profileOpen) scrollRowIntoView(profRow.current); }, [profileOpen, scrollRowIntoView]);
-  useEffect(() => { if (dabOpen)     scrollRowIntoView(dabRow.current);  }, [dabOpen, scrollRowIntoView]);
-  useEffect(() => { if (cmapOpen)    scrollRowIntoView(cmapRow.current); }, [cmapOpen, scrollRowIntoView]);
+  useEffect(() => { if (profileOpen) scrollRowIntoView(profRow.current, profScroll.current); }, [profileOpen, scrollRowIntoView]);
+  useEffect(() => { if (dabOpen)     scrollRowIntoView(dabRow.current,  dabScroll.current);  }, [dabOpen, scrollRowIntoView]);
+  useEffect(() => { if (cmapOpen)    scrollRowIntoView(cmapRow.current, cmapScroll.current); }, [cmapOpen, scrollRowIntoView]);
 
   // Bookmarks pane (replaces menu content like DISPLAY SETTINGS)
   const [bookmarksOpen,  setBookmarksOpen]  = useState(false);
@@ -592,10 +596,11 @@ export default function MenuSheet({
           <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(6,4,2,0.60)' }]} />
           <View style={styles.handle} />
 
-          <ScrollView ref={menuScroll} style={styles.scroll}
+          <ScrollView style={styles.scroll}
             contentContainerStyle={[styles.scrollContent,
               { paddingBottom: sheetInsets.bottom + 16 }]}
             keyboardShouldPersistTaps="handled"
+            scrollEnabled={!(profileOpen || dabOpen || cmapOpen)}
             showsVerticalScrollIndicator={false}>
 
             {/* Display settings is its OWN view — it REPLACES the main menu
@@ -623,7 +628,8 @@ export default function MenuSheet({
                   <Text style={styles.profileDropChevron}>{profileOpen ? '▴' : '▾'}</Text>
                 </TouchableOpacity>
                 {profileOpen && (
-                  <View style={styles.profileDropList}>
+                  <ScrollView ref={profScroll} style={styles.profileDropList} nestedScrollEnabled
+                              keyboardShouldPersistTaps="handled">
                     {sdrGroups.map((g) => {
                       const isCurrentSdr = g.items.some((it) => it.id === activeProfileId);
                       return (
@@ -656,7 +662,7 @@ export default function MenuSheet({
                         </View>
                       );
                     })}
-                  </View>
+                  </ScrollView>
                 )}
               </View>
             </>)}
@@ -672,7 +678,8 @@ export default function MenuSheet({
                   <Text style={styles.profileDropChevron}>{dabOpen ? '▴' : '▾'}</Text>
                 </TouchableOpacity>
                 {dabOpen && (
-                  <View style={styles.profileDropList}>
+                  <ScrollView ref={dabScroll} style={styles.profileDropList} nestedScrollEnabled
+                              keyboardShouldPersistTaps="handled">
                     {dabProgrammes.map((p) => {
                       const active = p.id === activeDabId;
                       return (
@@ -688,7 +695,7 @@ export default function MenuSheet({
                         </TouchableOpacity>
                       );
                     })}
-                  </View>
+                  </ScrollView>
                 )}
               </View>
               {/* DAB speed correction — works around the dablin/OWRX chipmunk
@@ -944,18 +951,20 @@ export default function MenuSheet({
                   <Text style={styles.dropChevron}>{cmapOpen ? '▴' : '▾'}</Text>
                 </TouchableOpacity>
                 {cmapOpen && (
-                  <View style={styles.dropList}>
+                  <ScrollView ref={cmapScroll} style={styles.dropList} nestedScrollEnabled
+                              keyboardShouldPersistTaps="handled">
                     {cmapSorted.map(name => (
                       <TouchableOpacity key={name}
                         ref={name === colormap ? cmapRow : undefined}
                         style={[styles.dropItem, name === colormap && styles.dropItemActive]}
-                        onPress={() => { onColormap(name); setCmapOpen(false); }}>
+                        onPress={() => { onColormap(name); setCmapOpen(false); }}
+                        activeOpacity={0.7}>
                         <Text style={[styles.dropItemText, name === colormap && styles.dropItemTextActive]}>
                           {name === 'gqrx' ? 'GQRX' : name.charAt(0).toUpperCase() + name.slice(1)}
                         </Text>
                       </TouchableOpacity>
                     ))}
-                  </View>
+                  </ScrollView>
                 )}
 
                 {/* VFO Needle Colour — colour swatches */}
@@ -1525,7 +1534,7 @@ const styles = StyleSheet.create({
   dropHeaderText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 0.5 },
   dropChevron:    { color: C.muted, fontSize: 10 },
   dropList: {
-    borderWidth: 1, borderColor: C.border, borderRadius: 4,
+    borderWidth: 1, borderColor: C.border, borderRadius: 4, maxHeight: 240,
     marginBottom: 6, overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.25)',
   },
   dropItem: {
@@ -1549,7 +1558,7 @@ const styles = StyleSheet.create({
   profileDropHeadText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14, flex: 1 },
   profileDropChevron: { color: C.muted, fontSize: 14, marginLeft: 8 },
   profileDropList: {
-    marginTop: 4, borderRadius: 8, borderWidth: 1, borderColor: C.border,
+    marginTop: 4, borderRadius: 8, borderWidth: 1, borderColor: C.border, maxHeight: 300,
     backgroundColor: C.btnBg, overflow: 'hidden',
   },
   profileDropItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.divider },

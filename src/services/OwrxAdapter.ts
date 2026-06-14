@@ -312,7 +312,12 @@ export class OwrxAdapter implements SDRBackend {
       ws.onclose = (ev) => {
         this.dbg('WS close ' + ev.code);
         this.lastLink = 0; this.cb.onLink?.(0);   // drop the connection signal meter
+        this.stopStatusPoll();                     // stop polling a dead server
+        // This handler is nulled before our own intentional close()s (destroy /
+        // disconnectSocket), so reaching here ALWAYS means an unexpected drop —
+        // i.e. the OWRX server crashed/restarted. Tell the UI to hold + warn.
         this.cb.onDisconnect();
+        this.cb.onServerLost?.();
         if (!settled) { settled = true; reject(new Error('OpenWebRX closed (' + ev.code + ')')); }
       };
     });
@@ -475,24 +480,27 @@ export class OwrxAdapter implements SDRBackend {
   /** Extract the active caller from a digital-voice metadata message, or undefined
    *  if the message isn't a digital-voice protocol. Returns '' when the protocol
    *  IS digital voice but nobody is transmitting (idle), so the dedupe resets. */
-  private digiVoiceSpeaker(v: any): string | undefined {
+  private digiVoiceState(v: any): { active: boolean; caller?: string } | null {
     const cs = (x: any) => (typeof x === 'string' && x.trim() ? x.trim() : undefined);
+    const pair = (c?: string, t?: string) => (c ? (t ? `${c} → ${t}` : c) : undefined);
     switch (v?.protocol) {
       case 'DMR': {
-        if (v.sync !== 'voice') return '';
-        const c = cs(v.additional?.callsign) ?? cs(v.talkeralias) ?? cs(v.source);
-        return c ? (cs(v.target) ? `${c} → ${v.target}` : c) : '';
+        const caller = pair(cs(v.additional?.callsign) ?? cs(v.talkeralias) ?? cs(v.source), cs(v.target));
+        return { active: v.sync === 'voice' || !!caller, caller };
       }
-      case 'YSF':
-        return (v.mode && cs(v.source)) ? (cs(v.source) as string) : '';
-      case 'DStar': case 'D-Star':
-        if (v.sync !== 'voice') return '';
-        { const o = cs(v.ourcall); return o ? (cs(v.yourcall) ? `${o} → ${v.yourcall}` : o) : ''; }
+      case 'YSF': {
+        const active = !!v.mode;
+        return { active, caller: active ? cs(v.source) : undefined };
+      }
+      case 'DStar': case 'D-Star': {
+        const caller = pair(cs(v.ourcall), cs(v.yourcall));
+        return { active: v.sync === 'voice' || !!caller, caller };
+      }
       case 'NXDN': case 'M17': {
-        const c = cs(v.source);
-        return c ? (cs(v.target) ? `${c} → ${v.target}` : c) : '';
+        const caller = pair(cs(v.source), cs(v.target));
+        return { active: !!caller, caller };
       }
-      default: return undefined;
+      default: return null;
     }
   }
 
@@ -527,19 +535,21 @@ export class OwrxAdapter implements SDRBackend {
     // Digital voice (DMR/YSF/D-Star/NXDN/M17): surface the active caller's
     // callsign (→ talkgroup/target) as the station name, so the VTS pops on each
     // NEW caller — uniform with RDS/DAB. Deduped on the speaker string.
-    const speaker = v ? this.digiVoiceSpeaker(v) : undefined;
-    if (speaker !== undefined) {       // a digital-voice protocol message
-      if (speaker) {                   // someone is transmitting
-        if (speaker !== this.lastVoiceSpeaker) {
-          this.lastVoiceSpeaker = speaker;
-          const badge = String(v.protocol).toUpperCase().replace('DSTAR', 'D-STAR');
-          this.cb.onMetadata?.({ stationName: speaker, badge });   // pop on each new caller
-        }
-        // Keep the caller shown while talking; clear ~2s after they stop (the
-        // server stops sending voice frames at key-down), so a stale callsign
-        // doesn't hang around — VTS falls back to the channel's bookmark.
+    const dv = v ? this.digiVoiceState(v) : null;
+    if (dv) {                          // a digital-voice protocol message
+      if (dv.caller && dv.caller !== this.lastVoiceSpeaker) {
+        this.lastVoiceSpeaker = dv.caller;
+        const badge = String(v.protocol).toUpperCase().replace('DSTAR', 'D-STAR');
+        this.cb.onMetadata?.({ stationName: dv.caller, badge });   // pop on each new caller
+      }
+      // Keep the caller shown for the WHOLE transmission. The callsign rides only
+      // on SOME voice frames, but the slot stays `active` throughout, so re-arm
+      // the idle-clear timer on any active frame (not just callsign-bearing ones)
+      // — that stops the caller dropping to the bookmark mid-over. The grace
+      // (3.5s) then clears it shortly after the transmission actually ends.
+      if ((dv.active || dv.caller) && this.lastVoiceSpeaker) {
         if (this.voiceTimer) clearTimeout(this.voiceTimer);
-        this.voiceTimer = setTimeout(() => { this.voiceTimer = null; this.clearLiveMeta(); }, 2000);
+        this.voiceTimer = setTimeout(() => { this.voiceTimer = null; this.clearLiveMeta(); }, 3500);
       }
       return;
     }

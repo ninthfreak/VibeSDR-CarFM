@@ -373,30 +373,44 @@ function WaterfallView({
   // Retire queues delay dispose() by a couple of swaps so the UI thread can
   // never be mid-draw on a freed object.
   const wfLive    = useRef<{ img: SkImage; data: SkData } | null>(null);
-  const wfRetired = useRef<{ img: SkImage; data: SkData }[]>([]);
+  const wfPending = useRef<Set<{ img: SkImage; data: SkData }>>(new Set());
   const swapWfImage = useCallback((img: SkImage, data: SkData) => {
     wfImage.value = img;
-    if (wfLive.current) wfRetired.current.push(wfLive.current);
+    const old = wfLive.current;
     wfLive.current = { img, data };
-    while (wfRetired.current.length > 2) {
-      const r = wfRetired.current.shift()!;
-      r.img.dispose(); r.data.dispose();
+    // TIME-based disposal (was count-based "keep 2"). The UI-thread Skia render
+    // may still be drawing the previous image; a fast producer (OWRX FFT/zoom is
+    // much faster than UberSDR) can swap past a count window before the GPU
+    // renders, so dispose() freed an image still referenced → JSI "disposed"
+    // throw on the render thread = hard crash. A 300ms grace is far longer than
+    // any render interval, so the freed image is always off-screen first.
+    if (old) {
+      wfPending.current.add(old);
+      setTimeout(() => {
+        if (wfPending.current.delete(old)) { try { old.img.dispose(); old.data.dispose(); } catch {} }
+      }, 300);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const pathRetired = useRef<SkPath[]>([]);
+  // Paths share the same hazard (the trace/peak redraw every tween + zoom frame),
+  // so dispose them on the same time grace rather than a count window.
+  const pathPending = useRef<Set<SkPath>>(new Set());
   const swapPath = useCallback((sv: { value: SkPath }, p: SkPath) => {
-    pathRetired.current.push(sv.value);
+    const old = sv.value;
     sv.value = p;
-    while (pathRetired.current.length > 4) pathRetired.current.shift()!.dispose();
+    if (old) {
+      pathPending.current.add(old);
+      setTimeout(() => { if (pathPending.current.delete(old)) { try { old.dispose(); } catch {} } }, 300);
+    }
   }, []);
 
-  useEffect(() => () => { // unmount: flush the queues
-    wfRetired.current.forEach(r => { r.img.dispose(); r.data.dispose(); });
-    wfRetired.current = [];
-    pathRetired.current.forEach(p => p.dispose());
-    pathRetired.current = [];
+  useEffect(() => () => { // unmount: flush the pending-dispose sets + the live image
+    wfPending.current.forEach(r => { try { r.img.dispose(); r.data.dispose(); } catch {} });
+    wfPending.current.clear();
+    if (wfLive.current) { try { wfLive.current.img.dispose(); wfLive.current.data.dispose(); } catch {} wfLive.current = null; }
+    pathPending.current.forEach(p => { try { p.dispose(); } catch {} });
+    pathPending.current.clear();
   }, []);
 
   // ── Smooth scroll (UI thread) — fed to the shader as a sub-pixel sample

@@ -141,6 +141,10 @@ export interface BackendCallbacks extends SDRCallbacks {
   onModes?: (list: BackendMode[]) => void;
   /** OWRX: live RDS (FM) / DAB station metadata. Cleared with empty fields. */
   onMetadata?: (meta: StationMeta) => void;
+  /** OWRX: the WS closed UNEXPECTEDLY (server crash/restart — common on OWRX),
+   *  as opposed to a user pause/navigation. The UI keeps the session alive and
+   *  shows a "server stopped responding" prompt instead of silently dropping. */
+  onServerLost?: () => void;
   /** OWRX: server bookmarks + dial-frequency markers arrive over the WS (no REST
    *  endpoint like UberSDR). Feeds the VTS station readout + the search bar. */
   onBookmarks?: (list: { name: string; frequency: number; mode?: string }[]) => void;

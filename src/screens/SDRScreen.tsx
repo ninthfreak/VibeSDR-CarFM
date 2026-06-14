@@ -318,6 +318,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── SDR state ─────────────────────────────────────────────────────────────
 
   const [connected, setConnected] = useState(false);
+  const [serverLost, setServerLost] = useState(false);   // OWRX server crashed/restarted
   const [profiles, setProfiles]   = useState<ProfileInfo[]>([]);  // OWRX only
   const [activeProfileId, setActiveProfileId] = useState<string | undefined>(undefined);
   const [sdrUsage, setSdrUsage] = useState<Record<string, { name: string; inUse: boolean; activeProfileId?: string }>>({});  // OWRX: per-SDR usage
@@ -1337,8 +1338,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     destroyed.current = false;
     const c = createBackend(route.params.serverType ?? 'ubersdr', baseUrl, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
-      onConnect:    () => { if (!destroyed.current) setConnected(true); },
+      onConnect:    () => { if (!destroyed.current) { setConnected(true); setServerLost(false); } },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
+      onServerLost: () => {
+        // OWRX server crashed/restarted. Keep the app alive, free the dead audio
+        // engine, and surface the wait-and-reconnect prompt (no auto-reconnect —
+        // the server is usually still restarting).
+        if (destroyed.current) return;
+        setServerLost(true);
+        (VibePowerModule as any)?.stopExternalAudio?.();
+      },
       onLink: (q) => {
         if (destroyed.current) return;
         const b = meterBus.current;
@@ -1493,12 +1502,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       }));
       lastTuneLoaded.current = true;
       setTuneLoaded(true);
-      c.connect(f, m);
+      // A server crash/refused connection rejects this — swallow it (onDisconnect
+      // drives the UI). An unhandled rejection here can escalate to a hard crash.
+      c.connect(f, m).catch(() => {});
     }).catch(() => {
       if (cancelled || destroyed.current) return;
       lastTuneLoaded.current = true;
       setTuneLoaded(true);
-      c.connect(status.frequency, status.mode);
+      c.connect(status.frequency, status.mode).catch(() => {});
     });
     return () => { cancelled = true; destroyed.current = true; c.destroy(); client.current = null; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2533,6 +2544,21 @@ export default function SDRScreen({ route, navigation }: Props) {
         </TouchableOpacity>
       )}
 
+      {/* OWRX server crashed/restarted (common on OWRX). Keep the app alive and
+          tell the user to wait before reconnecting (the server's still booting). */}
+      {serverLost && (
+        <View style={styles.serverLostWrap} pointerEvents="box-none">
+          <View style={styles.serverLostCard}>
+            <Text style={styles.serverLostTitle}>OpenWebRX server stopped responding</Text>
+            <Text style={styles.serverLostBody}>The receiver dropped the connection — OpenWebRX servers restart from time to time. Please wait a minute, then reconnect.</Text>
+            <TouchableOpacity style={styles.serverLostBtn}
+              onPress={() => { setServerLost(false); fullReconnect(); }} activeOpacity={0.85}>
+              <Text style={styles.serverLostBtnText}>RECONNECT</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       {/* Paused → disconnected — tap does a full from-scratch reconnect */}
       {dataSaverOff && !reconnectFailedUi && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
@@ -2848,6 +2874,31 @@ const styles = StyleSheet.create({
   mutedBannerText: {
     color: '#ff7a7a', fontFamily: 'Atkinson Hyperlegible',
     fontSize: 13, fontWeight: '700', letterSpacing: 0.5,
+  },
+  serverLostWrap: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 90,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  serverLostCard: {
+    maxWidth: 360, marginHorizontal: 28, padding: 20, borderRadius: 14,
+    backgroundColor: 'rgba(16,12,8,0.98)', borderWidth: 1, borderColor: 'rgba(255,184,77,0.55)',
+    alignItems: 'center',
+  },
+  serverLostTitle: {
+    color: '#ffb84d', fontFamily: 'Atkinson Hyperlegible', fontSize: 16,
+    fontWeight: '700', textAlign: 'center', marginBottom: 8,
+  },
+  serverLostBody: {
+    color: 'rgba(255,235,210,0.9)', fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 13, lineHeight: 19, textAlign: 'center', marginBottom: 16,
+  },
+  serverLostBtn: {
+    backgroundColor: '#ffb84d', borderRadius: 8, paddingHorizontal: 26, paddingVertical: 10,
+  },
+  serverLostBtnText: {
+    color: '#1a1206', fontFamily: 'Atkinson Hyperlegible', fontSize: 14,
+    fontWeight: '700', letterSpacing: 0.5,
   },
   restoreBtn: {
     position: 'absolute', alignSelf: 'center', zIndex: 60,
