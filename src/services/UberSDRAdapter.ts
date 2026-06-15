@@ -20,18 +20,24 @@ const UBERSDR_CAPS: BackendCapabilities = {
   maxBandwidth:   { default: 6000 },
 };
 
+// V4 local hardware (RTL-SDR Blog V4): HF direct ~0.1 MHz up to ~1766 MHz.
+const LOCAL_CAPS: BackendCapabilities = { ...UBERSDR_CAPS, freqRange: [100_000, 1_766_000_000] };
+
 export class UberSDRAdapter implements SDRBackend {
   readonly kind: BackendKind = 'ubersdr';
-  readonly caps = UBERSDR_CAPS;
+  readonly caps: BackendCapabilities;
   private client: UberSDRClient;
   private baseUrl: string;
   private cb: BackendCallbacks;
 
-  constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks, password?: string) {
+  constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks, password?: string, local = false) {
     // onSMeter/onProfiles unused: S-meter is spectrum-derived, no profiles.
     this.client = new UberSDRClient(baseUrl, uuid, callbacks, password);
     this.baseUrl = baseUrl;
     this.cb = callbacks;
+    // Local hardware tunes far beyond UberSDR's HF 30 MHz cap.
+    this.caps = local ? LOCAL_CAPS : UBERSDR_CAPS;
+    if (local) { this.client.minHz = LOCAL_CAPS.freqRange[0]; this.client.maxHz = LOCAL_CAPS.freqRange[1]; }
   }
 
   get uuid(): string { return this.client.uuid; }
@@ -75,9 +81,10 @@ export function createBackend(
   uuid: string,
   callbacks: BackendCallbacks,
   password?: string,
+  local = false,
 ): SDRBackend {
   switch (kind) {
-    case 'ubersdr': return new UberSDRAdapter(baseUrl, uuid, callbacks, password);
+    case 'ubersdr': return new UberSDRAdapter(baseUrl, uuid, callbacks, password, local);
     case 'owrx':    return new OwrxAdapter(baseUrl, uuid, callbacks);
     case 'kiwi':    return new KiwiAdapter(baseUrl, uuid, callbacks, password);
     default: throw new Error(`backend '${kind}' not implemented`);

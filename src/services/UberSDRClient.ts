@@ -110,6 +110,11 @@ export class UberSDRClient {
   // rendered under the predicted geometry while in flight, and the acked truth
   // (server snaps binBandwidth to a ladder, so its answer always wins) is
   // adopted in one clean step once sends go quiet.
+  // Tunable frequency range (Hz). Default = UberSDR HF limits (10 kHz–30 MHz).
+  // V4 local hardware widens this to the RTL-SDR's range.
+  minHz = 10_000;
+  maxHz = 30_000_000;
+
   private view = { centerHz: 0, binBandwidth: 0 };
   private pendingView: { frequency: number; binBandwidth: number } | null = null;
   private lastSendAt   = 0;
@@ -198,20 +203,20 @@ export class UberSDRClient {
   // the server ladder passes large values through unchecked and a runaway
   // zoom-out wedges the session.
   zoom(frequency: number, binBandwidth: number) {
-    const f = Math.max(10_000, Math.min(30_000_000, Math.round(frequency)));
+    const f = Math.max(this.minHz, Math.min(this.maxHz, Math.round(frequency)));
     const n  = this.status.binCount || 1024;
     // Max-zoom floor: 6 kHz total span (3 kHz per sideband — one SSB
     // channel both sides). The server goes deeper but past this the
     // spectrum shows artefacts and looks frozen even though it isn't
     // (device-confirmed on both platforms 2026-06-12).
-    const bb = Math.max(6_000 / n, Math.min(binBandwidth, 30_000_000 / n));
+    const bb = Math.max(6_000 / n, Math.min(binBandwidth, this.maxHz / n));
     this.view.centerHz     = f;
     this.view.binBandwidth = bb;
     this._sendView(f, bb);
   }
 
   pan(frequency: number) {
-    const f = Math.max(10_000, Math.min(30_000_000, Math.round(frequency)));
+    const f = Math.max(this.minHz, Math.min(this.maxHz, Math.round(frequency)));
     this.view.centerHz = f;
     this._sendView(f, this.view.binBandwidth || this.status.binBandwidth);
   }

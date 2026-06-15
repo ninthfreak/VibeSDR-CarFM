@@ -1594,7 +1594,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           ]);
         }
       },
-    }, password);
+    }, password, !!route.params.isLocal);
     client.current = c;
     // QoL: restore the last frequency/mode used on THIS instance before
     // connecting (the hardcoded default landed on the 20m FT8 squeal every
