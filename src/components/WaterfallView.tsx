@@ -162,7 +162,7 @@ export interface WaterfallViewProps {
   wfBrightness?:   number;
   wfContrast?:     number;
   wfSharpness?:    number;
-  frameRate?:      'native' | '20fps' | '30fps';
+  frameRate?:      'native' | '20fps' | '30fps' | '60fps';
   needleColor?:    string;        // VFO colour — needle, sidebands, peak hold
   /** Needle/glow brightness 1–10 (5 = original look) — bright palettes can
    *  swallow the needle whatever colour it is. */
@@ -280,7 +280,7 @@ function WaterfallView({
   // faster). 60fps existed briefly but 6-way interpolation smeared each data
   // line across six rows — unusably blurry in portrait; don't bring it back.
   // The smooth-tune boost overrides all of this with a vsync slide.
-  const ROWS_PER_FRAME = frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1;
+  const ROWS_PER_FRAME = frameRate === '60fps' ? 6 : frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1;
 
   // Smooth tune: gestures count as "interacting" for this long after the last
   // touch; inside it the slide is boosted to native rate, outside it drops to
@@ -295,7 +295,7 @@ function WaterfallView({
     // unsharp base scales with the selected fps and the slider is a multiplier
     // of it (5 = 1×; 60fps base 5 keeps existing setups looking identical).
     const sharpBase =
-      frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1.5; // native: least blur
+      frameRate === '60fps' ? 5 : frameRate === '30fps' ? 3 : frameRate === '20fps' ? 2 : 1.5; // native: least blur
     // Quadratic slider curve: 5 = 1× base, 10 = 4× — the linear curve made
     // the upper half of the slider nearly imperceptible.
     const sharpMul = Math.pow(wfSharpness / 5, 2);
