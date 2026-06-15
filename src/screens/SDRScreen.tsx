@@ -2600,18 +2600,23 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* OWRX server crashed/restarted (common on OWRX). Keep the app alive and
           tell the user to wait before reconnecting (the server's still booting). */}
-      {serverLost && (
+      {serverLost && (() => {
+        const lostLabel = route.params.serverType === 'kiwi' ? 'KiwiSDR'
+                        : route.params.serverType === 'owrx' ? 'OpenWebRX'
+                        : 'SDR';
+        return (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>OpenWebRX server stopped responding</Text>
-            <Text style={styles.serverLostBody}>The receiver dropped the connection — OpenWebRX servers restart from time to time. Please wait a minute, then reconnect.</Text>
+            <Text style={styles.serverLostTitle}>{lostLabel} server stopped responding</Text>
+            <Text style={styles.serverLostBody}>The receiver dropped the connection — {lostLabel} servers restart from time to time. Please wait a minute, then reconnect.</Text>
             <TouchableOpacity style={styles.serverLostBtn}
               onPress={() => { setServerLost(false); fullReconnect(); }} activeOpacity={0.85}>
               <Text style={styles.serverLostBtnText}>RECONNECT</Text>
             </TouchableOpacity>
           </View>
         </View>
-      )}
+        );
+      })()}
 
       {/* Paused → disconnected — tap does a full from-scratch reconnect */}
       {dataSaverOff && !reconnectFailedUi && (

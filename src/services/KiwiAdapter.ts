@@ -154,6 +154,10 @@ export class KiwiAdapter implements SDRBackend {
         this.dbg('SND open');
         this.sndSend(`SET auth t=kiwi p=${this.password}`);
         this.sndSend('SERVER DE CLIENT vibesdr SND');
+        // The reference client sends the RX params (which START the audio
+        // stream) in its init right after auth — NOT gated on any later MSG.
+        // A short tick lets the server process auth first.
+        setTimeout(() => { if (this.started) this.sendRxParams(); }, 150);
       };
       this.sndWs.onmessage = (e) => {
         try {
@@ -216,12 +220,14 @@ export class KiwiAdapter implements SDRBackend {
       case 'audio_rate': {
         const r = parseInt(val, 10) || 12000;
         this.sndSend(`SET AR OK in=${r} out=44100`);
+        // audio_rate is a server MSG → auth has been processed; (re)assert the
+        // RX params here too so audio starts even if the 150 ms tick raced auth.
+        if (stream === 'SND') this.sendRxParams();
         break;
       }
       case 'sample_rate': {
         const f = parseFloat(val);
         if (Number.isFinite(f) && f > 1000) this.trueAudioRate = f;
-        if (stream === 'SND' && !this.sndReady) { this.sndReady = true; this.sendRxParams(); this.maybeConnected(); }
         break;
       }
       case 'bandwidth': {
@@ -250,8 +256,9 @@ export class KiwiAdapter implements SDRBackend {
     }
   }
 
+  /** Fire onConnect/resolve once, on the first real frame from either socket. */
   private maybeConnected(): void {
-    if (this.sndReady && this._onConnected) { const f = this._onConnected; this._onConnected = null; f(); }
+    if (this._onConnected) { const f = this._onConnected; this._onConnected = null; f(); }
   }
 
   /** Send the SND receive params once we know the true rate (per reference order). */
@@ -272,6 +279,7 @@ export class KiwiAdapter implements SDRBackend {
     const dbm = smeter / 10 - 127;
     this.cb.onSMeter?.(dbm);
     this.cb.onLink?.(3);
+    this.maybeConnected();
 
     const offset = (flags & SND_STEREO) ? 20 : 10;
     const payload = buf.subarray(offset);
@@ -311,6 +319,7 @@ export class KiwiAdapter implements SDRBackend {
     for (let i = 0; i < n; i++) row[i] = bins[i] - 255;
 
     if (!this.viewInit) { this.viewInit = true; }
+    this.maybeConnected();
     this.cb.onSpectrum(row, this.statusForRow(n));
   }
 
