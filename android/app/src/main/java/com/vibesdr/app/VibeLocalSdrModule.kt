@@ -121,6 +121,84 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    // ── Spectrum session (Stage 3) ────────────────────────────────────────
+    // The UsbDeviceConnection must stay open for the whole session (the native
+    // shim holds the fd), so we keep it here rather than close it after open.
+    private var sessionConn: android.hardware.usb.UsbDeviceConnection? = null
+
+    /**
+     * Open the first attached RTL-SDR and start the local-SDR spectrum server.
+     * Resolves with { port, wsBaseUrl } so JS can point UberSDRClient at
+     * ws://127.0.0.1:<port>. Requests USB permission first if needed.
+     */
+    @ReactMethod
+    fun startSpectrum(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
+        val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
+        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) }
+            ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
+        if (!mgr.hasPermission(dev)) {
+            // Reuse the permission flow, then retry once granted.
+            openAndProbeThen(mgr, dev, promise) { startSpectrumNow(mgr, dev, opts, promise) }
+            return
+        }
+        startSpectrumNow(mgr, dev, opts, promise)
+    }
+
+    private fun startSpectrumNow(
+        mgr: UsbManager, dev: UsbDevice,
+        opts: com.facebook.react.bridge.ReadableMap, promise: Promise
+    ) {
+        stopSpectrumInternal()
+        val conn = mgr.openDevice(dev)
+            ?: run { promise.reject("open_failed", "openDevice returned null"); return }
+        val fd = conn.fileDescriptor
+        if (fd < 0) { conn.close(); promise.reject("bad_fd", "Invalid file descriptor"); return }
+        sessionConn = conn
+
+        val centerFreq = if (opts.hasKey("centerFreq")) opts.getDouble("centerFreq") else 100_000_000.0
+        val sampleRate = if (opts.hasKey("sampleRate")) opts.getDouble("sampleRate") else 2_400_000.0
+        val gain       = if (opts.hasKey("gainTenthDb")) opts.getInt("gainTenthDb") else -1 // auto
+        val fftSize    = if (opts.hasKey("fftSize")) opts.getInt("fftSize") else 1024
+        val fftRate    = if (opts.hasKey("fftRate")) opts.getDouble("fftRate") else 20.0
+
+        val port = VibeLocalSDR.startSpectrum(
+            fd, dev.vendorId, dev.productId, centerFreq, sampleRate, gain, fftSize, fftRate)
+        if (port <= 0) {
+            conn.close(); sessionConn = null
+            promise.reject("start_failed", "native startSpectrum failed (see logcat)")
+            return
+        }
+        Log.i(TAG, "spectrum started on port $port")
+        val res = Arguments.createMap()
+        res.putInt("port", port)
+        res.putString("wsBaseUrl", "http://127.0.0.1:$port")
+        promise.resolve(res)
+    }
+
+    @ReactMethod
+    fun stopSpectrum(promise: Promise) {
+        stopSpectrumInternal()
+        promise.resolve(null)
+    }
+
+    private fun stopSpectrumInternal() {
+        try { VibeLocalSDR.stopSpectrum() } catch (_: Throwable) {}
+        sessionConn?.let { try { it.close() } catch (_: Exception) {} }
+        sessionConn = null
+    }
+
+    // Like openAndProbe's permission path, but runs [onGranted] instead of probing.
+    private var grantedAction: (() -> Unit)? = null
+    private fun openAndProbeThen(mgr: UsbManager, dev: UsbDevice, promise: Promise, onGranted: () -> Unit) {
+        if (pendingPromise != null) { promise.reject("busy", "USB permission request in progress"); return }
+        pendingPromise = promise
+        grantedAction = onGranted
+        registerUsbReceiver()
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+        val intent = Intent(ACTION_USB_PERMISSION).setPackage(reactContext.packageName)
+        mgr.requestPermission(dev, PendingIntent.getBroadcast(reactContext, 0, intent, flags))
+    }
+
     private var receiver: BroadcastReceiver? = null
 
     private fun registerUsbReceiver() {
@@ -135,12 +213,14 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                 @Suppress("DEPRECATION")
                 val dev = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
                 val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                val action = grantedAction
+                grantedAction = null
                 if (promise == null) return
                 if (!granted || dev == null || mgr == null) {
                     promise.reject("permission_denied", "USB permission denied")
                     return
                 }
-                openAndProbe(mgr, dev, promise)
+                if (action != null) action() else openAndProbe(mgr, dev, promise)
             }
         }
         receiver = r
@@ -160,6 +240,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     override fun invalidate() {
         unregisterUsbReceiver()
         pendingPromise = null
+        stopSpectrumInternal()
         super.invalidate()
     }
 

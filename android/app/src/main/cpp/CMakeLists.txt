@@ -56,7 +56,11 @@ add_subdirectory("${SDRPP_SRC_ROOT}/source_modules/rtl_sdr_source" rtl_sdr_sourc
 
 # --- VibeSDR local-SDR shim -------------------------------------------------
 # Stage 2: opens an RTL-SDR from a USB fd via librtlsdr (rtlsdr_open_sys_dev).
-add_library(vibelocalsdr SHARED vibe_localsdr_jni.cpp)
+add_library(vibelocalsdr SHARED vibe_localsdr_jni.cpp local_sdr_shim.cpp)
+# core headers (dsp/stream, iq_frontend) need C++17; the global CMAKE_CXX_STANDARD
+# is 14 (mirrors SDR++ root), so force this target like core forces its own.
+set_target_properties(vibelocalsdr PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(vibelocalsdr PRIVATE -std=c++17)
 target_include_directories(vibelocalsdr PRIVATE
     "${SDRPP_SRC_ROOT}/core/src"
     "${SDR_KIT_ROOT}/${ANDROID_ABI}/include")

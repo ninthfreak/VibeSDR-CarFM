@@ -10,6 +10,7 @@
 #include <android/log.h>
 #include <string>
 #include <rtl-sdr.h>
+#include "local_sdr_shim.h"
 
 #define LOG_TAG "VibeLocalSDR"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -63,4 +64,23 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeProbeRtl(JNIEnv* env, jobject /*thiz*/,
 
     rtlsdr_close(dev);
     return env->NewStringUTF(desc.c_str());
+}
+
+// Start the local-SDR spectrum pipeline + localhost UberSDR server.
+// Returns the bound TCP port (>0), or -1 on failure (check logcat).
+extern "C" JNIEXPORT jint JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeStartSpectrum(
+        JNIEnv* env, jobject /*thiz*/, jint fd, jint vid, jint pid,
+        jdouble centerFreq, jdouble sampleRate, jint gainTenthDb,
+        jint fftSize, jdouble fftRate) {
+    std::string err;
+    int port = vibe::LocalSdrShim::instance().start(
+        fd, vid, pid, centerFreq, sampleRate, gainTenthDb, fftSize, fftRate, err);
+    if (port < 0) LOGE("startSpectrum failed: %s", err.c_str());
+    return port;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeStopSpectrum(JNIEnv* /*env*/, jobject /*thiz*/) {
+    vibe::LocalSdrShim::instance().stop();
 }

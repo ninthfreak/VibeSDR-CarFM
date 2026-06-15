@@ -39,6 +39,31 @@ object VibeLocalSDR {
         return nativeProbeRtl(fd, vid, pid)
     }
 
+    /**
+     * Start the local-SDR spectrum pipeline (RTL-SDR → FFT → localhost UberSDR
+     * spectrum WebSocket). Returns the bound TCP port, or -1 on failure. The fd
+     * must stay open (caller keeps the UsbDeviceConnection alive) until [stopSpectrum].
+     */
+    fun startSpectrum(
+        fd: Int, vid: Int, pid: Int,
+        centerFreq: Double, sampleRate: Double, gainTenthDb: Int,
+        fftSize: Int, fftRate: Double
+    ): Int {
+        ensureLoaded()
+        return nativeStartSpectrum(fd, vid, pid, centerFreq, sampleRate, gainTenthDb, fftSize, fftRate)
+    }
+
+    fun stopSpectrum() {
+        if (!loaded) return
+        nativeStopSpectrum()
+    }
+
     private external fun nativeHello(): String
     private external fun nativeProbeRtl(fd: Int, vid: Int, pid: Int): String
+    private external fun nativeStartSpectrum(
+        fd: Int, vid: Int, pid: Int,
+        centerFreq: Double, sampleRate: Double, gainTenthDb: Int,
+        fftSize: Int, fftRate: Double
+    ): Int
+    private external fun nativeStopSpectrum()
 }
