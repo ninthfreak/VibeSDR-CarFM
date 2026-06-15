@@ -2634,8 +2634,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       {serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>Receiver full</Text>
-            <Text style={styles.serverLostBody}>All channels on this KiwiSDR are in use right now. Public Kiwis are often busy — pick another receiver, or try again shortly.</Text>
+            <Text style={styles.serverLostTitle}>Receiver unavailable</Text>
+            <Text style={styles.serverLostBody}>This KiwiSDR has no free channel for you right now — it may be full, or its channels may be password-protected or limited to local users (the directory's user count can be out of date). Pick another receiver, or try again shortly.</Text>
             <View style={styles.serverLostBtnRow}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>

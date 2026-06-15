@@ -345,6 +345,8 @@ export default function InstancePickerScreen({ navigation }: Props) {
     const isDefault = defaultInst?.url === inst.url;
     const versionOld = isVersionOld(inst.version);
     const favoured = isFav(inst.url);
+    // Full receiver (all channels in use) — greyed out + unselectable.
+    const isFull = inst.maxUsers > 0 && inst.users >= inst.maxUsers;
 
     return (
       <>
@@ -356,9 +358,10 @@ export default function InstancePickerScreen({ navigation }: Props) {
             { borderColor: C.border },
             isDefault && { borderColor: C.borderBright, backgroundColor: 'rgba(255,160,0,0.08)' },
             favoured && !isDefault && { borderColor: 'rgba(255,80,80,0.4)' },
+            isFull && { opacity: 0.4 },
           ]}
           onPress={() => connect(inst.url, inst.name, undefined, inst.longitude, inst.serverType)}
-          disabled={connecting}
+          disabled={connecting || isFull}
         >
           <View style={styles.rowMain}>
             <View style={styles.nameRow}>
@@ -400,7 +403,9 @@ export default function InstancePickerScreen({ navigation }: Props) {
           </View>
           <View style={styles.rowRight}>
             {(inst.users != null && inst.maxUsers) ? (
-              <Text style={{ fontFamily: F, fontSize: fs(12), color: C.textDim }}>{inst.users}/{inst.maxUsers}</Text>
+              <Text style={{ fontFamily: F, fontSize: fs(12), color: isFull ? C.red : C.textDim, fontWeight: isFull ? 'bold' : 'normal' }}>
+                {isFull ? 'FULL ' : ''}{inst.users}/{inst.maxUsers}
+              </Text>
             ) : null}
             <TouchableOpacity style={{ padding: 4 }}
               onPress={() => isDefault ? handleClearDefault() : handleSetDefault({ name: inst.name, url: inst.url })}>
