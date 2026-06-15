@@ -310,8 +310,34 @@ export class KiwiAdapter implements SDRBackend {
 
   /** The demod line — sent on EVERY tune/mode/bandwidth change. The Kiwi expects
    *  the FULL `SET mod=… low_cut=… high_cut=… freq=…` (reference doset()); a bare
-   *  `SET freq=` is ignored, so tuning silently did nothing. */
+   *  `SET freq=` is ignored, so tuning silently did nothing.
+   *
+   *  THROTTLED: the VFO drum fires a demod change per frequency step (dozens/sec);
+   *  KiwiSDR has flood protection and KICKS clients that spam SET commands. The
+   *  reference throttles via `demodulator_response_time`. We coalesce to ~1 every
+   *  DEMOD_MIN_MS with a guaranteed trailing send of the final value. */
+  private demodTimer: ReturnType<typeof setTimeout> | null = null;
+  private demodPending = false;
+  private lastDemodAt = 0;
+  private static DEMOD_MIN_MS = 110;
+
   private sendDemod(): void {
+    const since = Date.now() - this.lastDemodAt;
+    if (since >= KiwiAdapter.DEMOD_MIN_MS) {
+      this.lastDemodAt = Date.now();
+      this.sendDemodNow();
+    } else {
+      this.demodPending = true;
+      if (!this.demodTimer) {
+        this.demodTimer = setTimeout(() => {
+          this.demodTimer = null;
+          if (this.demodPending) { this.demodPending = false; this.lastDemodAt = Date.now(); this.sendDemodNow(); }
+        }, KiwiAdapter.DEMOD_MIN_MS - since);
+      }
+    }
+  }
+
+  private sendDemodNow(): void {
     const wire = KIWI_MODE[this.mode].mod;
     this.sndSend(`SET mod=${wire} low_cut=${Math.round(this.bwLow)} high_cut=${Math.round(this.bwHigh)} freq=${(this.freq / 1000).toFixed(3)}`);
   }
@@ -383,13 +409,34 @@ export class KiwiAdapter implements SDRBackend {
     return Math.min(Math.max(z, 0), KIWI_MAX_ZOOM);
   }
 
-  /** Snap viewBw to the quantised zoom span and push `SET zoom=z cf=<kHz>`. */
+  /** Snap viewBw to the quantised zoom span and push `SET zoom=z cf=<kHz>`.
+   *  Throttled like the demod line — the zoom drum floods the W/F socket. */
+  private zoomTimer: ReturnType<typeof setTimeout> | null = null;
+  private zoomPending = false;
+  private lastZoomAt = 0;
+
   private sendZoom(): void {
     const z = this.zoomLevel();
     this.viewBw = KIWI_FULL_BW / Math.pow(2, z);          // authoritative snap
-    const cfKHz = (this.viewCenter / 1000).toFixed(3);
-    this.wfSend(`SET zoom=${z} cf=${cfKHz}`);
-    this.cb.onStatus(this.getStatus());
+    this.cb.onStatus(this.getStatus());                   // UI updates immediately
+    const since = Date.now() - this.lastZoomAt;
+    if (since >= KiwiAdapter.DEMOD_MIN_MS) {
+      this.lastZoomAt = Date.now();
+      this.sendZoomNow();
+    } else {
+      this.zoomPending = true;
+      if (!this.zoomTimer) {
+        this.zoomTimer = setTimeout(() => {
+          this.zoomTimer = null;
+          if (this.zoomPending) { this.zoomPending = false; this.lastZoomAt = Date.now(); this.sendZoomNow(); }
+        }, KiwiAdapter.DEMOD_MIN_MS - since);
+      }
+    }
+  }
+
+  private sendZoomNow(): void {
+    const z = this.zoomLevel();
+    this.wfSend(`SET zoom=${z} cf=${(this.viewCenter / 1000).toFixed(3)}`);
   }
 
   // ── SDRBackend surface ───────────────────────────────────────────────────
@@ -481,6 +528,8 @@ export class KiwiAdapter implements SDRBackend {
 
   private stopKeepalive(): void {
     if (this.keepalive) { clearInterval(this.keepalive); this.keepalive = null; }
+    if (this.demodTimer) { clearTimeout(this.demodTimer); this.demodTimer = null; }
+    if (this.zoomTimer) { clearTimeout(this.zoomTimer); this.zoomTimer = null; }
   }
 
   private onSocketDrop(): void {
