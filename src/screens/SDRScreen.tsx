@@ -322,6 +322,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [serverLost, setServerLost] = useState(false);   // OWRX server crashed/restarted
   const [serverBusy, setServerBusy] = useState(false);   // Kiwi receiver full (too_busy)
   const [connLost,   setConnLost]   = useState(false);   // UberSDR link down — auto-reconnecting
+  const connLostTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const appActiveRef  = useRef(true);   // false while backgrounded — gates connLost
   const [profiles, setProfiles]   = useState<ProfileInfo[]>([]);  // OWRX only
   const [activeProfileId, setActiveProfileId] = useState<string | undefined>(undefined);
   const [sdrUsage, setSdrUsage] = useState<Record<string, { name: string; inUse: boolean; activeProfileId?: string }>>({});  // OWRX: per-SDR usage
@@ -1350,7 +1352,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     destroyed.current = false;
     const c = createBackend(route.params.serverType ?? 'ubersdr', baseUrl, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
-      onConnect:    () => { if (!destroyed.current) { setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); } },
+      onConnect:    () => { if (!destroyed.current) { setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } } },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
       onServerLost: () => {
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio
@@ -1370,10 +1372,23 @@ export default function SDRScreen({ route, navigation }: Props) {
         const b = meterBus.current;
         b.emit({ ...b.value, link: q });
         // UberSDR auto-reconnects silently — without a cue the app just looks
-        // frozen when the link drops (e.g. the instance reboots). Surface a
-        // 'connection lost / reconnecting' popup. OWRX/Kiwi use the serverLost
-        // card instead (they don't auto-reconnect).
-        if ((route.params.serverType ?? 'ubersdr') === 'ubersdr') setConnLost(q === 0);
+        // frozen when the link drops (e.g. the instance reboots). But the spectrum
+        // is deliberately paused on minimise/resume, which briefly starves the
+        // link to 0 with audio still fine — so DEBOUNCE: only pop after a sustained
+        // drop, and cancel the instant the link recovers. OWRX/Kiwi use serverLost.
+        if ((route.params.serverType ?? 'ubersdr') === 'ubersdr' && appActiveRef.current) {
+          if (q === 0) {
+            if (!connLostTimer.current) {
+              connLostTimer.current = setTimeout(() => {
+                connLostTimer.current = null;
+                if (!destroyed.current) setConnLost(true);
+              }, 3000);
+            }
+          } else {
+            if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; }
+            setConnLost(false);
+          }
+        }
       },
       onStatus:     (s) => { if (!destroyed.current) setStatus(s); },
       onSMeter:     (dbm) => { if (!destroyed.current) owrxSmeterRef.current = dbm; },
@@ -1599,8 +1614,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     const sub = AppState.addEventListener('change', (state: string) => {
       if (state !== 'active') {
         if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
+        // Backgrounded: the spectrum pause starves the link to 0, but that's NOT
+        // a disconnect (audio keeps playing). Suppress the connection-lost popup
+        // while backgrounded and reset it so a long lock can't leave it armed.
+        appActiveRef.current = false;
+        if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; }
+        setConnLost(false);
         client.current?.pauseSpectrum();
       } else if (dataSaverOffRef.current) {
+        appActiveRef.current = true;
         // Opened the app after a data-saver disconnect (the Play event may not
         // survive suspension): do a full from-scratch reconnect.
         setDataSaverOff(false);
@@ -1622,6 +1644,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // reopens first it gets no frames and the waterfall stays frozen (the bug
         // where you had to back out to instances and reconnect). connect() uses
         // the same audio-first-then-1s ordering; mirror it here.
+        appActiveRef.current = true;
         if (resumeTimer) clearTimeout(resumeTimer);
         resumeTimer = setTimeout(() => { resumeTimer = null; client.current?.resumeSpectrum(); }, 1200);
       }
@@ -2211,6 +2234,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh,
       baseUrl, userBookmarks, persistUserBookmarks]);
 
+  // The menu's saved list should show only what applies to THIS instance —
+  // global ('') + this-instance — not bookmarks scoped to OTHER instances (a
+  // 'this instance only' bookmark was showing on every instance's list).
+  const visibleBookmarks = useMemo(
+    () => bookmarksForInstance(userBookmarks, baseUrl),
+    [userBookmarks, baseUrl],
+  );
+
   const onDeleteBookmark = useCallback((bm: UserBookmark) => {
     persistUserBookmarks(userBookmarks.filter(
       (b: UserBookmark) => !(b.name === bm.name && b.frequency === bm.frequency && b.scope === bm.scope),
@@ -2757,7 +2788,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         searchBookmarks={searchBookmarks}
         searchBands={searchBands}
         onSearchTune={onSearchTune}
-        userBookmarks={userBookmarks}
+        userBookmarks={visibleBookmarks}
         currentFreq={status.frequency}
         currentMode={status.mode}
         onAddBookmark={onAddBookmark}
