@@ -148,8 +148,11 @@ struct LocalSdrShim::Impl {
     dsp::channel::RxVFO* vfo = nullptr;
     dsp::Processor<dsp::complex_t, dsp::stereo_t>* demod = nullptr;
     void (*demodDeleter)(void*) = nullptr;
-    dsp::multirate::RationalResampler<dsp::stereo_t> resamp;
-    dsp::sink::Handler<dsp::stereo_t> audioSink;
+    // Heap-allocated + recreated on every rebuild: dsp::block::init() aborts() if
+    // called twice on the same block (registerInput guard), so member objects
+    // can't be re-init'd — each buildAudio() needs fresh ones.
+    dsp::multirate::RationalResampler<dsp::stereo_t>* resamp = nullptr;
+    dsp::sink::Handler<dsp::stereo_t>* audioSink = nullptr;
     std::atomic<int> audioChannels{1};
 
     // server
@@ -222,8 +225,8 @@ struct LocalSdrShim::Impl {
 
     // ── Demod chain (re)build ──────────────────────────────────────────────
     void teardownAudio() {
-        audioSink.stop();
-        resamp.stop();
+        if (audioSink) { audioSink->stop(); delete audioSink; audioSink = nullptr; }
+        if (resamp) { resamp->stop(); delete resamp; resamp = nullptr; }
         if (demod) { demod->stop(); if (demodDeleter) demodDeleter(demod); demod = nullptr; demodDeleter = nullptr; }
         if (vfo) { frontend.removeVFO("audio"); vfo = nullptr; }
     }
@@ -275,11 +278,13 @@ struct LocalSdrShim::Impl {
             }
         }
 
-        resamp.init(&demod->out, mp.ifRate, AUDIO_SR);
-        audioSink.init(&resamp.out, &Impl::audioHandler, this);
+        resamp = new dsp::multirate::RationalResampler<dsp::stereo_t>();
+        resamp->init(&demod->out, mp.ifRate, AUDIO_SR);
+        audioSink = new dsp::sink::Handler<dsp::stereo_t>();
+        audioSink->init(&resamp->out, &Impl::audioHandler, this);
         demod->start();
-        resamp.start();
-        audioSink.start();
+        resamp->start();
+        audioSink->start();
         LOGI("audio chain: mode=%s ifRate=%.0f bw=%.0f ch=%d", mode.c_str(), mp.ifRate, mp.bandwidth, mp.channels);
     }
 

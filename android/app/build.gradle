@@ -96,18 +96,6 @@ android {
         versionName "4.0.0-beta.2"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
-
-        // V4 local-SDR shim: build SDR++ Brown core + rtl_sdr into the APK.
-        // ARM only (matches reactNativeArchitectures); shares the RN c++ runtime.
-        externalNativeBuild {
-            cmake {
-                arguments "-DANDROID_STL=c++_shared",
-                          "-DOPT_BACKEND_ANDROID=ON",
-                          "-DOPT_BACKEND_GLFW=OFF"
-                cppFlags "-std=c++17"
-                abiFilters 'arm64-v8a', 'armeabi-v7a'
-            }
-        }
     }
     // Release/upload signing — loaded from android/keystore.properties (gitignored).
     // If absent (e.g. a fresh clone), release falls back to the debug key so the
@@ -157,10 +145,14 @@ android {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
     }
 
-    // V4 local-SDR shim native build (see src/main/cpp/CMakeLists.txt).
+    // App native build: RN New-Architecture setup + the V4 local-SDR shim.
+    // The jni/CMakeLists.txt includes RN's ReactNative-application.cmake (so
+    // libappmodules.so / core TurboModules are still built) and then adds the
+    // shim from ../cpp. Pointing this at the shim directly would drop RN's
+    // setup → "PlatformConstants could not be found" at launch.
     externalNativeBuild {
         cmake {
-            path "src/main/cpp/CMakeLists.txt"
+            path "src/main/jni/CMakeLists.txt"
             version "3.22.1"
         }
     }
