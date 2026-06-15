@@ -1022,9 +1022,20 @@ export class OwrxAdapter implements SDRBackend {
     // ADSB we keep the profile's mode, which works as mod=adsb + secondary_mod=adsb).
     const realUnderlying = (sel?.underlying ?? []).filter((u) => u !== 'empty');
     if (sel?.type === 'digimode' && sel.underlying?.length) {
-      this.secondaryDecoder = this.secondaryDecoder === sel.id ? null : sel.id;  // toggle
-      if (this.secondaryDecoder && realUnderlying.length && !realUnderlying.includes(String(this.mode))) {
-        this.mode = realUnderlying[0] as SDRMode;   // RTTY→usb, Page→nfm, … (skip "empty")
+      if (realUnderlying.length) {
+        // CARRIED digimode (RTTY/SSTV/WEFAX/Packet/ACARS): a secondary decoder on
+        // an analog carrier — toggle on/off and auto-pick a real sideband.
+        this.secondaryDecoder = this.secondaryDecoder === sel.id ? null : sel.id;
+        if (this.secondaryDecoder && !realUnderlying.includes(String(this.mode))) {
+          this.mode = realUnderlying[0] as SDRMode;   // RTTY→usb, Page→nfm, …
+        }
+      } else {
+        // RAW-IF STANDALONE digimode (ADSB/ISM/Meshtastic/Meshcore/LoRa-*): it IS
+        // the primary mod, but OWRX needs mod=id AND secondary_mod=id — mod alone
+        // decodes nothing. Manually picking it must set BOTH (the toggle path used
+        // to leave mode on the previous carrier, so the server kept decoding LoRa).
+        this.secondaryDecoder = sel.id;
+        this.mode = sel.id as SDRMode;
       }
       this.applyModeBandpass();
       this.audioDec.reset(); this.hdAudioDec.reset();
