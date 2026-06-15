@@ -78,6 +78,7 @@ import {
   VTS_ON_HZ, searchStations, type ServerBookmark, type ServerBand,
   type ServerUiConfig, type ReceiverInfo,
 } from '../services/stations';
+import { getUserLocation } from '../services/instancesApi';
 import {
   loadUserBookmarks, saveUserBookmarks, bookmarksForInstance, withoutInstance,
   exportBookmarksJSON, parseBookmarksJSON, mergeBookmarks, type UserBookmark,
@@ -2092,10 +2093,18 @@ export default function SDRScreen({ route, navigation }: Props) {
   // and band-plan info when crossing a band boundary. Menu arrows jump
   // bookmarks; an arrow jump defers any band notif 3s so the station name
   // shows first (skin VTS_ARROW_BOOKMARK_MS).
+  // ITU region drives the MW channel step (9 kHz region 1, 10 kHz region 2/3).
+  // Prefer the RECEIVER longitude (passed by the directory, which knows it); fall
+  // back to the user's device longitude when we don't have it (default/favourite
+  // reconnects, OWRX, custom URLs) so it isn't left at region 0 → wrong 10 kHz.
+  const [deviceLon, setDeviceLon] = useState<number | null>(null);
+  useEffect(() => {
+    if (route.params.serverLongitude != null) return;   // receiver location known
+    getUserLocation().then(l => setDeviceLon(l?.lon ?? null)).catch(() => {});
+  }, [route.params.serverLongitude]);
   const ituRegion = useMemo(
-    () => deriveItuRegion(route.params.serverLongitude),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    () => deriveItuRegion(route.params.serverLongitude ?? deviceLon),
+    [deviceLon],   // eslint-disable-line react-hooks/exhaustive-deps
   );
   const vtsBookmarks = useRef<ServerBookmark[]>([]);
   const [searchBookmarks, setSearchBookmarks] = useState<ServerBookmark[]>([]);
