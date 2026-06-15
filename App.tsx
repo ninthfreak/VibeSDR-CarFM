@@ -1,5 +1,5 @@
-import React, { useCallback, useRef, useState } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { Animated, ActivityIndicator, LogBox, Text, View } from 'react-native';
@@ -9,6 +9,8 @@ LogBox.ignoreAllLogs();
 
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import SDRScreen            from './src/screens/SDRScreen';
+import CrashBoundary        from './src/components/CrashBoundary';
+import { installCrashGuard } from './src/services/crashGuard';
 import { ThemeProvider }    from './src/contexts/ThemeContext';
 import type { ViewMode }    from './src/services/viewMode';
 
@@ -30,8 +32,13 @@ export const splashBridge = {
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+export const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 export default function App() {
+  // Install the global JS crash guard once — flaky SDR servers must never abort
+  // the whole app; recover to the picker with a server-attributed message.
+  useEffect(() => { installCrashGuard(navigationRef); }, []);
+
   const [fontsLoaded] = useFonts({
     'Nixie One':              require('./assets/fonts/NixieOne-Regular.ttf'),
     'Atkinson Hyperlegible':  require('./assets/fonts/AtkinsonHyperlegible-Regular.ttf'),
@@ -55,7 +62,8 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
       <View style={{ flex: 1, backgroundColor: '#080601' }}>
-        <NavigationContainer>
+        <CrashBoundary>
+        <NavigationContainer ref={navigationRef}>
           <StatusBar style="light" />
           <Stack.Navigator
             initialRouteName="InstancePicker"
@@ -71,6 +79,7 @@ export default function App() {
             <Stack.Screen name="SDR"            component={SDRScreen}            options={{ headerShown: false, gestureEnabled: false }} />
           </Stack.Navigator>
         </NavigationContainer>
+        </CrashBoundary>
 
         {!splashDone && (
           <Animated.View style={{

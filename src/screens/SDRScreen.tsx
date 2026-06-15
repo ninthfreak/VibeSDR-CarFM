@@ -2505,6 +2505,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         colormap={colormap}
         width={screenW}
         height={screenH - insets.top}
+        // Block waterfall tune/pan/pinch in the bottom gap (home-indicator
+        // zone): the whole strip below the pill when controls show, else just
+        // the home bar. Preserves swipe-up-to-minimise + menu Modals.
+        bottomGuard={controlsHidden ? bottomInset : bottomInset + 8}
         ituRegion={1}
         onPanDelta={onWfPanDelta}
         onZoomDelta={onWfZoomDelta}

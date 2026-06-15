@@ -139,6 +139,10 @@ export interface WaterfallViewProps {
   colormap?:   string;
   width:       number;
   height:      number;
+  /** Bottom strip (px) where waterfall gestures are ignored — the gap below the
+   *  control pill overlaps the home-indicator zone; tuning there fought the
+   *  swipe-up-to-minimise gesture. Menus (separate Modal) are unaffected. */
+  bottomGuard?: number;
   ituRegion?:  number;            // 1/2/3 — filters regional band plan entries
   fontFamily?: string;            // default Atkinson Hyperlegible (accessibility skin)
   onPanDelta?:  (dxPx: number) => void;
@@ -246,7 +250,7 @@ function WaterfallView({
   frameSink, binCount, centerHz, bwHz, tuneHz,
   filterLow = -3000, filterHigh = 3000,
   dbMin = -120, dbMax = -20, wfCoarse = 'auto',
-  colormap = 'gqrx', width, height,
+  colormap = 'gqrx', width, height, bottomGuard = 0,
   ituRegion = 1, fontFamily = 'Atkinson Hyperlegible',
   onPanDelta, onZoomDelta, onTapTune, onPinchZoom,
   specShow = true, specFrac = 0.26,
@@ -845,33 +849,49 @@ function WaterfallView({
   const lastPanY = useRef(0);
   const pinchRef = useRef(1);
 
+  // Bottom-edge guard: the gap below the control pill overlaps the home
+  // indicator; tuning/panning/zooming that started there fought the system
+  // swipe-up. Reject any waterfall gesture whose touch begins in that strip.
+  const guardTop = height - bottomGuard;          // y at/under which we ignore
+  const panBlocked   = useRef(false);
+  const pinchBlocked = useRef(false);
+
   const tapGesture = useMemo(() =>
     Gesture.Tap().runOnJS(true).maxDuration(300).onEnd((e: any) => {
       if (!bwHz || !centerHz) return;
       if (e.y < BAND_H) return; // band strip taps reserved (future: band jump)
+      if (bottomGuard > 0 && e.y >= guardTop) return; // home-bar gap
       onTapTune?.(Math.round(visStart + (e.x / width) * bwHz));
-    }), [bwHz, centerHz, visStart, width, onTapTune]);
+    }), [bwHz, centerHz, visStart, width, onTapTune, bottomGuard, guardTop]);
 
   const panGesture = useMemo(() =>
     Gesture.Pan().runOnJS(true).minDistance(4)
-      .onStart(() => { lastPanX.current = 0; lastPanY.current = 0; })
+      .onStart((e: any) => {
+        lastPanX.current = 0; lastPanY.current = 0;
+        panBlocked.current = bottomGuard > 0 && e.y >= guardTop;
+      })
       .onUpdate((e: any) => {
+        if (panBlocked.current) return;
         const dx = e.translationX - lastPanX.current;
         const dy = e.translationY - lastPanY.current;
         lastPanX.current = e.translationX;
         lastPanY.current = e.translationY;
         if (Math.abs(dx) >= Math.abs(dy)) onPanDelta?.(-dx);
         else onZoomDelta?.(dy);
-      }), [onPanDelta, onZoomDelta]);
+      }), [onPanDelta, onZoomDelta, bottomGuard, guardTop]);
 
   const pinchGesture = useMemo(() =>
     Gesture.Pinch().runOnJS(true)
-      .onStart(() => { pinchRef.current = 1; })
+      .onStart((e: any) => {
+        pinchRef.current = 1;
+        pinchBlocked.current = bottomGuard > 0 && e.focalY >= guardTop;
+      })
       .onUpdate((e: any) => {
+        if (pinchBlocked.current) return;
         const delta = e.scale / pinchRef.current;
         pinchRef.current = e.scale;
         onPinchZoom?.(delta);
-      }), [onPinchZoom]);
+      }), [onPinchZoom, bottomGuard, guardTop]);
 
   const gesture = useMemo(() =>
     Gesture.Simultaneous(Gesture.Exclusive(tapGesture, panGesture), pinchGesture),
