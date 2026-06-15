@@ -29,5 +29,16 @@ object VibeLocalSDR {
         return nativeHello()
     }
 
+    /**
+     * Open an RTL-SDR from a USB file descriptor (owned by a Kotlin
+     * UsbDeviceConnection) and return a human-readable description. Returns a
+     * string starting with "ERROR:" on failure. The fd stays owned by Kotlin.
+     */
+    fun probeRtl(fd: Int, vid: Int, pid: Int): String {
+        ensureLoaded()
+        return nativeProbeRtl(fd, vid, pid)
+    }
+
     private external fun nativeHello(): String
+    private external fun nativeProbeRtl(fd: Int, vid: Int, pid: Int): String
 }

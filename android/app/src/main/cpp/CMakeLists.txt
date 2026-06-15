@@ -54,11 +54,15 @@ set(CMAKE_CXX14_EXTENSION_COMPILE_OPTION "-std=c++17")
 add_subdirectory("${SDRPP_SRC_ROOT}/core" sdrpp_core_build)
 add_subdirectory("${SDRPP_SRC_ROOT}/source_modules/rtl_sdr_source" rtl_sdr_source_build)
 
-# --- VibeSDR local-SDR shim (Stage 1: JNI load-proof stub) ------------------
+# --- VibeSDR local-SDR shim -------------------------------------------------
+# Stage 2: opens an RTL-SDR from a USB fd via librtlsdr (rtlsdr_open_sys_dev).
 add_library(vibelocalsdr SHARED vibe_localsdr_jni.cpp)
-target_include_directories(vibelocalsdr PRIVATE "${SDRPP_SRC_ROOT}/core/src")
+target_include_directories(vibelocalsdr PRIVATE
+    "${SDRPP_SRC_ROOT}/core/src"
+    "${SDR_KIT_ROOT}/${ANDROID_ABI}/include")
 # --no-as-needed keeps the DT_NEEDED on libsdrpp_core.so so loading the shim
 # actually pulls the SDR++ core in (proves the link, not just that it compiled).
 target_link_libraries(vibelocalsdr PRIVATE
     -Wl,--no-as-needed sdrpp_core -Wl,--as-needed
+    "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/librtlsdr.so"
     log)
