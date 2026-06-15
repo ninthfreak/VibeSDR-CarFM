@@ -450,7 +450,10 @@ export class KiwiAdapter implements SDRBackend {
     this.freq = Math.min(Math.max(frequency, 0), this.rxBw);
     if (mode && mode !== this.mode) { this.setMode(mode); return; }
     this.sendDemod();                     // FULL demod line — bare SET freq is ignored
-    this.cb.onStatus(this.getStatus());
+    // Re-centre the waterfall on the VFO so it stays centred (like UberSDR's
+    // server-side zoom). sendZoom() is throttled, so a drum spin won't flood.
+    if (this.viewInit) { this.viewCenter = this.freq; this.sendZoom(); }
+    else this.cb.onStatus(this.getStatus());
   }
 
   syncFrequency(frequency: number, mode?: SDRMode): void {
