@@ -78,7 +78,6 @@ import {
   VTS_ON_HZ, searchStations, type ServerBookmark, type ServerBand,
   type ServerUiConfig, type ReceiverInfo,
 } from '../services/stations';
-import { getUserLocation } from '../services/instancesApi';
 import {
   loadUserBookmarks, saveUserBookmarks, bookmarksForInstance, withoutInstance,
   exportBookmarksJSON, parseBookmarksJSON, mergeBookmarks, type UserBookmark,
@@ -2098,18 +2097,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Prefer the RECEIVER longitude (passed by the directory, which knows it); fall
   // back to the user's device longitude when we don't have it (default/favourite
   // reconnects, OWRX, custom URLs) so it isn't left at region 0 → wrong 10 kHz.
-  // recvLon: the receiver's own longitude reported by the server (OWRX
-  // /status.json receiver.gps.lon) — set via onReceiverLon. deviceLon: fallback
-  // to the user's device when neither the directory nor the server tells us.
-  const [recvLon,   setRecvLon]   = useState<number | null>(null);
-  const [deviceLon, setDeviceLon] = useState<number | null>(null);
-  useEffect(() => {
-    if (route.params.serverLongitude != null) return;   // directory already knows
-    getUserLocation().then(l => setDeviceLon(l?.lon ?? null)).catch(() => {});
-  }, [route.params.serverLongitude]);
+  // ITU region (MW 9/10 kHz) is a property of WHERE THE RECEIVER IS — not the
+  // listener (a European on a US receiver wants 10 kHz). So use the receiver's
+  // own longitude only: from the directory (serverLongitude) or the server's
+  // status page (recvLon via onReceiverLon — OWRX/UberSDR /status.json,
+  // KiwiSDR /status). NOT the device location.
+  const [recvLon, setRecvLon] = useState<number | null>(null);
   const ituRegion = useMemo(
-    () => deriveItuRegion(route.params.serverLongitude ?? recvLon ?? deviceLon),
-    [recvLon, deviceLon],   // eslint-disable-line react-hooks/exhaustive-deps
+    () => deriveItuRegion(route.params.serverLongitude ?? recvLon),
+    [recvLon],   // eslint-disable-line react-hooks/exhaustive-deps
   );
   const vtsBookmarks = useRef<ServerBookmark[]>([]);
   const [searchBookmarks, setSearchBookmarks] = useState<ServerBookmark[]>([]);
