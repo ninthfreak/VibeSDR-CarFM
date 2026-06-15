@@ -166,7 +166,11 @@ export class KiwiAdapter implements SDRBackend {
         } catch (err: any) { this.dbg('SND msg err: ' + (err?.message ?? err)); }
       };
       this.sndWs.onerror = () => { this.dbg('SND error'); fail(new Error('KiwiSDR SND socket error')); };
-      this.sndWs.onclose = () => { this.dbg('SND close'); this.onSocketDrop(); fail(new Error('KiwiSDR SND closed')); };
+      this.sndWs.onclose = (ev: any) => { this.dbg('SND close code=' + ev?.code + ' reason=' + ev?.reason); this.onSocketDrop(); fail(new Error('KiwiSDR SND closed')); };
+
+      // Open W/F right away too (both share this.ts). The first-SND-MSG gate
+      // (openWf in onmessage) is kept as a no-op fallback via the wfOpened guard.
+      this.openWf();
 
       // Keepalive on BOTH sockets (Kiwi kicks idle clients).
       this.keepalive = setInterval(() => {
@@ -209,11 +213,12 @@ export class KiwiAdapter implements SDRBackend {
       } catch (err: any) { this.dbg('WF msg err: ' + (err?.message ?? err)); }
     };
     this.wfWs.onerror = () => { this.dbg('WF error'); };
-    this.wfWs.onclose = () => { this.dbg('WF close'); this.onSocketDrop(); };
+    this.wfWs.onclose = (ev: any) => { this.dbg('WF close code=' + ev?.code + ' reason=' + ev?.reason); this.onSocketDrop(); };
   }
 
   // ── text (MSG) ───────────────────────────────────────────────────────────
   private onText(data: string, stream: 'SND' | 'W/F'): void {
+    this.dbg(stream + ' rx: ' + data.slice(0, 120));
     if (!data.startsWith('MSG')) return;            // CLI / other — ignore
     const body = data.slice(4);                     // skip "MSG "
     for (const tok of body.split(' ')) {
@@ -448,7 +453,7 @@ export class KiwiAdapter implements SDRBackend {
   }
 
   // ── helpers ────────────────────────────────────────────────────────────────
-  private sndSend(s: string): void { try { if (this.sndWs?.readyState === WebSocket.OPEN) this.sndWs.send(s); } catch {} }
-  private wfSend(s: string): void { try { if (this.wfWs?.readyState === WebSocket.OPEN) this.wfWs.send(s); } catch {} }
-  private dbg(m: string): void { this.cb.onDbg?.('[kiwi] ' + m); }
+  private sndSend(s: string): void { try { if (this.sndWs?.readyState === WebSocket.OPEN) { if (s !== 'SET keepalive') this.dbg('SND tx: ' + s); this.sndWs.send(s); } } catch {} }
+  private wfSend(s: string): void { try { if (this.wfWs?.readyState === WebSocket.OPEN) { if (s !== 'SET keepalive') this.dbg('WF tx: ' + s); this.wfWs.send(s); } } catch {} }
+  private dbg(m: string): void { console.log('[kiwi] ' + m); this.cb.onDbg?.('[kiwi] ' + m); }
 }
