@@ -365,7 +365,9 @@ export default function InstancePickerScreen({ navigation }: Props) {
         >
           <View style={styles.rowMain}>
             <View style={styles.nameRow}>
-              <Image source={TYPE_LOGOS[inst.serverType ?? 'ubersdr']} style={styles.typeLogo} resizeMode="contain" />
+              <View style={(inst.serverType ?? 'ubersdr') === 'owrx' ? styles.logoChip : undefined}>
+                <Image source={TYPE_LOGOS[inst.serverType ?? 'ubersdr']} style={styles.typeLogo} resizeMode="contain" />
+              </View>
               <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, flex: 1 }} numberOfLines={1}>
                 {isDefault ? '★ ' : ''}{flagEmoji(inst.countryCode) ? flagEmoji(inst.countryCode) + ' ' : ''}{inst.name}
               </Text>
@@ -626,7 +628,9 @@ export default function InstancePickerScreen({ navigation }: Props) {
                     </View>
                     <View style={styles.rowRight}>
                       {d.kinds.map(k => (
-                        <Image key={k} source={TYPE_LOGOS[k]} style={styles.typeLogo} resizeMode="contain" />
+                        <View key={k} style={k === 'owrx' ? styles.logoChip : undefined}>
+                          <Image source={TYPE_LOGOS[k]} style={styles.typeLogo} resizeMode="contain" />
+                        </View>
                       ))}
                       <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 4 }}>›</Text>
                     </View>
@@ -686,6 +690,7 @@ const styles = StyleSheet.create({
   rowRight:      { alignItems: 'center', gap: 6, flexDirection: 'row', marginLeft: 8 },
   nameRow:       { flexDirection: 'row', alignItems: 'center', gap: 6 },
   typeLogo:      { width: 20, height: 20 },
+  logoChip:      { backgroundColor: 'rgba(235,235,235,0.92)', borderRadius: 5, padding: 2 },
   backRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1 },
   metaRow:       { flexDirection: 'row', flexWrap: 'wrap', marginTop: 2 },
   centred:       { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 20 },

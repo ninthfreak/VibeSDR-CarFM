@@ -214,6 +214,7 @@ export interface MenuSheetProps {
 const SERVER_LOGOS: Record<string, any> = {
   ubersdr: require('../../assets/logo_ubersdr.png'),
   owrx:    require('../../assets/logo_owrx.png'),
+  kiwi:    require('../../assets/logo_kiwi.png'),
 };
 
 // Accessibility skin (reference body.lsv-a11y) — the single style going
@@ -1483,9 +1484,13 @@ export default function MenuSheet({
                 <Text style={styles.footerAboutHint}>ABOUT</Text>
               </TouchableOpacity>
               <View style={styles.footerServer}>
-                <Image source={SERVER_LOGOS[serverType] ?? SERVER_LOGOS.ubersdr} style={styles.footerLogo} resizeMode="contain" />
+                {/* OWRX's logo is a black antenna that vanishes on the dark UI —
+                    give it a light chip so it reads. */}
+                <View style={serverType === 'owrx' ? styles.footerLogoChip : undefined}>
+                  <Image source={SERVER_LOGOS[serverType] ?? SERVER_LOGOS.ubersdr} style={styles.footerLogo} resizeMode="contain" />
+                </View>
                 <View>
-                  <Text style={styles.footerServerName}>{serverLabel ?? (isOwrx ? 'OpenWebRX' : 'UberSDR')}</Text>
+                  <Text style={styles.footerServerName}>{serverLabel ?? (serverType === 'kiwi' ? 'KiwiSDR' : isOwrx ? 'OpenWebRX' : 'UberSDR')}</Text>
                   {serverVersion ? (
                     <Text style={styles.footerServerVer}>v{serverVersion}</Text>
                   ) : null}
@@ -1547,6 +1552,7 @@ const styles = StyleSheet.create({
   },
   footerServer: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   footerLogo:   { width: 30, height: 30 },
+  footerLogoChip: { backgroundColor: 'rgba(235,235,235,0.92)', borderRadius: 7, padding: 3 },
   footerServerName: {
     color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 13,
     fontWeight: 'bold', letterSpacing: 1, textAlign: 'right',

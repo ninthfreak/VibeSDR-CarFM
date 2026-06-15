@@ -151,6 +151,7 @@ export class KiwiAdapter implements SDRBackend {
     this.wfOpened = false;
     this.connectedAt = Date.now();
     this.gapHist = []; this.lastFrameAt = 0; this.lastLink = -1;
+    this.verMaj = null; this.verMin = null; this.serverInfoSent = false;
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -312,6 +313,8 @@ export class KiwiAdapter implements SDRBackend {
         // 0 = auth OK. Non-zero = bad password / slot/IP limit — surface it.
         if (val !== '0') this.cb.onError('KiwiSDR refused the connection (badp=' + val + ')');
         break;
+      case 'version_maj': this.verMaj = val; this.emitServerInfo(); break;
+      case 'version_min': this.verMin = val; this.emitServerInfo(); break;
       case 'redirect':
         this.dbg('redirect ' + val);   // proxy.kiwisdr.com hop — TODO follow if needed
         break;
@@ -319,6 +322,16 @@ export class KiwiAdapter implements SDRBackend {
   }
 
   /** Fire onConnect/resolve once, on the first real frame from either socket. */
+  // Server version from MSG version_maj/version_min (e.g. 1 + 900 → "1.900").
+  private verMaj: string | null = null;
+  private verMin: string | null = null;
+  private serverInfoSent = false;
+  private emitServerInfo(): void {
+    if (this.serverInfoSent || this.verMaj == null || this.verMin == null) return;
+    this.serverInfoSent = true;
+    this.cb.onServerInfo?.({ name: 'KiwiSDR', version: `${this.verMaj}.${this.verMin}` });
+  }
+
   private maybeConnected(): void {
     if (this._onConnected) { const f = this._onConnected; this._onConnected = null; f(); }
   }
