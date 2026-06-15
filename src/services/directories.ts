@@ -44,7 +44,11 @@ function extractJsArray(text: string, varName: string): any[] | null {
     if (c === '"' || c === "'") { inStr = true; quote = c; continue; }
     if (c === '[') depth++;
     else if (c === ']') { depth--; if (depth === 0) {
-      try { return JSON.parse(text.slice(open, i + 1)); } catch { return null; }
+      // These arrays are generated JS, not strict JSON — the KiwiSDR list ends
+      // every object/array with a trailing comma (`},\n]`), which JSON.parse
+      // rejects. Strip trailing commas before parsing.
+      const slice = text.slice(open, i + 1).replace(/,(\s*[\]}])/g, '$1');
+      try { return JSON.parse(slice); } catch { return null; }
     } }
   }
   return null;
