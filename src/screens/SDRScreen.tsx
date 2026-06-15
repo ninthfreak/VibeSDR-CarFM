@@ -58,6 +58,7 @@ import ControlsBar, { createMeterBus } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import AudioPlayer, { VibePowerModule } from '../components/AudioPlayer';
+import LocalAudioPlayer from '../components/LocalAudioPlayer';
 import FreqModal       from '../components/FreqModal';
 import ModeSelector    from '../components/ModeSelector';
 import StepPicker      from '../components/StepPicker';
@@ -279,6 +280,14 @@ function chatTs(rfc: string): string {
 export default function SDRScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName, password } = route.params;
   useKeepAwake();
+
+  // V4 local hardware: tear down the on-device shim (closes the RTL-SDR + the
+  // localhost server) when leaving the screen.
+  useEffect(() => {
+    if (!route.params.isLocal) return;
+    return () => { (NativeModules as any).VibeLocalSDR?.stopSpectrum?.(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const insets = useSafeAreaInsets();
   const { width: screenW, height: screenH } = Dimensions.get('window');
@@ -3011,7 +3020,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         // v3: the native UberSDR Opus engine only speaks UberSDR. OWRX/Kiwi audio
         // moves into their own native engines in a later phase — until then the
         // OWRX waterfall works but audio is off (don't point the Opus engine at it).
-        baseUrl={tuneLoaded && (route.params.serverType ?? 'ubersdr') === 'ubersdr' ? baseUrl : null}
+        // v4 local hardware (isLocal) uses LocalAudioPlayer below instead.
+        baseUrl={tuneLoaded && !route.params.isLocal && (route.params.serverType ?? 'ubersdr') === 'ubersdr' ? baseUrl : null}
         password={password}
         frequency={status.frequency}
         mode={status.mode}
@@ -3019,6 +3029,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         instanceName={instanceName}
         uuid={sessionUuid}
       />
+      {/* v4 local hardware: audio from the on-device shim's /ws/audio (PCM) */}
+      {route.params.isLocal && route.params.localPort != null ? (
+        <LocalAudioPlayer
+          port={tuneLoaded ? route.params.localPort : null}
+          frequency={status.frequency}
+          mode={status.mode}
+          bandwidthLow={status.bandwidthLow}
+          bandwidthHigh={status.bandwidthHigh}
+          instanceName={instanceName}
+        />
+      ) : null}
     </View>
   );
 }

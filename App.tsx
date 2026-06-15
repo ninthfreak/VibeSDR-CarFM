@@ -23,6 +23,10 @@ export type RootStackParamList = {
     viewMode:        ViewMode;
     serverLongitude?: number | null;
     serverType?:     'ubersdr' | 'kiwi' | 'owrx';   // v3 multi-backend; default ubersdr
+    // V4 local hardware (Android): connect to the on-device shim on localhost.
+    // Audio comes from its /ws/audio (external-PCM engine), not the UberSDR /ws.
+    isLocal?:        boolean;
+    localPort?:      number;
   };
 };
 

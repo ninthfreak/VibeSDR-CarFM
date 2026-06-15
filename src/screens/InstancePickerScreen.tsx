@@ -12,6 +12,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  NativeModules,
 } from 'react-native';
 // safe-area-context SafeAreaView — RN's own is iOS-only, which put the
 // header under the status bar on Android (G35: cog untappable)
@@ -183,6 +184,28 @@ export default function InstancePickerScreen({ navigation }: Props) {
     } catch (e: any) {
       setConnecting(false);
       Alert.alert('Connection Error', e.message ?? 'Could not reach server');
+    }
+  }, [navigation, viewMode]);
+
+  // V4 local hardware (Android only): start the on-device shim (RTL-SDR over
+  // USB OTG) and connect to it on localhost. Audio rides /ws/audio (external
+  // PCM); spectrum/control reuse the UberSDR path against ws://127.0.0.1.
+  const connectLocal = useCallback(async () => {
+    const Local = (NativeModules as any).VibeLocalSDR;
+    if (!Local?.startSpectrum) { Alert.alert('Local Hardware', 'Not available on this build.'); return; }
+    setConnecting(true);
+    try {
+      const res = await Local.startSpectrum({
+        centerFreq: 100_000_000, sampleRate: 2_400_000, fftSize: 1024, fftRate: 20, mode: 'wfm',
+      }) as { port: number; wsBaseUrl: string };
+      setConnecting(false);
+      navigation.navigate('SDR', {
+        baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware', viewMode,
+        serverType: 'ubersdr', isLocal: true, localPort: res.port,
+      });
+    } catch (e: any) {
+      setConnecting(false);
+      Alert.alert('Local Hardware', e?.message ?? 'Could not start local SDR. Is an RTL-SDR plugged in via USB OTG?');
     }
   }, [navigation, viewMode]);
 
@@ -616,6 +639,25 @@ export default function InstancePickerScreen({ navigation }: Props) {
             renderItem={renderItem}
             contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
             ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
+            ListHeaderComponent={
+              Platform.OS === 'android' ? (
+                <View style={{ marginBottom: 4 }}>
+                  <SectionHeader label="LOCAL HARDWARE" fs={fs} F={F} C={C} />
+                  <TouchableOpacity
+                    style={[styles.row, { borderColor: C.amber }]}
+                    onPress={connectLocal}
+                  >
+                    <View style={styles.rowMain}>
+                      <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>📡 Local Hardware</Text>
+                      <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
+                        RTL-SDR plugged into this phone (USB-C OTG)
+                      </Text>
+                    </View>
+                    <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 4 }}>›</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null
+            }
             ListFooterComponent={
               <View style={{ marginTop: 14 }}>
                 <SectionHeader label="DIRECTORIES" fs={fs} F={F} C={C} />

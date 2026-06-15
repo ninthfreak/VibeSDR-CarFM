@@ -24,7 +24,7 @@ import { decodeOwrxFftFrame, OwrxAudioDecoder } from './imaAdpcm';
 
 const Vibe = NativeModules.VibePowerModule as {
   startExternalAudio?: (rate: number) => void;
-  pushExternalPcm?: (b64: string, rate: number) => void;
+  pushExternalPcm?: (b64: string, rate: number, channels: number) => void;
   stopExternalAudio?: () => void;
 } | undefined;
 
@@ -795,7 +795,7 @@ export class OwrxAdapter implements SDRBackend {
       for (let i = 0; i < pcm.length; i++) pcm[i] = dv.getInt16(i * 2, true);
     }
     if (!pcm.length) return;
-    Vibe?.pushExternalPcm?.(bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)), playRate);
+    Vibe?.pushExternalPcm?.(bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)), playRate, 1);
   }
 
   /** DAB speed correction factor (1 = off). e.g. 0.6667 plays a 32 kHz-as-48 kHz
