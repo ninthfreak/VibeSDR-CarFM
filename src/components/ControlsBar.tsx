@@ -221,13 +221,21 @@ function SignalCanvas({ width, height, signal: sigProp = 0, peak: peakProp = 0, 
 // Mobile-signal style: 3 green = solid link, 2 yellow = jitter/some drops,
 // 1 red = stalling/reconnecting, all dim = disconnected.
 function LinkBars({ q }: { q: 0 | 1 | 2 | 3 }) {
+  // Disconnected (q=0) → a clear red ✕ rather than ambiguous dim bars.
+  if (q === 0) {
+    return (
+      <View style={pm.linkWrap}>
+        <Text style={{ color: '#e04040', fontSize: 14, fontWeight: '900', lineHeight: 14 }}>✕</Text>
+      </View>
+    );
+  }
   const litColor = q === 3 ? '#33cc44' : q === 2 ? '#e0b020' : '#e04040';
   return (
     <View style={pm.linkWrap}>
       {[0, 1, 2].map(i => (
         <View key={i} style={[pm.linkBar, {
           height: 4 + i * 3,
-          backgroundColor: q > 0 && i < q ? litColor : 'rgba(255,255,255,0.18)',
+          backgroundColor: i < q ? litColor : 'rgba(255,255,255,0.18)',
         }]} />
       ))}
     </View>

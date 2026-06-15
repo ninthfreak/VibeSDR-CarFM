@@ -21,6 +21,7 @@ import {
   Alert,
   AppState,
   BackHandler,
+  ActivityIndicator,
   Dimensions,
   NativeEventEmitter,
   NativeModules,
@@ -320,6 +321,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [connected, setConnected] = useState(false);
   const [serverLost, setServerLost] = useState(false);   // OWRX server crashed/restarted
   const [serverBusy, setServerBusy] = useState(false);   // Kiwi receiver full (too_busy)
+  const [connLost,   setConnLost]   = useState(false);   // UberSDR link down — auto-reconnecting
   const [profiles, setProfiles]   = useState<ProfileInfo[]>([]);  // OWRX only
   const [activeProfileId, setActiveProfileId] = useState<string | undefined>(undefined);
   const [sdrUsage, setSdrUsage] = useState<Record<string, { name: string; inUse: boolean; activeProfileId?: string }>>({});  // OWRX: per-SDR usage
@@ -1348,7 +1350,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     destroyed.current = false;
     const c = createBackend(route.params.serverType ?? 'ubersdr', baseUrl, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
-      onConnect:    () => { if (!destroyed.current) { setConnected(true); setServerLost(false); setServerBusy(false); } },
+      onConnect:    () => { if (!destroyed.current) { setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); } },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
       onServerLost: () => {
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio
@@ -1367,6 +1369,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         const b = meterBus.current;
         b.emit({ ...b.value, link: q });
+        // UberSDR auto-reconnects silently — without a cue the app just looks
+        // frozen when the link drops (e.g. the instance reboots). Surface a
+        // 'connection lost / reconnecting' popup. OWRX/Kiwi use the serverLost
+        // card instead (they don't auto-reconnect).
+        if ((route.params.serverType ?? 'ubersdr') === 'ubersdr') setConnLost(q === 0);
       },
       onStatus:     (s) => { if (!destroyed.current) setStatus(s); },
       onSMeter:     (dbm) => { if (!destroyed.current) owrxSmeterRef.current = dbm; },
@@ -2644,6 +2651,30 @@ export default function SDRScreen({ route, navigation }: Props) {
               <TouchableOpacity style={styles.serverLostBtn}
                 onPress={() => { setServerBusy(false); fullReconnect(); }} activeOpacity={0.85}>
                 <Text style={styles.serverLostBtnText}>RETRY</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Connection to an UberSDR instance dropped (e.g. it rebooted). It auto-
+          reconnects, but show a clear popup so the app doesn't just look frozen. */}
+      {connLost && !dataSaverOff && !serverLost && !serverBusy && (
+        <View style={styles.serverLostWrap} pointerEvents="box-none">
+          <View style={styles.serverLostCard}>
+            <Text style={styles.serverLostTitle}>Connection lost</Text>
+            <Text style={styles.serverLostBody}>
+              Lost connection to {instanceName || 'the instance'} — trying to reconnect…
+            </Text>
+            <ActivityIndicator color="#ffb84d" style={{ marginBottom: 14 }} />
+            <View style={styles.serverLostBtnRow}>
+              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
+                onPress={() => navigation.goBack()} activeOpacity={0.85}>
+                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.serverLostBtn}
+                onPress={() => { setConnLost(false); fullReconnect(); }} activeOpacity={0.85}>
+                <Text style={styles.serverLostBtnText}>RECONNECT</Text>
               </TouchableOpacity>
             </View>
           </View>
