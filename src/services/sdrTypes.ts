@@ -54,8 +54,11 @@ export async function detectServerType(url: string): Promise<ServerType> {
   try {
     const r = await fetch(base + '/', { signal: ctrl.signal });
     const body = (await r.text()).toLowerCase();
+    // KiwiSDR's web UI is itself built ON OpenWebRX (its JS files literally
+    // contain "openwebrx"), so Kiwi MUST be checked FIRST or every Kiwi mis-
+    // detects as OWRX. Kiwi-specific markers: "kiwisdr", "/kiwi/", "kiwi_util".
+    if (/kiwisdr|kiwi sdr|\/kiwi\/|kiwi_util|owrx_ws_open/.test(body)) return 'kiwi';
     if (body.includes('openwebrx')) return 'owrx';
-    if (body.includes('kiwisdr') || body.includes('kiwi sdr')) return 'kiwi';
   } catch {
     // unreachable / CORS / timeout — fall through to ubersdr default
   } finally {
