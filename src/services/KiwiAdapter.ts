@@ -135,58 +135,38 @@ export class KiwiAdapter implements SDRBackend {
     if (mode) { this.mode = mode; const p = KIWI_MODE[mode]; this.bwLow = p.lo; this.bwHigh = p.hi; }
     this.started = true;
     this.viewInit = false;
+    this.wfOpened = false;
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
       const done = () => { if (!settled) { settled = true; resolve(); } };
       const fail = (e: any) => { if (!settled) { settled = true; reject(e); } };
 
+      // Open the SND socket FIRST. The reference client only opens W/F *after*
+      // the SND auth succeeds (kiwi.js: "repeat the auth for the second
+      // websocket … we only get here if the first auth has worked"). Opening
+      // both at once makes the Kiwi drop the SND connection after a few seconds.
       try {
         this.sndWs = new WebSocket(this.url('SND'));
-        this.wfWs  = new WebSocket(this.url('W/F'));
       } catch (e) { fail(e); return; }
-
       this.sndWs.binaryType = 'arraybuffer';
-      this.wfWs.binaryType  = 'arraybuffer';
 
-      // ── SND socket ──
       this.sndWs.onopen = () => {
         this.dbg('SND open');
         this.sndSend(`SET auth t=kiwi p=${this.password}`);
         this.sndSend('SERVER DE CLIENT vibesdr SND');
-        // The reference client sends the RX params (which START the audio
-        // stream) in its init right after auth — NOT gated on any later MSG.
-        // A short tick lets the server process auth first.
+        // RX params (which START the audio stream) — a short tick lets the
+        // server process auth first; also re-asserted on the audio_rate MSG.
         setTimeout(() => { if (this.started) this.sendRxParams(); }, 150);
       };
       this.sndWs.onmessage = (e) => {
         try {
-          if (typeof e.data === 'string') this.onText(e.data, 'SND');
+          if (typeof e.data === 'string') { this.onText(e.data, 'SND'); this.openWf(); }
           else this.onSndBinary(new Uint8Array(e.data as ArrayBuffer));
         } catch (err: any) { this.dbg('SND msg err: ' + (err?.message ?? err)); }
       };
       this.sndWs.onerror = () => { this.dbg('SND error'); fail(new Error('KiwiSDR SND socket error')); };
       this.sndWs.onclose = () => { this.dbg('SND close'); this.onSocketDrop(); fail(new Error('KiwiSDR SND closed')); };
-
-      // ── W/F socket ──
-      this.wfWs.onopen = () => {
-        this.dbg('WF open');
-        this.wfSend(`SET auth t=kiwi p=${this.password}`);
-        this.wfSend('SERVER DE CLIENT vibesdr W/F');
-        this.wfSend('SET send_dB=1');
-        this.wfSend('SET wf_comp=1');
-        this.wfSend('SET wf_speed=4');
-        this.wfSend('SET maxdb=-10 mindb=-110');
-        this.sendZoom();              // initial full-span view
-      };
-      this.wfWs.onmessage = (e) => {
-        try {
-          if (typeof e.data === 'string') this.onText(e.data, 'W/F');
-          else this.onWfBinary(new Uint8Array(e.data as ArrayBuffer));
-        } catch (err: any) { this.dbg('WF msg err: ' + (err?.message ?? err)); }
-      };
-      this.wfWs.onerror = () => { this.dbg('WF error'); };
-      this.wfWs.onclose = () => { this.dbg('WF close'); this.onSocketDrop(); };
 
       // Keepalive on BOTH sockets (Kiwi kicks idle clients).
       this.keepalive = setInterval(() => {
@@ -202,6 +182,35 @@ export class KiwiAdapter implements SDRBackend {
   }
 
   private _onConnected: (() => void) | null = null;
+  private wfOpened = false;
+
+  /** Open the W/F socket AFTER the SND auth (first SND MSG ⇒ auth processed),
+   *  matching the reference client's two-step handshake. */
+  private openWf(): void {
+    if (this.wfOpened || !this.started) return;
+    this.wfOpened = true;
+    try { this.wfWs = new WebSocket(this.url('W/F')); }
+    catch (e) { this.dbg('WF open failed: ' + e); return; }
+    this.wfWs.binaryType = 'arraybuffer';
+    this.wfWs.onopen = () => {
+      this.dbg('WF open');
+      this.wfSend(`SET auth t=kiwi p=${this.password}`);
+      this.wfSend('SERVER DE CLIENT vibesdr W/F');
+      this.wfSend('SET send_dB=1');
+      this.wfSend('SET wf_comp=1');
+      this.wfSend('SET wf_speed=4');
+      this.wfSend('SET maxdb=-10 mindb=-110');
+      this.sendZoom();              // initial full-span view
+    };
+    this.wfWs.onmessage = (e) => {
+      try {
+        if (typeof e.data === 'string') this.onText(e.data, 'W/F');
+        else this.onWfBinary(new Uint8Array(e.data as ArrayBuffer));
+      } catch (err: any) { this.dbg('WF msg err: ' + (err?.message ?? err)); }
+    };
+    this.wfWs.onerror = () => { this.dbg('WF error'); };
+    this.wfWs.onclose = () => { this.dbg('WF close'); this.onSocketDrop(); };
+  }
 
   // ── text (MSG) ───────────────────────────────────────────────────────────
   private onText(data: string, stream: 'SND' | 'W/F'): void {

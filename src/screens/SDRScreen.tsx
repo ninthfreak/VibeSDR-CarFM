@@ -2608,11 +2608,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>{lostLabel} server stopped responding</Text>
-            <Text style={styles.serverLostBody}>The receiver dropped the connection — {lostLabel} servers restart from time to time. Please wait a minute, then reconnect.</Text>
-            <TouchableOpacity style={styles.serverLostBtn}
-              onPress={() => { setServerLost(false); fullReconnect(); }} activeOpacity={0.85}>
-              <Text style={styles.serverLostBtnText}>RECONNECT</Text>
-            </TouchableOpacity>
+            <Text style={styles.serverLostBody}>The receiver dropped the connection — {lostLabel} servers restart from time to time. Please wait a minute, then reconnect — or pick another from the list.</Text>
+            <View style={styles.serverLostBtnRow}>
+              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
+                onPress={() => navigation.goBack()} activeOpacity={0.85}>
+                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.serverLostBtn}
+                onPress={() => { setServerLost(false); fullReconnect(); }} activeOpacity={0.85}>
+                <Text style={styles.serverLostBtnText}>RECONNECT</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
         );
@@ -2958,13 +2964,20 @@ const styles = StyleSheet.create({
     color: 'rgba(255,235,210,0.9)', fontFamily: 'Atkinson Hyperlegible',
     fontSize: 13, lineHeight: 19, textAlign: 'center', marginBottom: 16,
   },
+  serverLostBtnRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+  },
   serverLostBtn: {
-    backgroundColor: '#ffb84d', borderRadius: 8, paddingHorizontal: 26, paddingVertical: 10,
+    backgroundColor: '#ffb84d', borderRadius: 8, paddingHorizontal: 22, paddingVertical: 10,
   },
   serverLostBtnText: {
     color: '#1a1206', fontFamily: 'Atkinson Hyperlegible', fontSize: 14,
     fontWeight: '700', letterSpacing: 0.5,
   },
+  serverLostBtnAlt: {
+    backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(255,184,77,0.6)',
+  },
+  serverLostBtnAltText: { color: '#ffb84d' },
   restoreBtn: {
     position: 'absolute', alignSelf: 'center', zIndex: 60,
     backgroundColor: 'rgba(10,10,10,0.55)', borderWidth: 1,
