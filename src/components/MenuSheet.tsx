@@ -198,8 +198,8 @@ export interface MenuSheetProps {
   onSpecPeakScale?:   (v: number) => void;
   peakHold?:          boolean;
   onPeakHold?:        (v: boolean) => void;
-  frameRate?:         'native' | '20fps' | '30fps' | '60fps';
-  onFrameRate?:       (v: 'native' | '20fps' | '30fps' | '60fps') => void;
+  frameRate?:         'native' | '20fps' | '30fps';
+  onFrameRate?:       (v: 'native' | '20fps' | '30fps') => void;
   smoothTune?:        boolean;
   onSmoothTune?:      (v: boolean) => void;
   idleSlow?:          boolean;
@@ -1151,7 +1151,6 @@ export default function MenuSheet({
                   <Btn label="NATIVE" active={frameRate==='native'} onPress={() => onFrameRate?.('native')} />
                   <Btn label="20fps"  active={frameRate==='20fps'}  onPress={() => onFrameRate?.('20fps')} />
                   <Btn label="30fps"  active={frameRate==='30fps'}  onPress={() => onFrameRate?.('30fps')} />
-                  <Btn label="60fps"  active={frameRate==='60fps'}  onPress={() => onFrameRate?.('60fps')} />
                 </BtnRow>
 
                 {/* Power saving — SMOOTH TUNE: 120Hz only while interacting,
