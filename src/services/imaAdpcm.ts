@@ -111,14 +111,16 @@ export function createKiwiAudioDecoder(): ImaAdpcmDecoder {
 
 /**
  * Kiwi waterfall frame → u8 bins (dBm = bin − 255 + wf_cal happens upstream).
- * Fresh state per frame; the last 10 samples are a decompression tail.
+ * Fresh state per frame; the FIRST 10 samples are the ADPCM settling pad
+ * (reference: `decomp_data.subarray(ADPCM_PAD)` in openwebrx.js waterfall_recv).
  */
 export function decodeKiwiWaterfallFrame(data: Uint8Array): Uint8Array {
   const dec = new ImaAdpcmDecoder('kiwi', 0, 255);
   const all = dec.decode(data);
-  const n = Math.max(all.length - 10, 0);
+  const PAD = 10;
+  const n = Math.max(all.length - PAD, 0);
   const bins = new Uint8Array(n);
-  for (let i = 0; i < n; i++) bins[i] = all[i];
+  for (let i = 0; i < n; i++) bins[i] = all[i + PAD];
   return bins;
 }
 

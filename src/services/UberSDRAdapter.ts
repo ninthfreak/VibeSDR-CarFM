@@ -8,6 +8,7 @@
 import { UberSDRClient, type SDRMode, type SDRStatus } from './UberSDRClient';
 import type { SDRBackend, BackendCallbacks, BackendCapabilities, BackendKind } from './SDRBackend';
 import { OwrxAdapter } from './OwrxAdapter';
+import { KiwiAdapter } from './KiwiAdapter';
 
 const UBERSDR_CAPS: BackendCapabilities = {
   profiles:       false,
@@ -62,6 +63,7 @@ export function createBackend(
   switch (kind) {
     case 'ubersdr': return new UberSDRAdapter(baseUrl, uuid, callbacks, password);
     case 'owrx':    return new OwrxAdapter(baseUrl, uuid, callbacks);
-    default: throw new Error(`backend '${kind}' not implemented yet (v3 phase 1: kiwi)`);
+    case 'kiwi':    return new KiwiAdapter(baseUrl, uuid, callbacks, password);
+    default: throw new Error(`backend '${kind}' not implemented`);
   }
 }
