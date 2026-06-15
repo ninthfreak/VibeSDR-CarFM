@@ -42,8 +42,9 @@ export async function checkConnection(_url: string, _password?: string): Promise
 export type ServerType = 'ubersdr' | 'kiwi' | 'owrx';
 
 /** Probe a manually-entered host to pick the backend (v3). Fetches the landing
- *  page and sniffs for OpenWebRX / KiwiSDR markers; defaults to ubersdr. */
-export async function detectServerType(url: string): Promise<ServerType> {
+ *  page and sniffs markers. Returns null when the host can't be reached (the
+ *  caller keeps any previously-known type rather than guessing). */
+export async function detectServerType(url: string): Promise<ServerType | null> {
   const base = url.trim().replace(/\/+$/, '')
     .replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
   // Manual AbortController + setTimeout — AbortSignal.timeout() isn't reliably
@@ -54,15 +55,17 @@ export async function detectServerType(url: string): Promise<ServerType> {
   try {
     const r = await fetch(base + '/', { signal: ctrl.signal });
     const body = (await r.text()).toLowerCase();
-    // KiwiSDR's web UI is itself built ON OpenWebRX (its JS files literally
-    // contain "openwebrx"), so Kiwi MUST be checked FIRST or every Kiwi mis-
-    // detects as OWRX. Kiwi-specific markers: "kiwisdr", "/kiwi/", "kiwi_util".
+    // Order matters. UberSDR is checked FIRST and positively: it can enable a
+    // KiwiSDR-emulation feature, so its page contains Kiwi markers — without this
+    // an UberSDR-with-kiwi-emulation mis-detects as Kiwi. Then Kiwi (whose web UI
+    // is built ON OpenWebRX, so it also contains "openwebrx" — must beat OWRX).
+    if (body.includes('ubersdr')) return 'ubersdr';
     if (/kiwisdr|kiwi sdr|\/kiwi\/|kiwi_util|owrx_ws_open/.test(body)) return 'kiwi';
     if (body.includes('openwebrx')) return 'owrx';
+    return 'ubersdr';            // reachable but unidentifiable → assume ubersdr
   } catch {
-    // unreachable / CORS / timeout — fall through to ubersdr default
+    return null;                // couldn't reach — caller keeps any known type
   } finally {
     clearTimeout(timer);
   }
-  return 'ubersdr';
 }

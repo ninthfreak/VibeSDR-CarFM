@@ -189,14 +189,12 @@ export default function InstancePickerScreen({ navigation }: Props) {
   // Connect a saved favourite: use its stored backend type, or detect it once
   // (and remember it) so an OpenWebRX/Kiwi favourite doesn't reconnect as UberSDR.
   const connectFav = useCallback(async (fav: Favourite) => {
-    // Re-detect on every connect so a favourite first saved while detection was
-    // failing (e.g. cleartext blocked) self-heals instead of being stuck as
-    // ubersdr. But detection returns ubersdr on ANY failure (timeout/unreachable),
-    // so don't downgrade a previously-known OWRX/Kiwi favourite on a transient
-    // miss — keep the stored type in that case.
+    // Re-detect on every connect. A SUCCESSFUL detection is authoritative and
+    // self-heals a wrong stored type (e.g. an UberSDR-with-kiwi-emulation that a
+    // previous build mis-saved as kiwi). Detection returns null only when the
+    // host can't be reached — then keep the stored type rather than guessing.
     const detected = await detectServerType(fav.url);
-    const type = (detected === 'ubersdr' && fav.serverType && fav.serverType !== 'ubersdr')
-      ? fav.serverType : detected;
+    const type = detected ?? fav.serverType ?? 'ubersdr';
     if (type !== fav.serverType) setFavouriteServerType(fav.url, type).catch(() => {});
     connect(fav.url, fav.name, undefined, null, type);
   }, [connect]);
@@ -213,7 +211,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
     // Info.plist/app.json) — most KiwiSDR/OpenWebRX receivers are hobbyist HTTP
     // boxes with no TLS, so we don't block them (same as Echo SDR et al.).
     // v3: sniff the backend type (OpenWebRX / KiwiSDR / UberSDR) for manual adds.
-    const type = await detectServerType(url);
+    const type = (await detectServerType(url)) ?? 'ubersdr';
     connect(url, url, undefined, null, type);
   }, [customUrl, connect]);
 

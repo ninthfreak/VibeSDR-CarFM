@@ -209,6 +209,7 @@ export class OwrxAdapter implements SDRBackend {
   private lastLink: -1 | 0 | 1 | 2 | 3 = -1;
 
   private started = false;
+  private specPaused = false;   // background/lock: skip FFT processing, keep audio
   private dspStarted = false;     // dspcontrol start re-asserted after demod (web-client order)
   private audioStarted = false;
   private audioDec = new OwrxAudioDecoder();    // type-2 (output_rate, 12k)
@@ -801,6 +802,10 @@ export class OwrxAdapter implements SDRBackend {
 
   private onFft(payload: Uint8Array): void {
     if (!this.cfg) return;
+    // Backgrounded/locked: skip the per-frame FFT ADPCM decode + resample + emit
+    // entirely — it's the bulk of OWRX's CPU and useless with the screen off.
+    // Audio frames (type 2/4) still process so background audio keeps playing.
+    if (this.specPaused) return;
     let row: Float32Array;
     if (this.cfg.fftCompression === 'adpcm') {
       row = decodeOwrxFftFrame(payload);
@@ -1109,8 +1114,11 @@ export class OwrxAdapter implements SDRBackend {
 
   // OWRX pushes one row per FFT; no client rate control / pause needed.
   setRate(_divisor: number): void {}
-  pauseSpectrum(): void {}
-  resumeSpectrum(): void {}
+  pauseSpectrum(): void { this.specPaused = true; }
+  resumeSpectrum(): void {
+    this.specPaused = false;
+    if (this.lastRow) this.emitSlice(this.lastRow);   // repaint immediately, no wait for next frame
+  }
 
   // ── profiles ─────────────────────────────────────────────────────────────
   getProfiles(): ProfileInfo[] { return this.profiles; }
