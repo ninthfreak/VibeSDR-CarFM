@@ -161,8 +161,9 @@ export class KiwiAdapter implements SDRBackend {
       };
       this.sndWs.onmessage = (e) => {
         try {
-          if (typeof e.data === 'string') { this.onText(e.data, 'SND'); this.openWf(); }
-          else this.onSndBinary(new Uint8Array(e.data as ArrayBuffer));
+          if (typeof e.data === 'string') this.onText(e.data, 'SND');
+          else this.onBinaryFrame(new Uint8Array(e.data as ArrayBuffer), 'SND');
+          this.openWf();
         } catch (err: any) { this.dbg('SND msg err: ' + (err?.message ?? err)); }
       };
       this.sndWs.onerror = () => { this.dbg('SND error'); fail(new Error('KiwiSDR SND socket error')); };
@@ -209,11 +210,30 @@ export class KiwiAdapter implements SDRBackend {
     this.wfWs.onmessage = (e) => {
       try {
         if (typeof e.data === 'string') this.onText(e.data, 'W/F');
-        else this.onWfBinary(new Uint8Array(e.data as ArrayBuffer));
+        else this.onBinaryFrame(new Uint8Array(e.data as ArrayBuffer), 'W/F');
       } catch (err: any) { this.dbg('WF msg err: ' + (err?.message ?? err)); }
     };
     this.wfWs.onerror = () => { this.dbg('WF error'); };
     this.wfWs.onclose = (ev: any) => { this.dbg('WF close code=' + ev?.code + ' reason=' + ev?.reason); this.onSocketDrop(); };
+  }
+
+  // ── binary frame dispatch ───────────────────────────────────────────────
+  // KiwiSDR sends EVERYTHING as binary WebSocket frames, each prefixed with a
+  // 3-char ASCII tag ('MSG'/'SND'/'W/F'/'EXT'). MSG carries the text control
+  // plane (audio_rate, sample_rate, badp, too_busy …) — it is NOT a text frame.
+  private onBinaryFrame(buf: Uint8Array, stream: 'SND' | 'W/F'): void {
+    if (buf.length < 3) return;
+    const tag = String.fromCharCode(buf[0], buf[1], buf[2]);
+    if (tag === 'MSG') {
+      let s = '';
+      for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);  // latin1
+      this.onText(s, stream);
+    } else if (tag === 'SND') {
+      this.onSndBinary(buf);
+    } else if (tag === 'W/F') {
+      this.onWfBinary(buf);
+    }
+    // other tags (EXT/CLI) ignored
   }
 
   // ── text (MSG) ───────────────────────────────────────────────────────────
@@ -261,8 +281,16 @@ export class KiwiAdapter implements SDRBackend {
         if (Number.isFinite(idx) && Number.isFinite(prev)) this.audioDec.setState(idx, prev);
         break;
       }
+      case 'too_busy':
+        // All receiver channels in use. The server closes right after — mark
+        // not-started so the close doesn't also fire the generic serverLost.
+        this.dbg('too_busy=' + val);
+        this.started = false;
+        this.cb.onServerBusy?.();
+        break;
       case 'badp':
-        this.cb.onError('KiwiSDR auth/slot error (badp=' + val + ')');
+        // 0 = auth OK. Non-zero = bad password / slot/IP limit — surface it.
+        if (val !== '0') this.cb.onError('KiwiSDR refused the connection (badp=' + val + ')');
         break;
       case 'redirect':
         this.dbg('redirect ' + val);   // proxy.kiwisdr.com hop — TODO follow if needed

@@ -158,6 +158,9 @@ export interface BackendCallbacks extends SDRCallbacks {
    *  as opposed to a user pause/navigation. The UI keeps the session alive and
    *  shows a "server stopped responding" prompt instead of silently dropping. */
   onServerLost?: () => void;
+  /** Kiwi: the receiver is full (all channels in use) — `MSG too_busy`. Distinct
+   *  from onServerLost so the UI can say "server full, try another". */
+  onServerBusy?: () => void;
   /** OWRX: server bookmarks + dial-frequency markers arrive over the WS (no REST
    *  endpoint like UberSDR). Feeds the VTS station readout + the search bar. */
   onBookmarks?: (list: { name: string; frequency: number; mode?: string; repeater?: boolean }[]) => void;

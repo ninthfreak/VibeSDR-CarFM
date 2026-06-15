@@ -319,6 +319,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const [connected, setConnected] = useState(false);
   const [serverLost, setServerLost] = useState(false);   // OWRX server crashed/restarted
+  const [serverBusy, setServerBusy] = useState(false);   // Kiwi receiver full (too_busy)
   const [profiles, setProfiles]   = useState<ProfileInfo[]>([]);  // OWRX only
   const [activeProfileId, setActiveProfileId] = useState<string | undefined>(undefined);
   const [sdrUsage, setSdrUsage] = useState<Record<string, { name: string; inUse: boolean; activeProfileId?: string }>>({});  // OWRX: per-SDR usage
@@ -1347,7 +1348,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     destroyed.current = false;
     const c = createBackend(route.params.serverType ?? 'ubersdr', baseUrl, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
-      onConnect:    () => { if (!destroyed.current) { setConnected(true); setServerLost(false); } },
+      onConnect:    () => { if (!destroyed.current) { setConnected(true); setServerLost(false); setServerBusy(false); } },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
       onServerLost: () => {
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio
@@ -1355,6 +1356,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         // the server is usually still restarting).
         if (destroyed.current) return;
         setServerLost(true);
+        (VibePowerModule as any)?.stopExternalAudio?.();
+      },
+      onServerBusy: () => {
+        if (destroyed.current) return;
+        setServerBusy(true);
         (VibePowerModule as any)?.stopExternalAudio?.();
       },
       onLink: (q) => {
@@ -2623,6 +2629,26 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
         );
       })()}
+
+      {/* Kiwi receiver full (too_busy) — all channels in use. */}
+      {serverBusy && (
+        <View style={styles.serverLostWrap} pointerEvents="box-none">
+          <View style={styles.serverLostCard}>
+            <Text style={styles.serverLostTitle}>Receiver full</Text>
+            <Text style={styles.serverLostBody}>All channels on this KiwiSDR are in use right now. Public Kiwis are often busy — pick another receiver, or try again shortly.</Text>
+            <View style={styles.serverLostBtnRow}>
+              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
+                onPress={() => navigation.goBack()} activeOpacity={0.85}>
+                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.serverLostBtn}
+                onPress={() => { setServerBusy(false); fullReconnect(); }} activeOpacity={0.85}>
+                <Text style={styles.serverLostBtnText}>RETRY</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
 
       {/* Paused → disconnected — tap does a full from-scratch reconnect */}
       {dataSaverOff && !reconnectFailedUi && (
