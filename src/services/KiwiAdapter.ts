@@ -142,8 +142,21 @@ export class KiwiAdapter implements SDRBackend {
     return `${this.wsBase}/ws/kiwi/${this.ts}/${stream}`;
   }
 
+  /** Receiver location from the Kiwi /status text endpoint (`gps=(lat, lon)`)
+   *  → ITU region, for custom Kiwi hosts not carrying a directory longitude. */
+  private async fetchReceiverLon(): Promise<void> {
+    try {
+      const http = this.wsBase.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+      const r = await fetch(http + '/status', { signal: AbortSignal.timeout(8000) });
+      if (!r.ok) return;
+      const m = /gps=\(([-\d.]+),\s*([-\d.]+)\)/.exec(await r.text());
+      if (m) { const lon = Number(m[2]); if (Number.isFinite(lon)) this.cb.onReceiverLon?.(lon); }
+    } catch {}
+  }
+
   // ── connect ────────────────────────────────────────────────────────────────
   connect(frequency?: number, mode?: SDRMode): Promise<void> {
+    this.fetchReceiverLon();
     if (frequency) this.freq = frequency;
     if (mode) { this.mode = mode; const p = KIWI_MODE[mode]; this.bwLow = p.lo; this.bwHigh = p.hi; }
     this.started = true;

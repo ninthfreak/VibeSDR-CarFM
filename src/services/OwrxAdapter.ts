@@ -210,6 +210,7 @@ export class OwrxAdapter implements SDRBackend {
 
   private started = false;
   private specPaused = false;   // background/lock: skip FFT processing, keep audio
+  private lonSent = false;      // receiver longitude emitted once
   private dspStarted = false;     // dspcontrol start re-asserted after demod (web-client order)
   private audioStarted = false;
   private audioDec = new OwrxAudioDecoder();    // type-2 (output_rate, 12k)
@@ -241,6 +242,9 @@ export class OwrxAdapter implements SDRBackend {
       const res = await fetch(this.httpBase + '/status.json');
       if (!res.ok) return;
       const j: any = await res.json();
+      // Receiver location → ITU region (MW 9/10 kHz). Emit once.
+      const lon = j?.receiver?.gps?.lon;
+      if (typeof lon === 'number' && !this.lonSent) { this.lonSent = true; this.cb.onReceiverLon?.(lon); }
       const sdrs: any[] = Array.isArray(j?.sdrs) ? j.sdrs : [];
 
       // Group the WS profiles by sdrId (the id prefix).

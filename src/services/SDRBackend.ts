@@ -161,6 +161,10 @@ export interface BackendCallbacks extends SDRCallbacks {
   /** Kiwi: the receiver is full (all channels in use) — `MSG too_busy`. Distinct
    *  from onServerLost so the UI can say "server full, try another". */
   onServerBusy?: () => void;
+  /** The receiver's own longitude, if the server advertises it (OWRX /status.json
+   *  receiver.gps.lon). Drives the ITU region (MW 9/10 kHz) for custom/OWRX hosts
+   *  that don't come through the directory with a known longitude. */
+  onReceiverLon?: (lon: number) => void;
   /** OWRX: server bookmarks + dial-frequency markers arrive over the WS (no REST
    *  endpoint like UberSDR). Feeds the VTS station readout + the search bar. */
   onBookmarks?: (list: { name: string; frequency: number; mode?: string; repeater?: boolean }[]) => void;

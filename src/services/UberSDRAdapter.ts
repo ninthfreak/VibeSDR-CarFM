@@ -24,15 +24,31 @@ export class UberSDRAdapter implements SDRBackend {
   readonly kind: BackendKind = 'ubersdr';
   readonly caps = UBERSDR_CAPS;
   private client: UberSDRClient;
+  private baseUrl: string;
+  private cb: BackendCallbacks;
 
   constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks, password?: string) {
     // onSMeter/onProfiles unused: S-meter is spectrum-derived, no profiles.
     this.client = new UberSDRClient(baseUrl, uuid, callbacks, password);
+    this.baseUrl = baseUrl;
+    this.cb = callbacks;
   }
 
   get uuid(): string { return this.client.uuid; }
 
-  connect(frequency?: number, mode?: SDRMode) { return this.client.connect(frequency, mode); }
+  /** Receiver location from /status.json (same shape as OWRX: receiver.gps.lon)
+   *  → ITU region, for custom/default UberSDR hosts not carrying a directory lon. */
+  private async fetchReceiverLon(): Promise<void> {
+    try {
+      const http = this.baseUrl.trim().replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://').replace(/\/+$/, '');
+      const r = await fetch(http + '/status.json', { signal: AbortSignal.timeout(8000) });
+      if (!r.ok) return;
+      const lon = (await r.json())?.receiver?.gps?.lon;
+      if (typeof lon === 'number') this.cb.onReceiverLon?.(lon);
+    } catch {}
+  }
+
+  connect(frequency?: number, mode?: SDRMode) { this.fetchReceiverLon(); return this.client.connect(frequency, mode); }
   destroy()                                   { this.client.destroy(); }
 
   tune(frequency: number, mode?: SDRMode)          { this.client.tune(frequency, mode); }
