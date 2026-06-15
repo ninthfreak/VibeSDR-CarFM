@@ -26,7 +26,7 @@ import { ImaAdpcmDecoder, decodeKiwiWaterfallFrame } from './imaAdpcm';
 
 const Vibe = NativeModules.VibePowerModule as {
   startExternalAudio?: (rate: number) => void;
-  pushExternalPcm?: (b64: string, rate: number) => void;
+  pushExternalPcm?: (b64: string, rate: number, channels: number) => void;
   stopExternalAudio?: () => void;
 } | undefined;
 
@@ -424,7 +424,7 @@ export class KiwiAdapter implements SDRBackend {
 
     const rate = Math.round(this.trueAudioRate);
     if (!this.audioStarted) { Vibe?.startExternalAudio?.(rate); this.audioStarted = true; }
-    Vibe?.pushExternalPcm?.(bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)), rate);
+    Vibe?.pushExternalPcm?.(bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)), rate, 1);
   }
 
   // ── waterfall (W/F binary) ─────────────────────────────────────────────────

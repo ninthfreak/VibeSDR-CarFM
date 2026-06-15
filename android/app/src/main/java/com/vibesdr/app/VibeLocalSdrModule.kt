@@ -160,9 +160,10 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         val gain       = if (opts.hasKey("gainTenthDb")) opts.getInt("gainTenthDb") else -1 // auto
         val fftSize    = if (opts.hasKey("fftSize")) opts.getInt("fftSize") else 1024
         val fftRate    = if (opts.hasKey("fftRate")) opts.getDouble("fftRate") else 20.0
+        val mode       = if (opts.hasKey("mode")) opts.getString("mode") ?: "nfm" else "nfm"
 
         val port = VibeLocalSDR.startSpectrum(
-            fd, dev.vendorId, dev.productId, centerFreq, sampleRate, gain, fftSize, fftRate)
+            fd, dev.vendorId, dev.productId, centerFreq, sampleRate, gain, fftSize, fftRate, mode)
         if (port <= 0) {
             conn.close(); sessionConn = null
             promise.reject("start_failed", "native startSpectrum failed (see logcat)")

@@ -47,10 +47,10 @@ object VibeLocalSDR {
     fun startSpectrum(
         fd: Int, vid: Int, pid: Int,
         centerFreq: Double, sampleRate: Double, gainTenthDb: Int,
-        fftSize: Int, fftRate: Double
+        fftSize: Int, fftRate: Double, mode: String
     ): Int {
         ensureLoaded()
-        return nativeStartSpectrum(fd, vid, pid, centerFreq, sampleRate, gainTenthDb, fftSize, fftRate)
+        return nativeStartSpectrum(fd, vid, pid, centerFreq, sampleRate, gainTenthDb, fftSize, fftRate, mode)
     }
 
     fun stopSpectrum() {
@@ -63,7 +63,7 @@ object VibeLocalSDR {
     private external fun nativeStartSpectrum(
         fd: Int, vid: Int, pid: Int,
         centerFreq: Double, sampleRate: Double, gainTenthDb: Int,
-        fftSize: Int, fftRate: Double
+        fftSize: Int, fftRate: Double, mode: String
     ): Int
     private external fun nativeStopSpectrum()
 }

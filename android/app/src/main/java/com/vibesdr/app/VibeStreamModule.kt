@@ -72,8 +72,8 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun pushExternalPcm(base64: String, sampleRate: Double) {
-        VibeStreamService.instance?.pushExternalPcm(base64, sampleRate.toInt())
+    fun pushExternalPcm(base64: String, sampleRate: Double, channels: Double) {
+        VibeStreamService.instance?.pushExternalPcm(base64, sampleRate.toInt(), channels.toInt())
     }
 
     @ReactMethod

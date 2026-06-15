@@ -72,10 +72,13 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeStartSpectrum(
         JNIEnv* env, jobject /*thiz*/, jint fd, jint vid, jint pid,
         jdouble centerFreq, jdouble sampleRate, jint gainTenthDb,
-        jint fftSize, jdouble fftRate) {
+        jint fftSize, jdouble fftRate, jstring mode) {
+    const char* modeC = mode ? env->GetStringUTFChars(mode, nullptr) : "";
+    std::string modeS = modeC ? modeC : "";
+    if (mode && modeC) env->ReleaseStringUTFChars(mode, modeC);
     std::string err;
     int port = vibe::LocalSdrShim::instance().start(
-        fd, vid, pid, centerFreq, sampleRate, gainTenthDb, fftSize, fftRate, err);
+        fd, vid, pid, centerFreq, sampleRate, gainTenthDb, fftSize, fftRate, modeS, err);
     if (port < 0) LOGE("startSpectrum failed: %s", err.c_str());
     return port;
 }

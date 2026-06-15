@@ -466,8 +466,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     // audio survives because the foreground service keeps the app + JS alive.
     @Volatile private var extTrack: AudioTrack? = null
     private var extRate = 0
+    private var extChannels = 1
     private var extThread: Thread? = null
-    private val extQueue = LinkedBlockingDeque<Pair<Int, ShortArray>>(64)
+    // (rate, channels, interleaved int16 samples)
+    private val extQueue = LinkedBlockingDeque<Triple<Int, Int, ShortArray>>(64)
 
     fun startExternalAudio(rate: Int) {
         Log.i(TAG, "startExternalAudio $rate")
@@ -489,7 +491,9 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         startForeground(NOTIF_ID, buildNotification())
     }
 
-    fun pushExternalPcm(base64: String, rate: Int) {
+    // channels: 1=mono (OWRX/Kiwi, local narrow modes), 2=interleaved stereo
+    // (local WFM). Samples are interleaved L,R for stereo.
+    fun pushExternalPcm(base64: String, rate: Int, channels: Int = 1) {
         if (!externalAudio || muted) return
         val bytes = try { Base64.decode(base64, Base64.DEFAULT) } catch (e: Exception) { return }
         val n = bytes.size / 2
@@ -498,7 +502,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts)
         lastPacketAt = SystemClock.elapsedRealtime()
         packetCount++
-        extQueue.offer(Pair(rate, shorts))   // drop when full (backpressure)
+        extQueue.offer(Triple(rate, if (channels == 2) 2 else 1, shorts))   // drop when full (backpressure)
     }
 
     fun stopExternalAudio() {
@@ -518,8 +522,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             try {
                 while (running && externalAudio) {
                     val item = extQueue.poll(250, TimeUnit.MILLISECONDS) ?: continue
-                    ensureExtTrack(item.first)
-                    if (!muted) extTrack?.write(item.second, 0, item.second.size)  // blocking = backpressure
+                    ensureExtTrack(item.first, item.second)
+                    if (!muted) extTrack?.write(item.third, 0, item.third.size)  // blocking = backpressure
                 }
             } catch (e: InterruptedException) {
                 // normal shutdown
@@ -532,10 +536,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         t.start()
     }
 
-    private fun ensureExtTrack(rate: Int) {
-        if (extTrack != null && extRate == rate) return
+    private fun ensureExtTrack(rate: Int, channels: Int = 1) {
+        if (extTrack != null && extRate == rate && extChannels == channels) return
         extTrack?.release()
-        val mask = AudioFormat.CHANNEL_OUT_MONO
+        val mask = if (channels == 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
         val minBuf = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT)
         val t = AudioTrack.Builder()
             .setAudioAttributes(
@@ -551,14 +555,15 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     .setChannelMask(mask)
                     .build()
             )
-            .setBufferSizeInBytes(maxOf(minBuf * 2, rate / 5 * 2))  // ≥200ms
+            .setBufferSizeInBytes(maxOf(minBuf * 2, rate / 5 * 2 * channels))  // ≥200ms
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
         t.setVolume(volume)
         t.play()
         extTrack = t
         extRate = rate
-        Log.i(TAG, "ext AudioTrack ${rate}Hz")
+        extChannels = channels
+        Log.i(TAG, "ext AudioTrack ${rate}Hz ch=$channels")
     }
 
     fun setVolumeNative(v: Float) {
