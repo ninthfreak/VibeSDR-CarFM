@@ -345,8 +345,13 @@ export default function InstancePickerScreen({ navigation }: Props) {
     const isDefault = defaultInst?.url === inst.url;
     const versionOld = isVersionOld(inst.version);
     const favoured = isFav(inst.url);
-    // Full receiver (all channels in use) — greyed out + unselectable.
-    const isFull = inst.maxUsers > 0 && inst.users >= inst.maxUsers;
+    // Full receiver — greyed out + unselectable. The two directories report the
+    // count with OPPOSITE meaning: UberSDR's `users` = FREE slots (20/20 = empty,
+    // 0/20 = full); KiwiSDR's `users` = IN-USE (4/4 = full). So full-ness flips.
+    const st = inst.serverType ?? 'ubersdr';
+    const isFull = inst.maxUsers > 0 && (st === 'ubersdr'
+      ? inst.users <= 0              // ubersdr: 0 free slots = full
+      : inst.users >= inst.maxUsers); // kiwi: all in use = full
 
     return (
       <>
