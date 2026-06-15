@@ -282,11 +282,16 @@ export class KiwiAdapter implements SDRBackend {
         break;
       }
       case 'too_busy':
-        // All receiver channels in use. The server closes right after — mark
-        // not-started so the close doesn't also fire the generic serverLost.
-        this.dbg('too_busy=' + val);
-        this.started = false;
-        this.cb.onServerBusy?.();
+        // too_busy=0 is a NORMAL status ('you are NOT too busy') that healthy
+        // Kiwis broadcast — only a NON-ZERO value means the receiver is full.
+        // (We were self-booting on too_busy=0 → false 'server full' on clear
+        // servers.) On a real busy, mark not-started so the close doesn't also
+        // fire the generic serverLost.
+        if (val !== '0' && val !== '') {
+          this.dbg('too_busy=' + val + ' → busy');
+          this.started = false;
+          this.cb.onServerBusy?.();
+        }
         break;
       case 'badp':
         // 0 = auth OK. Non-zero = bad password / slot/IP limit — surface it.
