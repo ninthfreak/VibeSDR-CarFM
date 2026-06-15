@@ -632,6 +632,12 @@ export default function InstancePickerScreen({ navigation }: Props) {
                     </View>
                   </TouchableOpacity>
                 ))}
+                <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.textDim, lineHeight: fs(15),
+                               paddingHorizontal: 6, paddingTop: 10, paddingBottom: 4 }}>
+                  ⚠ KiwiSDR support is experimental. Many public KiwiSDRs limit or block app
+                  connections, so some may refuse or drop out — this is a server-side restriction,
+                  not a fault in VibeSDR. For the most reliable experience, use UberSDR or OpenWebRX.
+                </Text>
               </View>
             }
           />
