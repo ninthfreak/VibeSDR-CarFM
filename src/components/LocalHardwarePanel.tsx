@@ -1,0 +1,136 @@
+import React from 'react';
+import {
+  Modal, View, Text, TouchableOpacity, TouchableWithoutFeedback, ScrollView,
+  Switch, StyleSheet,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import GainSlider from './GainSlider';
+
+// VibeSDR V4 — RTL-SDR hardware controls submenu (Android, local hardware only).
+// Gain (also mirrored in the demodulators popup), PPM, sample rate, bias-T,
+// RTL2832 digital AGC, and direct sampling. Direct sampling is not needed on the
+// Blog V4 (it covers HF directly) — kept for V3/other dongles.
+
+const C = {
+  bg:     'rgba(6,4,2,0.99)',
+  border: 'rgba(255,255,255,0.30)',
+  gold:   '#ffe566',
+  muted:  'rgba(255,255,255,0.92)',
+  dim:    'rgba(200,210,225,0.90)',
+  sectionC: 'rgba(180,190,210,0.80)',
+  btnBg:  'rgba(20,18,14,0.85)',
+  active: 'rgba(255,200,0,0.16)',
+  abtn:   'rgba(255,229,102,0.55)',
+};
+
+const SAMPLE_RATES = [250000, 1024000, 1536000, 1800000, 2048000, 2400000, 3200000];
+const DS_MODES: { label: string; value: number }[] = [
+  { label: 'Off', value: 0 }, { label: 'I', value: 1 }, { label: 'Q', value: 2 },
+];
+
+export interface LocalHardwarePanelProps {
+  visible: boolean;
+  onClose: () => void;
+  gains: number[];
+  gainTenthDb: number;
+  autoGain: boolean;
+  onAuto: (auto: boolean) => void;
+  onGain: (tenthDb: number) => void;
+  ppm: number;
+  onPpm: (ppm: number) => void;
+  sampleRate: number;
+  onSampleRate: (rate: number) => void;
+  biasTee: boolean;
+  onBiasTee: (on: boolean) => void;
+  agc: boolean;
+  onAgc: (on: boolean) => void;
+  directSampling: number;
+  onDirectSampling: (mode: number) => void;
+}
+
+function Seg<T>({ options, value, onChange, fmt }: {
+  options: T[]; value: T; onChange: (v: T) => void; fmt: (v: T) => string;
+}) {
+  return (
+    <View style={styles.segRow}>
+      {options.map((o, i) => {
+        const active = o === value;
+        return (
+          <TouchableOpacity key={i} style={[styles.seg, active && styles.segActive]} onPress={() => onChange(o)}>
+            <Text style={[styles.segTxt, active && styles.segTxtActive]}>{fmt(o)}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal visible={p.visible} transparent animationType="slide" onRequestClose={p.onClose}>
+      <TouchableWithoutFeedback onPress={p.onClose}>
+        <View style={styles.backdrop} />
+      </TouchableWithoutFeedback>
+      <View style={[styles.sheet, { paddingBottom: insets.bottom + 12 }]}>
+        <View style={styles.handleBar}>
+          <Text style={styles.title}>RTL-SDR Controls</Text>
+          <TouchableOpacity onPress={p.onClose} hitSlop={10}><Text style={styles.close}>✕</Text></TouchableOpacity>
+        </View>
+        <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
+          <Text style={styles.section}>GAIN</Text>
+          <GainSlider gains={p.gains} gainTenthDb={p.gainTenthDb} auto={p.autoGain}
+                      onAuto={p.onAuto} onGain={p.onGain} />
+
+          <Text style={styles.section}>SAMPLE RATE</Text>
+          <Seg options={SAMPLE_RATES} value={p.sampleRate} onChange={p.onSampleRate}
+               fmt={(r) => `${(r / 1e6).toFixed(r % 1e6 === 0 ? 1 : 3).replace(/0+$/, '').replace(/\.$/, '.0')}M`} />
+
+          <Text style={styles.section}>FREQUENCY CORRECTION (PPM)</Text>
+          <View style={styles.stepperRow}>
+            <TouchableOpacity style={styles.stepBtn} onPress={() => p.onPpm(p.ppm - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
+            <Text style={styles.stepVal}>{p.ppm > 0 ? `+${p.ppm}` : p.ppm} ppm</Text>
+            <TouchableOpacity style={styles.stepBtn} onPress={() => p.onPpm(p.ppm + 1)}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
+          </View>
+
+          <View style={styles.toggleRow}>
+            <Text style={styles.toggleLabel}>Bias-T (5V antenna power)</Text>
+            <Switch value={p.biasTee} onValueChange={p.onBiasTee} trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.biasTee ? C.gold : '#ccc'} />
+          </View>
+          <View style={styles.toggleRow}>
+            <Text style={styles.toggleLabel}>RTL2832 digital AGC</Text>
+            <Switch value={p.agc} onValueChange={p.onAgc} trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.agc ? C.gold : '#ccc'} />
+          </View>
+
+          <Text style={styles.section}>DIRECT SAMPLING</Text>
+          <Seg options={DS_MODES.map(d => d.value)} value={p.directSampling} onChange={p.onDirectSampling}
+               fmt={(v) => DS_MODES.find(d => d.value === v)?.label ?? String(v)} />
+          <Text style={styles.note}>Not needed on RTL-SDR Blog V4 (HF is covered directly).</Text>
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)' },
+  sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '85%',
+           backgroundColor: C.bg, borderTopLeftRadius: 16, borderTopRightRadius: 16,
+           borderWidth: 1, borderColor: C.border, paddingHorizontal: 16, paddingTop: 10 },
+  handleBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  title: { fontSize: 16, color: C.gold, fontWeight: '700' },
+  close: { fontSize: 18, color: C.muted },
+  section: { fontSize: 10, letterSpacing: 2, color: C.sectionC, marginTop: 16, marginBottom: 4 },
+  segRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  seg: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: C.btnBg },
+  segActive: { borderColor: C.abtn, backgroundColor: C.active },
+  segTxt: { fontSize: 12, color: C.muted },
+  segTxtActive: { color: C.gold },
+  stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  stepBtn: { width: 44, height: 36, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: C.btnBg, alignItems: 'center', justifyContent: 'center' },
+  stepBtnTxt: { fontSize: 20, color: C.gold },
+  stepVal: { fontSize: 15, color: C.muted, minWidth: 80, textAlign: 'center' },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 },
+  toggleLabel: { fontSize: 14, color: C.muted },
+  note: { fontSize: 11, color: C.dim, marginTop: 6, fontStyle: 'italic' },
+});

@@ -4,6 +4,7 @@ import {
 } from 'react-native';
 import { Mode, MODES } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
+import GainSlider from './GainSlider';
 
 // Common analog/voice demodulators shown as buttons; everything else the server
 // offers (digital, decoders, sondes…) goes into the in-popup dropdown.
@@ -21,9 +22,14 @@ interface ModeSelectorProps {
   activeDecoder?: string;
   onSelect: (mode: Mode) => void;
   onClose:  () => void;
+  /** V4 local hardware: quick-access RTL-SDR gain control shown above the modes. */
+  gainControl?: {
+    gains: number[]; gainTenthDb: number; auto: boolean;
+    onAuto: (auto: boolean) => void; onGain: (tenthDb: number) => void;
+  };
 }
 
-export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose }: ModeSelectorProps) {
+export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose, gainControl }: ModeSelectorProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   const [moreOpen, setMoreOpen] = useState(false);
@@ -72,6 +78,17 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font }]}>
           DEMODULATOR
         </Text>
+        {gainControl ? (
+          <View style={st.gainWrap}>
+            <GainSlider
+              gains={gainControl.gains}
+              gainTenthDb={gainControl.gainTenthDb}
+              auto={gainControl.auto}
+              onAuto={gainControl.onAuto}
+              onGain={gainControl.onGain}
+            />
+          </View>
+        ) : null}
         <View style={st.grid}>
           {common.map(m => (
             <TouchableOpacity
@@ -162,6 +179,7 @@ const st = StyleSheet.create({
   },
   sheetLabel:   { textAlign: 'center', fontSize: 10, letterSpacing: 3, marginBottom: 14 },
   grid:         { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  gainWrap:     { marginBottom: 12, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.15)' },
   btn: {
     flex: 1, minWidth: '22%', backgroundColor: 'transparent',
     borderWidth: 1, borderRadius: 3, paddingHorizontal: 4, alignItems: 'center',

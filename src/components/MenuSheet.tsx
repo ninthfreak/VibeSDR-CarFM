@@ -153,6 +153,8 @@ export interface MenuSheetProps {
 
   onClose:          () => void;
   onBack?:          () => void;
+  /** V4 local hardware: opens the RTL-SDR controls submenu (Android only). */
+  onLocalHardware?: () => void;
   onAdminLink?:     (path: string, title: string) => void;
   onResetSettings?: () => void;
   onDisplaySettings?: () => void;
@@ -420,7 +422,7 @@ export default function MenuSheet({
   searchBookmarks = [], searchBands = [], onSearchTune,
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks,
-  onClose, onBack, onAdminLink, onResetSettings, onDisplaySettings,
+  onClose, onBack, onLocalHardware, onAdminLink, onResetSettings, onDisplaySettings,
   serverVersion = null, onAbout,
   onZoomIn, onZoomOut, onSetDefault, isDefaultInstance = false,
   decMode = null, decOn = false, onDecToggle,
@@ -626,6 +628,12 @@ export default function MenuSheet({
                 content instead of expanding inline over it (inline blended in
                 and was confusing to read). */}
             {!dispSettingsOpen && !bookmarksOpen && (<>
+
+            {/* ── LOCAL HARDWARE (V4 Android — RTL-SDR controls submenu) ── */}
+            {onLocalHardware && (<>
+              <SectionLabel label="LOCAL HARDWARE" first />
+              <Btn label="RTL-SDR Controls  ›" full onPress={onLocalHardware} />
+            </>)}
 
             {/* ── PROFILE (OWRX only — hidden unless the backend reports profiles) ── */}
             {profiles.length > 0 && (<>

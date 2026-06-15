@@ -182,6 +182,23 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(null)
     }
 
+    // ── Hardware controls ──────────────────────────────────────────────────
+    @ReactMethod fun setGain(gainTenthDb: Double) { VibeLocalSDR.setGain(gainTenthDb.toInt()) }
+    @ReactMethod fun setPpm(ppm: Double) { VibeLocalSDR.setPpm(ppm.toInt()) }
+    @ReactMethod fun setBiasTee(on: Boolean) { VibeLocalSDR.setBiasTee(on) }
+    @ReactMethod fun setAgc(on: Boolean) { VibeLocalSDR.setAgc(on) }
+    @ReactMethod fun setDirectSampling(mode: Double) { VibeLocalSDR.setDirectSampling(mode.toInt()) }
+    @ReactMethod fun setSampleRate(rate: Double) { VibeLocalSDR.setSampleRate(rate) }
+
+    /** Supported tuner gains in tenths of dB (e.g. 207 = 20.7 dB). */
+    @ReactMethod
+    fun getTunerGains(promise: Promise) {
+        val gains = VibeLocalSDR.getTunerGains()
+        val arr = Arguments.createArray()
+        for (g in gains) arr.pushInt(g)
+        promise.resolve(arr)
+    }
+
     private fun stopSpectrumInternal() {
         try { VibeLocalSDR.stopSpectrum() } catch (_: Throwable) {}
         sessionConn?.let { try { it.close() } catch (_: Exception) {} }

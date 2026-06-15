@@ -87,3 +87,35 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeStopSpectrum(JNIEnv* /*env*/, jobject /*thiz*/) {
     vibe::LocalSdrShim::instance().stop();
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetGain(JNIEnv*, jobject, jint g) {
+    vibe::LocalSdrShim::instance().setGain(g);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetPpm(JNIEnv*, jobject, jint ppm) {
+    vibe::LocalSdrShim::instance().setPpm(ppm);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetBiasTee(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::instance().setBiasTee(on);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetAgc(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::instance().setAgc(on);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetDirectSampling(JNIEnv*, jobject, jint mode) {
+    vibe::LocalSdrShim::instance().setDirectSampling(mode);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetSampleRate(JNIEnv*, jobject, jdouble rate) {
+    vibe::LocalSdrShim::instance().setSampleRate(rate);
+}
+extern "C" JNIEXPORT jintArray JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeGetTunerGains(JNIEnv* env, jobject) {
+    auto gains = vibe::LocalSdrShim::instance().getTunerGains();
+    jintArray arr = env->NewIntArray((jsize)gains.size());
+    if (arr && !gains.empty()) env->SetIntArrayRegion(arr, 0, (jsize)gains.size(), gains.data());
+    return arr;
+}

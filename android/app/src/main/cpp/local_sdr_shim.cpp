@@ -538,6 +538,54 @@ void LocalSdrShim::stop() {
     LOGI("local SDR stopped");
 }
 
+// ── Hardware controls ─────────────────────────────────────────────────────────
+void LocalSdrShim::setGain(int gainTenthDb) {
+    if (!p || !p->dev) return;
+    if (gainTenthDb < 0) { rtlsdr_set_tuner_gain_mode(p->dev, 0); LOGI("gain: auto"); }
+    else { rtlsdr_set_tuner_gain_mode(p->dev, 1); rtlsdr_set_tuner_gain(p->dev, gainTenthDb);
+           LOGI("gain: %.1f dB", gainTenthDb / 10.0); }
+}
+void LocalSdrShim::setPpm(int ppm) {
+    if (!p || !p->dev) return;
+    rtlsdr_set_freq_correction(p->dev, ppm); LOGI("ppm: %d", ppm);
+}
+void LocalSdrShim::setBiasTee(bool on) {
+    if (!p || !p->dev) return;
+    rtlsdr_set_bias_tee(p->dev, on ? 1 : 0); LOGI("bias-tee: %d", on);
+}
+void LocalSdrShim::setAgc(bool on) {
+    if (!p || !p->dev) return;
+    rtlsdr_set_agc_mode(p->dev, on ? 1 : 0); LOGI("agc: %d", on);
+}
+void LocalSdrShim::setDirectSampling(int mode) {
+    if (!p || !p->dev) return;
+    rtlsdr_set_direct_sampling(p->dev, mode); LOGI("direct sampling: %d", mode);
+}
+void LocalSdrShim::setSampleRate(double rate) {
+    if (!p || !p->dev || rate <= 0) return;
+    Impl* impl = p;
+    // Stop the IQ stream, change rate, rebuild the FFT/demod chain, restart.
+    rtlsdr_cancel_async(impl->dev);
+    if (impl->rtlThread.joinable()) impl->rtlThread.join();
+    rtlsdr_set_sample_rate(impl->dev, (uint32_t)rate);
+    rtlsdr_reset_buffer(impl->dev);
+    impl->sampleRate = rate;
+    impl->frontend.setSampleRate(rate);
+    impl->buildAudio();
+    { std::lock_guard<std::mutex> lk(impl->clientMtx); if (impl->specClient) impl->sendConfig(impl->specClient); }
+    impl->rtlThread = std::thread([impl]{ rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); });
+    LOGI("sample rate: %.0f", rate);
+}
+std::vector<int> LocalSdrShim::getTunerGains() {
+    std::vector<int> out;
+    if (!p || !p->dev) return out;
+    int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
+    if (n <= 0) return out;
+    out.resize(n);
+    rtlsdr_get_tuner_gains(p->dev, out.data());
+    return out;
+}
+
 bool LocalSdrShim::isRunning() const { return p != nullptr; }
 
 } // namespace vibe

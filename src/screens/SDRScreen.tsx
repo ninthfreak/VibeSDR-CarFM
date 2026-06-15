@@ -59,6 +59,7 @@ import { setDrumHaptics } from '../components/DrumWheel';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import AudioPlayer, { VibePowerModule } from '../components/AudioPlayer';
 import LocalAudioPlayer from '../components/LocalAudioPlayer';
+import LocalHardwarePanel from '../components/LocalHardwarePanel';
 import FreqModal       from '../components/FreqModal';
 import ModeSelector    from '../components/ModeSelector';
 import StepPicker      from '../components/StepPicker';
@@ -288,6 +289,43 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => { (NativeModules as any).VibeLocalSDR?.stopSpectrum?.(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── V4 local hardware controls (RTL-SDR) ──────────────────────────────────
+  const isLocal = !!route.params.isLocal;
+  const LocalHw = (NativeModules as any).VibeLocalSDR;
+  const [hwOpen,        setHwOpen]        = useState(false);
+  const [hwGains,       setHwGains]       = useState<number[]>([]);
+  const [hwGain,        setHwGain]        = useState(0);     // tenths of dB
+  const [hwAutoGain,    setHwAutoGain]    = useState(true);
+  const [hwPpm,         setHwPpm]         = useState(0);
+  const [hwSampleRate,  setHwSampleRate]  = useState(2_400_000);
+  const [hwBiasTee,     setHwBiasTee]     = useState(false);
+  const [hwAgc,         setHwAgc]         = useState(false);
+  const [hwDirectSamp,  setHwDirectSamp]  = useState(0);
+
+  useEffect(() => {
+    if (!isLocal || !LocalHw?.getTunerGains) return;
+    LocalHw.getTunerGains().then((g: number[]) => {
+      if (Array.isArray(g) && g.length) { setHwGains(g); setHwGain(g[Math.floor(g.length / 2)]); }
+    }).catch(() => {});
+  }, [isLocal, LocalHw]);
+
+  const onHwAuto = useCallback((auto: boolean) => {
+    setHwAutoGain(auto);
+    LocalHw?.setGain?.(auto ? -1 : hwGain);
+  }, [LocalHw, hwGain]);
+  const onHwGain = useCallback((tenthDb: number) => {
+    setHwAutoGain(false); setHwGain(tenthDb); LocalHw?.setGain?.(tenthDb);
+  }, [LocalHw]);
+  const onHwPpm = useCallback((ppm: number) => {
+    const v = Math.max(-200, Math.min(200, ppm)); setHwPpm(v); LocalHw?.setPpm?.(v);
+  }, [LocalHw]);
+  const onHwSampleRate = useCallback((rate: number) => {
+    setHwSampleRate(rate); LocalHw?.setSampleRate?.(rate);
+  }, [LocalHw]);
+  const onHwBiasTee = useCallback((on: boolean) => { setHwBiasTee(on); LocalHw?.setBiasTee?.(on); }, [LocalHw]);
+  const onHwAgc = useCallback((on: boolean) => { setHwAgc(on); LocalHw?.setAgc?.(on); }, [LocalHw]);
+  const onHwDirectSamp = useCallback((mode: number) => { setHwDirectSamp(mode); LocalHw?.setDirectSampling?.(mode); }, [LocalHw]);
 
   const insets = useSafeAreaInsets();
   const { width: screenW, height: screenH } = Dimensions.get('window');
@@ -2829,6 +2867,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         serverName={instanceName ?? ''}
         serverUrl={baseUrl}
         onClose={() => setMenuOpen(false)}
+        onLocalHardware={isLocal ? () => { setMenuOpen(false); setHwOpen(true); } : undefined}
         onColormap={setColormap}
         onDbMin={setDbMin}
         onDbMax={setDbMax}
@@ -2944,6 +2983,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Mode selector */}
       <ModeSelector
         visible={modeSelOpen}
+        gainControl={isLocal ? {
+          gains: hwGains, gainTenthDb: hwGain, auto: hwAutoGain, onAuto: onHwAuto, onGain: onHwGain,
+        } : undefined}
         current={status.mode}
         modes={route.params.serverType === 'owrx' ? serverModes : undefined}
         activeDecoder={route.params.serverType === 'owrx'
@@ -2952,6 +2994,29 @@ export default function SDRScreen({ route, navigation }: Props) {
         onSelect={onMode}
         onClose={() => setModeSelOpen(false)}
       />
+
+      {/* v4 local hardware: RTL-SDR controls submenu */}
+      {isLocal ? (
+        <LocalHardwarePanel
+          visible={hwOpen}
+          onClose={() => setHwOpen(false)}
+          gains={hwGains}
+          gainTenthDb={hwGain}
+          autoGain={hwAutoGain}
+          onAuto={onHwAuto}
+          onGain={onHwGain}
+          ppm={hwPpm}
+          onPpm={onHwPpm}
+          sampleRate={hwSampleRate}
+          onSampleRate={onHwSampleRate}
+          biasTee={hwBiasTee}
+          onBiasTee={onHwBiasTee}
+          agc={hwAgc}
+          onAgc={onHwAgc}
+          directSampling={hwDirectSamp}
+          onDirectSampling={onHwDirectSamp}
+        />
+      ) : null}
 
       {/* Server map overlay (HFDL / Digital / CW — full-screen WebView Leaflet) */}
       <MapOverlay
