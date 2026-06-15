@@ -56,10 +56,21 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   { v: 'V2.2', detail: 'Siri voice control (iOS). Say "Hey Siri, tune VibeSDR" — Siri asks what — then a frequency (7.150 MHz / 7150 kHz / 7151.5), a station ("Radio Caroline"), or a band ("40m ham", "CB"). It tunes with the right demodulator + step, honouring any spoken mode. When a name matches several bookmarks (e.g. "Radio 5") Siri reads the frequencies and you pick by voice; "China Radio at 11 MHz" narrows the list. Also "change VibeSDR mode" → AM / SAM / synchronous AM / LSB / lower side band / …, and "set VibeSDR step rate" → 100 Hz, 9 kHz, … It runs in the background while VibeSDR is playing, so it works over headphones / CarPlay / the lock screen without unlocking. (Tuning is a two-step ask-and-answer — Apple only allows a value inside a one-shot Siri phrase for fixed lists. Android’s in-car answer stays the Android Auto Bookmarks/Band-Plan browse — Google Assistant needs Play Store publishing.)' },
   { v: 'V2.2.1', detail: 'In-car fix: a Siri voice command interrupts the car audio session, which paused and disconnected VibeSDR — it then sat dead until you pressed Play. It now auto-resumes (reconnects on the new frequency) the moment Siri finishes, with no manual Play. A genuine takeover by another app (e.g. a Mac grabbing your AirPods) still waits for Play, as before.' },
   { v: 'V2.2.2', detail: 'Store-readiness pass: clearer location prompt (it’s only for sorting/filtering instances by distance, and denying it changes nothing else); removed two unused Android permissions (microphone and draw-over-other-apps); added a privacy policy and an App Store distribution exception to the GPL licence. No functional changes.' },
+  { v: 'V3', detail: 'Multi-backend release — VibeSDR now speaks three SDR server protocols (UberSDR, OpenWebRX/OpenWebRX+ and KiwiSDR) behind the same interface, with a new directory chooser in the instance picker. See What\'s New above. (KiwiSDR is experimental — many public Kiwis restrict third-party app connections.)' },
 ];
 
 const FUTURE_PLANS: string[] = [
-  'OpenWebRX & KiwiSDR support. I also operate an OpenWebRX server which I can use for testing, so the plan is to map the controls to OpenWebRX and intercept the waterfall data to run in this app\'s own custom waterfall — that way, no matter which server you connect to, everything should look and work the same.',
+  'V4 — local SDR hardware on Android. Plug an RTL-SDR (or similar) straight into your phone over USB and pick "Local Hardware" from the instance list: VibeSDR runs the radio on-device and everything fires up exactly like a remote server — same waterfall, drum, audio and decoders — with a hardware-control submenu for the SDR model, sample rate, direct sampling, HF upconverter offset, gain and PPM. It works by bundling the proven SDR++ Brown DSP/driver core and bridging it to VibeSDR over the existing protocol, so the app stays the same client it already is. Android only — iOS has no general USB SDR access — so iPhones stay network receivers.',
+];
+
+const V3_CHANGES: string[] = [
+  'OpenWebRX / OpenWebRX+ support: waterfall, audio (incl. WFM HD), profile auto-switching, server-gated modes (WFM/DMR/DStar/DAB…), squelch + noise-reduction sliders, basic text chat, and server-side decoders (RTTY, SSTV, FAX, Packet, POCSAG/FLEX, ADS-B, ISM, Meshtastic/Meshcore/LoRa…)',
+  'KiwiSDR support (experimental): waterfall, audio, tuning, real dBm S-meter, server-side zoom and a live connection meter — same custom interface as every other backend',
+  'New directory chooser in the instance picker: Favourites/Default pinned on top, then UberSDR, Receiverbook (OpenWebRX + KiwiSDR) and the KiwiSDR network — with type logos, user counts and full receivers greyed out',
+  'Custom server URLs auto-detect the backend (UberSDR / OpenWebRX / KiwiSDR)',
+  'Crash hardening: a flaky server can no longer take the app down — you are returned to the server list with a clear, server-attributed message',
+  'Swipe-up-to-minimise no longer knocks the tuning off',
+  'Menu footer shows the connected backend’s logo and software version',
 ];
 
 const V2_CHANGES: string[] = [
@@ -122,9 +133,9 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
           <View style={styles.heroRow}>
             <Image source={require('../../assets/icon.png')} style={styles.icon} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.appName}>VibeSDR V2</Text>
+              <Text style={styles.appName}>VibeSDR V3</Text>
               <Text style={styles.appVer}>Version {APP_VERSION}</Text>
-              <Text style={styles.appSub}>A native mobile client for UberSDR receivers</Text>
+              <Text style={styles.appSub}>A native mobile client for UberSDR, OpenWebRX & KiwiSDR receivers</Text>
             </View>
           </View>
 
@@ -136,7 +147,15 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
             <Text style={styles.link}>Visit my UberSDR instance: stuey3d.tunnel.ubersdr.org</Text>
           </TouchableOpacity>
 
-          <Text style={styles.section}>WHAT'S NEW IN V2</Text>
+          <Text style={styles.section}>WHAT'S NEW IN V3</Text>
+          {V3_CHANGES.map((c) => (
+            <View key={c} style={styles.bulletRow}>
+              <Text style={styles.bulletDot}>•</Text>
+              <Text style={styles.bulletText}>{c}</Text>
+            </View>
+          ))}
+
+          <Text style={styles.section}>V2 HIGHLIGHTS</Text>
           {V2_CHANGES.map((c) => (
             <View key={c} style={styles.bulletRow}>
               <Text style={styles.bulletDot}>•</Text>
