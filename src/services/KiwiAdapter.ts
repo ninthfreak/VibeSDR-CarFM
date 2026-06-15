@@ -308,10 +308,17 @@ export class KiwiAdapter implements SDRBackend {
     if (this._onConnected) { const f = this._onConnected; this._onConnected = null; f(); }
   }
 
+  /** The demod line — sent on EVERY tune/mode/bandwidth change. The Kiwi expects
+   *  the FULL `SET mod=… low_cut=… high_cut=… freq=…` (reference doset()); a bare
+   *  `SET freq=` is ignored, so tuning silently did nothing. */
+  private sendDemod(): void {
+    const wire = KIWI_MODE[this.mode].mod;
+    this.sndSend(`SET mod=${wire} low_cut=${Math.round(this.bwLow)} high_cut=${Math.round(this.bwHigh)} freq=${(this.freq / 1000).toFixed(3)}`);
+  }
+
   /** Send the SND receive params once we know the true rate (per reference order). */
   private sendRxParams(): void {
-    const m = KIWI_MODE[this.mode];
-    this.sndSend(`SET mod=${m.mod} low_cut=${Math.round(this.bwLow)} high_cut=${Math.round(this.bwHigh)} freq=${(this.freq / 1000).toFixed(3)}`);
+    this.sendDemod();
     this.sndSend('SET agc=1 hang=0 thresh=-100 slope=6 decay=1000 manGain=50');
     this.sndSend('SET compression=1');
     this.sndSend('SET ident_user=VibeSDR');
@@ -389,7 +396,7 @@ export class KiwiAdapter implements SDRBackend {
   tune(frequency: number, mode?: SDRMode): void {
     this.freq = Math.min(Math.max(frequency, 0), this.rxBw);
     if (mode && mode !== this.mode) { this.setMode(mode); return; }
-    this.sndSend(`SET freq=${(this.freq / 1000).toFixed(3)}`);
+    this.sendDemod();                     // FULL demod line — bare SET freq is ignored
     this.cb.onStatus(this.getStatus());
   }
 
@@ -403,14 +410,13 @@ export class KiwiAdapter implements SDRBackend {
     this.mode = mode;
     const p = KIWI_MODE[mode];
     this.bwLow = p.lo; this.bwHigh = p.hi;
-    this.sndSend(`SET mod=${p.mod} low_cut=${Math.round(this.bwLow)} high_cut=${Math.round(this.bwHigh)} freq=${(this.freq / 1000).toFixed(3)}`);
+    this.sendDemod();
     this.cb.onStatus(this.getStatus());
   }
 
   setBandwidth(low: number, high: number): void {
     this.bwLow = low; this.bwHigh = high;
-    const p = KIWI_MODE[this.mode];
-    this.sndSend(`SET mod=${p.mod} low_cut=${Math.round(low)} high_cut=${Math.round(high)} freq=${(this.freq / 1000).toFixed(3)}`);
+    this.sendDemod();
     this.cb.onStatus(this.getStatus());
   }
 
