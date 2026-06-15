@@ -96,6 +96,18 @@ android {
         versionName "4.0.0-beta.2"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
+
+        // V4 local-SDR shim: build SDR++ Brown core + rtl_sdr into the APK.
+        // ARM only (matches reactNativeArchitectures); shares the RN c++ runtime.
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_STL=c++_shared",
+                          "-DOPT_BACKEND_ANDROID=ON",
+                          "-DOPT_BACKEND_GLFW=OFF"
+                cppFlags "-std=c++17"
+                abiFilters 'arm64-v8a', 'armeabi-v7a'
+            }
+        }
     }
     // Release/upload signing — loaded from android/keystore.properties (gitignored).
     // If absent (e.g. a fresh clone), release falls back to the debug key so the
@@ -144,7 +156,38 @@ android {
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
     }
+
+    // V4 local-SDR shim native build (see src/main/cpp/CMakeLists.txt).
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+
+    // Package the prebuilt SDR deps (volk/fftw3f/zstd/libusb/librtlsdr) that the
+    // SDR++ core links against. externalNativeBuild only packages libs it builds,
+    // so the kit .so are flattened into a jniLibs dir below.
+    sourceSets {
+        main { jniLibs.srcDirs += ["${buildDir}/sdrkit-jniLibs"] }
+    }
 }
+
+// Flatten src/main/cpp/sdr-kit/<ABI>/lib/lib*.so -> build/sdrkit-jniLibs/<ABI>/.
+// Only plain lib*.so (versioned .so.N and .a are skipped); symlinks like
+// libzstd.so are dereferenced to real files by Copy.
+def sdrKitDir = file("src/main/cpp/sdr-kit")
+def sdrKitJniLibs = file("${buildDir}/sdrkit-jniLibs")
+tasks.register('copySdrKitLibs', Copy) {
+    into sdrKitJniLibs
+    ['arm64-v8a', 'armeabi-v7a'].each { abi ->
+        from("${sdrKitDir}/${abi}/lib") {
+            include 'lib*.so'
+            into abi
+        }
+    }
+}
+tasks.named('preBuild') { dependsOn 'copySdrKitLibs' }
 
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
 // Accepts values in comma delimited lists, example:
