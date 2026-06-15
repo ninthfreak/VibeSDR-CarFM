@@ -115,6 +115,13 @@ export class KiwiAdapter implements SDRBackend {
   private sndReady = false;
   private wfReady = false;
 
+  // Connection meter (0–3 bars) from audio-frame inter-arrival — flaky links
+  // stall/space the SND frames out, which is exactly the stutter the user hears.
+  private gapHist: number[] = [];
+  private lastFrameAt = 0;
+  private connectedAt = 0;
+  private lastLink = -1;
+
   constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks, password?: string) {
     this.uuid = uuid;
     this.cb = callbacks;
@@ -142,6 +149,8 @@ export class KiwiAdapter implements SDRBackend {
     this.started = true;
     this.viewInit = false;
     this.wfOpened = false;
+    this.connectedAt = Date.now();
+    this.gapHist = []; this.lastFrameAt = 0; this.lastLink = -1;
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -364,7 +373,11 @@ export class KiwiAdapter implements SDRBackend {
     const smeter = (buf[8] << 8) | buf[9];                 // BE u16
     const dbm = smeter / 10 - 127;
     this.cb.onSMeter?.(dbm);
-    this.cb.onLink?.(3);
+    // Track audio-frame inter-arrival → connection meter (stutters space frames out).
+    const now = Date.now();
+    if (this.lastFrameAt > 0) { this.gapHist.push(now - this.lastFrameAt); if (this.gapHist.length > 40) this.gapHist.shift(); }
+    this.lastFrameAt = now;
+    this.evalLink();
     this.maybeConnected();
 
     const offset = (flags & SND_STEREO) ? 20 : 10;
@@ -541,9 +554,35 @@ export class KiwiAdapter implements SDRBackend {
     if (this.zoomTimer) { clearTimeout(this.zoomTimer); this.zoomTimer = null; }
   }
 
+  /** Score the link 0–3 bars from audio-frame timing (median-relative, like OWRX). */
+  private evalLink(): void {
+    let q: 0 | 1 | 2 | 3;
+    if (this.sndWs?.readyState !== WebSocket.OPEN) { q = 0; }
+    else {
+      const now = Date.now(), h = this.gapHist;
+      let med = 150;
+      if (h.length >= 5) { const s = [...h].sort((a, b) => a - b); med = s[s.length >> 1]; }
+      let stalls = 0;
+      for (let i = 0; i < h.length; i++) if (h[i] > med * 2.5 + 60) stalls++;
+      const starving = this.lastFrameAt > 0 && now - this.lastFrameAt > Math.max(2000, med * 4);
+      if (now - this.connectedAt < 4000 && h.length < 5) q = 2;
+      else if (stalls >= 3 || starving) q = 1;
+      else if (stalls >= 1) q = 2;
+      else q = 3;
+    }
+    if (q !== this.lastLink) { this.lastLink = q; this.cb.onLink?.(q); }
+  }
+
   private onSocketDrop(): void {
-    if (!this.started) return;        // our own close()
+    if (!this.started) return;        // our own close() / already torn down
     this.started = false;
+    // Fully tear down: a half-open connection (one socket wobbled closed on flaky
+    // cellular while the other kept streaming) was leaving audio playing after the
+    // 'lost' card — and even after navigating back. Close BOTH + stop native audio.
+    this.stopKeepalive();
+    this.closeSocket('sndWs');
+    this.closeSocket('wfWs');
+    if (this.audioStarted) { Vibe?.stopExternalAudio?.(); this.audioStarted = false; }
     this.cb.onLink?.(0);
     this.cb.onDisconnect();
     this.cb.onServerLost?.();
