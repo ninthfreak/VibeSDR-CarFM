@@ -458,6 +458,10 @@ export default function MenuSheet({
   const sheetInsets = useSafeAreaInsets();
   const isLandscape = winW > winH;
   const sheetH = Math.min(winH * 0.88, 700);
+  // Inner dropdown scroll lists (search results, profile/DAB/colormap) carry a
+  // fixed maxHeight that fits portrait but overflows the much shorter landscape
+  // sheet, clipping the bottom of the list. Cap them to the live sheet height.
+  const dropMaxH = Math.min(300, Math.max(140, Math.round(sheetH - 180)));
   const sheetW = isLandscape
     ? Math.min(520, winW - sheetInsets.left - sheetInsets.right - 24)
     : undefined;
@@ -643,7 +647,7 @@ export default function MenuSheet({
                   <Text style={styles.profileDropChevron}>{profileOpen ? '▴' : '▾'}</Text>
                 </TouchableOpacity>
                 {profileOpen && (
-                  <ScrollView ref={profScroll} style={styles.profileDropList} nestedScrollEnabled
+                  <ScrollView ref={profScroll} style={[styles.profileDropList, { maxHeight: dropMaxH }]} nestedScrollEnabled
                               keyboardShouldPersistTaps="handled">
                     {/* Flat children (header rows + item rows) so each item's
                         onLayout y is content-relative → scroll-to-current works. */}
@@ -692,7 +696,7 @@ export default function MenuSheet({
                   <Text style={styles.profileDropChevron}>{dabOpen ? '▴' : '▾'}</Text>
                 </TouchableOpacity>
                 {dabOpen && (
-                  <ScrollView ref={dabScroll} style={styles.profileDropList} nestedScrollEnabled
+                  <ScrollView ref={dabScroll} style={[styles.profileDropList, { maxHeight: dropMaxH }]} nestedScrollEnabled
                               keyboardShouldPersistTaps="handled">
                     {dabProgrammes.map((p) => {
                       const active = p.id === activeDabId;
@@ -776,7 +780,7 @@ export default function MenuSheet({
                     <Text style={styles.searchHint}>
                       {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} · tap to tune
                     </Text>
-                    <ScrollView style={styles.searchScroll} nestedScrollEnabled
+                    <ScrollView style={[styles.searchScroll, { maxHeight: dropMaxH }]} nestedScrollEnabled
                       keyboardShouldPersistTaps="handled"
                       showsVerticalScrollIndicator={true}>
                     {searchResults.map((r: SearchResult, i: number) => (
@@ -966,7 +970,7 @@ export default function MenuSheet({
                   <Text style={styles.dropChevron}>{cmapOpen ? '▴' : '▾'}</Text>
                 </TouchableOpacity>
                 {cmapOpen && (
-                  <ScrollView ref={cmapScroll} style={styles.dropList} nestedScrollEnabled
+                  <ScrollView ref={cmapScroll} style={[styles.dropList, { maxHeight: dropMaxH }]} nestedScrollEnabled
                               keyboardShouldPersistTaps="handled">
                     {cmapSorted.map(name => (
                       <TouchableOpacity key={name}
