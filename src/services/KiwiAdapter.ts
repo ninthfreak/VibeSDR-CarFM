@@ -30,6 +30,12 @@ const Vibe = NativeModules.VibePowerModule as {
   stopExternalAudio?: () => void;
 } | undefined;
 
+// Present as a real browser. KiwiSDR classifies connections that jump straight
+// to the WS with a non-browser User-Agent as "ext_api" (API) connections, which
+// many receivers time-limit or refuse — looking like Safari + identifying as
+// the stock web client avoids that restriction.
+const KIWI_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+
 const KIWI_FULL_BW = 30_000_000;   // zoom 0 span (Hz) — Kiwi's nominal 0–30 MHz
 const KIWI_MAX_ZOOM = 14;
 const WF_BINS = 1024;              // Kiwi waterfall is a fixed 1024-bin row
@@ -147,14 +153,14 @@ export class KiwiAdapter implements SDRBackend {
       // websocket … we only get here if the first auth has worked"). Opening
       // both at once makes the Kiwi drop the SND connection after a few seconds.
       try {
-        this.sndWs = new WebSocket(this.url('SND'));
+        this.sndWs = new (WebSocket as any)(this.url('SND'), null, { headers: { 'User-Agent': KIWI_UA } }) as WebSocket;
       } catch (e) { fail(e); return; }
       this.sndWs.binaryType = 'arraybuffer';
 
       this.sndWs.onopen = () => {
         this.dbg('SND open');
         this.sndSend(`SET auth t=kiwi p=${this.password}`);
-        this.sndSend('SERVER DE CLIENT vibesdr SND');
+        this.sndSend('SERVER DE CLIENT openwebrx.js SND');
         // RX params (which START the audio stream) — a short tick lets the
         // server process auth first; also re-asserted on the audio_rate MSG.
         setTimeout(() => { if (this.started) this.sendRxParams(); }, 150);
@@ -194,13 +200,13 @@ export class KiwiAdapter implements SDRBackend {
   private openWf(): void {
     if (this.wfOpened || !this.started) return;
     this.wfOpened = true;
-    try { this.wfWs = new WebSocket(this.url('W/F')); }
+    try { this.wfWs = new (WebSocket as any)(this.url('W/F'), null, { headers: { 'User-Agent': KIWI_UA } }) as WebSocket; }
     catch (e) { this.dbg('WF open failed: ' + e); return; }
     this.wfWs.binaryType = 'arraybuffer';
     this.wfWs.onopen = () => {
       this.dbg('WF open');
       this.wfSend(`SET auth t=kiwi p=${this.password}`);
-      this.wfSend('SERVER DE CLIENT vibesdr W/F');
+      this.wfSend('SERVER DE CLIENT openwebrx.js W/F');
       this.wfSend('SET send_dB=1');
       this.wfSend('SET wf_comp=1');
       this.wfSend('SET wf_speed=4');
