@@ -102,6 +102,11 @@ export interface SDRBackend {
   setSquelch?(level: number): void;
   /** OWRX: noise reduction — threshold ≤ 0 = off, higher = more NR. */
   setNr?(threshold: number): void;
+  /** Kiwi: server-side noise filter / blanker, modelled as DSP descriptors.
+   *  setDsp = enable+filter+params; setDspFilter/setDspParams update them. */
+  setDsp?(enabled: boolean, filter: string, params: Record<string, string>): void;
+  setDspFilter?(filter: string, params: Record<string, string>): void;
+  setDspParams?(params: Record<string, string>): void;
   /** DAB: switch the audio service (programme) within the tuned ensemble. */
   setAudioServiceId?(id: number): void;
   /** DAB: speed-correction factor for the dablin chipmunk (1 = off). */

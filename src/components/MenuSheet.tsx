@@ -92,6 +92,9 @@ export interface MenuSheetProps {
   // Local SDR audio noise reduction strength (0=off..15).
   localNR?:        number;
   onLocalNR?:      (level: number) => void;
+  // Kiwi server-side squelch (0=off..99).
+  kiwiSquelch?:    number;
+  onKiwiSquelch?:  (v: number) => void;
   // FM squelch — only shown for fm/nfm modes
   fmSquelch?:     number;
   onFmSquelch?:   (v: number) => void;
@@ -414,7 +417,7 @@ export default function MenuSheet({
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
-  localNR = 0, onLocalNR,
+  localNR = 0, onLocalNR, kiwiSquelch = 0, onKiwiSquelch,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
   serverLabel = null, onOwrxSquelch, onOwrxNr,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
@@ -1310,7 +1313,22 @@ export default function MenuSheet({
               </View>
             )}
 
-            {!onLocalSquelch && !isOwrx && (
+            {/* Kiwi server-side squelch (0=off..99). */}
+            {onKiwiSquelch && (
+              <View style={styles.bwRow}>
+                <Text style={styles.bwLabel}>SQUELCH</Text>
+                <Slider style={styles.bwSlider}
+                  minimumValue={0} maximumValue={99} step={1}
+                  value={kiwiSquelch}
+                  onValueChange={(v: number) => onKiwiSquelch?.(v)}
+                  minimumTrackTintColor={kiwiSquelch > 0 ? C.gold : C.muted}
+                  maximumTrackTintColor={C.muted}
+                  thumbTintColor={C.gold} />
+                <Text style={styles.bwVal}>{kiwiSquelch <= 0 ? 'Off' : String(kiwiSquelch)}</Text>
+              </View>
+            )}
+
+            {!onLocalSquelch && !onKiwiSquelch && !isOwrx && (
             /* SNR Squelch — UberSDR audio gate. Slider 0–50 dB in OUR meter's
                units (SDRScreen shifts +30 for the server's raw SNR scale). */
             <View style={styles.bwRow}>

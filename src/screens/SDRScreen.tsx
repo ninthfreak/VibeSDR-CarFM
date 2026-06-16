@@ -40,6 +40,7 @@ import type { RootStackParamList }     from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { createBackend } from '../services/UberSDRAdapter';
+import { KiwiAdapter } from '../services/KiwiAdapter';
 import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
@@ -636,6 +637,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [serverDspFilter,  setServerDspFilter]  = useState('');
   const [serverDspParams,  setServerDspParams]  = useState<Record<string,string>>({});
   const [dspFilters,       setDspFilters]       = useState<DspFilterDesc[]>([]);
+  const [kiwiSquelch,      setKiwiSquelch]      = useState(0);   // Kiwi squelch 0=off..99
+  const onKiwiSquelch = useCallback((v: number) => {
+    setKiwiSquelch(v); client.current?.setSquelch?.(v);
+  }, []);
   const [dspError,         setDspError]         = useState<string | null>(null);
 
   // ── UI overlay state ──────────────────────────────────────────────────────
@@ -861,6 +866,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     raw.replace(/[^A-Za-z0-9\-_\/]/g, '').replace(/^[-_\/]+|[-_\/]+$/g, '').slice(0, 15), []);
 
   const isOwrx = route.params.serverType === 'owrx';
+  const isKiwi = route.params.serverType === 'kiwi';
+  // Kiwi exposes its noise filters/blanker as DSP descriptors → reuse the
+  // UberSDR server-DSP menu UI (filter selector + param sliders).
+  useEffect(() => {
+    if (isKiwi) setDspFilters(KiwiAdapter.DSP_FILTERS as DspFilterDesc[]);
+  }, [isKiwi]);
   // OWRX has no SNR meter — default to the S-meter (the 'snr' default reads dead).
   useEffect(() => { if (isOwrx && signalMode === 'snr') setSignalMode('smeter'); }, [isOwrx, signalMode]);
   const handleChatJoin = useCallback((cs: string) => {
@@ -2154,6 +2165,10 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onServerDsp = useCallback((enabled: boolean) => {
     setServerDspEnabled(enabled);  // optimistic — dsp_status confirms
+    if (isKiwi) {
+      client.current?.setDsp?.(enabled, dspFilterRef.current, dspParamsRef.current);
+      return;
+    }
     if (enabled) {
       sendAudioCmd({ type: 'set_dsp', enabled: true,
                      filter: dspFilterRef.current, params: dspParamsRef.current });
@@ -2163,16 +2178,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     } else {
       sendAudioCmd({ type: 'set_dsp', enabled: false });
     }
-  }, [sendAudioCmd]);
+  }, [sendAudioCmd, isKiwi]);
 
   const onServerDspFilter = useCallback((name: string) => {
     setServerDspFilter(name);
     const defs = dspDefaults(dspFiltersRef.current.find((f: DspFilterDesc) => f.name === name));
     applyDspParams(defs);
+    if (isKiwi) {
+      if (serverDspEnabledRef.current) client.current?.setDspFilter?.(name, defs);
+      return;
+    }
     if (serverDspEnabledRef.current) {
       sendAudioCmd({ type: 'set_dsp', enabled: true, filter: name, params: defs });
     }
-  }, [sendAudioCmd, dspDefaults, applyDspParams]);
+  }, [sendAudioCmd, dspDefaults, applyDspParams, isKiwi]);
 
   // Param edits send the FULL params map, debounced 120ms (skin parity)
   const dspParamTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2181,11 +2200,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     applyDspParams(next);
     if (dspParamTimer.current) clearTimeout(dspParamTimer.current);
     dspParamTimer.current = setTimeout(() => {
-      if (serverDspEnabledRef.current) {
-        sendAudioCmd({ type: 'set_dsp_params', params: dspParamsRef.current });
-      }
+      if (!serverDspEnabledRef.current) return;
+      if (isKiwi) client.current?.setDspParams?.(dspParamsRef.current);
+      else sendAudioCmd({ type: 'set_dsp_params', params: dspParamsRef.current });
     }, 120);
-  }, [sendAudioCmd, applyDspParams]);
+  }, [sendAudioCmd, applyDspParams, isKiwi]);
   useEffect(() => () => {
     if (dspParamTimer.current) clearTimeout(dspParamTimer.current);
   }, []);
@@ -3110,6 +3129,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         snrSquelch={snrSquelch}         onSnrSquelch={onSnrSquelch}
         fmSquelch={fmSquelch}           onFmSquelch={onFmSquelch}
         localSquelch={hwSquelch}        onLocalSquelch={isLocal ? onLocalSquelch : undefined}
+        kiwiSquelch={kiwiSquelch}       onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
         localNR={hwNrLevel}             onLocalNR={isLocal ? onLocalNR : undefined}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
         serverDspEnabled={serverDspEnabled}

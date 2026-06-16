@@ -516,6 +516,90 @@ export class KiwiAdapter implements SDRBackend {
     this.cb.onStatus(this.getStatus());
   }
 
+  // ── Noise filters / blanker (server-side DSP) ──────────────────────────────
+  // Exposed as DSP filter descriptors so they reuse the same menu UI as the
+  // UberSDR server DSP. Kiwi has 3 noise-filter algos + the noise blanker, each
+  // with its own params; we map a selected filter+params to its SET nr/nb seq.
+  // Param order in each descriptor == Kiwi's `param=` index.
+  static readonly DSP_FILTERS = [
+    { name: 'Spectral NR', params: [
+      { name: 'gain',       type: 'float', min: '-30',    max: '30',  default: '0'    },
+      { name: 'alpha',      type: 'float', min: '0.90',   max: '0.99', default: '0.95' },
+      { name: 'active_snr', type: 'int',   min: '2',      max: '30',  default: '30'   },
+    ] },
+    { name: 'WDSP Denoise', params: [
+      { name: 'taps',    type: 'int', min: '16', max: '128', default: '64' },
+      { name: 'delay',   type: 'int', min: '2',  max: '128', default: '16' },
+      { name: 'gain',    type: 'int', min: '1',  max: '20',  default: '10' },
+      { name: 'leakage', type: 'int', min: '1',  max: '23',  default: '7'  },
+    ] },
+    { name: 'LMS Denoise', params: [
+      { name: 'delay', type: 'int',   min: '1',      max: '200', default: '1'    },
+      { name: 'beta',  type: 'float', min: '0.0001', max: '0.15', default: '0.05' },
+      { name: 'decay', type: 'float', min: '0.90',   max: '1.0', default: '0.98' },
+    ] },
+    { name: 'Noise Blanker', params: [
+      { name: 'gate',      type: 'int', min: '100', max: '5000', default: '100' },
+      { name: 'threshold', type: 'int', min: '0',   max: '100',  default: '50'  },
+    ] },
+  ];
+  private static readonly NR_ALGO: Record<string, number> = {
+    'WDSP Denoise': 1, 'LMS Denoise': 2, 'Spectral NR': 3,
+  };
+
+  private dspEnabled = false;
+  private dspFilter  = 'Spectral NR';
+  private dspParams: Record<string, string> = {};
+
+  /** Apply the selected noise filter / blanker (enabled + filter + params). */
+  setDsp(enabled: boolean, filter: string, params: Record<string, string>): void {
+    this.dspEnabled = enabled;
+    this.dspFilter  = filter || this.dspFilter;
+    this.dspParams  = { ...params };
+    this.applyDsp();
+  }
+  setDspFilter(filter: string, params: Record<string, string>): void {
+    this.dspFilter = filter;
+    this.dspParams = { ...params };
+    this.applyDsp();
+  }
+  setDspParams(params: Record<string, string>): void {
+    this.dspParams = { ...params };
+    this.applyDsp();
+  }
+
+  private applyDsp(): void {
+    const desc = KiwiAdapter.DSP_FILTERS.find(f => f.name === this.dspFilter);
+    const isNB = this.dspFilter === 'Noise Blanker';
+    if (!this.dspEnabled || !desc) {
+      // Off: disable both the noise filter and the blanker.
+      this.sndSend('SET nr algo=0'); this.sndSend('SET nr type=0 en=0');
+      this.sndSend('SET nb algo=0'); this.sndSend('SET nb type=0 en=0');
+      return;
+    }
+    const pval = (name: string, def: string) => {
+      const v = this.dspParams[name];
+      return (v != null && v !== '') ? v : def;
+    };
+    if (isNB) {
+      this.sndSend('SET nr algo=0'); this.sndSend('SET nr type=0 en=0');   // drop NR
+      this.sndSend('SET nb algo=1');                                        // standard blanker
+      desc.params.forEach((p, i) => this.sndSend(`SET nb type=0 param=${i} pval=${pval(p.name, p.default)}`));
+      this.sndSend('SET nb type=0 en=1');
+    } else {
+      this.sndSend('SET nb algo=0'); this.sndSend('SET nb type=0 en=0');   // drop blanker
+      this.sndSend(`SET nr algo=${KiwiAdapter.NR_ALGO[this.dspFilter] ?? 3}`);
+      desc.params.forEach((p, i) => this.sndSend(`SET nr type=0 param=${i} pval=${pval(p.name, p.default)}`));
+      this.sndSend('SET nr type=0 en=1');                                  // type 0 = denoiser
+    }
+  }
+
+  /** Squelch 0–99 (0 = off). Kiwi gates the audio server-side. */
+  setSquelch(level: number): void {
+    const v = Math.max(0, Math.min(99, Math.round(level)));
+    this.sndSend(`SET squelch=${v} param=0`);
+  }
+
   zoom(frequency: number, binBandwidth: number): void {
     this.viewCenter = frequency;
     this.viewBw = Math.max(1, binBandwidth * WF_BINS);
