@@ -41,6 +41,7 @@
 #include "utils/net.h"
 #include "rds_demod.h"   // radio module RDS demod
 #include "rds.h"         // radio module RDS decoder
+#include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
 
 #define LOG_TAG "VibeLocalSDR"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -197,6 +198,13 @@ struct LocalSdrShim::Impl {
     float lrEma = 0.0f;
     std::atomic<float> spectrumSnr{0.0f};   // peak−floor (dB); gates stereo (no station = static)
 
+    // Audio-extension decoder (RTTY etc.) on /ws/dxcluster — fed the demod audio.
+    std::mutex decoderMtx;
+    FskDecoder* decoder = nullptr;
+    std::shared_ptr<net::Socket> dxClient;
+    std::string decTextBuf;                 // decoded chars awaiting flush (UTF-8)
+    std::mutex decBufMtx;
+
     // server
     std::shared_ptr<net::Listener> listener;
     std::thread acceptThread;
@@ -287,9 +295,14 @@ struct LocalSdrShim::Impl {
         ((Impl*)ctx)->onAudio(data, count);
     }
     void onAudio(dsp::stereo_t* data, int count) {
+        if (count <= 0) return;
+        // Feed the audio-extension decoder (mono int16) — runs even with no audio
+        // WS client. The decoder's onChar/onState push frames to the dxcluster WS.
+        feedDecoder(data, count);
+
         std::shared_ptr<net::Socket> sock;
         { std::lock_guard<std::mutex> lk(clientMtx); sock = audioClient; }
-        if (!sock || !sock->isOpen() || count <= 0) return;
+        if (!sock || !sock->isOpen()) return;
         int ch = audioChannels.load();
         // header: [0]=channels, [1]=0, [2..5]=sampleRate u32 LE, then int16 PCM
         std::vector<uint8_t> frame(6 + (size_t)count * ch * 2);
@@ -315,6 +328,42 @@ struct LocalSdrShim::Impl {
             for (int i = 0; i < count; i++) pcm[i] = cvt(data[i].l);
         }
         sendWs(sock, 0x2, frame.data(), frame.size());
+    }
+
+    // ── Audio-extension decoder (RTTY) ─────────────────────────────────────
+    void feedDecoder(dsp::stereo_t* data, int count) {
+        std::lock_guard<std::mutex> lk(decoderMtx);
+        if (!decoder) return;
+        std::vector<int16_t> mono((size_t)count);
+        for (int i = 0; i < count; i++) {
+            int s = (int)lround(data[i].l * 32767.0f);
+            mono[i] = (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
+        }
+        decoder->process(mono.data(), count);
+        // Flush any decoded text to the dxcluster client.
+        std::string text;
+        { std::lock_guard<std::mutex> bl(decBufMtx); if (!decTextBuf.empty()) { text.swap(decTextBuf); } }
+        if (!text.empty()) {
+            std::shared_ptr<net::Socket> dx;
+            { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
+            if (dx && dx->isOpen()) {
+                std::vector<uint8_t> msg(13 + text.size());
+                msg[0] = 0x01;
+                uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                for (int i = 0; i < 8; i++) msg[1 + i] = (uint8_t)(ts >> ((7 - i) * 8));   // big-endian
+                uint32_t len = (uint32_t)text.size();
+                msg[9] = (uint8_t)(len >> 24); msg[10] = (uint8_t)(len >> 16);
+                msg[11] = (uint8_t)(len >> 8); msg[12] = (uint8_t)len;
+                std::memcpy(msg.data() + 13, text.data(), text.size());
+                sendWs(dx, 0x2, msg.data(), msg.size());
+            }
+        }
+    }
+    void sendDecoderState(int st) {
+        std::shared_ptr<net::Socket> dx;
+        { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
+        if (dx && dx->isOpen()) { uint8_t m[2] = { 0x03, (uint8_t)st }; sendWs(dx, 0x2, m, 2); }
     }
 
     // ── Demod chain (re)build ──────────────────────────────────────────────
@@ -607,7 +656,10 @@ struct LocalSdrShim::Impl {
         }
         bool wsSpec  = reqLine.find("/ws/user-spectrum") != std::string::npos;
         bool wsAudio = reqLine.find("/ws/audio") != std::string::npos;
-        if ((wsSpec || wsAudio) && !wsKey.empty()) {
+        bool wsDx    = reqLine.find("/ws/dxcluster") != std::string::npos;
+        if (wsDx && !wsKey.empty()) {
+            acceptDxcluster(sock, wsKey);
+        } else if ((wsSpec || wsAudio) && !wsKey.empty()) {
             acceptWs(sock, wsKey, wsAudio);
         } else if (reqLine.find("/connection") != std::string::npos) {
             std::string body = "{\"allowed\":true}";
@@ -641,6 +693,62 @@ struct LocalSdrShim::Impl {
           if (audioClient == sock) audioClient = nullptr; }
         sock->close();
         LOGI("%s WS disconnected", isAudio ? "audio" : "spectrum");
+    }
+
+    void startDecoder(const std::string& msg) {
+        std::string ext = jsonStr(msg, "extension_name");
+        if (ext != "fsk") return;   // RTTY/NAVTEX only for now
+        double cf, sh, baud; bool inv = msg.find("\"inverted\":true") != std::string::npos;
+        if (!jsonNum(msg, "center_frequency", cf)) cf = 1000.0;
+        if (!jsonNum(msg, "shift", sh)) sh = 170.0;
+        if (!jsonNum(msg, "baud_rate", baud)) baud = 45.45;
+        std::string enc = jsonStr(msg, "encoding"); if (enc.empty()) enc = "ITA2";
+        std::string framing = jsonStr(msg, "framing"); if (framing.empty()) framing = "5N1.5";
+        std::lock_guard<std::mutex> lk(decoderMtx);
+        delete decoder;
+        decoder = new FskDecoder(48000, cf, sh, baud, framing, enc, inv);
+        decoder->onChar = [this](char32_t ch) {
+            std::lock_guard<std::mutex> bl(decBufMtx);
+            // RTTY/ITA2 is ASCII; encode minimally as UTF-8.
+            if (ch < 0x80) decTextBuf.push_back((char)ch);
+            else if (ch < 0x800) { decTextBuf.push_back((char)(0xC0|(ch>>6))); decTextBuf.push_back((char)(0x80|(ch&0x3F))); }
+        };
+        decoder->onState = [this](int st) { sendDecoderState(st); };
+        LOGI("decoder attached: fsk cf=%.0f shift=%.0f baud=%.2f enc=%s", cf, sh, baud, enc.c_str());
+    }
+    void stopDecoder() {
+        std::lock_guard<std::mutex> lk(decoderMtx);
+        delete decoder; decoder = nullptr;
+        { std::lock_guard<std::mutex> bl(decBufMtx); decTextBuf.clear(); }
+    }
+
+    void acceptDxcluster(std::shared_ptr<net::Socket> sock, const std::string& wsKey) {
+        std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
+        sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                      "Sec-WebSocket-Accept: " + base64(digest, 20) + "\r\n\r\n");
+        { std::lock_guard<std::mutex> lk(clientMtx); dxClient = sock; }
+        LOGI("dxcluster (decoder) WS connected");
+        while (serverRunning.load() && sock->isOpen()) {
+            std::string payload;
+            int op = recvWs(sock, payload);
+            if (op < 0 || op == 0x8) break;
+            if (op == 0x9) { sendWs(sock, 0xA, (const uint8_t*)payload.data(), payload.size()); continue; }
+            if (op != 0x1) continue;
+            std::string type = jsonStr(payload, "type");
+            if (type == "audio_extension_attach") {
+                startDecoder(payload);
+                sendText(sock, "{\"type\":\"audio_extension_attached\"}");
+            } else if (type == "audio_extension_detach") {
+                stopDecoder();
+                sendText(sock, "{\"type\":\"audio_extension_detached\"}");
+            }
+            // chat / subscribe_* messages are ignored (no server here).
+        }
+        stopDecoder();
+        { std::lock_guard<std::mutex> lk(clientMtx); if (dxClient == sock) dxClient = nullptr; }
+        sock->close();
+        LOGI("dxcluster WS disconnected");
     }
 
     // ── RTL IQ worker ──────────────────────────────────────────────────────
@@ -736,7 +844,9 @@ void LocalSdrShim::stop() {
     // listener, join the accept + connection threads.
     { std::lock_guard<std::mutex> lk(impl->clientMtx);
       if (impl->specClient) impl->specClient->close();
-      if (impl->audioClient) impl->audioClient->close(); }
+      if (impl->audioClient) impl->audioClient->close();
+      if (impl->dxClient) impl->dxClient->close(); }
+    impl->stopDecoder();
     if (impl->listener) impl->listener->stop();
     if (impl->acceptThread.joinable()) impl->acceptThread.join();
     { std::lock_guard<std::mutex> lk(impl->connMtx);
