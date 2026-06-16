@@ -42,6 +42,7 @@
 #include "rds_demod.h"   // radio module RDS demod
 #include "rds.h"         // radio module RDS decoder
 #include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
+#include "decoders/wefax_decoder.h" // WEFAX (audio-extension decoder)
 
 #define LOG_TAG "VibeLocalSDR"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -201,6 +202,7 @@ struct LocalSdrShim::Impl {
     // Audio-extension decoder (RTTY etc.) on /ws/dxcluster — fed the demod audio.
     std::mutex decoderMtx;
     FskDecoder* decoder = nullptr;
+    WefaxDecoder* wefax = nullptr;          // active image decoder (WEFAX), or null
     std::shared_ptr<net::Socket> dxClient;
     std::string decTextBuf;                 // decoded chars awaiting flush (UTF-8)
     std::mutex decBufMtx;
@@ -333,12 +335,13 @@ struct LocalSdrShim::Impl {
     // ── Audio-extension decoder (RTTY) ─────────────────────────────────────
     void feedDecoder(dsp::stereo_t* data, int count) {
         std::lock_guard<std::mutex> lk(decoderMtx);
-        if (!decoder) return;
+        if (!decoder && !wefax) return;
         std::vector<int16_t> mono((size_t)count);
         for (int i = 0; i < count; i++) {
             int s = (int)lround(data[i].l * 32767.0f);
             mono[i] = (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
         }
+        if (wefax) { wefax->process(mono.data(), count); return; }
         decoder->process(mono.data(), count);
         // Flush any decoded text to the dxcluster client.
         std::string text;
@@ -697,6 +700,7 @@ struct LocalSdrShim::Impl {
 
     void startDecoder(const std::string& msg) {
         std::string ext = jsonStr(msg, "extension_name");
+        if (ext == "wefax") { startWefax(msg); return; }
         bool navtex = (ext == "navtex");
         if (ext != "fsk" && !navtex) return;   // RTTY / NAVTEX
         double cf, sh, baud; bool inv = msg.find("\"inverted\":true") != std::string::npos;
@@ -717,9 +721,48 @@ struct LocalSdrShim::Impl {
         decoder->onState = [this](int st) { sendDecoderState(st); };
         LOGI("decoder attached: fsk cf=%.0f shift=%.0f baud=%.2f enc=%s", cf, sh, baud, enc.c_str());
     }
+    void startWefax(const std::string& msg) {
+        WefaxDecoder::Config cfg;
+        double v;
+        if (jsonNum(msg, "lpm", v))         cfg.lpm        = (int)v;
+        if (jsonNum(msg, "image_width", v)) cfg.imageWidth = (int)v;
+        if (jsonNum(msg, "carrier", v))     cfg.carrier    = v;
+        if (jsonNum(msg, "deviation", v))   cfg.deviation  = v;
+        if (jsonNum(msg, "bandwidth", v))   cfg.bandwidth  = (int)v;
+        cfg.usePhasing = msg.find("\"use_phasing\":false") == std::string::npos;
+        cfg.autoStop   = msg.find("\"auto_stop\":true")    != std::string::npos;
+        cfg.autoStart  = msg.find("\"auto_start\":true")   != std::string::npos;
+        std::lock_guard<std::mutex> lk(decoderMtx);
+        delete decoder; decoder = nullptr;
+        delete wefax;
+        wefax = new WefaxDecoder(48000, cfg);
+        wefax->onLine = [this](uint32_t ln, uint32_t w, const uint8_t* px) {
+            std::shared_ptr<net::Socket> dx;
+            { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
+            if (!dx || !dx->isOpen()) return;
+            std::vector<uint8_t> m(9 + w);
+            m[0] = 0x01;
+            m[1] = (uint8_t)(ln >> 24); m[2] = (uint8_t)(ln >> 16); m[3] = (uint8_t)(ln >> 8); m[4] = (uint8_t)ln;
+            m[5] = (uint8_t)(w >> 24);  m[6] = (uint8_t)(w >> 16);  m[7] = (uint8_t)(w >> 8);  m[8] = (uint8_t)w;
+            std::memcpy(m.data() + 9, px, w);
+            sendWs(dx, 0x2, m.data(), m.size());
+        };
+        wefax->onStart = [this]() {
+            std::shared_ptr<net::Socket> dx;
+            { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
+            if (dx && dx->isOpen()) { uint8_t b = 0x02; sendWs(dx, 0x2, &b, 1); }
+        };
+        wefax->onStop = [this]() {
+            std::shared_ptr<net::Socket> dx;
+            { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
+            if (dx && dx->isOpen()) { uint8_t b = 0x03; sendWs(dx, 0x2, &b, 1); }
+        };
+        LOGI("decoder attached: wefax lpm=%d width=%d carrier=%.0f", cfg.lpm, cfg.imageWidth, cfg.carrier);
+    }
     void stopDecoder() {
         std::lock_guard<std::mutex> lk(decoderMtx);
         delete decoder; decoder = nullptr;
+        delete wefax;   wefax = nullptr;
         { std::lock_guard<std::mutex> bl(decBufMtx); decTextBuf.clear(); }
     }
 

@@ -60,6 +60,7 @@ add_subdirectory("${SDRPP_SRC_ROOT}/source_modules/rtl_sdr_source" rtl_sdr_sourc
 add_library(vibelocalsdr SHARED
     vibe_localsdr_jni.cpp local_sdr_shim.cpp
     decoders/fsk_decoder.cpp
+    decoders/wefax_decoder.cpp
     "${SDRPP_SRC_ROOT}/decoder_modules/radio/src/rds.cpp")
 # core headers (dsp/stream, iq_frontend) need C++17; the global CMAKE_CXX_STANDARD
 # is 14 (mirrors SDR++ root), so force this target like core forces its own.
