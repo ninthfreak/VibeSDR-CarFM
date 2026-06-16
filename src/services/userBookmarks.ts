@@ -100,6 +100,77 @@ export function parseBookmarksJSON(jsonString: string, scope: string): UserBookm
   return out;
 }
 
+/** Parse UberSDR bookmark YAML (the server's export format):
+ *    bookmarks:
+ *      - name: "WWV 5 MHz"
+ *        frequency: 5000000
+ *        mode: "am"
+ *        group: "Beacons"
+ *        comment: "…"        # inline comments allowed
+ *  Minimal hand-rolled parser (no YAML dependency) — only this flat shape. */
+export function parseBookmarksYAML(yaml: string, scope: string): UserBookmark[] {
+  const splitKV = (s: string): [string, string] | null => {
+    const i = s.indexOf(':');
+    if (i < 0) return null;
+    const k = s.slice(0, i).trim();
+    let v = s.slice(i + 1).trim();
+    if (v.startsWith('"') || v.startsWith("'")) {
+      const q = v[0], end = v.indexOf(q, 1);
+      v = end > 0 ? v.slice(1, end) : v.slice(1);
+    } else {
+      const h = v.indexOf(' #');                 // strip trailing inline comment
+      if (h >= 0) v = v.slice(0, h).trim();
+    }
+    return [k, v];
+  };
+
+  const items: Record<string, string>[] = [];
+  let cur: Record<string, string> | null = null;
+  for (const raw of yaml.split(/\r?\n/)) {
+    const line = raw.replace(/\t/g, '  ');
+    if (/^\s*#/.test(line) || !line.trim()) continue;
+    const item = line.match(/^(\s*)-\s*(.*)$/);
+    if (item) {
+      cur = {}; items.push(cur);
+      if (item[2]) { const kv = splitKV(item[2]); if (kv) cur[kv[0]] = kv[1]; }
+    } else if (cur) {
+      const kv = splitKV(line.trim());
+      if (kv) cur[kv[0]] = kv[1];
+    }
+  }
+
+  const out: UserBookmark[] = [];
+  for (const b of items) {
+    let freq = Number(b.frequency ?? b.freq ?? 0);
+    if (!freq || isNaN(freq)) continue;
+    if (freq < 30_000) freq *= 1000;             // kHz heuristic
+    out.push({
+      name:           String(b.name ?? 'Unnamed'),
+      frequency:      Math.round(freq),
+      mode:           String(b.mode ?? 'usb').toLowerCase(),
+      group:          b.group ?? null,
+      comment:        b.comment ?? null,
+      extension:      b.extension ?? null,
+      bandwidth_low:  b.bandwidth_low != null && b.bandwidth_low !== '' ? Number(b.bandwidth_low) : null,
+      bandwidth_high: b.bandwidth_high != null && b.bandwidth_high !== '' ? Number(b.bandwidth_high) : null,
+      scope,
+    });
+  }
+  return out;
+}
+
+/** Parse pasted bookmark text — JSON or YAML, auto-detected. */
+export function parseBookmarksAny(text: string, scope: string): UserBookmark[] {
+  const t = text.trim();
+  if (t.startsWith('{') || t.startsWith('[')) return parseBookmarksJSON(text, scope);
+  // YAML (UberSDR export) — fall back to JSON if it doesn't look like YAML.
+  try {
+    const y = parseBookmarksYAML(text, scope);
+    if (y.length) return y;
+  } catch {}
+  return parseBookmarksJSON(text, scope);
+}
+
 /** Merge imported/added bookmarks — name+frequency keyed, newest wins. */
 export function mergeBookmarks(existing: UserBookmark[], incoming: UserBookmark[]): UserBookmark[] {
   const key = (b: UserBookmark) => `${b.name}|${b.frequency}`;

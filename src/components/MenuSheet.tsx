@@ -157,6 +157,7 @@ export interface MenuSheetProps {
   onDeleteBookmark?:  (bm: UserBookmark) => void;
   onExportBookmarks?: () => void;
   onImportBookmarks?: (text: string, allInstances: boolean) => string;
+  onPickImportFile?: (allInstances: boolean) => Promise<string>;
 
   onClose:          () => void;
   onBack?:          () => void;
@@ -430,7 +431,7 @@ export default function MenuSheet({
   dabProgrammes = [], activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
   searchBookmarks = [], searchBands = [], onSearchTune,
   userBookmarks = [], currentFreq = 0, currentMode = '',
-  onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks,
+  onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
   onClose, onBack, onLocalHardware, onAdminLink, onResetSettings, onDisplaySettings,
   serverVersion = null, onAbout,
   onZoomIn, onZoomOut, onSetDefault, isDefaultInstance = false,
@@ -926,15 +927,25 @@ export default function MenuSheet({
                 <SubLabel label="Transfer" />
                 <BtnRow>
                   <Btn label="⇧ EXPORT JSON" onPress={onExportBookmarks} />
-                  <Btn label="⇩ IMPORT" active={bmImportOpen}
+                  <Btn label="⇩ PASTE" active={bmImportOpen}
                        onPress={() => { setBmImportOpen((p: boolean) => !p); setBmImportMsg(''); }} />
                 </BtnRow>
+                {onPickImportFile && (
+                  <BtnRow>
+                    <Btn label="📁 IMPORT FILE (JSON / YAML)" full
+                         onPress={async () => {
+                           const msg = await onPickImportFile(bmAll);
+                           if (msg) { setBmImportMsg(msg); setBmImportOpen(false); }
+                         }} />
+                  </BtnRow>
+                )}
+                {!bmImportOpen && !!bmImportMsg && <Text style={styles.bmImportMsg}>{bmImportMsg}</Text>}
                 {bmImportOpen && (<>
                   <TextInput
                     style={[styles.searchInput, styles.bmImportBox]}
                     value={bmImportText}
                     onChangeText={setBmImportText}
-                    placeholder="Paste UberSDR bookmarks JSON here…"
+                    placeholder="Paste UberSDR bookmarks (JSON or YAML) here…"
                     placeholderTextColor="rgba(255,255,255,0.40)"
                     autoCorrect={false}
                     autoCapitalize="none"

@@ -82,9 +82,12 @@ import {
 } from '../services/stations';
 import {
   loadUserBookmarks, saveUserBookmarks, bookmarksForInstance, withoutInstance,
-  exportBookmarksJSON, parseBookmarksJSON, mergeBookmarks, type UserBookmark,
+  exportBookmarksJSON, parseBookmarksAny, mergeBookmarks, type UserBookmark,
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
+import { loadActiveEibi } from '../services/eibi';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -2281,7 +2284,25 @@ export default function SDRScreen({ route, navigation }: Props) {
     const isOwrx = (route.params.serverType ?? 'ubersdr') === 'owrx';
     // OWRX has no bookmark/band REST API — bookmarks arrive over the WS
     // (onBookmarks) and bands come from the built-in plan; UberSDR fetches both.
-    if (isOwrx) {
+    if (isLocal) {
+      // Local hardware has no server bookmark API — use the EiBi shortwave
+      // schedule (fetched + cached daily), time-filtered so stations show only
+      // while scheduled, like the server feed. Bands come from the built-in plan.
+      setSearchBands(BAND_PLAN.map((b: Band) => ({
+        label: b.bandLabel ?? b.name, start: b.lo, end: b.hi, group: b.type, mode: b.mode,
+      })));
+      const load = () => {
+        loadActiveEibi()
+          .then((b: ServerBookmark[]) => { if (!cancelled) setServerBookmarks(b); })
+          .catch(() => {});
+      };
+      load();
+      const iv = setInterval(load, 10 * 60_000);   // re-filter as the schedule rolls
+      loadUserBookmarks()
+        .then((b: UserBookmark[]) => { if (!cancelled) setUserBookmarks(b); })
+        .catch(() => {});
+      return () => { cancelled = true; clearInterval(iv); };
+    } else if (isOwrx) {
       setSearchBands(BAND_PLAN.map((b: Band) => ({
         label: b.bandLabel ?? b.name, start: b.lo, end: b.hi, group: b.type, mode: b.mode,
       })));
@@ -2398,14 +2419,26 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onImportBookmarks = useCallback((text: string, allInstances: boolean): string => {
     try {
-      const incoming = parseBookmarksJSON(text, allInstances ? '' : baseUrl);
-      if (!incoming.length) return 'No bookmarks found in that JSON.';
+      const incoming = parseBookmarksAny(text, allInstances ? '' : baseUrl);
+      if (!incoming.length) return 'No bookmarks found (JSON or YAML).';
       persistUserBookmarks(mergeBookmarks(userBookmarks, incoming));
       return `Imported ${incoming.length} bookmark${incoming.length !== 1 ? 's' : ''}.`;
     } catch {
-      return 'Could not parse that JSON.';
+      return 'Could not parse that file (need JSON or YAML).';
     }
   }, [baseUrl, userBookmarks, persistUserBookmarks]);
+
+  // Pick a bookmark file (JSON/YAML) from the Files app and import it.
+  const onPickImportFile = useCallback(async (allInstances: boolean): Promise<string> => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
+      if (res.canceled || !res.assets?.length) return '';
+      const text = await FileSystem.readAsStringAsync(res.assets[0].uri);
+      return onImportBookmarks(text, allInstances);
+    } catch {
+      return 'Could not read that file.';
+    }
+  }, [onImportBookmarks]);
 
   const showBandNotif = useCallback((bands: Band[]) => {
     if (!bands.length) return;
@@ -2937,6 +2970,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onDeleteBookmark={onDeleteBookmark}
         onExportBookmarks={onExportBookmarks}
         onImportBookmarks={onImportBookmarks}
+        onPickImportFile={onPickImportFile}
         colormap={colormap}
         dbMin={dbMin}
         dbMax={dbMax}
