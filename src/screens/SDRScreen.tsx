@@ -285,9 +285,10 @@ function chatTs(rfc: string): string {
 
 // V4 local hardware (RTL-SDR) demodulator list — includes WFM (broadcast FM),
 // which HF UberSDR servers don't offer.
+// SAM omitted — SDR++ (the local-SDR DSP) has no synchronous-AM demodulator.
 const LOCAL_MODES: { id: string; label: string }[] = [
   { id: 'wfm', label: 'WFM' }, { id: 'nfm', label: 'NFM' }, { id: 'am', label: 'AM' },
-  { id: 'sam', label: 'SAM' }, { id: 'usb', label: 'USB' }, { id: 'lsb', label: 'LSB' },
+  { id: 'usb', label: 'USB' }, { id: 'lsb', label: 'LSB' },
   { id: 'cwu', label: 'CW' },
 ];
 

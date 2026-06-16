@@ -21,7 +21,13 @@ const UBERSDR_CAPS: BackendCapabilities = {
 };
 
 // V4 local hardware (RTL-SDR Blog V4): HF direct ~0.1 MHz up to ~1766 MHz.
-const LOCAL_CAPS: BackendCapabilities = { ...UBERSDR_CAPS, freqRange: [100_000, 1_766_000_000] };
+// Per-mode bandwidth ceilings — WFM is broadcast-wide, so the slider must reach
+// ±100 kHz (without a wfm entry it fell back to default=6k and snapped narrow).
+const LOCAL_CAPS: BackendCapabilities = {
+  ...UBERSDR_CAPS,
+  freqRange: [100_000, 1_766_000_000],
+  maxBandwidth: { default: 6000, nfm: 8000, fm: 8000, am: 10000, wfm: 100000 },
+};
 
 export class UberSDRAdapter implements SDRBackend {
   readonly kind: BackendKind = 'ubersdr';

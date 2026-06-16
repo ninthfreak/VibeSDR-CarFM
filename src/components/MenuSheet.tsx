@@ -33,6 +33,7 @@ import {
 } from '../services/stations';
 import { type UserBookmark } from '../services/userBookmarks';
 import { APP_VERSION } from '../constants/version';
+import UsbSdrIcon from './UsbSdrIcon';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1577,7 +1578,11 @@ export default function MenuSheet({
               <View style={styles.footerServer}>
                 {/* OWRX's logo is a black antenna that vanishes on the dark UI —
                     give it a light chip so it reads. */}
-                {!isLocal && (
+                {isLocal ? (
+                  <View style={styles.footerLogo}>
+                    <UsbSdrIcon size={30} color="#cfe3ff" strokeWidth={2.4} />
+                  </View>
+                ) : (
                   <View style={serverType === 'owrx' ? styles.footerLogoChip : undefined}>
                     <Image source={SERVER_LOGOS[serverType] ?? SERVER_LOGOS.ubersdr} style={styles.footerLogo} resizeMode="contain" />
                   </View>
