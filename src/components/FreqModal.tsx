@@ -17,6 +17,10 @@ interface FreqModalProps {
   /** Controlled unit — selection here also drives the main frequency display. */
   unit?:     Unit;
   onUnit?:   (u: Unit) => void;
+  /** Backend tuning range (Hz). Defaults to UberSDR HF limits; local hardware
+   *  widens it so VHF/UHF entries (e.g. 96.6 MHz) aren't rejected. */
+  minHz?:    number;
+  maxHz?:    number;
 }
 
 function toDisplay(hz: number, unit: Unit): string {
@@ -36,6 +40,7 @@ function fromDisplay(val: string, unit: Unit): number {
 export default function FreqModal({
   visible, currentHz, onConfirm, onClose,
   unit: unitProp, onUnit,
+  minHz = MIN_FREQ_HZ, maxHz = MAX_FREQ_HZ,
 }: FreqModalProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
@@ -69,7 +74,7 @@ export default function FreqModal({
 
   const confirm = () => {
     const hz = fromDisplay(value, unit);
-    if (hz >= MIN_FREQ_HZ && hz <= MAX_FREQ_HZ) { onConfirm(hz); onClose(); }
+    if (hz >= minHz && hz <= maxHz) { onConfirm(hz); onClose(); }
     Keyboard.dismiss();
   };
 

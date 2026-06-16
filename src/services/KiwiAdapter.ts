@@ -70,6 +70,7 @@ const KIWI_MODE: Record<SDRMode, { mod: string; lo: number; hi: number }> = {
   nfm: { mod: 'nbfm', lo: -6000, hi:  6000 },
   cwu: { mod: 'cw',   lo:   300, hi:   700 },
   cwl: { mod: 'cw',   lo:  -700, hi:  -300 },
+  wfm: { mod: 'nbfm', lo: -6000, hi:  6000 }, // unused (Kiwi has no WFM) — local-only mode
 };
 
 const KIWI_CAPS: Omit<BackendCapabilities, 'freqRange'> = {

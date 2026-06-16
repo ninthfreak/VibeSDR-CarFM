@@ -1,11 +1,12 @@
 // Shared SDR types used across clients and UI
-export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl';
+// 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
+export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 export type Mode = SDRMode; // alias
 
 export const MODES: SDRMode[] = ['usb', 'lsb', 'am', 'sam', 'fm', 'nfm', 'cwu', 'cwl'];
 export const MODE_LABELS: Record<SDRMode, string> = {
   usb: 'USB', lsb: 'LSB', am: 'AM', sam: 'SAM',
-  fm: 'FM', nfm: 'NFM', cwu: 'CWU', cwl: 'CWL',
+  fm: 'FM', nfm: 'NFM', cwu: 'CWU', cwl: 'CWL', wfm: 'WFM',
 };
 
 export const STEPS = [10, 100, 500, 1000, 9000, 10000];

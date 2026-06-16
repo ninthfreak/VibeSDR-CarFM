@@ -21,7 +21,8 @@ import { VibePowerModule } from '../components/AudioPlayer';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl';
+// 'wfm' = broadcast FM (stereo); local-hardware (RTL-SDR) only — UberSDR is HF.
+export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 
 /** Server-side mode bandwidth defaults (websocket.go, verbatim). */
 export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
@@ -29,6 +30,7 @@ export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
   am:  [-5000, 5000],  sam: [-5000, 5000],
   cwu: [-200, 200],    cwl: [-200, 200],
   fm:  [-6000, 6000],  nfm: [-5000, 5000],
+  wfm: [-100000, 100000],
 };
 
 export interface SDRStatus {

@@ -278,6 +278,14 @@ function chatTs(rfc: string): string {
 // ── Component ──────────────────────────────────────────────────────────────────
 
 
+// V4 local hardware (RTL-SDR) demodulator list — includes WFM (broadcast FM),
+// which HF UberSDR servers don't offer.
+const LOCAL_MODES: { id: string; label: string }[] = [
+  { id: 'wfm', label: 'WFM' }, { id: 'nfm', label: 'NFM' }, { id: 'am', label: 'AM' },
+  { id: 'sam', label: 'SAM' }, { id: 'usb', label: 'USB' }, { id: 'lsb', label: 'LSB' },
+  { id: 'cwu', label: 'CW' },
+];
+
 export default function SDRScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName, password } = route.params;
   useKeepAwake();
@@ -2987,7 +2995,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           gains: hwGains, gainTenthDb: hwGain, auto: hwAutoGain, onAuto: onHwAuto, onGain: onHwGain,
         } : undefined}
         current={status.mode}
-        modes={route.params.serverType === 'owrx' ? serverModes : undefined}
+        modes={isLocal ? LOCAL_MODES : route.params.serverType === 'owrx' ? serverModes : undefined}
         activeDecoder={route.params.serverType === 'owrx'
           ? (activeDecoder === 'sstv' ? 'sstv' : activeDecoder === 'wefax' ? 'fax' : undefined)
           : undefined}
@@ -3046,6 +3054,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         onClose={() => setFreqModalOpen(false)}
         unit={freqUnit}
         onUnit={setFreqUnit}
+        minHz={client.current?.caps.freqRange[0]}
+        maxHz={client.current?.caps.freqRange[1]}
       />
 
       {/* Chat drawer */}

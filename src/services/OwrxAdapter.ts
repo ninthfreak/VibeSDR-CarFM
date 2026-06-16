@@ -124,7 +124,7 @@ function resampleRow(src: Float32Array, outN: number): Float32Array {
 // runtime; cwu/cwl collapse to 'cw' (offset convention handles the sideband).
 const MODE_TO_WIRE: Record<SDRMode, string> = {
   usb: 'usb', lsb: 'lsb', am: 'am', sam: 'sam',
-  fm: 'nfm', nfm: 'nfm', cwu: 'cw', cwl: 'cw',
+  fm: 'nfm', nfm: 'nfm', cwu: 'cw', cwl: 'cw', wfm: 'wfm',
 };
 
 const OWRX_CAPS: BackendCapabilities = {
