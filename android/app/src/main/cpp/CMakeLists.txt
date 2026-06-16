@@ -69,6 +69,7 @@ add_library(vibelocalsdr SHARED
     decoders/fsk_decoder.cpp
     decoders/wefax_decoder.cpp
     decoders/ft8_decoder.cpp
+    decoders/sstv_decoder.cpp
     ${FT8_LIB_SRC}
     "${SDRPP_SRC_ROOT}/decoder_modules/radio/src/rds.cpp")
 # ft8_lib (upstream kgoba) uses KISS FFT unconditionally — no extra define needed.

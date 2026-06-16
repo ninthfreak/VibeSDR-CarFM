@@ -44,6 +44,7 @@
 #include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
 #include "decoders/wefax_decoder.h" // WEFAX (audio-extension decoder)
 #include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
+#include "decoders/sstv_decoder.h"  // SSTV (audio-extension image decoder)
 
 #define LOG_TAG "VibeLocalSDR"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -211,6 +212,11 @@ struct LocalSdrShim::Impl {
     bool spotsActive = false;
     int  spotDecim = 0;                      // 48k→12k decimation counter
     float spotAcc = 0.0f;                    // box-average accumulator
+    // SSTV image decoder (audio-extension). Runs a video-decode thread, so all
+    // dxClient sends are serialised through dxSendMtx.
+    SstvDecoder* sstv = nullptr;
+    int  sstvDecim = 0; float sstvAcc = 0.0f;
+    std::mutex dxSendMtx;
     std::shared_ptr<net::Socket> dxClient;
     std::string decTextBuf;                 // decoded chars awaiting flush (UTF-8)
     std::mutex decBufMtx;
@@ -344,7 +350,21 @@ struct LocalSdrShim::Impl {
     // ── Audio-extension decoder (RTTY) ─────────────────────────────────────
     void feedDecoder(dsp::stereo_t* data, int count) {
         std::lock_guard<std::mutex> lk(decoderMtx);
-        if (!decoder && !wefax) return;
+        if (!decoder && !wefax && !sstv) return;
+        // SSTV runs at 12 kHz — decimate 48k→12k (box-average 4) and feed.
+        if (sstv) {
+            std::vector<int16_t> dec; dec.reserve((size_t)count/4 + 1);
+            for (int i = 0; i < count; i++) {
+                sstvAcc += data[i].l;
+                if (++sstvDecim >= 4) {
+                    int s = (int)lround(sstvAcc / 4.0f * 32767.0f);
+                    dec.push_back((int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s)));
+                    sstvDecim = 0; sstvAcc = 0.0f;
+                }
+            }
+            if (!dec.empty()) sstv->process(dec.data(), (int)dec.size());
+            return;
+        }
         std::vector<int16_t> mono((size_t)count);
         for (int i = 0; i < count; i++) {
             int s = (int)lround(data[i].l * 32767.0f);
@@ -780,6 +800,7 @@ struct LocalSdrShim::Impl {
     void startDecoder(const std::string& msg) {
         std::string ext = jsonStr(msg, "extension_name");
         if (ext == "wefax") { startWefax(msg); return; }
+        if (ext == "sstv")  { startSstv(msg);  return; }
         bool navtex = (ext == "navtex");
         if (ext != "fsk" && !navtex) return;   // RTTY / NAVTEX
         double cf, sh, baud; bool inv = msg.find("\"inverted\":true") != std::string::npos;
@@ -838,10 +859,58 @@ struct LocalSdrShim::Impl {
         };
         LOGI("decoder attached: wefax lpm=%d width=%d carrier=%.0f", cfg.lpm, cfg.imageWidth, cfg.carrier);
     }
+    // ── SSTV ───────────────────────────────────────────────────────────────
+    void dxSend(const uint8_t* d, size_t n) {
+        std::shared_ptr<net::Socket> dx;
+        { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
+        if (!dx || !dx->isOpen()) return;
+        std::lock_guard<std::mutex> sl(dxSendMtx);
+        sendWs(dx, 0x2, d, n);
+    }
+    static void put32(std::vector<uint8_t>& v, uint32_t x) {
+        v.push_back((uint8_t)(x>>24)); v.push_back((uint8_t)(x>>16));
+        v.push_back((uint8_t)(x>>8));  v.push_back((uint8_t)x);
+    }
+    void startSstv(const std::string& msg) {
+        (void)msg;
+        std::lock_guard<std::mutex> lk(decoderMtx);
+        delete decoder; decoder = nullptr;
+        delete wefax;   wefax = nullptr;
+        delete sstv;
+        sstv = new SstvDecoder(12000);
+        sstvDecim = 0; sstvAcc = 0.0f;
+        sstv->onImageStart = [this](int w, int h) {
+            std::vector<uint8_t> m; m.push_back(0x07); put32(m,(uint32_t)w); put32(m,(uint32_t)h);
+            dxSend(m.data(), m.size());
+        };
+        sstv->onLine = [this](int y, int w, const uint8_t* rgb) {
+            std::vector<uint8_t> m; m.reserve(9 + (size_t)w*3);
+            m.push_back(0x01); put32(m,(uint32_t)y); put32(m,(uint32_t)w);
+            m.insert(m.end(), rgb, rgb + (size_t)w*3);
+            dxSend(m.data(), m.size());
+        };
+        sstv->onMode = [this](uint8_t, const std::string& name) {
+            std::vector<uint8_t> m; m.push_back(0x02);
+            m.push_back((uint8_t)(name.size()>>8)); m.push_back((uint8_t)name.size());
+            m.insert(m.end(), name.begin(), name.end());
+            dxSend(m.data(), m.size());
+        };
+        sstv->onStatus = [this](const std::string& s) {
+            std::vector<uint8_t> m; m.push_back(0x03); m.push_back(0x00);
+            m.push_back((uint8_t)(s.size()>>8)); m.push_back((uint8_t)s.size());
+            m.insert(m.end(), s.begin(), s.end());
+            dxSend(m.data(), m.size());
+        };
+        sstv->onSync = [this]() { uint8_t b = 0x04; dxSend(&b, 1); };
+        sstv->onComplete = [this]() { std::vector<uint8_t> m; m.push_back(0x05); put32(m,0); dxSend(m.data(), m.size()); };
+        sstv->onRedrawStart = [this]() { uint8_t b = 0x08; dxSend(&b, 1); };
+        LOGI("decoder attached: sstv");
+    }
     void stopDecoder() {
         std::lock_guard<std::mutex> lk(decoderMtx);
         delete decoder; decoder = nullptr;
         delete wefax;   wefax = nullptr;
+        delete sstv;    sstv = nullptr;
         { std::lock_guard<std::mutex> bl(decBufMtx); decTextBuf.clear(); }
     }
 
