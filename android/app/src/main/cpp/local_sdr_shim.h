@@ -48,6 +48,7 @@ public:
 
 private:
     LocalSdrShim() = default;
+    void stopLocked();      // teardown; caller must hold g_lifecycle
     struct Impl;
     Impl* p = nullptr;
 };

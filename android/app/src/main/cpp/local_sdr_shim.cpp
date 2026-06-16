@@ -1041,7 +1041,10 @@ int LocalSdrShim::start(int fd, int vid, int pid,
                         double centerFreq, double sampleRate, int gainTenthDb,
                         int fftSize, double fftRate, const std::string& mode, std::string& err) {
     std::lock_guard<std::mutex> life(g_lifecycle);
-    if (p) { err = "already running"; return -1; }
+    // Recover from a stale shim left by a dirty exit (app swiped away while the
+    // foreground service kept the process — and the shim — alive). Without this
+    // the new connect got "already running" and wedged on the next launch.
+    if (p) { LOGI("stale shim found on start — tearing down"); stopLocked(); }
     auto* impl = new Impl();
     impl->sampleRate = sampleRate;
     impl->fftSize = fftSize;
@@ -1097,6 +1100,10 @@ void LocalSdrShim::stop() {
     // Kotlin paths (unmount + invalidate), possibly concurrently — without this
     // two stops grab the same Impl and double-free it (the ~Impl crash on close).
     std::lock_guard<std::mutex> life(g_lifecycle);
+    stopLocked();
+}
+
+void LocalSdrShim::stopLocked() {
     if (!p) return;
     Impl* impl = p; p = nullptr;
 
@@ -1136,7 +1143,7 @@ void LocalSdrShim::stop() {
 // ── Decoder-only sidecar (network backends) ───────────────────────────────────
 int LocalSdrShim::startDecoderService(std::string& err) {
     std::lock_guard<std::mutex> life(g_lifecycle);
-    if (p) { err = "already running"; return -1; }
+    if (p) { LOGI("stale shim found on decoder-service start — tearing down"); stopLocked(); }
     Impl* impl = new Impl();
     impl->decoderOnly = true;
     impl->sampleRate = 48000.0;            // decoders run at 48 kHz
