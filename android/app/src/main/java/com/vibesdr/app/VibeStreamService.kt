@@ -161,6 +161,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private var recTrackIndex = -1
     private var recMuxerStarted = false
     private var recChannels = 1
+    private var recRate = 48_000     // encoder rate: 48k (UberSDR) or the external stream rate
     private var recPtsUs = 0L
     private var recFile: java.io.File? = null
     private var recDisplayName = ""
@@ -521,9 +522,19 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         val t = Thread({
             try {
                 while (running && externalAudio) {
-                    val item = extQueue.poll(250, TimeUnit.MILLISECONDS) ?: continue
+                    val item = extQueue.poll(250, TimeUnit.MILLISECONDS)
+                    handleRecRequests()   // arm/stop the recorder on this thread too
+                    if (item == null) continue
                     ensureExtTrack(item.first, item.second)
                     if (!muted) extTrack?.write(item.third, 0, item.third.size)  // blocking = backpressure
+                    // Feed the recorder encoder (the UberSDR decode loop isn't
+                    // running on this path, so recording is driven from here).
+                    if (recArmed) {
+                        val sh = item.third
+                        val bytes = ByteArray(sh.size * 2)
+                        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(sh)
+                        encodePcm(bytes, item.second)
+                    }
                 }
             } catch (e: InterruptedException) {
                 // normal shutdown
@@ -938,9 +949,14 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 val mhz = String.format(java.util.Locale.US, "%.4fMHz", currentFreq / 1e6)
                 recDisplayName = "VibeSDR_${ts}_${mhz}_${currentMode.uppercase()}.m4a"
                 val f = java.io.File(cacheDir, recDisplayName)
-                recChannels = if (trackChannels == 2) 2 else 1
+                // External audio (local/Kiwi/OWRX) has its own rate/channels;
+                // the UberSDR path is always 48k. Match the encoder to the source
+                // so recordings play at the right speed.
+                recRate = if (externalAudio && extRate > 0) extRate else 48_000
+                recChannels = if (externalAudio) extChannels.coerceIn(1, 2)
+                              else if (trackChannels == 2) 2 else 1
                 val fmt = MediaFormat.createAudioFormat(
-                    MediaFormat.MIMETYPE_AUDIO_AAC, 48_000, recChannels)
+                    MediaFormat.MIMETYPE_AUDIO_AAC, recRate, recChannels)
                 fmt.setInteger(MediaFormat.KEY_AAC_PROFILE,
                     android.media.MediaCodecInfo.CodecProfileLevel.AACObjectLC)
                 fmt.setInteger(MediaFormat.KEY_BIT_RATE, 128_000)
@@ -988,10 +1004,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         }
     }
 
-    private fun encodePcm(pcm: ByteArray) {
+    private fun encodePcm(pcm: ByteArray, srcChannels: Int = trackChannels) {
         val enc = recEncoder ?: return
-        // Track channels can flip mid-recording — adapt to the encoder's count
-        val data = matchChannels(pcm, trackChannels, recChannels)
+        // Source channels can flip mid-recording — adapt to the encoder's count
+        val data = matchChannels(pcm, srcChannels, recChannels)
         var off = 0
         try {
             while (off < data.size) {
@@ -1002,7 +1018,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 val chunk = min(ib.capacity(), data.size - off)
                 ib.put(data, off, chunk)
                 enc.queueInputBuffer(idx, 0, chunk, recPtsUs, 0)
-                recPtsUs += (chunk / (2L * recChannels)) * 1_000_000L / 48_000L
+                recPtsUs += (chunk / (2L * recChannels)) * 1_000_000L / recRate
                 off += chunk
             }
             drainEncoder(false)
