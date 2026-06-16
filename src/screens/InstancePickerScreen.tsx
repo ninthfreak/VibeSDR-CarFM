@@ -196,7 +196,9 @@ export default function InstancePickerScreen({ navigation }: Props) {
     setConnecting(true);
     try {
       const res = await Local.startSpectrum({
-        centerFreq: 100_000_000, sampleRate: 2_400_000, fftSize: 1024, fftRate: 20, mode: 'wfm',
+        // fftSize 8192 over 2.4 MHz ≈ 293 Hz/bin (sharp AM/SSB); fftRate 10 to
+        // match UberSDR's line cadence so the waterfall interpolation lines up.
+        centerFreq: 100_000_000, sampleRate: 2_400_000, fftSize: 8192, fftRate: 10, mode: 'wfm',
       }) as { port: number; wsBaseUrl: string };
       setConnecting(false);
       navigation.navigate('SDR', {

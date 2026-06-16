@@ -114,6 +114,16 @@ struct ModeParams {
     double bandwidth;
     int channels;
 };
+// Pick the FFT size for a given sample rate to hold ~constant Hz/bin (≈ UberSDR
+// spectrum density), so detail stays uniform and scales up with bandwidth.
+// Smallest power-of-2 giving <= ~300 Hz/bin, clamped [2048, 16384].
+int fftSizeForRate(double rate) {
+    double want = rate / 300.0;
+    int s = 2048;
+    while (s < (int)want && s < 16384) s *= 2;
+    return s;
+}
+
 ModeParams paramsFor(const std::string& mode) {
     if (mode == "usb")            return {ModeParams::SSB_USB, 24000, 2700, 1};
     if (mode == "lsb")            return {ModeParams::SSB_LSB, 24000, 2700, 1};
@@ -137,13 +147,19 @@ struct LocalSdrShim::Impl {
     std::atomic<int>    rateDivisor{1};
     std::atomic<double> zoomFactor{1.0}; // spectrum zoom: FFT-crop factor (>=1)
     std::string mode = "nfm";
+    double demodOffset = 0.0;             // VFO offset for the mode (SSB = ±bw/2)
     std::mutex modeMtx;
 
-    // IQ + FFT
+    // IQ + FFT. frontend is heap-allocated so a detail (FFT-size) change can
+    // recreate it with fresh dsp blocks (re-init aborts; setFFTSize touches the
+    // GUI waterfall which doesn't exist headless).
     dsp::stream<dsp::complex_t> iqStream;
-    IQFrontEnd frontend;
+    IQFrontEnd* frontend = nullptr;
     std::vector<float> fftBuf;
     std::thread rtlThread;
+
+    // VFO offset for the current dial freq + mode (SSB sideband correction).
+    double vfoOffsetNow() { return audioFreq.load() - rtlCenter.load() + demodOffset; }
 
     // audio chain (rebuilt on mode change)
     dsp::channel::RxVFO* vfo = nullptr;
@@ -240,7 +256,7 @@ struct LocalSdrShim::Impl {
         if (audioSink) { audioSink->stop(); delete audioSink; audioSink = nullptr; }
         if (resamp) { resamp->stop(); delete resamp; resamp = nullptr; }
         if (demod) { demod->stop(); if (demodDeleter) demodDeleter(demod); demod = nullptr; demodDeleter = nullptr; }
-        if (vfo) { frontend.removeVFO("audio"); vfo = nullptr; }
+        if (vfo) { frontend->removeVFO("audio"); vfo = nullptr; }
     }
 
     void buildAudio() {
@@ -248,9 +264,14 @@ struct LocalSdrShim::Impl {
         teardownAudio();
         ModeParams mp = paramsFor(mode);
         audioChannels.store(mp.channels);
+        // SSB sideband correction: USB passband sits above the carrier (tune at
+        // lower edge → VFO +bw/2), LSB below (−bw/2). Without this the audio is
+        // shifted ±bw/2 → the SSB "beat"/high-pitch.
+        demodOffset = (mp.kind == ModeParams::SSB_USB) ?  mp.bandwidth / 2.0
+                    : (mp.kind == ModeParams::SSB_LSB) ? -mp.bandwidth / 2.0 : 0.0;
 
-        double offset = audioFreq.load() - rtlCenter.load();
-        vfo = frontend.addVFO("audio", mp.ifRate, mp.bandwidth, offset);
+        double offset = vfoOffsetNow();
+        vfo = frontend->addVFO("audio", mp.ifRate, mp.bandwidth, offset);
 
         switch (mp.kind) {
             case ModeParams::AM: {
@@ -303,15 +324,13 @@ struct LocalSdrShim::Impl {
     // retune the demod (and RTL centre if the offset would fall outside span)
     void retune(double freq) {
         audioFreq.store(freq);
-        double offset = freq - rtlCenter.load();
         double limit = sampleRate / 2.0 - 50000.0;
-        if (std::fabs(offset) > limit) {
+        if (std::fabs(freq - rtlCenter.load()) > limit) {
             rtlCenter.store(freq);
             if (dev) rtlsdr_set_center_freq(dev, (uint32_t)llround(freq));
-            offset = 0.0;
         }
         std::lock_guard<std::mutex> lk(modeMtx);
-        if (vfo) vfo->setOffset(offset);
+        if (vfo) vfo->setOffset(vfoOffsetNow());
     }
 
     // ── WebSocket framing ──────────────────────────────────────────────────
@@ -385,7 +404,7 @@ struct LocalSdrShim::Impl {
                     rtlCenter.store(v);
                     if (dev) rtlsdr_set_center_freq(dev, (uint32_t)llround(v));
                     std::lock_guard<std::mutex> lk(modeMtx);
-                    if (vfo) vfo->setOffset(audioFreq.load() - v);
+                    if (vfo) vfo->setOffset(vfoOffsetNow());
                 }
             }
             double bb;
@@ -523,10 +542,17 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     if (gainTenthDb < 0) rtlsdr_set_tuner_gain_mode(impl->dev, 0);
     else { rtlsdr_set_tuner_gain_mode(impl->dev, 1); rtlsdr_set_tuner_gain(impl->dev, gainTenthDb); }
     rtlsdr_reset_buffer(impl->dev);
+    // Use the ACTUAL rate the RTL rounded to (keeps the waterfall calibrated).
+    uint32_t actualSr = rtlsdr_get_sample_rate(impl->dev);
+    if (actualSr > 0) impl->sampleRate = (double)actualSr;
+    // FFT size auto-scales with the rate for uniform Hz/bin (matches UberSDR).
+    impl->fftSize = fftSizeForRate(impl->sampleRate);
+    impl->fftBuf.assign(impl->fftSize, -256.0f);
 
-    impl->frontend.init(&impl->iqStream, sampleRate, true, 1, false, fftSize, fftRate,
-                        IQFrontEnd::FFTWindow::NUTTALL, &Impl::acquire, &Impl::release, impl);
-    impl->frontend.start();
+    impl->frontend = new IQFrontEnd();
+    impl->frontend->init(&impl->iqStream, impl->sampleRate, true, 1, false, impl->fftSize, fftRate,
+                         IQFrontEnd::FFTWindow::NUTTALL, &Impl::acquire, &Impl::release, impl);
+    impl->frontend->start();
     impl->buildAudio();
 
     int chosen = -1;
@@ -536,7 +562,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     }
     if (!impl->listener) {
         err = "could not bind localhost port";
-        impl->teardownAudio(); impl->frontend.stop(); rtlsdr_close(impl->dev); delete impl; return -1;
+        impl->teardownAudio(); impl->frontend->stop(); delete impl->frontend; rtlsdr_close(impl->dev); delete impl; return -1;
     }
     impl->port = chosen;
     impl->serverRunning.store(true);
@@ -568,7 +594,7 @@ void LocalSdrShim::stop() {
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
 
     impl->teardownAudio();
-    impl->frontend.stop();
+    if (impl->frontend) { impl->frontend->stop(); delete impl->frontend; impl->frontend = nullptr; }
     if (impl->dev) rtlsdr_close(impl->dev);
     delete impl;
     LOGI("local SDR stopped");
@@ -600,17 +626,31 @@ void LocalSdrShim::setDirectSampling(int mode) {
 void LocalSdrShim::setSampleRate(double rate) {
     if (!p || !p->dev || rate <= 0) return;
     Impl* impl = p;
-    // Stop the IQ stream, change rate, rebuild the FFT/demod chain, restart.
+    // Stop the IQ stream and recreate the front end at the new rate + auto FFT
+    // size (FFT scales with rate for uniform Hz/bin). setFFTSize/setSampleRate on
+    // the live IQFrontEnd touch the headless GUI / abort, so rebuild the object.
     rtlsdr_cancel_async(impl->dev);
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
     rtlsdr_set_sample_rate(impl->dev, (uint32_t)rate);
     rtlsdr_reset_buffer(impl->dev);
-    impl->sampleRate = rate;
-    impl->frontend.setSampleRate(rate);
+    // The RTL rounds to a supported rate — use the ACTUAL rate for the FFT/config
+    // or the waterfall calibration drifts (signals land off their true freq).
+    uint32_t actual = rtlsdr_get_sample_rate(impl->dev);
+    impl->sampleRate = actual > 0 ? (double)actual : rate;
+    impl->fftSize = fftSizeForRate(impl->sampleRate);
+
+    impl->teardownAudio();
+    impl->frontend->stop();
+    delete impl->frontend;
+    impl->fftBuf.assign(impl->fftSize, -256.0f);
+    impl->frontend = new IQFrontEnd();
+    impl->frontend->init(&impl->iqStream, impl->sampleRate, true, 1, false, impl->fftSize, impl->fftRate,
+                         IQFrontEnd::FFTWindow::NUTTALL, &Impl::acquire, &Impl::release, impl);
+    impl->frontend->start();
     impl->buildAudio();
     { std::lock_guard<std::mutex> lk(impl->clientMtx); if (impl->specClient) impl->sendConfig(impl->specClient); }
     impl->rtlThread = std::thread([impl]{ rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); });
-    LOGI("sample rate: %.0f", rate);
+    LOGI("sample rate: %.0f (actual %u) fft=%d", rate, actual, impl->fftSize);
 }
 std::vector<int> LocalSdrShim::getTunerGains() {
     std::vector<int> out;
