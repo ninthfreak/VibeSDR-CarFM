@@ -45,7 +45,7 @@
 #include "decoders/wefax_decoder.h" // WEFAX (audio-extension decoder)
 #include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
 #include "decoders/sstv_decoder.h"  // SSTV (audio-extension image decoder)
-#include "omlsa_mcra.h"             // Brown OMLSA/MCRA audio noise reduction
+#include "decoders/audio_nr.h"      // self-contained spectral-subtraction audio NR
 
 #define LOG_TAG "VibeLocalSDR"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -169,19 +169,13 @@ struct LocalSdrShim::Impl {
     // Squelch (power-based, dBFS — independent of the SNR readout).
     std::atomic<bool>  squelchOn{false};
     std::atomic<float> squelchDb{-50.0f};
-    // Audio noise reduction (Brown OMLSA/MCRA). Mono only; off by default.
+    // Audio noise reduction (self-contained spectral subtraction). Mono only;
+    // off by default. No external resources → can't fail to init.
     std::atomic<bool>  nrOn{false};
     std::atomic<float> nrCpuPct{0.0f};      // rolling CPU% (NR time / wall time)
     std::mutex         nrMtx;
-    dsp::omlsa_mcra*   nrEng = nullptr;
-    std::vector<float> nrInBuf;
+    AudioNR*           nrEng = nullptr;
     double nrBusyNs = 0.0, nrWallNs = 0.0;  // CPU% accumulators
-    // Spectral display NR: log-MMSE-style suppression on the FFT bins inside a
-    // ~500 kHz window around the VFO, so the waterfall floor drops where you're
-    // looking (cheap — operates on bins already computed). Gated by nrOn.
-    std::vector<float> nrNoiseLin;          // per-bin noise power estimate (linear)
-    std::vector<float> nrSpecDb;            // working dB spectrum when NR on
-    std::chrono::steady_clock::time_point nrClock{};  // for spectral NR CPU%
 
     // IQ + FFT. frontend is heap-allocated so a detail (FFT-size) change can
     // recreate it with fresh dsp blocks (re-init aborts; setFFTSize touches the
@@ -281,40 +275,6 @@ struct LocalSdrShim::Impl {
             double zoom = zoomFactor.load();
             const int outBins = OUT_BINS;
             const double step = (double)bins / (zoom * (double)outBins); // src bins / out bin
-
-            // Spectral NR: log-MMSE-style suppression across the FULL displayed
-            // band. Per-bin noise estimate tracked (fast-down / slow-up); a
-            // spectral-subtraction gain pulls noise bins toward a floor while
-            // leaving carriers, so the whole waterfall floor drops and peaks
-            // lift. Cheap (one powf/log per bin on the already-computed FFT).
-            // Operates on a working copy so raw fftAccum (station detect) is
-            // untouched. Off = skipped entirely.
-            const float* srcDb = nullptr;
-            if (nrOn.load()) {
-                auto nrT0 = std::chrono::steady_clock::now();
-                if ((int)nrSpecDb.size() != bins)  nrSpecDb.assign(bins, 0.0f);
-                if ((int)nrNoiseLin.size() != bins) nrNoiseLin.assign(bins, 0.0f);
-                const float gminDb = 14.0f;                                 // max suppression depth
-                const float gmin = powf(10.0f, -gminDb * 0.1f);
-                for (int idx = 0; idx < bins; idx++) {
-                    float P = powf(10.0f, fftAccum[idx] * inv * 0.1f);      // linear power
-                    float& N = nrNoiseLin[idx];
-                    if (N <= 0.0f) N = P;
-                    if (P < N) N = P; else N += 0.04f * (P - N);            // track floor
-                    float gain = (P > N) ? (P - N) / P : 0.0f;             // spectral subtraction
-                    if (gain < gmin) gain = gmin;
-                    nrSpecDb[idx] = 10.0f * log10f(P * gain + 1e-12f);
-                }
-                srcDb = nrSpecDb.data();
-                auto nrT1 = std::chrono::steady_clock::now();
-                double busy = std::chrono::duration<double, std::nano>(nrT1 - nrT0).count();
-                if (nrClock.time_since_epoch().count() != 0) {
-                    double wall = std::chrono::duration<double, std::nano>(nrT1 - nrClock).count();
-                    if (wall > 0) nrCpuPct.store(nrCpuPct.load() * 0.8f + (float)(busy / wall * 100.0) * 0.2f);
-                }
-                nrClock = nrT1;
-            }
-
             std::vector<uint8_t> frame(22 + outBins);
             frame[0]='S';frame[1]='P';frame[2]='E';frame[3]='C';frame[4]=0x01;frame[5]=0x03;
             uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -331,7 +291,7 @@ struct LocalSdrShim::Impl {
                 float best = -1e9f;
                 for (int s = lo; s < hi; s++) {
                     int idx = ((s % bins) + bins) % bins;
-                    float val = srcDb ? srcDb[idx] : fftAccum[idx] * inv;  // NR'd or raw dB
+                    float val = fftAccum[idx] * inv;        // averaged dB
                     if (val > best) best = val;             // peak-hold
                 }
                 int v = (int)lround(best + 256.0);
@@ -381,6 +341,36 @@ struct LocalSdrShim::Impl {
         { std::lock_guard<std::mutex> lk(clientMtx); sock = audioClient; }
         if (!sock || !sock->isOpen()) return;
         int ch = audioChannels.load();
+
+        // Audio NR (mono only, opt-in). Spectral subtraction with STFT latency —
+        // output count differs from input, so the NR branch sends its own frame.
+        if (nrOn.load() && ch == 1) {
+            std::vector<float> nrOut;
+            {
+                std::lock_guard<std::mutex> lk(nrMtx);
+                if (!nrEng) nrEng = new AudioNR();
+                std::vector<float> mono((size_t)count);
+                for (int i = 0; i < count; i++) mono[i] = data[i].l;
+                auto t0 = std::chrono::steady_clock::now();
+                nrEng->process(mono.data(), count, nrOut);
+                auto t1 = std::chrono::steady_clock::now();
+                nrBusyNs += std::chrono::duration<double, std::nano>(t1 - t0).count();
+                nrWallNs += (double)count / AUDIO_SR * 1e9;
+                if (nrWallNs > 5e8) { nrCpuPct.store((float)(nrBusyNs / nrWallNs * 100.0)); nrBusyNs = nrWallNs = 0.0; }
+            }
+            if (nrOut.empty()) return;          // still filling the first STFT frame
+            int n2 = (int)nrOut.size();
+            std::vector<uint8_t> frame(6 + (size_t)n2 * 2);
+            frame[0] = 1; frame[1] = 0;
+            uint32_t sr0 = (uint32_t)AUDIO_SR; std::memcpy(&frame[2], &sr0, 4);
+            int16_t* pcm0 = (int16_t*)(frame.data() + 6);
+            for (int i = 0; i < n2; i++) {
+                int s = (int)lround(nrOut[i] * 32767.0f);
+                pcm0[i] = (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
+            }
+            sendWs(sock, 0x2, frame.data(), frame.size());
+            return;
+        }
 
         // header: [0]=channels, [1]=0, [2..5]=sampleRate u32 LE, then int16 PCM
         std::vector<uint8_t> frame(6 + (size_t)count * ch * 2);
@@ -1106,7 +1096,7 @@ void LocalSdrShim::stop() {
       if (impl->dxClient) impl->dxClient->close(); }
     impl->stopDecoder();
     impl->stopSpots();
-    { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; impl->nrInBuf.clear(); }
+    { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; }
     if (impl->listener) impl->listener->stop();
     if (impl->acceptThread.joinable()) impl->acceptThread.join();
     { std::lock_guard<std::mutex> lk(impl->connMtx);
@@ -1149,7 +1139,7 @@ void LocalSdrShim::setSquelch(bool on, float db) {
 void LocalSdrShim::setNR(bool on) {
     if (!p) return;
     p->nrOn.store(on);
-    if (!on) { std::lock_guard<std::mutex> lk(p->nrMtx); p->nrInBuf.clear(); if (p->nrEng) p->nrEng->reset(); }
+    if (!on) { std::lock_guard<std::mutex> lk(p->nrMtx); if (p->nrEng) p->nrEng->reset(); }
     LOGI("audio NR: %d", on);
 }
 float LocalSdrShim::getNrCpu() { return p ? p->nrCpuPct.load() : 0.0f; }
