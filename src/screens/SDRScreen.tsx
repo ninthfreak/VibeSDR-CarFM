@@ -311,12 +311,52 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwAgc,         setHwAgc]         = useState(false);
   const [hwDirectSamp,  setHwDirectSamp]  = useState(0);
 
+  // Load saved RTL-SDR hardware settings and apply them to the running session,
+  // so gain/bias-T/PPM/etc. persist across connections.
+  const hwLoaded = useRef(false);
   useEffect(() => {
-    if (!isLocal || !LocalHw?.getTunerGains) return;
-    LocalHw.getTunerGains().then((g: number[]) => {
-      if (Array.isArray(g) && g.length) { setHwGains(g); setHwGain(g[Math.floor(g.length / 2)]); }
-    }).catch(() => {});
+    if (!isLocal) return;
+    let cancelled = false;
+    (async () => {
+      let prefs: any = {};
+      try { const j = await AsyncStorage.getItem('lsv_local_hw'); if (j) prefs = JSON.parse(j); } catch {}
+      if (cancelled) return;
+      const auto = prefs.autoGain ?? true;
+      const ppm  = typeof prefs.ppm === 'number' ? prefs.ppm : 0;
+      const rate = typeof prefs.sampleRate === 'number' ? prefs.sampleRate : 2_400_000;
+      const bias = !!prefs.biasTee;
+      const agc  = !!prefs.agc;
+      const ds   = typeof prefs.directSampling === 'number' ? prefs.directSampling : 0;
+      setHwAutoGain(auto); setHwPpm(ppm); setHwSampleRate(rate);
+      setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds);
+      if (typeof prefs.gain === 'number') setHwGain(prefs.gain);
+      // Re-apply to the native session (already running from startSpectrum).
+      LocalHw?.setPpm?.(ppm);
+      LocalHw?.setBiasTee?.(bias);
+      LocalHw?.setAgc?.(agc);
+      LocalHw?.setDirectSampling?.(ds);
+      if (rate !== 2_400_000) LocalHw?.setSampleRate?.(rate);
+      LocalHw?.setGain?.(auto ? -1 : (typeof prefs.gain === 'number' ? prefs.gain : 0));
+      try {
+        const g = await LocalHw?.getTunerGains?.();
+        if (!cancelled && Array.isArray(g) && g.length) {
+          setHwGains(g);
+          if (typeof prefs.gain !== 'number') setHwGain(g[Math.floor(g.length / 2)]);
+        }
+      } catch {}
+      hwLoaded.current = true;
+    })();
+    return () => { cancelled = true; };
   }, [isLocal, LocalHw]);
+
+  // Persist hardware settings whenever they change (after the initial load).
+  useEffect(() => {
+    if (!isLocal || !hwLoaded.current) return;
+    AsyncStorage.setItem('lsv_local_hw', JSON.stringify({
+      autoGain: hwAutoGain, gain: hwGain, ppm: hwPpm, sampleRate: hwSampleRate,
+      biasTee: hwBiasTee, agc: hwAgc, directSampling: hwDirectSamp,
+    })).catch(() => {});
+  }, [isLocal, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp]);
 
   const onHwAuto = useCallback((auto: boolean) => {
     setHwAutoGain(auto);
