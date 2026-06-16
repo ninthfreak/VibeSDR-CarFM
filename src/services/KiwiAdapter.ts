@@ -30,6 +30,11 @@ const Vibe = NativeModules.VibePowerModule as {
   stopExternalAudio?: () => void;
 } | undefined;
 
+// Native decoder sidecar (decodes the backend audio for the client decoders).
+const VibeLocal = NativeModules.VibeLocalSDR as {
+  feedDecoderPcm?: (b64: string, rate: number) => void;
+} | undefined;
+
 // Present as a real browser. KiwiSDR classifies connections that jump straight
 // to the WS with a non-browser User-Agent as "ext_api" (API) connections, which
 // many receivers time-limit or refuse — looking like Safari + identifying as
@@ -425,7 +430,11 @@ export class KiwiAdapter implements SDRBackend {
 
     const rate = Math.round(this.trueAudioRate);
     if (!this.audioStarted) { Vibe?.startExternalAudio?.(rate); this.audioStarted = true; }
-    Vibe?.pushExternalPcm?.(bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)), rate, 1);
+    const b64 = bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength));
+    Vibe?.pushExternalPcm?.(b64, rate, 1);
+    // Also feed the native decoder sidecar (RTTY/WEFAX/SSTV/FT8 on Kiwi audio).
+    // No-op natively unless the decoder service is running.
+    VibeLocal?.feedDecoderPcm?.(b64, rate);
   }
 
   // ── waterfall (W/F binary) ─────────────────────────────────────────────────

@@ -193,6 +193,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun setSquelch(on: Boolean, db: Double) { VibeLocalSDR.setSquelch(on, db.toFloat()) }
     @ReactMethod fun setNR(on: Boolean) { VibeLocalSDR.setNR(on) }
     @ReactMethod fun setNrStrength(s: Double) { VibeLocalSDR.setNrStrength(s.toFloat()) }
+    @ReactMethod fun startDecoderService(promise: Promise) { promise.resolve(VibeLocalSDR.startDecoderService()) }
+    @ReactMethod fun feedDecoderPcm(b64: String, rate: Double) { VibeLocalSDR.feedDecoderPcm(b64, rate.toInt()) }
+    @ReactMethod fun stopDecoderService() { VibeLocalSDR.stopSpectrum() }
     @ReactMethod fun getNrCpu(promise: Promise) { promise.resolve(VibeLocalSDR.getNrCpu().toDouble()) }
 
     /** Supported tuner gains in tenths of dB (e.g. 207 = 20.7 dB). */

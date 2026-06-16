@@ -1540,21 +1540,7 @@ export default function MenuSheet({
               <BtnRow>
                 <Btn label="⚙ ADMIN" full onPress={() => onAdminLink?.('/settings', 'Settings')} />
               </BtnRow>
-            </>) : isLocal ? null : isKiwi ? (<>
-              {/* KiwiSDR server-side extensions — open in the in-app browser via
-                  the Kiwi web client's ?ext= deep links (uses a 2nd channel). */}
-              <SectionLabel label="KIWI EXTENSIONS" />
-              <BtnRow>
-                <Btn label="📠 FAX"    onPress={() => onAdminLink?.('/?ext=fax', 'FAX')} />
-                <Btn label="📡 FT8"    onPress={() => onAdminLink?.('/?ext=ft8', 'FT8')} />
-                <Btn label="🖼 SSTV"   onPress={() => onAdminLink?.('/?ext=sstv', 'SSTV')} />
-              </BtnRow>
-              <BtnRow>
-                <Btn label="⚓ NAVTEX" onPress={() => onAdminLink?.('/?ext=navtex', 'NAVTEX')} />
-                <Btn label="≈ DRM"    onPress={() => onAdminLink?.('/?ext=DRM', 'DRM')} />
-                <Btn label="⊞ MORE"   onPress={() => onAdminLink?.('/', 'Kiwi Extensions')} />
-              </BtnRow>
-            </>) : (<>
+            </>) : isLocal || isKiwi ? null : (<>
               <SectionLabel label="INSTANCE ADMIN" />
               <BtnRow>
                 <Btn label="ADMIN"      onPress={() => onAdminLink?.('/admin.html', 'Admin')} />

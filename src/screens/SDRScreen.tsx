@@ -1120,8 +1120,25 @@ export default function SDRScreen({ route, navigation }: Props) {
   const decoderImageRef = useRef<DecoderImageHandle | null>(null);
   const activeDecRef    = useRef<DecoderType>(null);
 
+  // Decoder transport base. Local/UberSDR serve /ws/dxcluster themselves; Kiwi
+  // (no dxcluster) gets a native decoder sidecar fed its audio, so we point the
+  // DecoderClient at that localhost service instead.
+  const [decoderBase, setDecoderBase] = useState<string | null>(isKiwi ? null : baseUrl);
   useEffect(() => {
-    const dc = new DecoderClient(baseUrl, sessionUuid, {
+    if (!isKiwi) { setDecoderBase(baseUrl); return; }
+    let cancelled = false;
+    (NativeModules as any).VibeLocalSDR?.startDecoderService?.()
+      .then((port: number) => { if (!cancelled && port > 0) setDecoderBase(`ws://127.0.0.1:${port}`); })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      (NativeModules as any).VibeLocalSDR?.stopDecoderService?.();
+    };
+  }, [isKiwi, baseUrl]);
+
+  useEffect(() => {
+    if (!decoderBase) return;
+    const dc = new DecoderClient(decoderBase, sessionUuid, {
       onText: (text: string) => {
         setDecoding(true);
         setDecoderText((prev: string) => {

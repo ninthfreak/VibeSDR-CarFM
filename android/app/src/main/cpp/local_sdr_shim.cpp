@@ -154,6 +154,9 @@ ModeParams paramsFor(const std::string& mode) {
 
 // ── Impl ────────────────────────────────────────────────────────────────────
 struct LocalSdrShim::Impl {
+    bool decoderOnly = false;             // sidecar mode: decoders only, no RTL
+    std::vector<float> pcmResid;          // upsample carry (fractional sample pos)
+    double pcmAcc = 0.0;
     // device / params
     rtlsdr_dev_t* dev = nullptr;
     double sampleRate = 2400000.0;
@@ -1113,7 +1116,13 @@ void LocalSdrShim::stop() {
     impl->stopDecoder();
     impl->stopSpots();
     { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; }
-    if (impl->listener) impl->listener->stop();
+    // NOTE: do NOT call listener->stop() here. acceptLoop polls accept() with a
+    // 500ms timeout and checks serverRunning, so clearing it (above) exits the
+    // loop on its own. net::Listener::stop() isn't idempotent (it closeSocket()s
+    // unconditionally) and ~Listener calls stop() again on `delete impl` — an
+    // explicit stop() here made that a DOUBLE close of the same fd, which after
+    // the number was reused tripped fdsan → SIGABRT on teardown. Let ~Listener
+    // close it exactly once.
     if (impl->acceptThread.joinable()) impl->acceptThread.join();
     { std::lock_guard<std::mutex> lk(impl->connMtx);
       for (auto& t : impl->connThreads) if (t.joinable()) t.join();
@@ -1122,6 +1131,45 @@ void LocalSdrShim::stop() {
     if (impl->dev) rtlsdr_close(impl->dev);
     delete impl;
     LOGI("local SDR stopped");
+}
+
+// ── Decoder-only sidecar (network backends) ───────────────────────────────────
+int LocalSdrShim::startDecoderService(std::string& err) {
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (p) { err = "already running"; return -1; }
+    Impl* impl = new Impl();
+    impl->decoderOnly = true;
+    impl->sampleRate = 48000.0;            // decoders run at 48 kHz
+    int chosen = -1;
+    for (int port = 48050; port < 48100; port++) {   // above the local-SDR range
+        try { impl->listener = net::listen("127.0.0.1", port); chosen = port; break; }
+        catch (...) { impl->listener = nullptr; }
+    }
+    if (!impl->listener) { err = "could not bind localhost port"; delete impl; return -1; }
+    impl->port = chosen;
+    impl->serverRunning.store(true);
+    impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
+    p = impl;
+    LOGI("decoder service started: port=%d", chosen);
+    return chosen;
+}
+
+void LocalSdrShim::feedDecoderPcm(const int16_t* pcm, int n, int rate) {
+    if (!p || !p->decoderOnly || n < 2 || rate <= 0) return;
+    // Upsample to the decoders' 48 kHz (linear interp), build a mono stereo_t
+    // buffer (l=r) and feed the decoder + digital-spots paths.
+    double ratio = 48000.0 / (double)rate;
+    double srcStep = 1.0 / ratio;
+    std::vector<dsp::stereo_t> buf;
+    buf.reserve((size_t)(n * ratio) + 2);
+    for (double s = 0; s < n - 1; s += srcStep) {
+        int i = (int)s; double f = s - i;
+        float v = (float)(((1.0 - f) * pcm[i] + f * pcm[i + 1]) / 32768.0);
+        buf.push_back({ v, v });
+    }
+    if (buf.empty()) return;
+    p->feedDecoder(buf.data(), (int)buf.size());
+    p->feedSpots(buf.data(), (int)buf.size());
 }
 
 // ── Hardware controls ─────────────────────────────────────────────────────────
