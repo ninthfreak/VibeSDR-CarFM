@@ -151,5 +151,10 @@ void CwDecoder::decodeLoop()
             m_speed = stats.estimatedSpeed_wpm;
             if (m_onStats) m_onStats({stats.estimatedPitch_Hz, stats.estimatedSpeed_wpm, stats.costFunction});
         }
+
+        // Yield between decode passes so this worker can never peg a core and
+        // starve the SDR DSP/audio threads (each frame is ~100ms of audio, so a
+        // few ms here is negligible to decode latency).
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
 }

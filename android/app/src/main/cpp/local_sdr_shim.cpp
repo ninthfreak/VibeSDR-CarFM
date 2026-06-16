@@ -420,13 +420,13 @@ struct LocalSdrShim::Impl {
     void feedDecoder(dsp::stereo_t* data, int count) {
         std::lock_guard<std::mutex> lk(decoderMtx);
         if (!decoder && !wefax && !sstv && !morse) return;
-        // Morse (ggmorse) runs at 12 kHz — decimate 48k→12k (box-average 4).
+        // Morse (ggmorse) runs at 4 kHz — decimate 48k→4k (box-average 12).
         if (morse) {
-            std::vector<int16_t> dec; dec.reserve((size_t)count/4 + 1);
+            std::vector<int16_t> dec; dec.reserve((size_t)count/12 + 1);
             for (int i = 0; i < count; i++) {
                 morseAcc += data[i].l;
-                if (++morseDecim >= 4) {
-                    int s = (int)lround(morseAcc / 4.0f * 32767.0f);
+                if (++morseDecim >= 12) {
+                    int s = (int)lround(morseAcc / 12.0f * 32767.0f);
                     dec.push_back((int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s)));
                     morseDecim = 0; morseAcc = 0.0f;
                 }
@@ -1004,7 +1004,10 @@ struct LocalSdrShim::Impl {
         delete wefax;   wefax = nullptr;
         delete sstv;    sstv = nullptr;
         delete morse;
-        morse = new CwDecoder(12000);
+        // ggmorse's native rate is 4 kHz; feeding 12 kHz tripled its CPU and
+        // starved the DSP threads (audio/waterfall freezes). CW tones are well
+        // under 2 kHz, so 4 kHz is plenty and runs comfortably realtime.
+        morse = new CwDecoder(4000);
         morseDecim = 0; morseAcc = 0.0f;
         if (havePitch) morse->setPitchRange((float)pitch - 150.0f, (float)pitch + 150.0f);
         morse->start(
