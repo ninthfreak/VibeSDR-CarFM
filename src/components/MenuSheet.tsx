@@ -1236,10 +1236,12 @@ export default function MenuSheet({
               <Text style={styles.bwEdgeVal}>{filterHigh < 0 ? '−' : '+'}{fmtHz(Math.abs(filterHigh))}</Text>
             </View>
 
-            {/* NR/NB are UberSDR client-side DSP — hidden for OWRX (its NR is a
-                server slider, below). REC stays for both. */}
+            {/* NR/NB are UberSDR client-side DSP only — OWRX has its own server NR
+                slider (below), local has its own NR slider, and Kiwi uses the
+                server-side DSP filters. REC stays for all. */}
+            {(() => { const uberDsp = !isOwrx && !isLocal && !isKiwi; return (
             <BtnRow>
-              {!isOwrx && (
+              {uberDsp && (
                 <Btn
                   label={nrMode === 'serv' ? 'SERV' : nrMode === 'nr2' ? 'NR2' : 'NR'}
                   active={nrMode !== 'off'}
@@ -1247,9 +1249,10 @@ export default function MenuSheet({
                   onPress={cycleNr}
                 />
               )}
-              {!isOwrx && <Btn label="NB" active={nb} onPress={() => onNb?.(!nb)} />}
+              {uberDsp && <Btn label="NB" active={nb} onPress={() => onNb?.(!nb)} />}
               <Btn label="⏺ REC"  active={recording} onPress={onRec} />
             </BtnRow>
+            ); })()}
             {recording && (
               <View style={styles.recTimer}>
                 <View style={styles.recDot} />

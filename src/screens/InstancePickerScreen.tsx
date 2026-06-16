@@ -21,6 +21,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { splashBridge } from '../../App';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
+import UsbSdrIcon from '../components/UsbSdrIcon';
 import { themeFor } from '../constants/theme';
 import {
   SDRInstance,
@@ -650,12 +651,13 @@ export default function InstancePickerScreen({ navigation }: Props) {
                     onPress={connectLocal}
                   >
                     <View style={styles.rowMain}>
-                      <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>📡 Local Hardware</Text>
+                      <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>Local Hardware</Text>
                       <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
                         RTL-SDR plugged into this phone (USB-C OTG)
                       </Text>
                     </View>
-                    <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 4 }}>›</Text>
+                    <View style={{ marginLeft: 4 }}><UsbSdrIcon size={26} color={C.amber} strokeWidth={2.4} /></View>
+                    <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>
                   </TouchableOpacity>
                 </View>
               ) : null
