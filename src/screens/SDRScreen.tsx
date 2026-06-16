@@ -87,7 +87,8 @@ import {
 import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi } from '../services/eibi';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+// SDK 56 moved readAsStringAsync to the legacy entry (new File API otherwise).
+import * as FileSystem from 'expo-file-system/legacy';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
