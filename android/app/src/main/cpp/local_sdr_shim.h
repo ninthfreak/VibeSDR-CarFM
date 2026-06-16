@@ -31,6 +31,8 @@ public:
     void setSampleRate(double rate);      // cancels + restarts the IQ stream (auto FFT size)
     void setDeemphasis(double tau);       // FM de-emphasis time constant (0=off, 50e-6, 75e-6)
     void setSquelch(bool on, float db);   // power-based audio squelch (dBFS)
+    void setNR(bool on);                  // Brown OMLSA/MCRA audio noise reduction
+    float getNrCpu();                     // NR CPU% (rolling) for the UI readout
     // Returns supported tuner gains (tenths of dB); empty if not running.
     std::vector<int> getTunerGains();
 

@@ -89,6 +89,10 @@ export interface MenuSheetProps {
   // squelch slider on local instances.
   localSquelch?:   number;
   onLocalSquelch?: (db: number) => void;
+  // Local SDR audio noise reduction (Brown OMLSA/MCRA) + live CPU%.
+  localNR?:        boolean;
+  onLocalNR?:      (on: boolean) => void;
+  nrCpu?:          number;
   // FM squelch — only shown for fm/nfm modes
   fmSquelch?:     number;
   onFmSquelch?:   (v: number) => void;
@@ -410,6 +414,7 @@ export default function MenuSheet({
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
+  localNR = false, onLocalNR, nrCpu = 0,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
   serverLabel = null, onOwrxSquelch, onOwrxNr,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
@@ -1275,7 +1280,22 @@ export default function MenuSheet({
                 thumbTintColor={C.gold} />
               <Text style={styles.bwVal}>{localSquelch <= -100 ? 'Off' : `${localSquelch.toFixed(0)}dB`}</Text>
             </View>
-            ) : !isOwrx && (
+            ) : null}
+
+            {/* Local SDR audio noise reduction (OMLSA/MCRA) with live CPU%. */}
+            {onLocalNR && (
+              <View style={styles.bwRow}>
+                <View style={{ flex: 1 }}>
+                  <Btn label={localNR ? 'AUDIO NR: ON' : 'AUDIO NR: OFF'} active={localNR}
+                       onPress={() => onLocalNR?.(!localNR)} />
+                </View>
+                <Text style={[styles.bwVal, { color: localNR ? C.gold : C.muted }]}>
+                  {localNR ? `${Math.round(nrCpu)}% CPU` : ''}
+                </Text>
+              </View>
+            )}
+
+            {!onLocalSquelch && !isOwrx && (
             /* SNR Squelch — UberSDR audio gate. Slider 0–50 dB in OUR meter's
                units (SDRScreen shifts +30 for the server's raw SNR scale). */
             <View style={styles.bwRow}>

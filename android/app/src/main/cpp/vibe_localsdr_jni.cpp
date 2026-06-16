@@ -120,6 +120,14 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetSquelch(JNIEnv*, jobject, jboolean on, jfloat db) {
     vibe::LocalSdrShim::instance().setSquelch(on, db);
 }
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetNR(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::instance().setNR(on);
+}
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeGetNrCpu(JNIEnv*, jobject) {
+    return vibe::LocalSdrShim::instance().getNrCpu();
+}
 extern "C" JNIEXPORT jintArray JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeGetTunerGains(JNIEnv* env, jobject) {
     auto gains = vibe::LocalSdrShim::instance().getTunerGains();

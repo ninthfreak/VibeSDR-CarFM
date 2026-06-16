@@ -45,6 +45,7 @@
 #include "decoders/wefax_decoder.h" // WEFAX (audio-extension decoder)
 #include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
 #include "decoders/sstv_decoder.h"  // SSTV (audio-extension image decoder)
+#include "omlsa_mcra.h"             // Brown OMLSA/MCRA audio noise reduction
 
 #define LOG_TAG "VibeLocalSDR"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -168,6 +169,13 @@ struct LocalSdrShim::Impl {
     // Squelch (power-based, dBFS — independent of the SNR readout).
     std::atomic<bool>  squelchOn{false};
     std::atomic<float> squelchDb{-50.0f};
+    // Audio noise reduction (Brown OMLSA/MCRA). Mono only; off by default.
+    std::atomic<bool>  nrOn{false};
+    std::atomic<float> nrCpuPct{0.0f};      // rolling CPU% (NR time / wall time)
+    std::mutex         nrMtx;
+    dsp::omlsa_mcra*   nrEng = nullptr;
+    std::vector<float> nrInBuf;
+    double nrBusyNs = 0.0, nrWallNs = 0.0;  // CPU% accumulators
 
     // IQ + FFT. frontend is heap-allocated so a detail (FFT-size) change can
     // recreate it with fresh dsp blocks (re-init aborts; setFFTSize touches the
@@ -333,6 +341,52 @@ struct LocalSdrShim::Impl {
         { std::lock_guard<std::mutex> lk(clientMtx); sock = audioClient; }
         if (!sock || !sock->isOpen()) return;
         int ch = audioChannels.load();
+
+        // ── Audio noise reduction (mono only, opt-in) ──────────────────────
+        // OMLSA/MCRA works on the narrowband demod audio (not the full
+        // baseband), block-buffered → variable output length. Off by default;
+        // when off this branch is skipped and the audio path is unchanged.
+        if (nrOn.load() && ch == 1) {
+            std::vector<float> nrOut;
+            {
+                std::lock_guard<std::mutex> lk(nrMtx);
+                if (!nrEng) { nrEng = new dsp::omlsa_mcra(); nrEng->setSampleRate((int)AUDIO_SR); }
+                int bs = nrEng->blockSize();
+                if (bs > 0) {
+                    nrInBuf.reserve(nrInBuf.size() + count);
+                    for (int i = 0; i < count; i++) nrInBuf.push_back(data[i].l);
+                    std::vector<short> pin(bs), pout(3 * bs);
+                    auto t0 = std::chrono::steady_clock::now();
+                    while ((int)nrInBuf.size() >= bs) {
+                        float mx = 0; for (int i = 0; i < bs; i++) { float a = std::fabs(nrInBuf[i]); if (a > mx) mx = a; }
+                        float scale = (mx > 1.0f) ? 32767.0f / mx : 32767.0f;
+                        for (int i = 0; i < bs; i++) pin[i] = (short)(nrInBuf[i] * scale);
+                        int wrote = 0;
+                        bool ok = nrEng->process(pin.data(), bs, pout.data(), wrote);
+                        nrInBuf.erase(nrInBuf.begin(), nrInBuf.begin() + bs);
+                        if (!ok) { nrEng->reset(); continue; }
+                        for (int i = 0; i < wrote; i++) nrOut.push_back(pout[i] / scale);
+                    }
+                    auto t1 = std::chrono::steady_clock::now();
+                    nrBusyNs += std::chrono::duration<double, std::nano>(t1 - t0).count();
+                    nrWallNs += (double)count / AUDIO_SR * 1e9;
+                    if (nrWallNs > 5e8) { nrCpuPct.store((float)(nrBusyNs / nrWallNs * 100.0)); nrBusyNs = nrWallNs = 0.0; }
+                }
+            }
+            if (nrOut.empty()) return;   // still buffering a block
+            int n2 = (int)nrOut.size();
+            std::vector<uint8_t> frame(6 + (size_t)n2 * 2);
+            frame[0] = 1; frame[1] = 0;
+            uint32_t sr0 = (uint32_t)AUDIO_SR; std::memcpy(&frame[2], &sr0, 4);
+            int16_t* pcm0 = (int16_t*)(frame.data() + 6);
+            for (int i = 0; i < n2; i++) {
+                int s = (int)lround(nrOut[i] * 32767.0f);
+                pcm0[i] = (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
+            }
+            sendWs(sock, 0x2, frame.data(), frame.size());
+            return;
+        }
+
         // header: [0]=channels, [1]=0, [2..5]=sampleRate u32 LE, then int16 PCM
         std::vector<uint8_t> frame(6 + (size_t)count * ch * 2);
         frame[0] = (uint8_t)ch; frame[1] = 0;
@@ -1057,6 +1111,7 @@ void LocalSdrShim::stop() {
       if (impl->dxClient) impl->dxClient->close(); }
     impl->stopDecoder();
     impl->stopSpots();
+    { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; impl->nrInBuf.clear(); }
     if (impl->listener) impl->listener->stop();
     if (impl->acceptThread.joinable()) impl->acceptThread.join();
     { std::lock_guard<std::mutex> lk(impl->connMtx);
@@ -1096,6 +1151,13 @@ void LocalSdrShim::setSquelch(bool on, float db) {
     p->squelchOn.store(on); p->squelchDb.store(db);
     LOGI("squelch: %d @ %.1f dB", on, db);
 }
+void LocalSdrShim::setNR(bool on) {
+    if (!p) return;
+    p->nrOn.store(on);
+    if (!on) { std::lock_guard<std::mutex> lk(p->nrMtx); p->nrInBuf.clear(); if (p->nrEng) p->nrEng->reset(); }
+    LOGI("audio NR: %d", on);
+}
+float LocalSdrShim::getNrCpu() { return p ? p->nrCpuPct.load() : 0.0f; }
 void LocalSdrShim::setSampleRate(double rate) {
     if (!p || !p->dev || rate <= 0) return;
     Impl* impl = p;
