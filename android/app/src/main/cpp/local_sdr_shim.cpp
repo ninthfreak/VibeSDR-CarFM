@@ -106,6 +106,14 @@ bool jsonNum(const std::string& s, const char* key, double& out) {
 }
 
 constexpr double AUDIO_SR = 48000.0;
+// FFT averaging: the front end runs FFT_AVG× the emit rate and we block-average
+// that many independent FFTs per emitted frame. Cuts per-frame variance so the
+// spectrum/waterfall doesn't shimmer (UberSDR/SDR++ average similarly).
+constexpr int FFT_AVG = 4;
+// Bins actually sent to the client (= waterfall texture width). Kept GPU-safe
+// (a 32768-wide texture exceeds mobile GPU max texture size → blank waterfall).
+// The internal FFT is finer (fftSizeForRate); we downsample/crop to this.
+constexpr int OUT_BINS = 4096;
 
 // Per-mode demod parameters.
 struct ModeParams {
@@ -114,13 +122,14 @@ struct ModeParams {
     double bandwidth;
     int channels;
 };
-// Pick the FFT size for a given sample rate to hold ~constant Hz/bin (≈ UberSDR
-// spectrum density), so detail stays uniform and scales up with bandwidth.
-// Smallest power-of-2 giving <= ~300 Hz/bin, clamped [2048, 16384].
+// Pick the FFT size for a given sample rate to hold ~constant Hz/bin so detail
+// stays uniform and scales with bandwidth. ~75 Hz/bin → fine enough that
+// zoomed-in views (crop-zoom stretches existing bins, it doesn't add resolution)
+// still have plenty of bins. Smallest power-of-2 >= rate/75, clamped [4096, 32768].
 int fftSizeForRate(double rate) {
-    double want = rate / 300.0;
-    int s = 2048;
-    while (s < (int)want && s < 16384) s *= 2;
+    double want = rate / 75.0;
+    int s = 4096;
+    while (s < (int)want && s < 32768) s *= 2;
     return s;
 }
 
@@ -156,6 +165,8 @@ struct LocalSdrShim::Impl {
     dsp::stream<dsp::complex_t> iqStream;
     IQFrontEnd* frontend = nullptr;
     std::vector<float> fftBuf;
+    std::vector<float> fftAccum;   // running sum for FFT averaging
+    int accumCount = 0;
     std::thread rtlThread;
 
     // VFO offset for the current dial freq + mode (SSB sideband correction).
@@ -192,37 +203,55 @@ struct LocalSdrShim::Impl {
     static float* acquire(void* ctx) { return ((Impl*)ctx)->fftBuf.data(); }
     static void release(void* ctx) { ((Impl*)ctx)->onFFT(); }
     void onFFT() {
+        const int bins = fftSize;
+        // Block-average FFT_AVG independent FFTs (dB domain) to kill shimmer.
+        if ((int)fftAccum.size() != bins) { fftAccum.assign(bins, 0.0f); accumCount = 0; }
+        for (int i = 0; i < bins; i++) fftAccum[i] += fftBuf[i];
+        if (++accumCount < FFT_AVG) return;
+        float inv = 1.0f / (float)accumCount;
+
         uint64_t n = frameCounter.fetch_add(1);
         int div = rateDivisor.load();
-        if (div > 1 && (n % (uint64_t)div) != 0) return;
+        bool emit = !(div > 1 && (n % (uint64_t)div) != 0);
         std::shared_ptr<net::Socket> sock;
         { std::lock_guard<std::mutex> lk(clientMtx); sock = specClient; }
-        if (!sock || !sock->isOpen()) return;
 
-        const int bins = fftSize;
-        std::vector<uint8_t> frame(22 + bins);
-        frame[0]='S';frame[1]='P';frame[2]='E';frame[3]='C';frame[4]=0x01;frame[5]=0x03;
-        uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-        std::memcpy(&frame[6], &ts, 8);
-        uint64_t f = (uint64_t)llround(rtlCenter.load());
-        std::memcpy(&frame[14], &f, 8);
-        // Zoom = crop the FFT around DC (centre) by `zoom` and stretch back to
-        // `bins`. Raw FFT order (DC=0): output bin i maps to source bin
-        // round(signed(i)/zoom) (wrapped). zoom==1 → identity. Decouples zoom
-        // from the IQ/audio path entirely (no decimation, no core reconfig).
-        double zoom = zoomFactor.load();
-        for (int i = 0; i < bins; i++) {
-            int src = i;
-            if (zoom > 1.0) {
-                int signedI = (i <= bins / 2) ? i : i - bins;
-                int s = (int)lround(signedI / zoom);
-                src = ((s % bins) + bins) % bins;
+        if (emit && sock && sock->isOpen()) {
+            // Emit a FIXED OUT_BINS bins (GPU-safe waterfall texture width — a
+            // 32768-wide texture exceeds mobile GPU limits and the waterfall
+            // silently fails). Map the fine internal FFT (fftSize bins) to the
+            // output, applying zoom: each output bin covers `step` source bins;
+            // peak-hold when downsampling (don't drop narrow carriers), nearest
+            // when zoomed in (step<1) so deep zoom stays sharp off the fine FFT.
+            double zoom = zoomFactor.load();
+            const int outBins = OUT_BINS;
+            const double step = (double)bins / (zoom * (double)outBins); // src bins / out bin
+            std::vector<uint8_t> frame(22 + outBins);
+            frame[0]='S';frame[1]='P';frame[2]='E';frame[3]='C';frame[4]=0x01;frame[5]=0x03;
+            uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            std::memcpy(&frame[6], &ts, 8);
+            uint64_t f = (uint64_t)llround(rtlCenter.load());
+            std::memcpy(&frame[14], &f, 8);
+            for (int i = 0; i < outBins; i++) {
+                int signedOut = (i <= outBins / 2) ? i : i - outBins;
+                double center = signedOut * step;          // fractional src index (signed)
+                int lo = (int)std::floor(center - step / 2.0);
+                int hi = (int)std::ceil(center + step / 2.0);
+                if (hi <= lo) hi = lo + 1;
+                float best = -1e9f;
+                for (int s = lo; s < hi; s++) {
+                    int idx = ((s % bins) + bins) % bins;
+                    float val = fftAccum[idx] * inv;        // averaged dB
+                    if (val > best) best = val;             // peak-hold
+                }
+                int v = (int)lround(best + 256.0);
+                frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
             }
-            int v = (int)lround(fftBuf[src] + 256.0);
-            frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
+            sendWs(sock, 0x2, frame.data(), frame.size());
         }
-        sendWs(sock, 0x2, frame.data(), frame.size());
+        std::fill(fftAccum.begin(), fftAccum.end(), 0.0f);
+        accumCount = 0;
     }
 
     // ── Audio callback (Stage 4) ───────────────────────────────────────────
@@ -351,12 +380,12 @@ struct LocalSdrShim::Impl {
     }
     void sendConfig(const std::shared_ptr<net::Socket>& sock) {
         double effective = sampleRate / zoomFactor.load();           // zoom-aware span
-        double binBw = effective / (double)fftSize;
+        double binBw = effective / (double)OUT_BINS;                  // we emit OUT_BINS bins
         char buf[256];
         snprintf(buf, sizeof buf,
             "{\"type\":\"config\",\"centerFreq\":%lld,\"binCount\":%d,"
             "\"binBandwidth\":%.6f,\"totalBandwidth\":%.1f}",
-            (long long)llround(rtlCenter.load()), fftSize, binBw, effective);
+            (long long)llround(rtlCenter.load()), OUT_BINS, binBw, effective);
         sendText(sock, buf);
     }
 
@@ -366,7 +395,10 @@ struct LocalSdrShim::Impl {
     // headless core), no effect on audio. Capped so the crop keeps >= 16 bins.
     void setSpan(double binBw) {
         if (binBw <= 0) return;
-        double want = sampleRate / (binBw * (double)fftSize);   // desired zoom
+        // The client sees OUT_BINS bins, so its requested span = binBw*OUT_BINS;
+        // zoom = full span / requested span. (Using fftSize here made the reported
+        // span 8x too wide → zoom snapped straight back out / wouldn't go deep.)
+        double want = sampleRate / (binBw * (double)OUT_BINS);
         double maxZoom = (double)fftSize / 16.0;
         if (want < 1.0) want = 1.0;
         if (want > maxZoom) want = maxZoom;
@@ -520,11 +552,15 @@ struct LocalSdrShim::Impl {
 };
 
 // ── Public API ───────────────────────────────────────────────────────────────
+// Serialises start()/stop() so concurrent app-teardown calls can't double-free.
+static std::mutex g_lifecycle;
+
 LocalSdrShim& LocalSdrShim::instance() { static LocalSdrShim inst; return inst; }
 
 int LocalSdrShim::start(int fd, int vid, int pid,
                         double centerFreq, double sampleRate, int gainTenthDb,
                         int fftSize, double fftRate, const std::string& mode, std::string& err) {
+    std::lock_guard<std::mutex> life(g_lifecycle);
     if (p) { err = "already running"; return -1; }
     auto* impl = new Impl();
     impl->sampleRate = sampleRate;
@@ -550,7 +586,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     impl->fftBuf.assign(impl->fftSize, -256.0f);
 
     impl->frontend = new IQFrontEnd();
-    impl->frontend->init(&impl->iqStream, impl->sampleRate, true, 1, true, impl->fftSize, fftRate,
+    impl->frontend->init(&impl->iqStream, impl->sampleRate, true, 1, true, impl->fftSize, fftRate * FFT_AVG,
                          IQFrontEnd::FFTWindow::NUTTALL, &Impl::acquire, &Impl::release, impl);
     impl->frontend->start();
     impl->buildAudio();
@@ -577,10 +613,22 @@ int LocalSdrShim::start(int fd, int vid, int pid,
 }
 
 void LocalSdrShim::stop() {
+    // Serialise with start()/stop(): app teardown fires stopSpectrum from several
+    // Kotlin paths (unmount + invalidate), possibly concurrently — without this
+    // two stops grab the same Impl and double-free it (the ~Impl crash on close).
+    std::lock_guard<std::mutex> life(g_lifecycle);
     if (!p) return;
     Impl* impl = p; p = nullptr;
 
+    // Stop data producers/consumers FIRST (they touch impl + the sockets).
     impl->serverRunning.store(false);
+    if (impl->dev) rtlsdr_cancel_async(impl->dev);
+    if (impl->rtlThread.joinable()) impl->rtlThread.join();
+    impl->teardownAudio();
+    if (impl->frontend) { impl->frontend->stop(); delete impl->frontend; impl->frontend = nullptr; }
+
+    // Then the server: close client sockets to unblock reader recv, stop the
+    // listener, join the accept + connection threads.
     { std::lock_guard<std::mutex> lk(impl->clientMtx);
       if (impl->specClient) impl->specClient->close();
       if (impl->audioClient) impl->audioClient->close(); }
@@ -590,11 +638,6 @@ void LocalSdrShim::stop() {
       for (auto& t : impl->connThreads) if (t.joinable()) t.join();
       impl->connThreads.clear(); }
 
-    if (impl->dev) rtlsdr_cancel_async(impl->dev);
-    if (impl->rtlThread.joinable()) impl->rtlThread.join();
-
-    impl->teardownAudio();
-    if (impl->frontend) { impl->frontend->stop(); delete impl->frontend; impl->frontend = nullptr; }
     if (impl->dev) rtlsdr_close(impl->dev);
     delete impl;
     LOGI("local SDR stopped");
@@ -644,7 +687,7 @@ void LocalSdrShim::setSampleRate(double rate) {
     delete impl->frontend;
     impl->fftBuf.assign(impl->fftSize, -256.0f);
     impl->frontend = new IQFrontEnd();
-    impl->frontend->init(&impl->iqStream, impl->sampleRate, true, 1, true, impl->fftSize, impl->fftRate,
+    impl->frontend->init(&impl->iqStream, impl->sampleRate, true, 1, true, impl->fftSize, impl->fftRate * FFT_AVG,
                          IQFrontEnd::FFTWindow::NUTTALL, &Impl::acquire, &Impl::release, impl);
     impl->frontend->start();
     impl->buildAudio();
