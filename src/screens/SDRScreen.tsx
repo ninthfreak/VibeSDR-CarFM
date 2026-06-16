@@ -441,6 +441,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [serverLost, setServerLost] = useState(false);   // OWRX server crashed/restarted
   const [serverBusy, setServerBusy] = useState(false);   // Kiwi receiver full (too_busy)
   const [connLost,   setConnLost]   = useState(false);   // UberSDR link down — auto-reconnecting
+  const [connTimedOut, setConnTimedOut] = useState(false); // initial connect never completed
   const connLostTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const appActiveRef  = useRef(true);   // false while backgrounded — gates connLost
   const [profiles, setProfiles]   = useState<ProfileInfo[]>([]);  // OWRX only
@@ -1732,6 +1733,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   // on 20m FT8/USB while the UI showed the restored station (sounded like
   // "broken AM"), and zoom anchored on the stale server frequency.
   const [tuneLoaded, setTuneLoaded] = useState(false);
+
+  // Initial-connect timeout: if the link never comes up (e.g. a wedged local
+  // shim, dead host, or USB not ready) there's no error event to surface an
+  // escape — the screen just spins forever. After 15s with no connection, show
+  // a "couldn't connect" card with an escape back to the instance list.
+  useEffect(() => {
+    if (connected) { setConnTimedOut(false); return; }
+    const t = setTimeout(() => { if (!destroyed.current && !connected) setConnTimedOut(true); }, 15000);
+    return () => clearTimeout(t);
+  }, [connected]);
+
   useEffect(() => {
     if (!lastTuneLoaded.current || !status.frequency) return;
     const t = setTimeout(() => {
@@ -2880,6 +2892,31 @@ export default function SDRScreen({ route, navigation }: Props) {
               <TouchableOpacity style={styles.serverLostBtn}
                 onPress={() => { setConnLost(false); fullReconnect(); }} activeOpacity={0.85}>
                 <Text style={styles.serverLostBtnText}>RECONNECT</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Initial connect never completed (wedged host/shim/USB). Escape hatch so
+          the app can never be permanently stuck on the connecting spinner. */}
+      {connTimedOut && !connected && !serverLost && !serverBusy && !connLost && !dataSaverOff && (
+        <View style={styles.serverLostWrap} pointerEvents="box-none">
+          <View style={styles.serverLostCard}>
+            <Text style={styles.serverLostTitle}>Couldn’t connect</Text>
+            <Text style={styles.serverLostBody}>
+              No response from {instanceName || 'the receiver'}. {route.params.isLocal
+                ? 'Check the SDR is plugged in and try again, or pick another instance.'
+                : 'It may be offline or unreachable — try again or pick another instance.'}
+            </Text>
+            <View style={styles.serverLostBtnRow}>
+              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
+                onPress={() => navigation.goBack()} activeOpacity={0.85}>
+                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.serverLostBtn}
+                onPress={() => { setConnTimedOut(false); fullReconnect(); }} activeOpacity={0.85}>
+                <Text style={styles.serverLostBtnText}>RETRY</Text>
               </TouchableOpacity>
             </View>
           </View>

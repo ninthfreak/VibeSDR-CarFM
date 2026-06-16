@@ -1558,12 +1558,17 @@ export default function MenuSheet({
               <View style={styles.footerServer}>
                 {/* OWRX's logo is a black antenna that vanishes on the dark UI —
                     give it a light chip so it reads. */}
-                <View style={serverType === 'owrx' ? styles.footerLogoChip : undefined}>
-                  <Image source={SERVER_LOGOS[serverType] ?? SERVER_LOGOS.ubersdr} style={styles.footerLogo} resizeMode="contain" />
-                </View>
+                {!isLocal && (
+                  <View style={serverType === 'owrx' ? styles.footerLogoChip : undefined}>
+                    <Image source={SERVER_LOGOS[serverType] ?? SERVER_LOGOS.ubersdr} style={styles.footerLogo} resizeMode="contain" />
+                  </View>
+                )}
                 <View>
-                  <Text style={styles.footerServerName}>{serverLabel ?? (serverType === 'kiwi' ? 'KiwiSDR' : isOwrx ? 'OpenWebRX' : 'UberSDR')}</Text>
-                  {serverVersion ? (
+                  <Text style={styles.footerServerName}>{isLocal ? 'Local Hardware'
+                    : serverLabel ?? (serverType === 'kiwi' ? 'KiwiSDR' : isOwrx ? 'OpenWebRX' : 'UberSDR')}</Text>
+                  {isLocal ? (
+                    <Text style={styles.footerServerVer}>via SDR++ Brown 1.2.1</Text>
+                  ) : serverVersion ? (
                     <Text style={styles.footerServerVer}>v{serverVersion}</Text>
                   ) : null}
                 </View>
