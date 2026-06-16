@@ -287,13 +287,13 @@ struct LocalSdrShim::Impl {
                 d->init(&vfo->out,
                         mp.kind == ModeParams::SSB_USB ? dsp::demod::SSB<dsp::stereo_t>::Mode::USB
                                                        : dsp::demod::SSB<dsp::stereo_t>::Mode::LSB,
-                        mp.bandwidth, mp.ifRate, 1.0/mp.ifRate, 50.0/mp.ifRate);
+                        mp.bandwidth, mp.ifRate, 50.0/mp.ifRate, 5.0/mp.ifRate);
                 demod = d; demodDeleter = [](void* x){ delete (dsp::demod::SSB<dsp::stereo_t>*)x; };
                 break;
             }
             case ModeParams::CW: {
                 auto* d = new dsp::demod::CW<dsp::stereo_t>();
-                d->init(&vfo->out, 700.0, 1.0/mp.ifRate, 50.0/mp.ifRate, mp.ifRate);
+                d->init(&vfo->out, 800.0, 100.0/mp.ifRate, 5.0/mp.ifRate, mp.ifRate);
                 demod = d; demodDeleter = [](void* x){ delete (dsp::demod::CW<dsp::stereo_t>*)x; };
                 break;
             }
@@ -550,7 +550,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     impl->fftBuf.assign(impl->fftSize, -256.0f);
 
     impl->frontend = new IQFrontEnd();
-    impl->frontend->init(&impl->iqStream, impl->sampleRate, true, 1, false, impl->fftSize, fftRate,
+    impl->frontend->init(&impl->iqStream, impl->sampleRate, true, 1, true, impl->fftSize, fftRate,
                          IQFrontEnd::FFTWindow::NUTTALL, &Impl::acquire, &Impl::release, impl);
     impl->frontend->start();
     impl->buildAudio();
@@ -644,7 +644,7 @@ void LocalSdrShim::setSampleRate(double rate) {
     delete impl->frontend;
     impl->fftBuf.assign(impl->fftSize, -256.0f);
     impl->frontend = new IQFrontEnd();
-    impl->frontend->init(&impl->iqStream, impl->sampleRate, true, 1, false, impl->fftSize, impl->fftRate,
+    impl->frontend->init(&impl->iqStream, impl->sampleRate, true, 1, true, impl->fftSize, impl->fftRate,
                          IQFrontEnd::FFTWindow::NUTTALL, &Impl::acquire, &Impl::release, impl);
     impl->frontend->start();
     impl->buildAudio();
