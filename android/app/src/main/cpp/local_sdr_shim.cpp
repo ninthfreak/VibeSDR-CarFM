@@ -282,25 +282,22 @@ struct LocalSdrShim::Impl {
             const int outBins = OUT_BINS;
             const double step = (double)bins / (zoom * (double)outBins); // src bins / out bin
 
-            // Spectral NR: log-MMSE-style suppression on the bins inside a
-            // ~500 kHz window around the VFO. Per-bin noise estimate tracked
-            // (fast-down / slow-up); spectral-subtraction gain pulls noise bins
-            // toward a floor while leaving carriers. Operates on a working copy
-            // so the raw fftAccum (station detect) is untouched. Off = skipped.
+            // Spectral NR: log-MMSE-style suppression across the FULL displayed
+            // band. Per-bin noise estimate tracked (fast-down / slow-up); a
+            // spectral-subtraction gain pulls noise bins toward a floor while
+            // leaving carriers, so the whole waterfall floor drops and peaks
+            // lift. Cheap (one powf/log per bin on the already-computed FFT).
+            // Operates on a working copy so raw fftAccum (station detect) is
+            // untouched. Off = skipped entirely.
             const float* srcDb = nullptr;
             if (nrOn.load()) {
                 auto nrT0 = std::chrono::steady_clock::now();
                 if ((int)nrSpecDb.size() != bins)  nrSpecDb.assign(bins, 0.0f);
                 if ((int)nrNoiseLin.size() != bins) nrNoiseLin.assign(bins, 0.0f);
-                for (int i = 0; i < bins; i++) nrSpecDb[i] = fftAccum[i] * inv;
-                double binHz = sampleRate / (double)bins;
-                int halfW = std::min(bins / 2, (int)(250000.0 / binHz));   // 500 kHz total
-                int cbin = (int)llround(vfoOffsetNow() / binHz);
                 const float gminDb = 14.0f;                                 // max suppression depth
                 const float gmin = powf(10.0f, -gminDb * 0.1f);
-                for (int o = -halfW; o <= halfW; o++) {
-                    int idx = (((cbin + o) % bins) + bins) % bins;
-                    float P = powf(10.0f, nrSpecDb[idx] * 0.1f);            // linear power
+                for (int idx = 0; idx < bins; idx++) {
+                    float P = powf(10.0f, fftAccum[idx] * inv * 0.1f);      // linear power
                     float& N = nrNoiseLin[idx];
                     if (N <= 0.0f) N = P;
                     if (P < N) N = P; else N += 0.04f * (P - N);            // track floor
