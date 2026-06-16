@@ -381,11 +381,13 @@ struct LocalSdrShim::Impl {
     void sendConfig(const std::shared_ptr<net::Socket>& sock) {
         double effective = sampleRate / zoomFactor.load();           // zoom-aware span
         double binBw = effective / (double)OUT_BINS;                  // we emit OUT_BINS bins
-        char buf[256];
+        char buf[320];
+        // maxBandwidth = full (unzoomed) device span — the client caps zoom-out
+        // to this so you can't zoom out past the actual RTL bandwidth.
         snprintf(buf, sizeof buf,
             "{\"type\":\"config\",\"centerFreq\":%lld,\"binCount\":%d,"
-            "\"binBandwidth\":%.6f,\"totalBandwidth\":%.1f}",
-            (long long)llround(rtlCenter.load()), OUT_BINS, binBw, effective);
+            "\"binBandwidth\":%.6f,\"totalBandwidth\":%.1f,\"maxBandwidth\":%.1f}",
+            (long long)llround(rtlCenter.load()), OUT_BINS, binBw, effective, sampleRate);
         sendText(sock, buf);
     }
 

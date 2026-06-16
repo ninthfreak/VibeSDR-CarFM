@@ -116,6 +116,9 @@ export class UberSDRClient {
   // V4 local hardware widens this to the RTL-SDR's range.
   minHz = 10_000;
   maxHz = 30_000_000;
+  // Max zoom-OUT span (Hz). 0 = use maxHz. Local hardware reports its full
+  // device bandwidth via config.maxBandwidth so you can't zoom out past it.
+  private maxSpanHz = 0;
 
   private view = { centerHz: 0, binBandwidth: 0 };
   private pendingView: { frequency: number; binBandwidth: number } | null = null;
@@ -211,7 +214,8 @@ export class UberSDRClient {
     // channel both sides). The server goes deeper but past this the
     // spectrum shows artefacts and looks frozen even though it isn't
     // (device-confirmed on both platforms 2026-06-12).
-    const bb = Math.max(6_000 / n, Math.min(binBandwidth, this.maxHz / n));
+    const spanCap = this.maxSpanHz > 0 ? this.maxSpanHz : this.maxHz;
+    const bb = Math.max(6_000 / n, Math.min(binBandwidth, spanCap / n));
     this.view.centerHz     = f;
     this.view.binBandwidth = bb;
     this._sendView(f, bb);
@@ -662,6 +666,8 @@ export class UberSDRClient {
     // just the centre frequency) — without it bwHz stays 0 and the entire
     // frequency→pixel mapping (needle, band plan, gestures) is dead.
     if (msg.type === 'config') {
+      // Local hardware advertises its full span here → cap zoom-out to it.
+      if (typeof msg.maxBandwidth === 'number') this.maxSpanHz = msg.maxBandwidth;
       if (typeof msg.centerFreq   === 'number') this.status.centerHz     = msg.centerFreq;
       if (typeof msg.binBandwidth === 'number') this.status.binBandwidth = msg.binBandwidth;
       if (typeof msg.binCount     === 'number') {

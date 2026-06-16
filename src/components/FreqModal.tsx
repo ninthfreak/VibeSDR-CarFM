@@ -89,7 +89,10 @@ export default function FreqModal({
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <Pressable style={st.backdrop} onPress={onClose} />
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        // Android uses windowSoftInputMode=adjustResize (the window already
+        // shrinks above the keyboard) so no behavior here — adding one double-
+        // adjusts and makes the box bounce. iOS needs padding.
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={st.center} pointerEvents="box-none"
       >
         <View style={[st.modal, { borderColor: t.barBorder }]}>
