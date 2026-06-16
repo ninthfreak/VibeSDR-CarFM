@@ -190,6 +190,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun setDirectSampling(mode: Double) { VibeLocalSDR.setDirectSampling(mode.toInt()) }
     @ReactMethod fun setSampleRate(rate: Double) { VibeLocalSDR.setSampleRate(rate) }
     @ReactMethod fun setDeemphasis(tau: Double) { VibeLocalSDR.setDeemphasis(tau) }
+    @ReactMethod fun setSquelch(on: Boolean, db: Double) { VibeLocalSDR.setSquelch(on, db.toFloat()) }
 
     /** Supported tuner gains in tenths of dB (e.g. 207 = 20.7 dB). */
     @ReactMethod

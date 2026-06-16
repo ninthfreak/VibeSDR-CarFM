@@ -85,6 +85,10 @@ export interface MenuSheetProps {
   // SNR squelch — value ≤ -999 = off/open
   snrSquelch?:    number;
   onSnrSquelch?:  (v: number) => void;
+  // Local SDR power-based squelch (dBFS, -100 = off). Replaces the (dead) SNR
+  // squelch slider on local instances.
+  localSquelch?:   number;
+  onLocalSquelch?: (db: number) => void;
   // FM squelch — only shown for fm/nfm modes
   fmSquelch?:     number;
   onFmSquelch?:   (v: number) => void;
@@ -405,6 +409,7 @@ export default function MenuSheet({
   filterLow, filterHigh, bwEdgeMax = 6000, onFilterLow, onFilterHigh, onFilterBoth,
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
+  localSquelch = -100, onLocalSquelch,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
   serverLabel = null, onOwrxSquelch, onOwrxNr,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
@@ -1256,9 +1261,23 @@ export default function MenuSheet({
               </View>
             </>)}
 
-            {/* SNR Squelch — UberSDR audio gate. Slider 0–50 dB in OUR meter's
-                units (SDRScreen shifts +30 for the server's raw SNR scale). */}
-            {!isOwrx && (
+            {/* Local SDR: power-based squelch (dBFS). Reuses this slot since the
+                SNR squelch doesn't apply to local hardware. */}
+            {onLocalSquelch ? (
+            <View style={styles.bwRow}>
+              <Text style={styles.bwLabel}>SQUELCH</Text>
+              <Slider style={styles.bwSlider}
+                minimumValue={-100} maximumValue={-20} step={1}
+                value={localSquelch}
+                onValueChange={(v: number) => onLocalSquelch?.(v <= -100 ? -100 : v)}
+                minimumTrackTintColor={localSquelch > -100 ? C.gold : C.muted}
+                maximumTrackTintColor={C.muted}
+                thumbTintColor={C.gold} />
+              <Text style={styles.bwVal}>{localSquelch <= -100 ? 'Off' : `${localSquelch.toFixed(0)}dB`}</Text>
+            </View>
+            ) : !isOwrx && (
+            /* SNR Squelch — UberSDR audio gate. Slider 0–50 dB in OUR meter's
+               units (SDRScreen shifts +30 for the server's raw SNR scale). */
             <View style={styles.bwRow}>
               <Text style={styles.bwLabel}>SNR SQL</Text>
               <Slider style={styles.bwSlider}

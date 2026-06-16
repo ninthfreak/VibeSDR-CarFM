@@ -116,6 +116,10 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetDeemphasis(JNIEnv*, jobject, jdouble tau) {
     vibe::LocalSdrShim::instance().setDeemphasis(tau);
 }
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetSquelch(JNIEnv*, jobject, jboolean on, jfloat db) {
+    vibe::LocalSdrShim::instance().setSquelch(on, db);
+}
 extern "C" JNIEXPORT jintArray JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeGetTunerGains(JNIEnv* env, jobject) {
     auto gains = vibe::LocalSdrShim::instance().getTunerGains();

@@ -311,6 +311,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwAgc,         setHwAgc]         = useState(false);
   const [hwDirectSamp,  setHwDirectSamp]  = useState(0);
   const [hwDeemph,      setHwDeemph]      = useState(50e-6);  // FM de-emphasis tau (0/50µs/75µs)
+  const [hwSquelch,     setHwSquelch]     = useState(-100);   // audio squelch dBFS (-100 = off)
 
   // Load saved RTL-SDR hardware settings and apply them to the running session,
   // so gain/bias-T/PPM/etc. persist across connections.
@@ -329,8 +330,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       const agc  = !!prefs.agc;
       const ds   = typeof prefs.directSampling === 'number' ? prefs.directSampling : 0;
       const deemph = typeof prefs.deemph === 'number' ? prefs.deemph : 50e-6;
+      const sql  = typeof prefs.squelch === 'number' ? prefs.squelch : -100;
       setHwAutoGain(auto); setHwPpm(ppm); setHwSampleRate(rate);
-      setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph);
+      setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwSquelch(sql);
       if (typeof prefs.gain === 'number') setHwGain(prefs.gain);
       // Re-apply to the native session (already running from startSpectrum).
       LocalHw?.setPpm?.(ppm);
@@ -338,6 +340,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       LocalHw?.setAgc?.(agc);
       LocalHw?.setDirectSampling?.(ds);
       LocalHw?.setDeemphasis?.(deemph);
+      LocalHw?.setSquelch?.(sql > -100, sql);
       if (rate !== 2_400_000) LocalHw?.setSampleRate?.(rate);
       LocalHw?.setGain?.(auto ? -1 : (typeof prefs.gain === 'number' ? prefs.gain : 0));
       try {
@@ -358,8 +361,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_local_hw', JSON.stringify({
       autoGain: hwAutoGain, gain: hwGain, ppm: hwPpm, sampleRate: hwSampleRate,
       biasTee: hwBiasTee, agc: hwAgc, directSampling: hwDirectSamp, deemph: hwDeemph,
+      squelch: hwSquelch,
     })).catch(() => {});
-  }, [isLocal, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph]);
+  }, [isLocal, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwSquelch]);
 
   const onHwAuto = useCallback((auto: boolean) => {
     setHwAutoGain(auto);
@@ -378,6 +382,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onHwAgc = useCallback((on: boolean) => { setHwAgc(on); LocalHw?.setAgc?.(on); }, [LocalHw]);
   const onHwDirectSamp = useCallback((mode: number) => { setHwDirectSamp(mode); LocalHw?.setDirectSampling?.(mode); }, [LocalHw]);
   const onHwDeemph = useCallback((tau: number) => { setHwDeemph(tau); LocalHw?.setDeemphasis?.(tau); }, [LocalHw]);
+  const onLocalSquelch = useCallback((db: number) => {
+    setHwSquelch(db); LocalHw?.setSquelch?.(db > -100, db);
+  }, [LocalHw]);
 
   const insets = useSafeAreaInsets();
   const { width: screenW, height: screenH } = Dimensions.get('window');
@@ -3011,6 +3018,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onDispSaveGlobal={onDispSaveGlobal}
         snrSquelch={snrSquelch}         onSnrSquelch={onSnrSquelch}
         fmSquelch={fmSquelch}           onFmSquelch={onFmSquelch}
+        localSquelch={hwSquelch}        onLocalSquelch={isLocal ? onLocalSquelch : undefined}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
         serverDspEnabled={serverDspEnabled}
         serverDspFilter={serverDspFilter}

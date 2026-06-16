@@ -165,6 +165,9 @@ struct LocalSdrShim::Impl {
     std::string mode = "nfm";
     double demodOffset = 0.0;             // VFO offset for the mode (SSB = ±bw/2)
     std::mutex modeMtx;
+    // Squelch (power-based, dBFS — independent of the SNR readout).
+    std::atomic<bool>  squelchOn{false};
+    std::atomic<float> squelchDb{-50.0f};
 
     // IQ + FFT. frontend is heap-allocated so a detail (FFT-size) change can
     // recreate it with fresh dsp blocks (re-init aborts; setFFTSize touches the
@@ -316,6 +319,15 @@ struct LocalSdrShim::Impl {
         // WS client. The decoder's onChar/onState push frames to the dxcluster WS.
         feedDecoder(data, count);
         feedSpots(data, count);
+
+        // Squelch: mute the audio sent to the user when passband power is below
+        // threshold. Applied AFTER the decoders so they still see raw audio.
+        if (squelchOn.load()) {
+            float sum = 0.0f;
+            for (int i = 0; i < count; i++) sum += data[i].l*data[i].l + data[i].r*data[i].r;
+            float p = 10.0f * log10f(sum / (count * 2) + 1e-20f);
+            if (p < squelchDb.load()) for (int i = 0; i < count; i++) { data[i].l = 0.0f; data[i].r = 0.0f; }
+        }
 
         std::shared_ptr<net::Socket> sock;
         { std::lock_guard<std::mutex> lk(clientMtx); sock = audioClient; }
@@ -1078,6 +1090,11 @@ void LocalSdrShim::setAgc(bool on) {
 void LocalSdrShim::setDirectSampling(int mode) {
     if (!p || !p->dev) return;
     rtlsdr_set_direct_sampling(p->dev, mode); LOGI("direct sampling: %d", mode);
+}
+void LocalSdrShim::setSquelch(bool on, float db) {
+    if (!p) return;
+    p->squelchOn.store(on); p->squelchDb.store(db);
+    LOGI("squelch: %d @ %.1f dB", on, db);
 }
 void LocalSdrShim::setSampleRate(double rate) {
     if (!p || !p->dev || rate <= 0) return;
