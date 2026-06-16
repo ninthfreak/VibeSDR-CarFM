@@ -176,6 +176,11 @@ struct LocalSdrShim::Impl {
     dsp::omlsa_mcra*   nrEng = nullptr;
     std::vector<float> nrInBuf;
     double nrBusyNs = 0.0, nrWallNs = 0.0;  // CPU% accumulators
+    // Spectral display NR: log-MMSE-style suppression on the FFT bins inside a
+    // ~500 kHz window around the VFO, so the waterfall floor drops where you're
+    // looking (cheap — operates on bins already computed). Gated by nrOn.
+    std::vector<float> nrNoiseLin;          // per-bin noise power estimate (linear)
+    std::vector<float> nrSpecDb;            // working dB spectrum when NR on
 
     // IQ + FFT. frontend is heap-allocated so a detail (FFT-size) change can
     // recreate it with fresh dsp blocks (re-init aborts; setFFTSize touches the
@@ -275,6 +280,35 @@ struct LocalSdrShim::Impl {
             double zoom = zoomFactor.load();
             const int outBins = OUT_BINS;
             const double step = (double)bins / (zoom * (double)outBins); // src bins / out bin
+
+            // Spectral NR: log-MMSE-style suppression on the bins inside a
+            // ~500 kHz window around the VFO. Per-bin noise estimate tracked
+            // (fast-down / slow-up); spectral-subtraction gain pulls noise bins
+            // toward a floor while leaving carriers. Operates on a working copy
+            // so the raw fftAccum (station detect) is untouched. Off = skipped.
+            const float* srcDb = nullptr;
+            if (nrOn.load()) {
+                if ((int)nrSpecDb.size() != bins)  nrSpecDb.assign(bins, 0.0f);
+                if ((int)nrNoiseLin.size() != bins) nrNoiseLin.assign(bins, 0.0f);
+                for (int i = 0; i < bins; i++) nrSpecDb[i] = fftAccum[i] * inv;
+                double binHz = sampleRate / (double)bins;
+                int halfW = std::min(bins / 2, (int)(250000.0 / binHz));   // 500 kHz total
+                int cbin = (int)llround(vfoOffsetNow() / binHz);
+                const float gminDb = 14.0f;                                 // max suppression depth
+                const float gmin = powf(10.0f, -gminDb * 0.1f);
+                for (int o = -halfW; o <= halfW; o++) {
+                    int idx = (((cbin + o) % bins) + bins) % bins;
+                    float P = powf(10.0f, nrSpecDb[idx] * 0.1f);            // linear power
+                    float& N = nrNoiseLin[idx];
+                    if (N <= 0.0f) N = P;
+                    if (P < N) N = P; else N += 0.04f * (P - N);            // track floor
+                    float gain = (P > N) ? (P - N) / P : 0.0f;             // spectral subtraction
+                    if (gain < gmin) gain = gmin;
+                    nrSpecDb[idx] = 10.0f * log10f(P * gain + 1e-12f);
+                }
+                srcDb = nrSpecDb.data();
+            }
+
             std::vector<uint8_t> frame(22 + outBins);
             frame[0]='S';frame[1]='P';frame[2]='E';frame[3]='C';frame[4]=0x01;frame[5]=0x03;
             uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -291,7 +325,7 @@ struct LocalSdrShim::Impl {
                 float best = -1e9f;
                 for (int s = lo; s < hi; s++) {
                     int idx = ((s % bins) + bins) % bins;
-                    float val = fftAccum[idx] * inv;        // averaged dB
+                    float val = srcDb ? srcDb[idx] : fftAccum[idx] * inv;  // NR'd or raw dB
                     if (val > best) best = val;             // peak-hold
                 }
                 int v = (int)lround(best + 256.0);
