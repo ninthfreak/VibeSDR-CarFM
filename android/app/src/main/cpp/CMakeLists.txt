@@ -71,6 +71,9 @@ add_library(vibelocalsdr SHARED
     decoders/ft8_decoder.cpp
     decoders/sstv_decoder.cpp
     decoders/audio_nr.cpp
+    decoders/morse/CwDecoder.cpp
+    decoders/morse/ggmorse/src/ggmorse.cpp
+    decoders/morse/ggmorse/src/resampler.cpp
     ${FT8_LIB_SRC}
     "${SDRPP_SRC_ROOT}/decoder_modules/radio/src/rds.cpp")
 # ft8_lib (upstream kgoba) uses KISS FFT unconditionally — no extra define needed.
@@ -82,6 +85,9 @@ target_include_directories(vibelocalsdr PRIVATE
     "${SDRPP_SRC_ROOT}/core/src"
     "${SDRPP_SRC_ROOT}/decoder_modules/radio/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib"
+    "${CMAKE_CURRENT_SOURCE_DIR}/decoders/morse"
+    "${CMAKE_CURRENT_SOURCE_DIR}/decoders/morse/ggmorse/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/decoders/morse/ggmorse/src"
     "${SDR_KIT_ROOT}/${ANDROID_ABI}/include")
 # --no-as-needed keeps the DT_NEEDED on libsdrpp_core.so so loading the shim
 # actually pulls the SDR++ core in (proves the link, not just that it compiled).
