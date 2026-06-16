@@ -182,10 +182,10 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
 
     // Recorder — MediaCodec AAC + MediaMuxer on the service decode thread
     @ReactMethod
-    fun startRecording(promise: Promise) {
+    fun startRecording(frequency: Double, mode: String, promise: Promise) {
         val svc = VibeStreamService.instance
         if (svc == null) promise.reject("not_running", "Audio engine is not running")
-        else svc.startRecordingNative(promise)
+        else svc.startRecordingNative(frequency, mode, promise)
     }
 
     @ReactMethod

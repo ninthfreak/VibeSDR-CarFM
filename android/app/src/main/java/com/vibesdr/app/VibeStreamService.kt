@@ -162,6 +162,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private var recMuxerStarted = false
     private var recChannels = 1
     private var recRate = 48_000     // encoder rate: 48k (UberSDR) or the external stream rate
+    private var recReqFreq = 0.0     // freq/mode from the UI for the recording filename
+    private var recReqMode = ""
     private var recPtsUs = 0L
     private var recFile: java.io.File? = null
     private var recDisplayName = ""
@@ -946,8 +948,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             try {
                 val ts = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH-mm-ss", java.util.Locale.US)
                     .format(java.util.Date())
-                val mhz = String.format(java.util.Locale.US, "%.4fMHz", currentFreq / 1e6)
-                recDisplayName = "VibeSDR_${ts}_${mhz}_${currentMode.uppercase()}.m4a"
+                val rf = if (recReqFreq > 0) recReqFreq else currentFreq.toDouble()
+                val rm = if (recReqMode.isNotEmpty()) recReqMode else currentMode
+                val mhz = String.format(java.util.Locale.US, "%.4fMHz", rf / 1e6)
+                recDisplayName = "VibeSDR_${ts}_${mhz}_${rm.uppercase()}.m4a"
                 val f = java.io.File(cacheDir, recDisplayName)
                 // External audio (local/Kiwi/OWRX) has its own rate/channels;
                 // the UberSDR path is always 48k. Match the encoder to the source
@@ -1116,8 +1120,12 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         }
     }
 
-    fun startRecordingNative(promise: com.facebook.react.bridge.Promise) {
+    fun startRecordingNative(frequency: Double, mode: String, promise: com.facebook.react.bridge.Promise) {
         if (!running) { promise.reject("not_running", "Audio engine is not running"); return }
+        // Use the frequency/mode the UI passes (accurate for every backend,
+        // including local/Kiwi where the service's currentFreq isn't synced).
+        if (frequency > 0) recReqFreq = frequency
+        if (mode.isNotEmpty()) recReqMode = mode
         recStartReq = promise
     }
 
