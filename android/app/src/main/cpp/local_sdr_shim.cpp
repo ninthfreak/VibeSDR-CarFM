@@ -135,8 +135,7 @@ struct LocalSdrShim::Impl {
     std::atomic<double> rtlCenter{100000000.0}; // RTL tuned centre = spectrum centre
     std::atomic<double> audioFreq{100000000.0}; // demod dial frequency
     std::atomic<int>    rateDivisor{1};
-    std::atomic<int>    decimRatio{1};   // spectrum zoom (power-of-2 decimation)
-    double currentIfRate = 50000.0;      // current mode's IF rate (audio-safe decim floor)
+    std::atomic<double> zoomFactor{1.0}; // spectrum zoom: FFT-crop factor (>=1)
     std::string mode = "nfm";
     std::mutex modeMtx;
 
@@ -192,8 +191,19 @@ struct LocalSdrShim::Impl {
         std::memcpy(&frame[6], &ts, 8);
         uint64_t f = (uint64_t)llround(rtlCenter.load());
         std::memcpy(&frame[14], &f, 8);
+        // Zoom = crop the FFT around DC (centre) by `zoom` and stretch back to
+        // `bins`. Raw FFT order (DC=0): output bin i maps to source bin
+        // round(signed(i)/zoom) (wrapped). zoom==1 → identity. Decouples zoom
+        // from the IQ/audio path entirely (no decimation, no core reconfig).
+        double zoom = zoomFactor.load();
         for (int i = 0; i < bins; i++) {
-            int v = (int)lround(fftBuf[i] + 256.0);
+            int src = i;
+            if (zoom > 1.0) {
+                int signedI = (i <= bins / 2) ? i : i - bins;
+                int s = (int)lround(signedI / zoom);
+                src = ((s % bins) + bins) % bins;
+            }
+            int v = (int)lround(fftBuf[src] + 256.0);
             frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
         sendWs(sock, 0x2, frame.data(), frame.size());
@@ -238,13 +248,6 @@ struct LocalSdrShim::Impl {
         teardownAudio();
         ModeParams mp = paramsFor(mode);
         audioChannels.store(mp.channels);
-        currentIfRate = mp.ifRate;
-        // A wider mode (e.g. WFM) may need more bandwidth than the current zoom
-        // leaves — back the decimation off so the demod isn't starved.
-        if ((sampleRate / (double)decimRatio.load()) < mp.ifRate) {
-            frontend.setDecimation(1);
-            decimRatio.store(1);
-        }
 
         double offset = audioFreq.load() - rtlCenter.load();
         vfo = frontend.addVFO("audio", mp.ifRate, mp.bandwidth, offset);
@@ -328,7 +331,7 @@ struct LocalSdrShim::Impl {
         sendWs(sock, 0x1, (const uint8_t*)s.data(), s.size());
     }
     void sendConfig(const std::shared_ptr<net::Socket>& sock) {
-        double effective = sampleRate / (double)decimRatio.load();   // zoom-aware span
+        double effective = sampleRate / zoomFactor.load();           // zoom-aware span
         double binBw = effective / (double)fftSize;
         char buf[256];
         snprintf(buf, sizeof buf,
@@ -338,31 +341,17 @@ struct LocalSdrShim::Impl {
         sendText(sock, buf);
     }
 
-    // Largest power-of-2 decimation that keeps the decimated rate >= the current
-    // mode's IF rate (so zooming never starves the demod), capped at 64.
-    int maxDecimForAudio() {
-        int d = 1;
-        while (d * 2 <= 64 && (sampleRate / (d * 2)) >= currentIfRate) d *= 2;
-        return d;
-    }
-
-    // Waterfall zoom: pick the power-of-2 decimation whose resulting span best
-    // matches the requested binBandwidth*fftSize, clamped audio-safe. Decimation
-    // auto-propagates to the audio VFO (IQFrontEnd::setSampleRate), so no rebuild.
+    // Waterfall zoom: set the FFT-crop factor to match the requested span
+    // (binBandwidth*fftSize). Pure display-side crop in onFFT — no IQ
+    // decimation, no IQFrontEnd reconfig (which would touch the uninitialised
+    // headless core), no effect on audio. Capped so the crop keeps >= 16 bins.
     void setSpan(double binBw) {
         if (binBw <= 0) return;
-        double want = sampleRate / (binBw * (double)fftSize);   // desired decim
-        int d = 1;
-        while (d * 2 <= want) d *= 2;                           // floor to pow2
-        int mx = maxDecimForAudio();
-        if (d < 1) d = 1;
-        if (d > mx) d = mx;
-        if (d != decimRatio.load()) {
-            std::lock_guard<std::mutex> lk(modeMtx);
-            frontend.setDecimation(d);
-            decimRatio.store(d);
-            LOGI("zoom: decim=%d span=%.0f", d, sampleRate / d);
-        }
+        double want = sampleRate / (binBw * (double)fftSize);   // desired zoom
+        double maxZoom = (double)fftSize / 16.0;
+        if (want < 1.0) want = 1.0;
+        if (want > maxZoom) want = maxZoom;
+        zoomFactor.store(want);
     }
 
     static bool recvN(const std::shared_ptr<net::Socket>& s, uint8_t* buf, size_t n) {
@@ -387,11 +376,7 @@ struct LocalSdrShim::Impl {
         double v;
         if (type == "ping") { sendText(sock, "{\"type\":\"pong\"}"); return; }
         if (type == "set_rate") { if (jsonNum(msg,"divisor",v)) rateDivisor.store(std::max(1,(int)llround(v))); return; }
-        if (type == "reset") {
-            if (decimRatio.load() != 1) { std::lock_guard<std::mutex> lk(modeMtx); frontend.setDecimation(1); decimRatio.store(1); }
-            sendConfig(sock);
-            return;
-        }
+        if (type == "reset") { zoomFactor.store(1.0); sendConfig(sock); return; }
         if (type == "zoom") { // spectrum centre move (+ span via binBandwidth)
             if (jsonNum(msg,"frequency",v) && v > 0) {
                 // Only retune the RTL when the centre actually moves (a pinch
