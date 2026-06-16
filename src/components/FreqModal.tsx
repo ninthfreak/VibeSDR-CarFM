@@ -89,7 +89,7 @@ export default function FreqModal({
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <Pressable style={st.backdrop} onPress={onClose} />
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={st.center} pointerEvents="box-none"
       >
         <View style={[st.modal, { borderColor: t.barBorder }]}>
@@ -160,7 +160,9 @@ export default function FreqModal({
 
 const st = StyleSheet.create({
   backdrop:     { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.58)' },
-  center:       { ...StyleSheet.absoluteFill, justifyContent: 'flex-start', alignItems: 'center', paddingTop: 44 },
+  // Anchor near the bottom (over the control pill) so it's thumb-reachable on
+  // big phones; the auto-opened keyboard then sits just below it.
+  center:       { ...StyleSheet.absoluteFill, justifyContent: 'flex-end', alignItems: 'center', paddingBottom: 16 },
   modal:        { backgroundColor: 'rgba(8,6,1,0.97)', borderWidth: 1, borderRadius: 12, padding: 20, width: '90%', maxWidth: 360 },
   title:        { textAlign: 'center', fontSize: 10, letterSpacing: 3, marginBottom: 14 },
   inputRow:     { flexDirection: 'row', alignItems: 'flex-end', gap: 6, borderBottomWidth: 1, paddingBottom: 6, marginBottom: 8 },
