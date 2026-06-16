@@ -78,6 +78,53 @@ function mkBuf(w: number, h: number): PixBuf {
   return { w, h, data, complete: false, maxLine: 0 };
 }
 
+// WEFAX post-process (greyscale): auto-level contrast stretch + 3×3 median
+// despeckle. Runs once on the completed image — weak HF fax comes in faint and
+// speckled, this pulls the black/white levels to the 2nd/98th percentile and
+// removes salt-and-pepper noise. Operates in place on the RGBA buffer (R=G=B).
+function enhanceWefax(buf: PixBuf) {
+  const { w, data } = buf;
+  const h = Math.max(1, buf.maxLine + 1);
+  const N = w * h;
+  if (N < w * 4) return; // too little to bother
+
+  const g = new Uint8Array(N);
+  for (let i = 0; i < N; i++) g[i] = data[i * 4];
+
+  // Auto-level: stretch the 2nd…98th percentile to full range.
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < N; i++) hist[g[i]]++;
+  const loCount = N * 0.02, hiCount = N * 0.98;
+  let acc = 0, lo = 0, hi = 255;
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= loCount) { lo = v; break; } }
+  acc = 0;
+  for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= N - hiCount) { hi = v; break; } }
+  if (hi <= lo) hi = lo + 1;
+  const scale = 255 / (hi - lo);
+  const lut = new Uint8Array(256);
+  for (let v = 0; v < 256; v++) { const x = (v - lo) * scale; lut[v] = x < 0 ? 0 : x > 255 ? 255 : x; }
+
+  // 3×3 median despeckle (on the raw luma), then apply the contrast LUT.
+  const win = new Uint8Array(9);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let m: number;
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) {
+        m = g[y * w + x];
+      } else {
+        let k = 0;
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) win[k++] = g[(y + dy) * w + (x + dx)];
+        for (let a = 1; a < 9; a++) { const t = win[a]; let b = a - 1; while (b >= 0 && win[b] > t) { win[b + 1] = win[b]; b--; } win[b + 1] = t; }
+        m = win[4];
+      }
+      const v = lut[m];
+      const o = (y * w + x) * 4;
+      data[o] = v; data[o + 1] = v; data[o + 2] = v;
+    }
+  }
+}
+
 const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProps>(
   function DecoderImageCanvas({ maxHeight, onInfo, onStatus, onPrevState, decoderName }, ref) {
     const { width: winW } = useWindowDimensions();
@@ -190,6 +237,10 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       imageDone() {
         if (live.current) {
           live.current.complete = true;
+          // WEFAX: enhance the finished greyscale fax (contrast + despeckle).
+          if ((decoderName || '').toLowerCase() === 'wefax') {
+            try { enhanceWefax(live.current); } catch {}
+          }
           rebuild(live.current, true);
         }
         onStatus('done — tap SAVE');

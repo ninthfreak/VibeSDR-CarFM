@@ -43,6 +43,7 @@
 #include "rds.h"         // radio module RDS decoder
 #include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
 #include "decoders/wefax_decoder.h" // WEFAX (audio-extension decoder)
+#include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
 
 #define LOG_TAG "VibeLocalSDR"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -203,6 +204,13 @@ struct LocalSdrShim::Impl {
     std::mutex decoderMtx;
     FskDecoder* decoder = nullptr;
     WefaxDecoder* wefax = nullptr;          // active image decoder (WEFAX), or null
+    // FT8/FT4 digital-spots decoders (independent of the text/image decoders).
+    std::mutex spotsMtx;
+    Ft8Decoder* ft8 = nullptr;
+    Ft8Decoder* ft4 = nullptr;
+    bool spotsActive = false;
+    int  spotDecim = 0;                      // 48k→12k decimation counter
+    float spotAcc = 0.0f;                    // box-average accumulator
     std::shared_ptr<net::Socket> dxClient;
     std::string decTextBuf;                 // decoded chars awaiting flush (UTF-8)
     std::mutex decBufMtx;
@@ -301,6 +309,7 @@ struct LocalSdrShim::Impl {
         // Feed the audio-extension decoder (mono int16) — runs even with no audio
         // WS client. The decoder's onChar/onState push frames to the dxcluster WS.
         feedDecoder(data, count);
+        feedSpots(data, count);
 
         std::shared_ptr<net::Socket> sock;
         { std::lock_guard<std::mutex> lk(clientMtx); sock = audioClient; }
@@ -367,6 +376,76 @@ struct LocalSdrShim::Impl {
         std::shared_ptr<net::Socket> dx;
         { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
         if (dx && dx->isOpen()) { uint8_t m[2] = { 0x03, (uint8_t)st }; sendWs(dx, 0x2, m, 2); }
+    }
+
+    // ── FT8/FT4 digital spots ──────────────────────────────────────────────
+    static const char* bandFor(double hz) {
+        double m = hz / 1e6;
+        if (m >= 1.8  && m < 2.0)   return "160m";
+        if (m >= 3.5  && m < 4.0)   return "80m";
+        if (m >= 5.3  && m < 5.5)   return "60m";
+        if (m >= 7.0  && m < 7.3)   return "40m";
+        if (m >= 10.1 && m < 10.15) return "30m";
+        if (m >= 14.0 && m < 14.35) return "20m";
+        if (m >= 18.0 && m < 18.2)  return "17m";
+        if (m >= 21.0 && m < 21.45) return "15m";
+        if (m >= 24.8 && m < 25.0)  return "12m";
+        if (m >= 28.0 && m < 29.7)  return "10m";
+        if (m >= 50.0 && m < 54.0)  return "6m";
+        return "";
+    }
+    void emitSpot(bool isFt4, const std::string& callTo, const std::string& callDe,
+                  const std::string& grid, int snr, float audioHz) {
+        (void)callTo;
+        std::shared_ptr<net::Socket> dx;
+        { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
+        if (!dx || !dx->isOpen()) return;
+        double rfHz = audioFreq.load() + audioHz;     // dial (USB) + audio offset
+        uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        char buf[384];
+        int n = snprintf(buf, sizeof(buf),
+            "{\"type\":\"digital_spot\",\"data\":{\"mode\":\"%s\",\"callsign\":\"%s\","
+            "\"snr\":%d,\"frequency\":%.0f,\"band\":\"%s\",\"grid\":\"%s\",\"timestamp\":%llu}}",
+            isFt4 ? "FT4" : "FT8", callDe.c_str(), snr, rfHz, bandFor(rfHz),
+            grid.c_str(), (unsigned long long)ts);
+        if (n > 0) sendText(dx, std::string(buf, (size_t)n));
+    }
+    void startSpots() {
+        std::lock_guard<std::mutex> lk(spotsMtx);
+        if (spotsActive) return;
+        delete ft8; delete ft4;
+        ft8 = new Ft8Decoder(12000, false);
+        ft4 = new Ft8Decoder(12000, true);
+        ft8->onSpot = [this](const std::string& to, const std::string& de, const std::string& g, int s, float f) { emitSpot(false, to, de, g, s, f); };
+        ft4->onSpot = [this](const std::string& to, const std::string& de, const std::string& g, int s, float f) { emitSpot(true,  to, de, g, s, f); };
+        spotDecim = 0; spotAcc = 0.0f;
+        spotsActive = true;
+        LOGI("digital spots (FT8/FT4) started");
+    }
+    void stopSpots() {
+        std::lock_guard<std::mutex> lk(spotsMtx);
+        spotsActive = false;
+        delete ft8; ft8 = nullptr;
+        delete ft4; ft4 = nullptr;
+    }
+    void feedSpots(dsp::stereo_t* data, int count) {
+        std::lock_guard<std::mutex> lk(spotsMtx);
+        if (!spotsActive) return;
+        // Decimate 48k→12k by box-averaging 4 samples (mono).
+        std::vector<int16_t> dec;
+        dec.reserve((size_t)count / 4 + 1);
+        for (int i = 0; i < count; i++) {
+            spotAcc += data[i].l;
+            if (++spotDecim >= 4) {
+                int s = (int)lround(spotAcc / 4.0f * 32767.0f);
+                dec.push_back((int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s)));
+                spotDecim = 0; spotAcc = 0.0f;
+            }
+        }
+        if (dec.empty()) return;
+        if (ft8) ft8->process(dec.data(), (int)dec.size());
+        if (ft4) ft4->process(dec.data(), (int)dec.size());
     }
 
     // ── Demod chain (re)build ──────────────────────────────────────────────
@@ -786,10 +865,15 @@ struct LocalSdrShim::Impl {
             } else if (type == "audio_extension_detach") {
                 stopDecoder();
                 sendText(sock, "{\"type\":\"audio_extension_detached\"}");
+            } else if (type == "subscribe_digital_spots") {
+                startSpots();    // local FT8/FT4 decoder feeds digital_spot frames
+            } else if (type == "unsubscribe_digital_spots") {
+                stopSpots();
             }
-            // chat / subscribe_* messages are ignored (no server here).
+            // chat / cw-spot / subscribe_chat messages are ignored (no server here).
         }
         stopDecoder();
+        stopSpots();
         { std::lock_guard<std::mutex> lk(clientMtx); if (dxClient == sock) dxClient = nullptr; }
         sock->close();
         LOGI("dxcluster WS disconnected");
@@ -891,6 +975,7 @@ void LocalSdrShim::stop() {
       if (impl->audioClient) impl->audioClient->close();
       if (impl->dxClient) impl->dxClient->close(); }
     impl->stopDecoder();
+    impl->stopSpots();
     if (impl->listener) impl->listener->stop();
     if (impl->acceptThread.joinable()) impl->acceptThread.join();
     { std::lock_guard<std::mutex> lk(impl->connMtx);

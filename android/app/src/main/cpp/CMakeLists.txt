@@ -57,11 +57,21 @@ add_subdirectory("${SDRPP_SRC_ROOT}/source_modules/rtl_sdr_source" rtl_sdr_sourc
 # --- VibeSDR local-SDR shim -------------------------------------------------
 # Stage 2: opens an RTL-SDR from a USB fd via librtlsdr (rtlsdr_open_sys_dev).
 # Include the radio module's RDS decoder source (FM RDS = station name etc.).
+# ft8_lib (kgoba, MIT) — FT8/FT4 core, built with self-contained KISS FFT.
+file(GLOB FT8_LIB_SRC
+    "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/ft8/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/fft/kiss_fft.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/fft/kiss_fftr.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/common/monitor.c")
+
 add_library(vibelocalsdr SHARED
     vibe_localsdr_jni.cpp local_sdr_shim.cpp
     decoders/fsk_decoder.cpp
     decoders/wefax_decoder.cpp
+    decoders/ft8_decoder.cpp
+    ${FT8_LIB_SRC}
     "${SDRPP_SRC_ROOT}/decoder_modules/radio/src/rds.cpp")
+# ft8_lib (upstream kgoba) uses KISS FFT unconditionally — no extra define needed.
 # core headers (dsp/stream, iq_frontend) need C++17; the global CMAKE_CXX_STANDARD
 # is 14 (mirrors SDR++ root), so force this target like core forces its own.
 set_target_properties(vibelocalsdr PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
@@ -69,6 +79,7 @@ target_compile_options(vibelocalsdr PRIVATE -std=c++17)
 target_include_directories(vibelocalsdr PRIVATE
     "${SDRPP_SRC_ROOT}/core/src"
     "${SDRPP_SRC_ROOT}/decoder_modules/radio/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib"
     "${SDR_KIT_ROOT}/${ANDROID_ABI}/include")
 # --no-as-needed keeps the DT_NEEDED on libsdrpp_core.so so loading the shim
 # actually pulls the SDR++ core in (proves the link, not just that it compiled).
