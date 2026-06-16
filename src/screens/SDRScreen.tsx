@@ -312,7 +312,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwDirectSamp,  setHwDirectSamp]  = useState(0);
   const [hwDeemph,      setHwDeemph]      = useState(50e-6);  // FM de-emphasis tau (0/50µs/75µs)
   const [hwSquelch,     setHwSquelch]     = useState(-100);   // audio squelch dBFS (-100 = off)
-  const [hwNR,          setHwNR]          = useState(false);  // audio noise reduction (OMLSA/MCRA)
+  const [hwNrLevel,     setHwNrLevel]     = useState(0);      // audio NR strength 0=off..10
   const [nrCpu,         setNrCpu]         = useState(0);      // NR CPU% readout
 
   // Load saved RTL-SDR hardware settings and apply them to the running session,
@@ -333,9 +333,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       const ds   = typeof prefs.directSampling === 'number' ? prefs.directSampling : 0;
       const deemph = typeof prefs.deemph === 'number' ? prefs.deemph : 50e-6;
       const sql  = typeof prefs.squelch === 'number' ? prefs.squelch : -100;
-      const nr   = !!prefs.nr;
+      const nrLvl = typeof prefs.nrLevel === 'number' ? prefs.nrLevel : 0;
       setHwAutoGain(auto); setHwPpm(ppm); setHwSampleRate(rate);
-      setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwSquelch(sql); setHwNR(nr);
+      setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwSquelch(sql); setHwNrLevel(nrLvl);
       if (typeof prefs.gain === 'number') setHwGain(prefs.gain);
       // Re-apply to the native session (already running from startSpectrum).
       LocalHw?.setPpm?.(ppm);
@@ -344,7 +344,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       LocalHw?.setDirectSampling?.(ds);
       LocalHw?.setDeemphasis?.(deemph);
       LocalHw?.setSquelch?.(sql > -100, sql);
-      LocalHw?.setNR?.(nr);
+      LocalHw?.setNrStrength?.(nrLvl / 10);
+      LocalHw?.setNR?.(nrLvl > 0);
       if (rate !== 2_400_000) LocalHw?.setSampleRate?.(rate);
       LocalHw?.setGain?.(auto ? -1 : (typeof prefs.gain === 'number' ? prefs.gain : 0));
       try {
@@ -365,18 +366,18 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_local_hw', JSON.stringify({
       autoGain: hwAutoGain, gain: hwGain, ppm: hwPpm, sampleRate: hwSampleRate,
       biasTee: hwBiasTee, agc: hwAgc, directSampling: hwDirectSamp, deemph: hwDeemph,
-      squelch: hwSquelch, nr: hwNR,
+      squelch: hwSquelch, nrLevel: hwNrLevel,
     })).catch(() => {});
-  }, [isLocal, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwSquelch, hwNR]);
+  }, [isLocal, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwSquelch, hwNrLevel]);
 
   // Poll the native NR CPU% while NR is on (for the menu readout).
   useEffect(() => {
-    if (!isLocal || !hwNR) { setNrCpu(0); return; }
+    if (!isLocal || hwNrLevel <= 0) { setNrCpu(0); return; }
     const id = setInterval(() => {
       LocalHw?.getNrCpu?.().then((v: number) => setNrCpu(typeof v === 'number' ? v : 0)).catch(() => {});
     }, 1000);
     return () => clearInterval(id);
-  }, [isLocal, hwNR, LocalHw]);
+  }, [isLocal, hwNrLevel, LocalHw]);
 
   const onHwAuto = useCallback((auto: boolean) => {
     setHwAutoGain(auto);
@@ -398,8 +399,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onLocalSquelch = useCallback((db: number) => {
     setHwSquelch(db); LocalHw?.setSquelch?.(db > -100, db);
   }, [LocalHw]);
-  const onLocalNR = useCallback((on: boolean) => {
-    setHwNR(on); LocalHw?.setNR?.(on);
+  const onLocalNR = useCallback((level: number) => {
+    setHwNrLevel(level);
+    LocalHw?.setNrStrength?.(level / 10);
+    LocalHw?.setNR?.(level > 0);
   }, [LocalHw]);
 
   const insets = useSafeAreaInsets();
@@ -3045,7 +3048,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         snrSquelch={snrSquelch}         onSnrSquelch={onSnrSquelch}
         fmSquelch={fmSquelch}           onFmSquelch={onFmSquelch}
         localSquelch={hwSquelch}        onLocalSquelch={isLocal ? onLocalSquelch : undefined}
-        localNR={hwNR}                  onLocalNR={isLocal ? onLocalNR : undefined}  nrCpu={nrCpu}
+        localNR={hwNrLevel}             onLocalNR={isLocal ? onLocalNR : undefined}  nrCpu={nrCpu}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
         serverDspEnabled={serverDspEnabled}
         serverDspFilter={serverDspFilter}

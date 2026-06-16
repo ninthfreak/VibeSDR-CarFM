@@ -89,9 +89,9 @@ export interface MenuSheetProps {
   // squelch slider on local instances.
   localSquelch?:   number;
   onLocalSquelch?: (db: number) => void;
-  // Local SDR audio noise reduction (Brown OMLSA/MCRA) + live CPU%.
-  localNR?:        boolean;
-  onLocalNR?:      (on: boolean) => void;
+  // Local SDR audio noise reduction strength (0=off..10) + live CPU%.
+  localNR?:        number;
+  onLocalNR?:      (level: number) => void;
   nrCpu?:          number;
   // FM squelch — only shown for fm/nfm modes
   fmSquelch?:     number;
@@ -414,7 +414,7 @@ export default function MenuSheet({
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
-  localNR = false, onLocalNR, nrCpu = 0,
+  localNR = 0, onLocalNR, nrCpu = 0,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
   serverLabel = null, onOwrxSquelch, onOwrxNr,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
@@ -1282,15 +1282,19 @@ export default function MenuSheet({
             </View>
             ) : null}
 
-            {/* Local SDR audio noise reduction (OMLSA/MCRA) with live CPU%. */}
+            {/* Local SDR audio noise reduction — strength slider + live CPU%. */}
             {onLocalNR && (
               <View style={styles.bwRow}>
-                <View style={{ flex: 1 }}>
-                  <Btn label={localNR ? 'AUDIO NR: ON' : 'AUDIO NR: OFF'} active={localNR}
-                       onPress={() => onLocalNR?.(!localNR)} />
-                </View>
-                <Text style={[styles.bwVal, { color: localNR ? C.gold : C.muted }]}>
-                  {localNR ? `${Math.round(nrCpu)}% CPU` : ''}
+                <Text style={styles.bwLabel}>NR</Text>
+                <Slider style={styles.bwSlider}
+                  minimumValue={0} maximumValue={10} step={1}
+                  value={localNR}
+                  onValueChange={(v: number) => onLocalNR?.(v)}
+                  minimumTrackTintColor={localNR > 0 ? C.gold : C.muted}
+                  maximumTrackTintColor={C.muted}
+                  thumbTintColor={C.gold} />
+                <Text style={styles.bwVal}>
+                  {localNR <= 0 ? 'Off' : `${localNR} · ${Math.round(nrCpu)}%`}
                 </Text>
               </View>
             )}

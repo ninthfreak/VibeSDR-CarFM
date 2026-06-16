@@ -32,7 +32,10 @@ void AudioNR::reset() {
 
 void AudioNR::process(const float* in, int count, std::vector<float>& out) {
     inBuf.insert(inBuf.end(), in, in + count);
-    const float gmin = 0.06f;                  // floor gain (~ -12 dB) — limits musical noise
+    // Map strength → floor gain (residual noise) + over-subtraction factor.
+    // weak:  beta 1.0, gmin 0.30 (gentle)   strong: beta 2.5, gmin 0.02 (deep)
+    const float beta = 1.0f + 1.5f * strength;
+    const float gmin = 0.30f - 0.28f * strength;
     const float invN = 1.0f / (float)N;
 
     while ((int)inBuf.size() >= N) {
@@ -46,7 +49,7 @@ void AudioNR::process(const float* in, int count, std::vector<float>& out) {
             float& Nn = noise[k];
             if (Nn <= 0.0f) Nn = P;
             if (P < Nn) Nn = P; else Nn += 0.02f * (P - Nn);   // fast-down / slow-up
-            float g = (P > Nn) ? (P - Nn) / P : 0.0f;          // power gain
+            float g = (P > beta * Nn) ? (P - beta * Nn) / P : 0.0f;  // over-subtraction
             if (g < gmin) g = gmin;
             float ag = std::sqrt(g);                            // amplitude gain
             spec[k].r *= ag; spec[k].i *= ag;

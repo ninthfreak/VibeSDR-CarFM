@@ -68,6 +68,7 @@ object VibeLocalSDR {
     fun setDeemphasis(tau: Double) { if (loaded) nativeSetDeemphasis(tau) }
     fun setSquelch(on: Boolean, db: Float) { if (loaded) nativeSetSquelch(on, db) }
     fun setNR(on: Boolean) { if (loaded) nativeSetNR(on) }
+    fun setNrStrength(s: Float) { if (loaded) nativeSetNrStrength(s) }
     fun getNrCpu(): Float { return if (loaded) nativeGetNrCpu() else 0f }
     fun getTunerGains(): IntArray { return if (loaded) nativeGetTunerGains() ?: IntArray(0) else IntArray(0) }
 
@@ -88,6 +89,7 @@ object VibeLocalSDR {
     private external fun nativeSetDeemphasis(tau: Double)
     private external fun nativeSetSquelch(on: Boolean, db: Float)
     private external fun nativeSetNR(on: Boolean)
+    private external fun nativeSetNrStrength(s: Float)
     private external fun nativeGetNrCpu(): Float
     private external fun nativeGetTunerGains(): IntArray?
 }

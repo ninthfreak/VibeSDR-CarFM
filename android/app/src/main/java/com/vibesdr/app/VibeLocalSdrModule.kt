@@ -192,6 +192,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun setDeemphasis(tau: Double) { VibeLocalSDR.setDeemphasis(tau) }
     @ReactMethod fun setSquelch(on: Boolean, db: Double) { VibeLocalSDR.setSquelch(on, db.toFloat()) }
     @ReactMethod fun setNR(on: Boolean) { VibeLocalSDR.setNR(on) }
+    @ReactMethod fun setNrStrength(s: Double) { VibeLocalSDR.setNrStrength(s.toFloat()) }
     @ReactMethod fun getNrCpu(promise: Promise) { promise.resolve(VibeLocalSDR.getNrCpu().toDouble()) }
 
     /** Supported tuner gains in tenths of dB (e.g. 207 = 20.7 dB). */

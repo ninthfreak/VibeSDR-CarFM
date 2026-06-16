@@ -22,6 +22,8 @@ public:
     // Feed mono floats; appends denoised output (variable count, STFT latency).
     void process(const float* in, int count, std::vector<float>& out);
     void reset();
+    // Strength 0..1: higher = more aggressive (deeper floor, more subtraction).
+    void setStrength(float s) { strength = s < 0 ? 0 : (s > 1 ? 1 : s); }
 private:
     static const int N = 512;        // FFT size
     static const int HOP = 256;      // 50% overlap
@@ -33,6 +35,7 @@ private:
     std::vector<float> noise;        // per-bin noise power (N/2+1)
     std::vector<kiss_fft_cpx> spec;  // N/2+1
     bool primed = false;
+    float strength = 0.5f;           // 0..1 aggressiveness
 };
 
 } // namespace vibe

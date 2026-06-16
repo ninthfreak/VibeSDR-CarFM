@@ -1142,6 +1142,12 @@ void LocalSdrShim::setNR(bool on) {
     if (!on) { std::lock_guard<std::mutex> lk(p->nrMtx); if (p->nrEng) p->nrEng->reset(); }
     LOGI("audio NR: %d", on);
 }
+void LocalSdrShim::setNrStrength(float s) {
+    if (!p) return;
+    std::lock_guard<std::mutex> lk(p->nrMtx);
+    if (!p->nrEng) p->nrEng = new AudioNR();
+    p->nrEng->setStrength(s);
+}
 float LocalSdrShim::getNrCpu() { return p ? p->nrCpuPct.load() : 0.0f; }
 void LocalSdrShim::setSampleRate(double rate) {
     if (!p || !p->dev || rate <= 0) return;
