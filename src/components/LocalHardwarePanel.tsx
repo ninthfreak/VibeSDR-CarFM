@@ -46,7 +46,13 @@ export interface LocalHardwarePanelProps {
   onAgc: (on: boolean) => void;
   directSampling: number;
   onDirectSampling: (mode: number) => void;
+  deemph: number;            // FM de-emphasis tau (0=off, 50e-6, 75e-6)
+  onDeemph: (tau: number) => void;
 }
+
+const DEEMPH_OPTS: { label: string; value: number }[] = [
+  { label: 'Off', value: 0 }, { label: '50µs', value: 50e-6 }, { label: '75µs', value: 75e-6 },
+];
 
 function Seg<T>({ options, value, onChange, fmt }: {
   options: T[]; value: T; onChange: (v: T) => void; fmt: (v: T) => string;
@@ -85,6 +91,11 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           <Text style={styles.section}>SAMPLE RATE</Text>
           <Seg options={SAMPLE_RATES} value={p.sampleRate} onChange={p.onSampleRate}
                fmt={(r) => `${(r / 1e6).toFixed(r % 1e6 === 0 ? 1 : 3).replace(/0+$/, '').replace(/\.$/, '.0')}M`} />
+
+          <Text style={styles.section}>FM DE-EMPHASIS</Text>
+          <Seg options={DEEMPH_OPTS.map(d => d.value)} value={p.deemph} onChange={p.onDeemph}
+               fmt={(v) => DEEMPH_OPTS.find(d => d.value === v)?.label ?? String(v)} />
+          <Text style={styles.note}>50µs Europe/UK, 75µs Americas/Korea.</Text>
 
           <Text style={styles.section}>FREQUENCY CORRECTION (PPM)</Text>
           <View style={styles.stepperRow}>

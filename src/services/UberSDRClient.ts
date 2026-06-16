@@ -665,6 +665,19 @@ export class UberSDRClient {
     // This is the ONLY way the client learns binBandwidth (binary frames carry
     // just the centre frequency) — without it bwHz stays 0 and the entire
     // frequency→pixel mapping (needle, band plan, gestures) is dead.
+    // V4 local hardware: FM RDS + stereo → reuse the OWRX metadata display path.
+    if (msg.type === 'rds') {
+      const ps = typeof msg.ps === 'string' ? msg.ps.trim() : '';
+      const rt = typeof msg.radiotext === 'string' ? msg.radiotext.trim() : '';
+      const stereo = msg.stereo === true;
+      (this.callbacks as any).onMetadata?.({
+        stationName: ps || undefined,
+        text: rt || undefined,
+        badge: ps ? 'RDS' : undefined,
+        stereo,
+      });
+      return;
+    }
     if (msg.type === 'config') {
       // Local hardware advertises its full span here → cap zoom-out to it.
       if (typeof msg.maxBandwidth === 'number') this.maxSpanHz = msg.maxBandwidth;

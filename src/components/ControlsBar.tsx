@@ -169,6 +169,8 @@ export interface ControlsBarProps {
   meterBus?:     MeterBus;
   /** Readout mode for the pill text (menu SIGNAL METER toggles). */
   signalMode?:   'snr' | 'smeter' | 'dbfs';
+  /** WFM stereo pilot detected (local hardware) → "ST" badge on the mode pill. */
+  fmStereo?:     boolean;
   bottomInset:   number;
   onVfoDelta:    (px: number) => void;
   onBwDelta:     (px: number) => void;
@@ -278,10 +280,24 @@ export function LinkIndicator({ bus }: { bus?: MeterBus }) {
 // ── Freq + mode pill ──────────────────────────────────────────────────────────
 // All sizes passed as props from parent so they scale with useUiScale()
 
+// Classic interlocking-rings stereo symbol (two overlapping ring outlines),
+// shown on the mode pill when a WFM stereo pilot is locked.
+function StereoIcon({ size, color }: { size: number; color: string }) {
+  const bw = Math.max(1.2, size * 0.13);
+  const ring = { position: 'absolute' as const, top: 0, width: size, height: size,
+                 borderRadius: size / 2, borderWidth: bw, borderColor: color, backgroundColor: 'transparent' };
+  return (
+    <View style={{ width: size * 1.62, height: size, marginLeft: 5, justifyContent: 'center' }}>
+      <View style={[ring, { left: 0 }]} />
+      <View style={[ring, { left: size * 0.62 }]} />
+    </View>
+  );
+}
+
 function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActive,
   onFreqTap, onModeTap, freqFontSize, freqWidth, unitFontSize, modeFontSize,
   modeLs, snrWidth, pillPadH, pillPadV, modePadH, modePadV, gap, bus, meterMode,
-  tight = false,
+  tight = false, fmStereo = false,
 }: any) {
   const { theme: t } = useTheme();
   // Skin parity (lsvSnrDisp): plain "NNdb", not a synthetic S-meter reading.
@@ -317,12 +333,15 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
         style={[pm.modeBtn, { backgroundColor: t.pillBg, paddingHorizontal: modePadH, paddingVertical: modePadV, minWidth: tight ? 72 : 84 }]}
         onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
       >
-        <Text style={[pm.modeLbl, {
-          color: t.modeColor, fontSize: modeFontSize, letterSpacing: modeLs, fontFamily: t.font,
-          lineHeight: Math.round(modeFontSize * 1.15), includeFontPadding: false,
-        }]}>
-          {modeLabel}
-        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={[pm.modeLbl, {
+            color: t.modeColor, fontSize: modeFontSize, letterSpacing: modeLs, fontFamily: t.font,
+            lineHeight: Math.round(modeFontSize * 1.15), includeFontPadding: false,
+          }]}>
+            {modeLabel}
+          </Text>
+          {fmStereo ? <StereoIcon size={Math.max(10, Math.round(modeFontSize * 0.85))} color="#52dc64" /> : null}
+        </View>
         <Text style={[pm.snr, {
           color: t.snrColor, fontFamily: t.font, width: snrWidth,
           fontSize: Math.max(9, Math.round(modeFontSize * 0.75)),
@@ -407,7 +426,7 @@ function ChatIcon({ size, color }: { size: number; color: string }) {
 
 // ── PORTRAIT ──────────────────────────────────────────────────────────────────
 
-function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode,
+function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread }: any) {
 
@@ -499,7 +518,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
         <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
         <FreqModePill
           freqStr={freqStr} unit={unit} modeLabel={modeLabel} snrText={snrText}
-          connected={connected} signalActive={signalActive} bus={bus} meterMode={meterMode}
+          connected={connected} signalActive={signalActive} bus={bus} meterMode={meterMode} fmStereo={fmStereo}
           onFreqTap={onFreqTap} onModeTap={onModeTap}
           freqFontSize={FREQ_FONT} freqWidth={FREQ_W} unitFontSize={UNIT_FONT}
           modeFontSize={MODE_FONT} modeLs={MODE_LS} snrWidth={SNR_W}
@@ -594,7 +613,7 @@ const por = StyleSheet.create({
 
 // ── LANDSCAPE ─────────────────────────────────────────────────────────────────
 
-function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode,
+function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread }: any) {
 
@@ -667,7 +686,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
           <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
           <FreqModePill
             freqStr={freqStr} unit={unit} modeLabel={modeLabel} snrText={snrText}
-            connected={connected} signalActive={signalActive} bus={bus} meterMode={meterMode}
+            connected={connected} signalActive={signalActive} bus={bus} meterMode={meterMode} fmStereo={fmStereo}
             onFreqTap={onFreqTap} onModeTap={onModeTap}
             freqFontSize={FREQ_FONT} freqWidth={FREQ_W} unitFontSize={UNIT_FONT}
             modeFontSize={MODE_FONT} modeLs={MODE_LS} snrWidth={SNR_W}
@@ -714,6 +733,7 @@ const lnd = StyleSheet.create({
 function ControlsBar({
   frequency, mode, step, connected, bottomInset,
   signalLevel, peakLevel, snrDb = 40, signalActive, meterBus, signalMode = 'snr',
+  fmStereo = false,
   onVfoDelta, onBwDelta, onMode, onStep,
   onMenu, onChat, onFreqTap, onModeTap,
   instanceHost = 'ubersdr',
@@ -754,7 +774,7 @@ function ControlsBar({
   const RADIUS  = s.r(18);
 
   const shared = {
-    freqStr, unit, modeLabel: mode.toUpperCase(), snrText,
+    freqStr, unit, modeLabel: mode.toUpperCase(), snrText, fmStereo,
     connected, signalActive, bus: meterBus, meterMode: signalMode,
     signal: signalLevel, peak: peakLevel,
     stepLabel, onFreqTap, onModeTap,

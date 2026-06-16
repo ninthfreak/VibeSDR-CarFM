@@ -65,6 +65,7 @@ object VibeLocalSDR {
     fun setAgc(on: Boolean) { if (loaded) nativeSetAgc(on) }
     fun setDirectSampling(mode: Int) { if (loaded) nativeSetDirectSampling(mode) }
     fun setSampleRate(rate: Double) { if (loaded) nativeSetSampleRate(rate) }
+    fun setDeemphasis(tau: Double) { if (loaded) nativeSetDeemphasis(tau) }
     fun getTunerGains(): IntArray { return if (loaded) nativeGetTunerGains() ?: IntArray(0) else IntArray(0) }
 
     private external fun nativeHello(): String
@@ -81,5 +82,6 @@ object VibeLocalSDR {
     private external fun nativeSetAgc(on: Boolean)
     private external fun nativeSetDirectSampling(mode: Int)
     private external fun nativeSetSampleRate(rate: Double)
+    private external fun nativeSetDeemphasis(tau: Double)
     private external fun nativeGetTunerGains(): IntArray?
 }

@@ -29,6 +29,7 @@ public:
     void setAgc(bool on);                 // RTL2832 digital AGC
     void setDirectSampling(int mode);     // 0=off, 1=I, 2=Q (not needed on Blog V4)
     void setSampleRate(double rate);      // cancels + restarts the IQ stream (auto FFT size)
+    void setDeemphasis(double tau);       // FM de-emphasis time constant (0=off, 50e-6, 75e-6)
     // Returns supported tuner gains (tenths of dB); empty if not running.
     std::vector<int> getTunerGains();
 

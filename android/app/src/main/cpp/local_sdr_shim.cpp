@@ -35,9 +35,12 @@
 #include "dsp/demod/cw.h"
 #include "dsp/demod/broadcast_fm.h"
 #include "dsp/multirate/rational_resampler.h"
+#include "dsp/filter/deephasis.h"
 #include "dsp/sink/handler_sink.h"
 #include "dsp/types.h"
 #include "utils/net.h"
+#include "rds_demod.h"   // radio module RDS demod
+#include "rds.h"         // radio module RDS decoder
 
 #define LOG_TAG "VibeLocalSDR"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -180,8 +183,18 @@ struct LocalSdrShim::Impl {
     // called twice on the same block (registerInput guard), so member objects
     // can't be re-init'd — each buildAudio() needs fresh ones.
     dsp::multirate::RationalResampler<dsp::stereo_t>* resamp = nullptr;
+    dsp::filter::Deemphasis<dsp::stereo_t>* deemph = nullptr;   // FM de-emphasis (50/75us)
     dsp::sink::Handler<dsp::stereo_t>* audioSink = nullptr;
     std::atomic<int> audioChannels{1};
+    double deempTau = 50e-6;   // FM de-emphasis time constant (0 = off); 50us EU / 75us US
+
+    // FM extras (WFM): RDS decode + stereo-pilot detection.
+    dsp::demod::BroadcastFM* wfmDemod = nullptr;   // typed handle for demod.rdsOut
+    RDSDemod* rdsDemodB = nullptr;
+    dsp::sink::Handler<uint8_t>* rdsSink = nullptr;
+    rds::Decoder* rdsDecoder = nullptr;
+    std::atomic<bool> stereoDetected{false};
+    float lrEma = 0.0f;
 
     // server
     std::shared_ptr<net::Listener> listener;
@@ -249,6 +262,7 @@ struct LocalSdrShim::Impl {
                 frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
             }
             sendWs(sock, 0x2, frame.data(), frame.size());
+            if (n % 10 == 0) sendFmMeta(sock);   // RDS + stereo ~1/sec
         }
         std::fill(fftAccum.begin(), fftAccum.end(), 0.0f);
         accumCount = 0;
@@ -273,6 +287,13 @@ struct LocalSdrShim::Impl {
             return (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
         };
         if (ch == 2) {
+            // Stereo-pilot detection: a mono station has L==R (no difference
+            // signal); a stereo broadcast carries L−R, so the ratio of |L−R| to
+            // the total tracks the pilot. EMA-smoothed, thresholded.
+            float diff = 0.0f, tot = 1e-6f;
+            for (int i = 0; i < count; i++) { diff += std::fabs(data[i].l - data[i].r); tot += std::fabs(data[i].l) + std::fabs(data[i].r); }
+            lrEma += 0.1f * (diff / tot - lrEma);
+            stereoDetected.store(lrEma > 0.03f);
             for (int i = 0; i < count; i++) { pcm[i*2] = cvt(data[i].l); pcm[i*2+1] = cvt(data[i].r); }
         } else {
             for (int i = 0; i < count; i++) pcm[i] = cvt(data[i].l);
@@ -283,9 +304,21 @@ struct LocalSdrShim::Impl {
     // ── Demod chain (re)build ──────────────────────────────────────────────
     void teardownAudio() {
         if (audioSink) { audioSink->stop(); delete audioSink; audioSink = nullptr; }
+        if (deemph) { deemph->stop(); delete deemph; deemph = nullptr; }
+        // RDS chain (consumers before the demod that feeds them).
+        if (rdsSink) { rdsSink->stop(); delete rdsSink; rdsSink = nullptr; }
+        if (rdsDemodB) { rdsDemodB->stop(); delete rdsDemodB; rdsDemodB = nullptr; }
+        if (rdsDecoder) { delete rdsDecoder; rdsDecoder = nullptr; }
+        wfmDemod = nullptr;
+        stereoDetected.store(false); lrEma = 0.0f;
         if (resamp) { resamp->stop(); delete resamp; resamp = nullptr; }
         if (demod) { demod->stop(); if (demodDeleter) demodDeleter(demod); demod = nullptr; demodDeleter = nullptr; }
         if (vfo) { frontend->removeVFO("audio"); vfo = nullptr; }
+    }
+
+    static void rdsSymbolHandler(uint8_t* data, int count, void* ctx) {
+        Impl* _this = (Impl*)ctx;
+        if (_this->rdsDecoder) _this->rdsDecoder->process(data, count);
     }
 
     void buildAudio() {
@@ -334,20 +367,74 @@ struct LocalSdrShim::Impl {
             }
             case ModeParams::WFM: {
                 auto* d = new dsp::demod::BroadcastFM();
-                d->init(&vfo->out, 75000.0, mp.ifRate, /*stereo*/true, /*lowPass*/true, /*rds*/false);
+                d->init(&vfo->out, 75000.0, mp.ifRate, /*stereo*/true, /*lowPass*/true, /*rds*/true);
                 demod = d; demodDeleter = [](void* x){ delete (dsp::demod::BroadcastFM*)x; };
+                wfmDemod = d;
                 break;
             }
         }
 
         resamp = new dsp::multirate::RationalResampler<dsp::stereo_t>();
         resamp->init(&demod->out, mp.ifRate, AUDIO_SR);
+
+        // FM de-emphasis (WFM/NFM) between the resampler and the sink.
+        dsp::stream<dsp::stereo_t>* af = &resamp->out;
+        if ((mp.kind == ModeParams::WFM || mp.kind == ModeParams::NFM) && deempTau > 0.0) {
+            deemph = new dsp::filter::Deemphasis<dsp::stereo_t>();
+            deemph->init(&resamp->out, deempTau, AUDIO_SR);
+            af = &deemph->out;
+        }
         audioSink = new dsp::sink::Handler<dsp::stereo_t>();
-        audioSink->init(&resamp->out, &Impl::audioHandler, this);
+        audioSink->init(af, &Impl::audioHandler, this);
+
+        // RDS: BroadcastFM rdsOut → RDS demod → decoder (WFM only).
+        if (mp.kind == ModeParams::WFM && wfmDemod) {
+            rdsDecoder = new rds::Decoder();
+            rdsDemodB = new RDSDemod();
+            rdsDemodB->init(&wfmDemod->rdsOut, false);
+            rdsSink = new dsp::sink::Handler<uint8_t>();
+            rdsSink->init(&rdsDemodB->out, &Impl::rdsSymbolHandler, this);
+        }
+
         demod->start();
         resamp->start();
+        if (deemph) deemph->start();
         audioSink->start();
-        LOGI("audio chain: mode=%s ifRate=%.0f bw=%.0f ch=%d", mode.c_str(), mp.ifRate, mp.bandwidth, mp.channels);
+        if (rdsDemodB) rdsDemodB->start();
+        if (rdsSink) rdsSink->start();
+        LOGI("audio chain: mode=%s ifRate=%.0f bw=%.0f ch=%d deemp=%.0fus rds=%d",
+             mode.c_str(), mp.ifRate, mp.bandwidth, mp.channels, deempTau * 1e6, rdsDecoder != nullptr);
+    }
+
+    // FM RDS + stereo status → client (reuses the OWRX metadata display).
+    static std::string jsonEscape(const std::string& s) {
+        std::string o;
+        for (char c : s) {
+            if (c == '"' || c == '\\') { o.push_back('\\'); o.push_back(c); }
+            else if ((unsigned char)c >= 0x20) o.push_back(c);
+        }
+        return o;
+    }
+    void sendFmMeta(const std::shared_ptr<net::Socket>& sock) {
+        std::string ps, rt; int pi = -1;
+        bool wfm = false;
+        { std::lock_guard<std::mutex> lk(modeMtx);
+          wfm = (mode == "wfm");
+          if (wfm && rdsDecoder) {
+              if (rdsDecoder->PSNameValid())   ps = rdsDecoder->getPSName();
+              if (rdsDecoder->radioTextValid()) rt = rdsDecoder->getRadioText();
+              if (rdsDecoder->piCodeValid())    pi = rdsDecoder->getPICode();
+          }
+        }
+        // trim trailing spaces RDS pads with
+        auto trim = [](std::string s){ size_t e = s.find_last_not_of(" \t\r\n"); return e==std::string::npos?std::string():s.substr(0,e+1); };
+        ps = trim(ps); rt = trim(rt);
+        char buf[512];
+        snprintf(buf, sizeof buf,
+            "{\"type\":\"rds\",\"stereo\":%s,\"ps\":\"%s\",\"radiotext\":\"%s\",\"pi\":%d}",
+            (wfm && stereoDetected.load()) ? "true" : "false",
+            jsonEscape(ps).c_str(), jsonEscape(rt).c_str(), pi);
+        sendText(sock, buf);
     }
 
     // retune the demod (and RTL centre if the offset would fall outside span)
@@ -696,6 +783,14 @@ void LocalSdrShim::setSampleRate(double rate) {
     { std::lock_guard<std::mutex> lk(impl->clientMtx); if (impl->specClient) impl->sendConfig(impl->specClient); }
     impl->rtlThread = std::thread([impl]{ rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); });
     LOGI("sample rate: %.0f (actual %u) fft=%d", rate, actual, impl->fftSize);
+}
+void LocalSdrShim::setDeemphasis(double tau) {
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (!p) return;
+    if (p->deempTau == tau) return;
+    p->deempTau = tau;
+    p->buildAudio();   // chain insert/remove → rebuild
+    LOGI("deemphasis: %.0f us", tau * 1e6);
 }
 std::vector<int> LocalSdrShim::getTunerGains() {
     std::vector<int> out;

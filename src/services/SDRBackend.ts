@@ -127,6 +127,8 @@ export interface StationMeta {
   programmes?: DabProgramme[];
   /** Short source tag for the UI badge (e.g. 'RDS', 'DMR') — live server data. */
   badge?: string;
+  /** WFM stereo pilot detected (V4 local hardware) — drives the stereo icon. */
+  stereo?: boolean;
 }
 
 /** Additive callbacks for v3 backends — UI ignores when absent. */

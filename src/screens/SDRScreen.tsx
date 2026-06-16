@@ -310,6 +310,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwBiasTee,     setHwBiasTee]     = useState(false);
   const [hwAgc,         setHwAgc]         = useState(false);
   const [hwDirectSamp,  setHwDirectSamp]  = useState(0);
+  const [hwDeemph,      setHwDeemph]      = useState(50e-6);  // FM de-emphasis tau (0/50µs/75µs)
 
   // Load saved RTL-SDR hardware settings and apply them to the running session,
   // so gain/bias-T/PPM/etc. persist across connections.
@@ -327,14 +328,16 @@ export default function SDRScreen({ route, navigation }: Props) {
       const bias = !!prefs.biasTee;
       const agc  = !!prefs.agc;
       const ds   = typeof prefs.directSampling === 'number' ? prefs.directSampling : 0;
+      const deemph = typeof prefs.deemph === 'number' ? prefs.deemph : 50e-6;
       setHwAutoGain(auto); setHwPpm(ppm); setHwSampleRate(rate);
-      setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds);
+      setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph);
       if (typeof prefs.gain === 'number') setHwGain(prefs.gain);
       // Re-apply to the native session (already running from startSpectrum).
       LocalHw?.setPpm?.(ppm);
       LocalHw?.setBiasTee?.(bias);
       LocalHw?.setAgc?.(agc);
       LocalHw?.setDirectSampling?.(ds);
+      LocalHw?.setDeemphasis?.(deemph);
       if (rate !== 2_400_000) LocalHw?.setSampleRate?.(rate);
       LocalHw?.setGain?.(auto ? -1 : (typeof prefs.gain === 'number' ? prefs.gain : 0));
       try {
@@ -354,9 +357,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!isLocal || !hwLoaded.current) return;
     AsyncStorage.setItem('lsv_local_hw', JSON.stringify({
       autoGain: hwAutoGain, gain: hwGain, ppm: hwPpm, sampleRate: hwSampleRate,
-      biasTee: hwBiasTee, agc: hwAgc, directSampling: hwDirectSamp,
+      biasTee: hwBiasTee, agc: hwAgc, directSampling: hwDirectSamp, deemph: hwDeemph,
     })).catch(() => {});
-  }, [isLocal, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp]);
+  }, [isLocal, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph]);
 
   const onHwAuto = useCallback((auto: boolean) => {
     setHwAutoGain(auto);
@@ -374,6 +377,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onHwBiasTee = useCallback((on: boolean) => { setHwBiasTee(on); LocalHw?.setBiasTee?.(on); }, [LocalHw]);
   const onHwAgc = useCallback((on: boolean) => { setHwAgc(on); LocalHw?.setAgc?.(on); }, [LocalHw]);
   const onHwDirectSamp = useCallback((mode: number) => { setHwDirectSamp(mode); LocalHw?.setDirectSampling?.(mode); }, [LocalHw]);
+  const onHwDeemph = useCallback((tau: number) => { setHwDeemph(tau); LocalHw?.setDeemphasis?.(tau); }, [LocalHw]);
 
   const insets = useSafeAreaInsets();
   const { width: screenW, height: screenH } = Dimensions.get('window');
@@ -433,6 +437,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; badge?: string }>({});
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
+  const [fmStereo, setFmStereo] = useState(false);   // WFM stereo pilot (local hardware)
 
   // DAB speed correction is remembered PER STATION (ensemble + programme), since
   // the chipmunk is per-service: you set ×0.67 on a bad station once and it
@@ -1549,6 +1554,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         liveStationRef.current = meta.stationName ?? '';
         liveBadgeRef.current = meta.badge;
         setLiveStation({ name: meta.stationName, text: meta.text, badge: meta.badge });
+        if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
         if (meta.programmes) {
@@ -1996,6 +2002,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const c = client.current; if (!c) return;
     c.setMode(m); // client mirrors the server's per-mode bandwidth defaults
     setStatus({ ...c.getStatus() });
+    if (m !== 'wfm') setFmStereo(false);  // stereo icon only applies to WFM
     // OWRX image decoders (SSTV/Fax) ride on top of the analog carrier — sync the
     // decoder canvas to the adapter's REAL decoder state (it auto-keeps/clears the
     // decoder when the carrier changes), so changing the carrier doesn't close it.
@@ -2854,6 +2861,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           instanceHost={instanceName ?? baseUrl}
           meterBus={meterBus.current}
           signalMode={signalMode}
+          fmStereo={fmStereo}
           isRecording={isRecording}
           recSeconds={recSeconds}
           chatUnread={chatUnread}
@@ -3063,6 +3071,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           onAgc={onHwAgc}
           directSampling={hwDirectSamp}
           onDirectSampling={onHwDirectSamp}
+          deemph={hwDeemph}
+          onDeemph={onHwDeemph}
         />
       ) : null}
 

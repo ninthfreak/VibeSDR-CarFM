@@ -189,6 +189,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun setAgc(on: Boolean) { VibeLocalSDR.setAgc(on) }
     @ReactMethod fun setDirectSampling(mode: Double) { VibeLocalSDR.setDirectSampling(mode.toInt()) }
     @ReactMethod fun setSampleRate(rate: Double) { VibeLocalSDR.setSampleRate(rate) }
+    @ReactMethod fun setDeemphasis(tau: Double) { VibeLocalSDR.setDeemphasis(tau) }
 
     /** Supported tuner gains in tenths of dB (e.g. 207 = 20.7 dB). */
     @ReactMethod
