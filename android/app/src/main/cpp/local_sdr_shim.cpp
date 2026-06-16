@@ -195,6 +195,7 @@ struct LocalSdrShim::Impl {
     rds::Decoder* rdsDecoder = nullptr;
     std::atomic<bool> stereoDetected{false};
     float lrEma = 0.0f;
+    std::atomic<float> spectrumSnr{0.0f};   // peak−floor (dB); gates stereo (no station = static)
 
     // server
     std::shared_ptr<net::Listener> listener;
@@ -246,6 +247,7 @@ struct LocalSdrShim::Impl {
             std::memcpy(&frame[6], &ts, 8);
             uint64_t f = (uint64_t)llround(rtlCenter.load());
             std::memcpy(&frame[14], &f, 8);
+            float peak = -1e9f; double dbSum = 0.0;
             for (int i = 0; i < outBins; i++) {
                 int signedOut = (i <= outBins / 2) ? i : i - outBins;
                 double center = signedOut * step;          // fractional src index (signed)
@@ -258,9 +260,13 @@ struct LocalSdrShim::Impl {
                     float val = fftAccum[idx] * inv;        // averaged dB
                     if (val > best) best = val;             // peak-hold
                 }
+                if (best > peak) peak = best;
+                dbSum += best;
                 int v = (int)lround(best + 256.0);
                 frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
             }
+            // Peak above the mean floor → a carrier is present (vs flat static).
+            spectrumSnr.store(peak - (float)(dbSum / outBins));
             sendWs(sock, 0x2, frame.data(), frame.size());
             if (n % 10 == 0) sendFmMeta(sock);   // RDS + stereo ~1/sec
         }
@@ -293,7 +299,9 @@ struct LocalSdrShim::Impl {
             float diff = 0.0f, tot = 1e-6f;
             for (int i = 0; i < count; i++) { diff += std::fabs(data[i].l - data[i].r); tot += std::fabs(data[i].l) + std::fabs(data[i].r); }
             lrEma += 0.1f * (diff / tot - lrEma);
-            stereoDetected.store(lrEma > 0.03f);
+            // Stereo needs BOTH an L−R difference AND an actual carrier — static
+            // is uncorrelated noise (L≠R) but flat (no peak), so gate on SNR.
+            stereoDetected.store(lrEma > 0.04f && spectrumSnr.load() > 12.0f);
             for (int i = 0; i < count; i++) { pcm[i*2] = cvt(data[i].l); pcm[i*2+1] = cvt(data[i].r); }
         } else {
             for (int i = 0; i < count; i++) pcm[i] = cvt(data[i].l);
