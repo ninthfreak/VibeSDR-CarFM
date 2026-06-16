@@ -47,6 +47,27 @@ private:
     int dataBits = 5, nbits_ = 5;
 };
 
+// ── CCIR476 (NAVTEX / SITOR-B) — 7-bit FEC, 4 mark bits per char ─────────────
+class Ccir476 {
+public:
+    Ccir476();
+    void reset() { shift = false; alphaPhase = false; c1 = c2 = c3 = 0; }
+    int nbits() const { return 7; }
+    uint16_t msb() const { return 0x40; }
+    bool checkBits(uint16_t code) const;
+    // Returns decoded char (0 = none). `success` set to bit validity.
+    char32_t processChar(uint16_t code, bool& success);
+private:
+    static bool fourMarkBits(uint8_t v);
+    char32_t codeToChar(uint8_t code, bool fig) const;
+    char32_t ltrs[128], figs[128]; bool validCodes[128] = {false};
+    std::map<uint8_t, char32_t> codeLtrs, codeFigs;
+    bool shift = false, alphaPhase = false;
+    uint8_t c1 = 0, c2 = 0, c3 = 0;
+    const uint8_t codeAlpha = 0x0f, codeBeta = 0x33, codeChar32 = 0x6a,
+                  codeRep = 0x66, letters = 0x5a, figures = 0x36;
+};
+
 // ── FSK demodulator + decoder ───────────────────────────────────────────────
 class FskDecoder {
 public:
@@ -87,7 +108,8 @@ private:
     bool syncSetup = false; std::vector<uint16_t> syncChars; int validCount = 0, errorCount = 0;
     bool waiting = false, stopVariable = false;
 
-    Ita2* ita2 = nullptr;
+    Ita2*    ita2 = nullptr;
+    Ccir476* ccir476 = nullptr;
 };
 
 } // namespace vibe

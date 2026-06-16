@@ -187,6 +187,8 @@ export interface ControlsBarProps {
   isRecording?:  boolean;
   recSeconds?:   number;
   chatUnread?:   boolean;
+  /** Grey out chat + share (local hardware has no server chat / shareable URL). */
+  chatShareDisabled?: boolean;
 }
 
 // ── Signal bar canvas ─────────────────────────────────────────────────────────
@@ -340,7 +342,7 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
           }]}>
             {modeLabel}
           </Text>
-          {fmStereo ? <StereoIcon size={Math.max(10, Math.round(modeFontSize * 0.85))} color="#52dc64" /> : null}
+          {/* stereo icon removed — pilot detection too eager to be reliable */}
         </View>
         <Text style={[pm.snr, {
           color: t.snrColor, fontFamily: t.font, width: snrWidth,
@@ -428,7 +430,7 @@ function ChatIcon({ size, color }: { size: number; color: string }) {
 
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
-  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread }: any) {
+  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -552,10 +554,10 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
         </Animated.View>
 
         {/* CHAT */}
-        <Animated.View style={[por.btn, { minHeight: BTN_H, borderColor: chatBorderColor, borderWidth: 1 }]}>
+        <Animated.View style={[por.btn, { minHeight: BTN_H, borderColor: chatBorderColor, borderWidth: 1, opacity: csDisabled ? 0.4 : 1 }]}>
           <TouchableOpacity
             style={{ flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' }}
-            onPress={onChat} activeOpacity={0.75} hitSlop={10}
+            onPress={csDisabled ? undefined : onChat} disabled={csDisabled} activeOpacity={0.75} hitSlop={10}
           >
             {/* decorative — don't let the Skia view contest the touch */}
             <ChatIcon size={ICON_SZ} color={t.btnText} />
@@ -564,8 +566,8 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
 
         {/* SHARE */}
         <TouchableOpacity
-          style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder }]}
-          onPress={onShare} activeOpacity={0.75} hitSlop={10}
+          style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder, opacity: csDisabled ? 0.4 : 1 }]}
+          onPress={csDisabled ? undefined : onShare} disabled={csDisabled} activeOpacity={0.75} hitSlop={10}
         >
           <ShareIcon size={ICON_SZ} color={t.btnText} />
         </TouchableOpacity>
@@ -615,7 +617,7 @@ const por = StyleSheet.create({
 
 function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
-  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread }: any) {
+  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -699,12 +701,13 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
       {/* CHAT + SHARE column */}
       <View style={{ width: BTN_W, gap: GAP }}>
         <TouchableOpacity
-          style={[lnd.lsBtn, { borderColor: chatUnread ? 'rgba(40,140,255,0.85)' : t.btnBorder }]}
-          onPress={onChat} activeOpacity={0.75} hitSlop={10}
+          style={[lnd.lsBtn, { borderColor: chatUnread ? 'rgba(40,140,255,0.85)' : t.btnBorder, opacity: csDisabled ? 0.4 : 1 }]}
+          onPress={csDisabled ? undefined : onChat} disabled={csDisabled} activeOpacity={0.75} hitSlop={10}
         >
           <ChatIcon size={ICON_SZ} color={t.btnText} />
         </TouchableOpacity>
-        <TouchableOpacity style={[lnd.lsBtn, { borderColor: t.btnBorder }]} onPress={onShare} activeOpacity={0.75} hitSlop={10}>
+        <TouchableOpacity style={[lnd.lsBtn, { borderColor: t.btnBorder, opacity: csDisabled ? 0.4 : 1 }]}
+          onPress={csDisabled ? undefined : onShare} disabled={csDisabled} activeOpacity={0.75} hitSlop={10}>
           <ShareIcon size={ICON_SZ} color={t.btnText} />
         </TouchableOpacity>
       </View>
@@ -740,6 +743,7 @@ function ControlsBar({
   isRecording = false, recSeconds = 0, chatUnread = false,
   freqUnit = 'khz',
   onShare: onShareProp,
+  chatShareDisabled = false,
 }: ControlsBarProps) {
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -781,6 +785,7 @@ function ControlsBar({
     onStep: cycleStep, onChat, onMenu, onShare: handleShare,
     onVfoDelta, onBwDelta,
     clock, isRecording, recTime, chatUnread,
+    csDisabled: chatShareDisabled,
   };
 
   return (

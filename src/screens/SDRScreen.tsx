@@ -2876,6 +2876,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onFreqTap={onFreqOpen}
           onModeTap={onModeOpen}
           freqUnit={freqUnit}
+          chatShareDisabled={isLocal}
         />
       </View>}
 

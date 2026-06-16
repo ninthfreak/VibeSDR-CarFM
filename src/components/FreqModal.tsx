@@ -48,6 +48,16 @@ export default function FreqModal({
   const unit = unitProp ?? unitState;
   const [value, setValue] = useState('');
   const inputRef          = useRef<TextInput>(null);
+  // Android Modals are a separate window that adjustResize doesn't shrink, so
+  // KeyboardAvoidingView can't see the keyboard — track its height ourselves and
+  // pad the box up by it so it floats just above the keypad.
+  const [kbHeight, setKbHeight] = useState(0);
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const show = Keyboard.addListener('keyboardDidShow', e => setKbHeight(e.endCoordinates.height));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKbHeight(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
 
   useEffect(() => {
     if (unitProp !== undefined) return; // controlled by SDRScreen
@@ -93,7 +103,7 @@ export default function FreqModal({
         // shrinks above the keyboard) so no behavior here — adding one double-
         // adjusts and makes the box bounce. iOS needs padding.
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={st.center} pointerEvents="box-none"
+        style={[st.center, { paddingBottom: 16 + kbHeight }]} pointerEvents="box-none"
       >
         <View style={[st.modal, { borderColor: t.barBorder }]}>
           <Text style={[st.title, { color: t.sectionColor, fontFamily: t.font }]}>
@@ -165,7 +175,7 @@ const st = StyleSheet.create({
   backdrop:     { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.58)' },
   // Anchor near the bottom (over the control pill) so it's thumb-reachable on
   // big phones; the auto-opened keyboard then sits just below it.
-  center:       { ...StyleSheet.absoluteFill, justifyContent: 'flex-end', alignItems: 'center', paddingBottom: 16 },
+  center:       { ...StyleSheet.absoluteFill, justifyContent: 'flex-end', alignItems: 'center' },
   modal:        { backgroundColor: 'rgba(8,6,1,0.97)', borderWidth: 1, borderRadius: 12, padding: 20, width: '90%', maxWidth: 360 },
   title:        { textAlign: 'center', fontSize: 10, letterSpacing: 3, marginBottom: 14 },
   inputRow:     { flexDirection: 'row', alignItems: 'flex-end', gap: 6, borderBottomWidth: 1, paddingBottom: 6, marginBottom: 8 },

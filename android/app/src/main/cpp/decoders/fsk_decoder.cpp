@@ -86,6 +86,63 @@ char32_t Ita2::processChar(uint16_t code) {
     return out;
 }
 
+// ── CCIR476 (NAVTEX) ─────────────────────────────────────────────────────────
+bool Ccir476::fourMarkBits(uint8_t v) {
+    int c = 0; while (v) { c++; v &= v - 1; } return c == 4;
+}
+Ccir476::Ccir476() {
+    const char32_t U = U'_';
+    const char32_t L[128] = {
+        U,U,U,U,U,U,U,U,U,U,U,U,U,U,U,U,
+        U,U,U,U,U,U,U,U'J',U,U,U,U'F',U,U'C',U'K',U,
+        U,U,U,U,U,U,U,U'W',U,U,U,U'Y',U,U'P',U'Q',U,
+        U,U,U,U,U,U'G',U,U,U,U'M',U'X',U,U'V',U,U,U,
+        U,U,U,U,U,U,U,U'A',U,U,U,U'S',U,U'I',U'U',U,
+        U,U,U,U'D',U,U'R',U'E',U,U,U'N',U,U,U' ',U,U,U,
+        U,U,U,U'Z',U,U'L',U,U,U,U'H',U,U,U'\n',U,U,U,
+        U,U'O',U'B',U,U'T',U,U,U,U'\r',U,U,U,U,U,U,U };
+    const char32_t F[128] = {
+        U,U,U,U,U,U,U,U,U,U,U,U,U,U,U,U,
+        U,U,U,U,U,U,U,U'\'',U,U,U,U'!',U,U':',U'(',U,
+        U,U,U,U,U,U,U,U'2',U,U,U,U'6',U,U'0',U'1',U,
+        U,U,U,U,U,U'&',U,U,U,U'.',U'/',U,U';',U,U,U,
+        U,U,U,U,U,U,U,U'-',U,U,U,7,U,U'8',U'7',U,
+        U,U,U,U'$',U,U'4',U'3',U,U,U',',U,U,U' ',U,U,U,
+        U,U,U,U'"',U,U')',U,U,U,U'#',U,U,U'\n',U,U,U,
+        U,U'9',U'?',U,U'5',U,U,U,U'\r',U,U,U,U,U,U,U };
+    for (int c = 0; c < 128; c++) { ltrs[c] = L[c]; figs[c] = F[c];
+        if (fourMarkBits((uint8_t)c)) { validCodes[c] = true;
+            if (L[c] != U'_') codeLtrs[(uint8_t)c] = L[c];
+            if (F[c] != U'_') codeFigs[(uint8_t)c] = F[c]; } }
+}
+bool Ccir476::checkBits(uint16_t code) const { return code <= 0xFF && validCodes[code & 0x7F]; }
+char32_t Ccir476::codeToChar(uint8_t code, bool fig) const {
+    auto& m = fig ? codeFigs : codeLtrs; auto it = m.find(code);
+    return it == m.end() ? 0 : it->second;
+}
+char32_t Ccir476::processChar(uint16_t code, bool& success) {
+    uint8_t code7 = (uint8_t)(code & 0x7F);
+    success = fourMarkBits(code7);
+    uint8_t chr = 0xff;
+    if (code7 == codeRep) alphaPhase = false;
+    else if (code7 == codeAlpha) alphaPhase = true;
+    if (!alphaPhase) { c1 = c2; c2 = c3; c3 = code7; }
+    else {
+        if (success && c1 == code7) chr = code7;
+        else if (success) chr = code7;
+        else if (fourMarkBits(c1)) chr = c1;
+        if (chr != 0xff) {
+            alphaPhase = !alphaPhase;
+            if (chr == codeRep || chr == codeAlpha || chr == codeBeta || chr == codeChar32) return 0;
+            if (chr == letters) { shift = false; return 0; }
+            if (chr == figures) { shift = true; return 0; }
+            return codeToChar(chr, shift);
+        }
+    }
+    alphaPhase = !alphaPhase;
+    return 0;
+}
+
 // ── FskDecoder ───────────────────────────────────────────────────────────────
 FskDecoder::FskDecoder(int sr, double cf, double sh, double baud,
                        const std::string& fr, const std::string& enc, bool inv)
@@ -94,10 +151,14 @@ FskDecoder::FskDecoder(int sr, double cf, double sh, double baud,
     deviationF = shiftHz / 2.0;
     audioAverageTC = 1000.0 / sampleRate;
     if (baudRate < 10) baudRate = 10;
-    // ITA2 (RTTY). CCIR476/NAVTEX = future.
-    ita2 = new Ita2(framing.empty() ? "5N1.5" : framing);
-    nbits = ita2->nbits(); msb = ita2->msb();
-    if (framing == "5N1.5") { baudRate *= 2; stopVariable = true; }
+    if (encoding == "CCIR476") {
+        ccir476 = new Ccir476();
+        nbits = ccir476->nbits(); msb = ccir476->msb();
+    } else {
+        ita2 = new Ita2(framing.empty() ? "5N1.5" : framing);
+        nbits = ita2->nbits(); msb = ita2->msb();
+        if (framing == "5N1.5") { baudRate *= 2; stopVariable = true; }
+    }
     double bitDur = 1.0 / baudRate;
     bitSampleCount = (int)(sampleRate * bitDur + 0.5);
     halfBitSampleCount = bitSampleCount / 2;
@@ -167,18 +228,24 @@ void FskDecoder::process(const int16_t* samples, int count) {
         sampleCount++;
     }
 }
+// coder helpers (ITA2 RTTY or CCIR476 NAVTEX)
+static inline bool ckCode(Ita2* i, Ccir476* c, uint16_t code) {
+    return (i && i->checkBits(code)) || (c && c->checkBits(code));
+}
+
 void FskDecoder::processBit(bool bit) {
     uint16_t bitVal = bit ? 1 : 0;
     if (syncSetup) {
         bitCount = 0; codeBits = 0; errorCount = 0; validCount = 0;
         if (ita2) ita2->reset();
+        if (ccir476) ccir476->reset();
         syncChars.clear(); setState(Sync1); syncSetup = false;
     }
     switch (state) {
         case NoSignal: break;
         case Sync1: {
             codeBits = (uint16_t)((codeBits >> 1) | (bitVal * msb));
-            if (ita2 && ita2->checkBits(codeBits)) {
+            if (ckCode(ita2, ccir476, codeBits)) {
                 syncChars.push_back(codeBits); validCount++;
                 bitCount = 0; codeBits = 0; setState(Sync2); waiting = true;
             }
@@ -189,9 +256,9 @@ void FskDecoder::processBit(bool bit) {
             waiting = false;
             codeBits = (uint16_t)((codeBits >> 1) | (bitVal * msb)); bitCount++;
             if (bitCount == nbits) {
-                if (ita2 && ita2->checkBits(codeBits)) {
+                if (ckCode(ita2, ccir476, codeBits)) {
                     syncChars.push_back(codeBits); codeBits = 0; bitCount = 0; validCount++;
-                    int required = ita2 ? 1 : 4;
+                    int required = ccir476 ? 4 : 1;
                     if (validCount >= required) {
                         for (uint16_t c : syncChars) processCharacter(c);
                         setState(ReadData);
@@ -220,6 +287,12 @@ bool FskDecoder::processCharacter(uint16_t code) {
         char32_t ch = ita2->processChar(code);
         if (ch != 0 && onChar) onChar(ch);
         return true;   // ITA2 has no error correction
+    }
+    if (ccir476) {
+        bool ok = false;
+        char32_t ch = ccir476->processChar(code, ok);
+        if (ch != 0 && onChar) onChar(ch);
+        return ok;
     }
     return false;
 }

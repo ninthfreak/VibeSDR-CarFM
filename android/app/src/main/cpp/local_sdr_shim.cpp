@@ -697,13 +697,14 @@ struct LocalSdrShim::Impl {
 
     void startDecoder(const std::string& msg) {
         std::string ext = jsonStr(msg, "extension_name");
-        if (ext != "fsk") return;   // RTTY/NAVTEX only for now
+        bool navtex = (ext == "navtex");
+        if (ext != "fsk" && !navtex) return;   // RTTY / NAVTEX
         double cf, sh, baud; bool inv = msg.find("\"inverted\":true") != std::string::npos;
-        if (!jsonNum(msg, "center_frequency", cf)) cf = 1000.0;
-        if (!jsonNum(msg, "shift", sh)) sh = 170.0;
-        if (!jsonNum(msg, "baud_rate", baud)) baud = 45.45;
-        std::string enc = jsonStr(msg, "encoding"); if (enc.empty()) enc = "ITA2";
-        std::string framing = jsonStr(msg, "framing"); if (framing.empty()) framing = "5N1.5";
+        if (!jsonNum(msg, "center_frequency", cf)) cf = navtex ? 500.0 : 1000.0;
+        if (!jsonNum(msg, "shift", sh)) sh = navtex ? 170.0 : 170.0;
+        if (!jsonNum(msg, "baud_rate", baud)) baud = navtex ? 100.0 : 45.45;
+        std::string enc = jsonStr(msg, "encoding"); if (enc.empty()) enc = navtex ? "CCIR476" : "ITA2";
+        std::string framing = jsonStr(msg, "framing"); if (framing.empty()) framing = navtex ? "4/7" : "5N1.5";
         std::lock_guard<std::mutex> lk(decoderMtx);
         delete decoder;
         decoder = new FskDecoder(48000, cf, sh, baud, framing, enc, inv);
