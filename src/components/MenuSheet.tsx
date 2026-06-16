@@ -1430,7 +1430,7 @@ export default function MenuSheet({
             {!isLandscape && serverType !== 'owrx' && (<>
             <SectionLabel label="CLIENT DECODERS" />
             <BtnRow>
-              {(['rtty','navtex','wefax','sstv','morse'] as const).map(k => (
+              {(['rtty','navtex','wefax','sstv','morse'] as const).filter(k => !(isLocal && k === 'morse')).map(k => (
                 <Btn key={k} label={k.toUpperCase()}
                   active={decMode === k && decOn}
                   style={decMode === k && !decOn ? styles.btnSelected : undefined}

@@ -46,7 +46,6 @@
 #include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
 #include "decoders/sstv_decoder.h"  // SSTV (audio-extension image decoder)
 #include "decoders/audio_nr.h"      // self-contained spectral-subtraction audio NR
-#include "decoders/morse/CwDecoder.h" // CW/Morse decoder (ggmorse)
 
 #define LOG_TAG "VibeLocalSDR"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -221,8 +220,6 @@ struct LocalSdrShim::Impl {
     std::mutex decoderMtx;
     FskDecoder* decoder = nullptr;
     WefaxDecoder* wefax = nullptr;          // active image decoder (WEFAX), or null
-    CwDecoder* morse = nullptr;             // CW/Morse decoder (ggmorse), or null
-    int  morseDecim = 0; float morseAcc = 0.0f;  // 48k→12k decimation
     // FT8/FT4 digital-spots decoders (independent of the text/image decoders).
     std::mutex spotsMtx;
     Ft8Decoder* ft8 = nullptr;
@@ -419,21 +416,7 @@ struct LocalSdrShim::Impl {
     // ── Audio-extension decoder (RTTY) ─────────────────────────────────────
     void feedDecoder(dsp::stereo_t* data, int count) {
         std::lock_guard<std::mutex> lk(decoderMtx);
-        if (!decoder && !wefax && !sstv && !morse) return;
-        // Morse (ggmorse) runs at 4 kHz — decimate 48k→4k (box-average 12).
-        if (morse) {
-            std::vector<int16_t> dec; dec.reserve((size_t)count/12 + 1);
-            for (int i = 0; i < count; i++) {
-                morseAcc += data[i].l;
-                if (++morseDecim >= 12) {
-                    int s = (int)lround(morseAcc / 12.0f * 32767.0f);
-                    dec.push_back((int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s)));
-                    morseDecim = 0; morseAcc = 0.0f;
-                }
-            }
-            if (!dec.empty()) morse->feedAudio(dec.data(), (int)dec.size());
-            return;
-        }
+        if (!decoder && !wefax && !sstv) return;
         // SSTV runs at 12 kHz — decimate 48k→12k (box-average 4) and feed.
         if (sstv) {
             std::vector<int16_t> dec; dec.reserve((size_t)count/4 + 1);
@@ -885,7 +868,6 @@ struct LocalSdrShim::Impl {
         std::string ext = jsonStr(msg, "extension_name");
         if (ext == "wefax") { startWefax(msg); return; }
         if (ext == "sstv")  { startSstv(msg);  return; }
-        if (ext == "morse") { startMorse(msg); return; }
         bool navtex = (ext == "navtex");
         if (ext != "fsk" && !navtex) return;   // RTTY / NAVTEX
         double cf, sh, baud; bool inv = msg.find("\"inverted\":true") != std::string::npos;
@@ -991,50 +973,11 @@ struct LocalSdrShim::Impl {
         sstv->onRedrawStart = [this]() { uint8_t b = 0x08; dxSend(&b, 1); };
         LOGI("decoder attached: sstv");
     }
-    static void putF32(std::vector<uint8_t>& v, float f) {
-        uint32_t u; std::memcpy(&u, &f, 4);
-        v.push_back((uint8_t)(u>>24)); v.push_back((uint8_t)(u>>16));
-        v.push_back((uint8_t)(u>>8));  v.push_back((uint8_t)u);
-    }
-    void startMorse(const std::string& msg) {
-        double pitch = 0;
-        bool havePitch = jsonNum(msg, "pitch", pitch) && pitch > 0;
-        std::lock_guard<std::mutex> lk(decoderMtx);
-        delete decoder; decoder = nullptr;
-        delete wefax;   wefax = nullptr;
-        delete sstv;    sstv = nullptr;
-        delete morse;
-        // ggmorse's native rate is 4 kHz; feeding 12 kHz tripled its CPU and
-        // starved the DSP threads (audio/waterfall freezes). CW tones are well
-        // under 2 kHz, so 4 kHz is plenty and runs comfortably realtime.
-        morse = new CwDecoder(4000);
-        morseDecim = 0; morseAcc = 0.0f;
-        if (havePitch) morse->setPitchRange((float)pitch - 150.0f, (float)pitch + 150.0f);
-        morse->start(
-            [this](const std::string& text, float cost) {
-                uint8_t conf = cost < 0.15f ? 0 : cost < 0.35f ? 1 : cost < 0.60f ? 2 : 3;
-                std::vector<uint8_t> m; m.reserve(18 + text.size());
-                m.push_back(0x10); m.push_back(conf);
-                putF32(m, cost); putF32(m, lastMorsePitch); putF32(m, lastMorseSpeed);
-                put32(m, (uint32_t)text.size());
-                m.insert(m.end(), text.begin(), text.end());
-                dxSend(m.data(), m.size());
-            },
-            [this](CwDecoder::Stats s) {
-                lastMorsePitch = s.pitchHz; lastMorseSpeed = s.speedWpm;
-                std::vector<uint8_t> m; m.push_back(0x11);
-                putF32(m, s.pitchHz); putF32(m, s.speedWpm);
-                dxSend(m.data(), m.size());
-            });
-        LOGI("decoder attached: morse pitch=%s", havePitch ? "locked" : "auto");
-    }
-    float lastMorsePitch = 0.0f, lastMorseSpeed = 0.0f;
     void stopDecoder() {
         std::lock_guard<std::mutex> lk(decoderMtx);
         delete decoder; decoder = nullptr;
         delete wefax;   wefax = nullptr;
         delete sstv;    sstv = nullptr;
-        delete morse;   morse = nullptr;
         { std::lock_guard<std::mutex> bl(decBufMtx); decTextBuf.clear(); }
     }
 
