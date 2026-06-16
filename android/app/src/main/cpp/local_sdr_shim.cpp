@@ -166,9 +166,13 @@ struct LocalSdrShim::Impl {
     std::string mode = "nfm";
     double demodOffset = 0.0;             // VFO offset for the mode (SSB = ±bw/2)
     std::mutex modeMtx;
-    // Squelch (power-based, dBFS — independent of the SNR readout).
+    // Squelch — keys off the pre-AGC tuned-channel power from the FFT (post-demod
+    // audio is AGC-flattened, so its level can't gate). channelDb is the peak
+    // dB in the demod passband, updated in onFFT.
     std::atomic<bool>  squelchOn{false};
     std::atomic<float> squelchDb{-50.0f};
+    std::atomic<double> vfoBwHz{12000.0};   // current demod bandwidth
+    std::atomic<float>  channelDb{-200.0f};  // peak passband power (dB), pre-AGC
     // Audio noise reduction (self-contained spectral subtraction). Mono only;
     // off by default. No external resources → can't fail to init.
     std::atomic<bool>  nrOn{false};
@@ -313,6 +317,20 @@ struct LocalSdrShim::Impl {
             sendWs(sock, 0x2, frame.data(), frame.size());
             if (n % 10 == 0) sendFmMeta(sock);   // RDS + stereo ~1/sec
         }
+        // Tuned-channel power for squelch (peak dB in the demod passband, pre-AGC).
+        // Computed every averaged FFT so squelch keys even when spectrum is throttled.
+        {
+            double binHz = sampleRate / (double)bins;
+            int cbin = (int)llround(vfoOffsetNow() / binHz);
+            int hw = std::max(1, (int)(vfoBwHz.load() / 2.0 / binHz));
+            float peak = -1e9f;
+            for (int o = -hw; o <= hw; o++) {
+                int idx = (((cbin + o) % bins) + bins) % bins;
+                float v = fftAccum[idx] * inv;
+                if (v > peak) peak = v;
+            }
+            channelDb.store(peak);
+        }
         std::fill(fftAccum.begin(), fftAccum.end(), 0.0f);
         accumCount = 0;
     }
@@ -328,13 +346,10 @@ struct LocalSdrShim::Impl {
         feedDecoder(data, count);
         feedSpots(data, count);
 
-        // Squelch: mute the audio sent to the user when passband power is below
-        // threshold. Applied AFTER the decoders so they still see raw audio.
-        if (squelchOn.load()) {
-            float sum = 0.0f;
-            for (int i = 0; i < count; i++) sum += data[i].l*data[i].l + data[i].r*data[i].r;
-            float p = 10.0f * log10f(sum / (count * 2) + 1e-20f);
-            if (p < squelchDb.load()) for (int i = 0; i < count; i++) { data[i].l = 0.0f; data[i].r = 0.0f; }
+        // Squelch: mute the audio when the tuned-channel power (pre-AGC, from the
+        // FFT) is below threshold. Applied AFTER the decoders so they see raw audio.
+        if (squelchOn.load() && channelDb.load() < squelchDb.load()) {
+            for (int i = 0; i < count; i++) { data[i].l = 0.0f; data[i].r = 0.0f; }
         }
 
         std::shared_ptr<net::Socket> sock;
@@ -551,6 +566,7 @@ struct LocalSdrShim::Impl {
                     : (mp.kind == ModeParams::SSB_LSB) ? -mp.bandwidth / 2.0 : 0.0;
 
         double offset = vfoOffsetNow();
+        vfoBwHz.store(mp.bandwidth);
         vfo = frontend->addVFO("audio", mp.ifRate, mp.bandwidth, offset);
 
         switch (mp.kind) {

@@ -89,10 +89,9 @@ export interface MenuSheetProps {
   // squelch slider on local instances.
   localSquelch?:   number;
   onLocalSquelch?: (db: number) => void;
-  // Local SDR audio noise reduction strength (0=off..10) + live CPU%.
+  // Local SDR audio noise reduction strength (0=off..15).
   localNR?:        number;
   onLocalNR?:      (level: number) => void;
-  nrCpu?:          number;
   // FM squelch — only shown for fm/nfm modes
   fmSquelch?:     number;
   onFmSquelch?:   (v: number) => void;
@@ -414,7 +413,7 @@ export default function MenuSheet({
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
-  localNR = 0, onLocalNR, nrCpu = 0,
+  localNR = 0, onLocalNR,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
   serverLabel = null, onOwrxSquelch, onOwrxNr,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
@@ -487,6 +486,9 @@ export default function MenuSheet({
   const [owrxSql, setOwrxSql] = useState(-150);            // OWRX squelch dB (-150 = off)
   const [owrxNr,  setOwrxNr]  = useState(0);               // OWRX NR threshold dB (0 = off)
   const isOwrx = serverType === 'owrx';
+  // Local hardware: no server-side maps/admin/CW-skimmer/STT (those are network
+  // server features). FT8/FT4 digital spots are decoded locally, so they stay.
+  const isLocal = !!onLocalHardware;
   const [dispSettingsOpen, setDispSettingsOpen] = useState(false);
 
   // Palette list alphabetised (it ships in table order); profiles are LEFT in
@@ -1282,20 +1284,18 @@ export default function MenuSheet({
             </View>
             ) : null}
 
-            {/* Local SDR audio noise reduction — strength slider + live CPU%. */}
+            {/* Local SDR audio noise reduction — strength slider (0=off..15). */}
             {onLocalNR && (
               <View style={styles.bwRow}>
                 <Text style={styles.bwLabel}>NR</Text>
                 <Slider style={styles.bwSlider}
-                  minimumValue={0} maximumValue={10} step={1}
+                  minimumValue={0} maximumValue={15} step={1}
                   value={localNR}
                   onValueChange={(v: number) => onLocalNR?.(v)}
                   minimumTrackTintColor={localNR > 0 ? C.gold : C.muted}
                   maximumTrackTintColor={C.muted}
                   thumbTintColor={C.gold} />
-                <Text style={styles.bwVal}>
-                  {localNR <= 0 ? 'Off' : `${localNR} · ${Math.round(nrCpu)}%`}
-                </Text>
+                <Text style={styles.bwVal}>{localNR <= 0 ? 'Off' : String(localNR)}</Text>
               </View>
             )}
 
@@ -1399,7 +1399,7 @@ export default function MenuSheet({
             {/* ── SERVER MAPS — UberSDR's per-feed Leaflet overlays (skin parity).
                    OWRX has its own combined map (opened from the OPENWEBRX section
                    below), so these UberSDR-specific feeds are hidden for it. ── */}
-            {serverType !== 'owrx' && (<>
+            {serverType !== 'owrx' && !isLocal && (<>
               <SectionLabel label="SERVER MAPS" />
               <BtnRow>
                 <Btn label="✈ HFDL"     onPress={() => onServerMap?.('hfdl')} />
@@ -1441,16 +1441,22 @@ export default function MenuSheet({
               </View>
             )}
 
-            {/* ── SERVER EXTENSIONS — spots feeds + speech-to-text ── */}
-            <SectionLabel label="SERVER EXTENSIONS" />
+            {/* ── SERVER EXTENSIONS — spots feeds + speech-to-text. Local hardware
+                   decodes FT8/FT4 itself (DIGITAL SPOTS), but has no CW skimmer
+                   or server STT, so those are hidden. ── */}
+            <SectionLabel label={isLocal ? 'DECODED SPOTS' : 'SERVER EXTENSIONS'} />
             <BtnRow>
               <Btn label="DIGITAL SPOTS" active={spotsKind === 'digi'}
                    onPress={() => onSpotsToggle?.('digi')} />
-              <Btn label="CW SPOTS" active={spotsKind === 'cw'}
-                   onPress={() => onSpotsToggle?.('cw')} />
-              <Btn label="STT" active={decMode === 'whisper' && decOn}
-                   style={decMode === 'whisper' && !decOn ? styles.btnSelected : undefined}
-                   onPress={() => onDecToggle?.('whisper')} />
+              {!isLocal && (
+                <Btn label="CW SPOTS" active={spotsKind === 'cw'}
+                     onPress={() => onSpotsToggle?.('cw')} />
+              )}
+              {!isLocal && (
+                <Btn label="STT" active={decMode === 'whisper' && decOn}
+                     style={decMode === 'whisper' && !decOn ? styles.btnSelected : undefined}
+                     onPress={() => onDecToggle?.('whisper')} />
+              )}
             </BtnRow>
             {spotsKind !== null && (
               <View style={styles.subPanel}>
@@ -1504,7 +1510,7 @@ export default function MenuSheet({
               <BtnRow>
                 <Btn label="⚙ ADMIN" full onPress={() => onAdminLink?.('/settings', 'Settings')} />
               </BtnRow>
-            </>) : (<>
+            </>) : isLocal ? null : (<>
               <SectionLabel label="INSTANCE ADMIN" />
               <BtnRow>
                 <Btn label="ADMIN"      onPress={() => onAdminLink?.('/admin.html', 'Admin')} />
