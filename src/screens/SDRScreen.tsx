@@ -1626,7 +1626,17 @@ export default function SDRScreen({ route, navigation }: Props) {
           // — the demodulator's own measurement of the tuned channel, so it's
           // independent of zoom (this is how UberSDR's meter works). 0 until the
           // first reading lands.
-          const snrDb = audioSnrRef.current ?? 0;
+          let snrDb = audioSnrRef.current ?? 0;
+          // Local SDR has no radiod SNR feed, so derive it from the spectrum:
+          // passband peak minus the noise floor (mean of all bins ≈ the floor
+          // for a mostly-empty spectrum). Cheap (no per-frame sort) and gives a
+          // meaningful, zoom-tolerant reading.
+          if (isLocal) {
+            let sum = 0;
+            for (let i = 0; i < len; i++) sum += newBins[i];
+            const floor = sum / len;
+            snrDb = Math.max(0, peak - floor);
+          }
           // OWRX exposes a real channel S-meter (dBm) over the control WS but no
           // SNR. When present it's the honest absolute level source (and, lacking
           // an SNR feed, drives the bar in every mode); otherwise fall back to
