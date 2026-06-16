@@ -1654,7 +1654,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // connecting (the hardcoded default landed on the 20m FT8 squeal every
     // launch). Falls back to the default tune on first visit / bad data.
     let cancelled = false;
-    AsyncStorage.getItem('lsv_last_tune:' + baseUrl).then((j: string | null) => {
+    AsyncStorage.getItem(route.params.isLocal ? 'lsv_last_tune:local' : 'lsv_last_tune:' + baseUrl).then((j: string | null) => {
       if (cancelled || destroyed.current) return;
       let f = status.frequency;
       let m: SDRMode = status.mode;
@@ -1705,7 +1705,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!lastTuneLoaded.current || !status.frequency) return;
     const t = setTimeout(() => {
-      AsyncStorage.setItem('lsv_last_tune:' + baseUrl,
+      // Local hardware's baseUrl has a per-session port → use a stable key so
+      // the last tune restores (otherwise it reverts to the 14 MHz default).
+      AsyncStorage.setItem(route.params.isLocal ? 'lsv_last_tune:local' : 'lsv_last_tune:' + baseUrl,
         JSON.stringify({ frequency: status.frequency, mode: status.mode })).catch(() => {});
     }, 1000);
     return () => clearTimeout(t);

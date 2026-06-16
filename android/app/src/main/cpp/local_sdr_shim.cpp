@@ -247,7 +247,6 @@ struct LocalSdrShim::Impl {
             std::memcpy(&frame[6], &ts, 8);
             uint64_t f = (uint64_t)llround(rtlCenter.load());
             std::memcpy(&frame[14], &f, 8);
-            float peak = -1e9f; double dbSum = 0.0;
             for (int i = 0; i < outBins; i++) {
                 int signedOut = (i <= outBins / 2) ? i : i - outBins;
                 double center = signedOut * step;          // fractional src index (signed)
@@ -260,13 +259,22 @@ struct LocalSdrShim::Impl {
                     float val = fftAccum[idx] * inv;        // averaged dB
                     if (val > best) best = val;             // peak-hold
                 }
-                if (best > peak) peak = best;
-                dbSum += best;
                 int v = (int)lround(best + 256.0);
                 frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
             }
-            // Peak above the mean floor → a carrier is present (vs flat static).
-            spectrumSnr.store(peak - (float)(dbSum / outBins));
+            // WFM station presence (off the full-span fine FFT, zoom-independent):
+            // a station is a broad hump at centre, static is flat. Compare centre
+            // band (±100 kHz, excluding the ±3 kHz DC spike) to the edges (Nyquist).
+            {
+                double binHz = sampleRate / (double)bins;
+                int half = std::min(bins / 4, (int)(100000.0 / binHz));
+                int skip = std::min(half - 1, std::max(1, (int)(3000.0 / binHz)));
+                double cSum = 0; int cN = 0;
+                for (int i = skip; i <= half; i++)           { cSum += fftAccum[i]*inv; cSum += fftAccum[bins-i]*inv; cN += 2; }
+                double eSum = 0; int eN = 0;
+                for (int i = bins/2 - half/2; i <= bins/2 + half/2; i++) { eSum += fftAccum[((i%bins)+bins)%bins]*inv; eN++; }
+                spectrumSnr.store((cN && eN) ? (float)(cSum/cN - eSum/eN) : 0.0f);
+            }
             sendWs(sock, 0x2, frame.data(), frame.size());
             if (n % 10 == 0) sendFmMeta(sock);   // RDS + stereo ~1/sec
         }
@@ -301,7 +309,7 @@ struct LocalSdrShim::Impl {
             lrEma += 0.1f * (diff / tot - lrEma);
             // Stereo needs BOTH an L−R difference AND an actual carrier — static
             // is uncorrelated noise (L≠R) but flat (no peak), so gate on SNR.
-            stereoDetected.store(lrEma > 0.04f && spectrumSnr.load() > 12.0f);
+            stereoDetected.store(lrEma > 0.04f && spectrumSnr.load() > 8.0f);
             for (int i = 0; i < count; i++) { pcm[i*2] = cvt(data[i].l); pcm[i*2+1] = cvt(data[i].r); }
         } else {
             for (int i = 0; i < count; i++) pcm[i] = cvt(data[i].l);
