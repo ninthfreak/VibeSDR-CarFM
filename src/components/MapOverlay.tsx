@@ -27,10 +27,11 @@
  * rings are pure CSS keyframes.
  */
 
-import React, { useMemo } from 'react';
-import { Modal, StyleSheet, View } from 'react-native';
+import React, { useMemo, useRef, useEffect, useState } from 'react';
+import { Modal, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { CABBR } from '../assets/countryAbbr';
+import { type SpotRow } from '../services/DecoderClient';
 
 export type MapKind = 'hfdl' | 'digi' | 'cw';
 
@@ -41,13 +42,36 @@ interface MapOverlayProps {
   /** Registered session UUID — required by /ws/dxcluster validation. */
   sessionUuid: string;
   onClose: () => void;
+  /** On-device-decoder mode (Local/Kiwi): spots come from the localhost shim's
+   *  /ws/dxcluster carrying a Maidenhead grid (not lat/lon, no /api/description),
+   *  so the WebView converts grid→lat/lon and the RX position is injected. */
+  local?:   boolean;
+  /** ws://127.0.0.1:<port> of the local shim/sidecar (local mode). */
+  wsBaseOverride?: string | null;
+  /** Injected receiver position (Kiwi gps / device GPS / picked city). 0,0 =
+   *  Null Island = location unknown → the map offers a "set location" button. */
+  rxLat?:   number | null;
+  rxLon?:   number | null;
+  /** local mode: user tapped "set location" (no GPS) → open the RN city picker. */
+  onPickCity?: () => void;
+  /** Server (Kiwi) dropped/kicked us while the map is open → show a warning over
+   *  the map with Back-to-instances / Retry / Ignore (stay on the map). */
+  disconnected?: boolean;
+  onBackToList?: () => void;
+  onRetry?: () => void;
 }
 
 // ── HTML document builder ─────────────────────────────────────────────────────
 
-function buildHtml(kind: MapKind, baseUrl: string, uuid: string): string {
+function buildHtml(
+  kind: MapKind, baseUrl: string, uuid: string,
+  opts?: { local?: boolean; wsBase?: string | null; rxLat?: number | null; rxLon?: number | null },
+): string {
+  const local = !!opts?.local;
   const base = baseUrl.replace(/\/+$/, '');
-  const wsBase = base.replace(/^http/, 'ws');
+  const wsBase = local && opts?.wsBase ? opts.wsBase.replace(/\/+$/, '') : base.replace(/^http/, 'ws');
+  const rxLat = opts?.rxLat ?? 0;
+  const rxLon = opts?.rxLon ?? 0;
   const isHfdl = kind === 'hfdl';
   // Theme: HFDL amber (255,160,0), spots maps green (80,200,80) — skin parity.
   const T = isHfdl
@@ -271,7 +295,19 @@ ${!isHfdl ? `
 </div>
 <script>
 var BASE='${base}', WSBASE='${wsBase}', KIND='${kind}', UUID='${uuid}';
-var RX_LAT=0, RX_LON=0;
+var LOCAL=${local ? 1 : 0};
+var RX_LAT=${rxLat || 0}, RX_LON=${rxLon || 0};
+// Maidenhead locator → square-centre lat/lon (on-device FT8 spots carry a grid,
+// not lat/lon). 4- or 6-char; returns null if invalid.
+function gridLL(g){
+  if(!g)return null; g=String(g).trim().toUpperCase();
+  if(!/^[A-R]{2}[0-9]{2}([A-X]{2})?$/.test(g))return null;
+  var lon=(g.charCodeAt(0)-65)*20-180, lat=(g.charCodeAt(1)-65)*10-90;
+  lon+=(g.charCodeAt(2)-48)*2; lat+=(g.charCodeAt(3)-48);
+  if(g.length===6){lon+=(g.charCodeAt(4)-65)*(2/24)+(1/24);lat+=(g.charCodeAt(5)-65)*(1/24)+(0.5/24);}
+  else{lon+=1;lat+=0.5;}
+  return{lat:lat,lon:lon};
+}
 var CABBR=${JSON.stringify(CABBR)};
 function abbr(c){if(!c)return'';var s=String(c).trim();if(CABBR[s])return CABBR[s];return s.length>10?s.substring(0,9)+'\\u2026':s;}
 var map=L.map('lmap',{zoomControl:false,attributionControl:true,fadeAnimation:true,zoomAnimation:true,markerZoomAnimation:true})
@@ -314,11 +350,25 @@ function distKm(lat,lon){if(!RX_LAT&&!RX_LON)return null;var R=6371,r=Math.PI/18
 var RX_SVG='<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,10 17,10 17,21 13,21 13,15 9,15 9,21 5,21 5,10 1,10" fill="rgba(255,200,60,0.85)" stroke="rgba(0,0,0,0.5)" stroke-width="1"/></svg>';
 function addRx(){if(RX_LAT||RX_LON){L.marker([RX_LAT,RX_LON],{icon:L.divIcon({html:RX_SVG,className:'',iconSize:[22,22],iconAnchor:[11,22]}),zIndexOffset:1000}).addTo(map).bindPopup('<div style="font-size:11px;letter-spacing:1px;">&#127968; Your receiver</div>');map.setView([RX_LAT,RX_LON],KIND==='hfdl'?4:3);}}
 
-fetch(BASE+'/api/description').then(function(r){return r.json();}).then(function(d){
-  var gps=d&&d.receiver&&d.receiver.gps;
-  if(gps&&(gps.lat||gps.lon)){RX_LAT=gps.lat;RX_LON=gps.lon;}
-  addRx();
-}).catch(function(){});
+// Local/Kiwi (on-device decoder): RX position is injected (no /api/description).
+// 0,0 = Null Island = unknown → offer a "set location" button that asks RN for a
+// city so distances are at least roughly meaningful.
+function showSetLoc(){
+  var b=document.createElement('button');
+  b.textContent='\\uD83D\\uDCCD SET LOCATION';
+  b.style.cssText='position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:900;background:rgba(6,9,6,0.92);color:rgba('+'${T.hi}'+',0.95);border:1px solid rgba('+'${T.a}'+',0.5);border-radius:8px;padding:9px 16px;font-family:inherit;font-size:12px;letter-spacing:1px;';
+  b.addEventListener('click',function(){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage('pickCity');});
+  document.getElementById('map').appendChild(b);
+}
+if(LOCAL){
+  if(RX_LAT||RX_LON)addRx(); else showSetLoc();
+}else{
+  fetch(BASE+'/api/description').then(function(r){return r.json();}).then(function(d){
+    var gps=d&&d.receiver&&d.receiver.gps;
+    if(gps&&(gps.lat||gps.lon)){RX_LAT=gps.lat;RX_LON=gps.lon;}
+    addRx();
+  }).catch(function(){});
+}
 
 // ════════ HFDL (skin lsv-hfdl parity) ════════
 if(KIND==='hfdl'){
@@ -742,6 +792,8 @@ if(KIND==='digi'||KIND==='cw'){
 
   function norm(d,cw){
     var lat=d.latitude, lon=d.longitude;
+    // On-device FT8 spots (Local/Kiwi) carry a Maidenhead grid instead of lat/lon.
+    if((lat==null||lon==null)&&d.grid){var ll=gridLL(d.grid);if(ll){lat=ll.lat;lon=ll.lon;}}
     if(lat==null||lon==null)return null;
     return{
       lat:lat, lon:lon,
@@ -763,6 +815,16 @@ if(KIND==='digi'||KIND==='cw'){
     clearTimeout(toast._tid);
     toast._tid=setTimeout(function(){toast.classList.remove('on');},3000);
   }
+  function ingest(d){
+    var s=norm(d||{},isCW);
+    if(!s)return;
+    spots.unshift(s);
+    if(spots.length>MAXS)spots.length=MAXS;
+    upsert(s);
+    updateCount();
+    showSpotToast(s);
+    if(statsOpen)updateStats();
+  }
   function connect(){
     // Server validates this UUID against the registered /connection session —
     // random IDs are rejected with 400 before upgrade.
@@ -774,21 +836,21 @@ if(KIND==='digi'||KIND==='cw'){
       if(typeof e.data!=='string')return;
       try{
         var m=JSON.parse(e.data);
-        if((m.type==='digital_spot'&&!isCW)||(m.type==='cw_spot'&&isCW)){
-          var s=norm(m.data||{},isCW);
-          if(!s)return;
-          spots.unshift(s);
-          if(spots.length>MAXS)spots.length=MAXS;
-          upsert(s);
-          updateCount();
-          showSpotToast(s);
-          if(statsOpen)updateStats();
-        }
+        if((m.type==='digital_spot'&&!isCW)||(m.type==='cw_spot'&&isCW))ingest(m.data||{});
       }catch(x){}
     };
     ws.onclose=function(){setTimeout(connect,3000);};
   }
-  connect();
+  // Local/Kiwi (on-device decoder): the sidecar sends spots to only one
+  // /ws/dxcluster client, so a second socket here would steal the decoder
+  // panel's stream. Instead RN feeds us the spots it already has (each carries a
+  // grid) via injected __digiPush — no extra connection, no conflict.
+  if(LOCAL){
+    window.__digiPush=function(json){try{var a=JSON.parse(json);for(var i=0;i<a.length;i++)ingest(a[i]);}catch(e){}};
+    if(window.__pendingSpots){window.__digiPush(window.__pendingSpots);window.__pendingSpots=null;}
+  }else{
+    connect();
+  }
 }
 </script>
 </body></html>`;
@@ -796,11 +858,47 @@ if(KIND==='digi'||KIND==='cw'){
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function MapOverlay({ visible, kind, baseUrl, sessionUuid, onClose }: MapOverlayProps) {
+/** SpotRow → the digital_spot `data` shape the WebView's norm() expects. */
+function spotToData(s: SpotRow) {
+  return {
+    grid: s.grid, mode: s.mode, band: s.band, callsign: s.call,
+    snr: s.snr, frequency: s.freqHz, distance_km: s.distKm, timestamp: s.time,
+    country: s.country,
+  };
+}
+
+export default function MapOverlay(
+  { visible, kind, baseUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
+    disconnected, onBackToList, onRetry }:
+    MapOverlayProps & { spots?: SpotRow[] },
+) {
+  const webRef = useRef<WebView>(null);
+  const [ignored, setIgnored] = useState(false);
+  useEffect(() => { if (!disconnected) setIgnored(false); }, [disconnected]);
+  const injected = useRef<Set<string>>(new Set());
   const html = useMemo(
-    () => (kind ? buildHtml(kind, baseUrl, sessionUuid) : ''),
-    [kind, baseUrl, sessionUuid],
+    () => (kind ? buildHtml(kind, baseUrl, sessionUuid,
+      { local, wsBase: wsBaseOverride, rxLat, rxLon }) : ''),
+    [kind, baseUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon],
   );
+
+  // Inject any spots not yet pushed (newest-first), so markers/stats don't double
+  // count. Local mode only — UberSDR maps own their WS.
+  const pushSpots = (rows?: SpotRow[]) => {
+    if (!local || !rows || rows.length === 0) return;
+    const fresh = rows.filter(s => {
+      const k = `${s.time}-${s.call}-${s.freqHz}`;
+      if (injected.current.has(k)) return false;
+      injected.current.add(k); return true;
+    });
+    if (!fresh.length) return;
+    const json = JSON.stringify(fresh.map(spotToData));
+    webRef.current?.injectJavaScript(
+      `(window.__digiPush?window.__digiPush(${JSON.stringify(json)}):(window.__pendingSpots=${JSON.stringify(json)}));true;`,
+    );
+  };
+  // Live updates push only the new ones.
+  useEffect(() => { if (visible) pushSpots(spots); }, [local, visible, spots]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!visible || !kind) return null;
 
@@ -814,6 +912,7 @@ export default function MapOverlay({ visible, kind, baseUrl, sessionUuid, onClos
     >
       <View style={mo.root}>
         <WebView
+          ref={webRef}
           // baseUrl gives the document the INSTANCE's origin so in-page
           // fetches (/addon/hfdl/*, /api/*) are same-origin — CORS is a
           // per-instance ubersdr config flag (Server.EnableCORS) and most
@@ -826,8 +925,32 @@ export default function MapOverlay({ visible, kind, baseUrl, sessionUuid, onClos
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
-          onMessage={(e) => { if (e.nativeEvent.data === 'close') onClose(); }}
+          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); }}
+          onMessage={(e) => {
+            const d = e.nativeEvent.data;
+            if (d === 'close') onClose();
+            else if (d === 'pickCity') onPickCity?.();
+          }}
         />
+        {disconnected && !ignored && (
+          <View style={mo.discWrap} pointerEvents="box-none">
+            <View style={mo.discCard}>
+              <Text style={mo.discTitle}>Receiver disconnected</Text>
+              <Text style={mo.discBody}>The server dropped the connection — spots have stopped. You can stay on the map (already-plotted spots remain) or reconnect.</Text>
+              <View style={mo.discRow}>
+                <TouchableOpacity style={[mo.discBtn, mo.discBtnAlt]} onPress={() => onBackToList?.()} activeOpacity={0.85}>
+                  <Text style={mo.discBtnAltTxt}>Back to list</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={mo.discBtn} onPress={() => { setIgnored(true); onRetry?.(); }} activeOpacity={0.85}>
+                  <Text style={mo.discBtnTxt}>Retry</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[mo.discBtn, mo.discBtnAlt]} onPress={() => setIgnored(true)} activeOpacity={0.85}>
+                  <Text style={mo.discBtnAltTxt}>Ignore</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
       </View>
     </Modal>
   );
@@ -836,4 +959,14 @@ export default function MapOverlay({ visible, kind, baseUrl, sessionUuid, onClos
 const mo = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#0a0804' },
   web:  { flex: 1, backgroundColor: '#0a0804' },
+  discWrap:  { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  discCard:  { backgroundColor: 'rgba(6,9,6,0.97)', borderWidth: 1, borderColor: 'rgba(80,200,80,0.45)',
+               borderRadius: 12, padding: 18, maxWidth: 420 },
+  discTitle: { color: 'rgba(120,240,120,0.95)', fontSize: 15, letterSpacing: 1, fontWeight: '600' },
+  discBody:  { color: 'rgba(80,200,80,0.7)', fontSize: 12, lineHeight: 17, marginTop: 8 },
+  discRow:   { flexDirection: 'row', marginTop: 16, gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' },
+  discBtn:   { backgroundColor: 'rgba(80,200,80,0.9)', borderRadius: 8, paddingHorizontal: 16, paddingVertical: 9 },
+  discBtnTxt:{ color: '#031003', fontSize: 13, fontWeight: '600', letterSpacing: 0.5 },
+  discBtnAlt:{ backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(80,200,80,0.55)' },
+  discBtnAltTxt: { color: 'rgba(120,240,120,0.9)', fontSize: 13, letterSpacing: 0.5 },
 });

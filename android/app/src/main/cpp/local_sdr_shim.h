@@ -30,6 +30,10 @@ public:
     int startDecoderService(std::string& err);
     // Feed mono int16 PCM at `rate` Hz (upsampled to the decoders' 48 kHz).
     void feedDecoderPcm(const int16_t* pcm, int n, int rate);
+    // Tell the sidecar the backend's dial frequency (Hz) so FT8 spot RF freq +
+    // band are correct (otherwise they're computed against a 100 MHz default →
+    // empty band / wrong tune freq). Network backends (Kiwi) call this on tune.
+    void setDecoderFreq(double hz);
 
     // Hardware controls (no-ops if not running). gainTenthDb < 0 = auto gain.
     void setGain(int gainTenthDb);

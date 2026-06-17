@@ -80,6 +80,30 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun stopExternalAudio() { VibeStreamService.instance?.stopExternalAudio() }
 
+    // Exclude a full-width horizontal band (the VFO/zoom drums) from the system
+    // back-edge swipe so a horizontal drag on a drum doesn't trigger the (useless,
+    // in-app-handled) Android back gesture — which animated and blocked the drum
+    // until it released. top/height are in dp; height<=0 clears the exclusion.
+    @ReactMethod
+    fun setSwipeExclusion(topDp: Double, heightDp: Double) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val act = reactContext.currentActivity ?: return
+        act.runOnUiThread {
+            try {
+                val dm = act.resources.displayMetrics
+                val root = act.window.decorView
+                if (heightDp <= 0) {
+                    root.systemGestureExclusionRects = emptyList()
+                } else {
+                    val top = (topDp * dm.density).toInt()
+                    val h = (heightDp * dm.density).toInt()
+                    root.systemGestureExclusionRects =
+                        listOf(android.graphics.Rect(0, top, dm.widthPixels, top + h))
+                }
+            } catch (_: Throwable) {}
+        }
+    }
+
     // Local hardware (V4): the foreground service reads the on-device shim's
     // /ws/audio natively (background-safe), so JS no longer pushes PCM. JS just
     // starts/stops it and forwards tune changes over the same WS.

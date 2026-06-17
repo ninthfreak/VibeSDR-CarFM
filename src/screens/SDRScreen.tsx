@@ -70,6 +70,7 @@ import DecoderPanel,
   { type DecoderType } from '../components/DecoderPanel';
 import SpecRatioOverlay  from '../components/SpecRatioOverlay';
 import MapOverlay, { type MapKind } from '../components/MapOverlay';
+import CityPickerModal from '../components/CityPickerModal';
 import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
@@ -89,6 +90,7 @@ import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../con
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation } from '../services/instancesApi';
 import { distanceKmToGrid } from '../services/grid';
+import { countryForCallsign } from '../services/callsignCountry';
 import * as DocumentPicker from 'expo-document-picker';
 // SDK 56 moved readAsStringAsync to the legacy entry (new File API otherwise).
 import * as FileSystem from 'expo-file-system/legacy';
@@ -653,6 +655,9 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Server map overlays (HFDL / Digital spots / CW spots — skin parity)
   const [mapKind, setMapKind] = useState<MapKind | null>(null);
+  // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
+  const [localMapOpen, setLocalMapOpen]   = useState(false);
+  const [cityPickerOpen, setCityPickerOpen] = useState(false);
 
   // Admin pages (skin menu Admin section) — in-app browser overlay
   const [adminPage, setAdminPage] = useState<{ url: string; title: string } | null>(null);
@@ -1271,11 +1276,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       const buf = spotBufRef.current;
       if (buf.length === 0) return;
       spotBufRef.current = [];
-      // On-device decoder (Local/Kiwi) sends a TX grid but no distance — compute
-      // it from the receiver position. UberSDR spots already carry distKm.
+      // On-device decoder (Local/Kiwi) sends a TX grid + callsign but no distance
+      // or country — derive both here. UberSDR spots already carry them.
       const rx = recvLocRef.current;
-      if (rx) for (const s of buf) {
-        if (s.distKm == null && s.grid) s.distKm = distanceKmToGrid(rx, s.grid);
+      for (const s of buf) {
+        if (s.distKm == null && s.grid && rx) s.distKm = distanceKmToGrid(rx, s.grid);
+        if (!s.country && s.call) s.country = countryForCallsign(s.call);
       }
       buf.reverse(); // arrival order oldest→newest; display newest first
       setSpots((prev: SpotRow[]) => {
@@ -3118,6 +3124,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         spotsKind={spotsKind}
         onSpotsToggle={onSpotsToggle}
         onServerMap={(k) => { setMenuOpen(false); setMapKind(k); }}
+        onSpotsMap={() => {
+          setMenuOpen(false);
+          // The map plots the live Digital Spots feed — start it if it isn't on.
+          if (spotsKindRef.current !== 'digi') onSpotsToggle('digi');
+          setLocalMapOpen(true);
+        }}
         rttySettings={rttySettings}
         onRttySettings={onRttySettings}
         wefaxLpm={wefaxLpm}
@@ -3263,6 +3275,35 @@ export default function SDRScreen({ route, navigation }: Props) {
         baseUrl={baseUrl}
         sessionUuid={sessionUuid}
         onClose={() => setMapKind(null)}
+      />
+
+      {/* On-device FT8 spots map (Local/Kiwi): RN-fed spots (each with a grid),
+          receiver position from device GPS / Kiwi gps / a picked city. */}
+      <MapOverlay
+        visible={localMapOpen}
+        kind="digi"
+        local
+        baseUrl={isLocal ? 'https://localhost' : baseUrl}
+        wsBaseOverride={decoderBase}
+        sessionUuid={sessionUuid}
+        rxLat={recvLoc?.lat ?? 0}
+        rxLon={recvLoc?.lon ?? 0}
+        spots={spots}
+        onPickCity={() => setCityPickerOpen(true)}
+        onClose={() => setLocalMapOpen(false)}
+        disconnected={serverLost || serverBusy || connTimedOut}
+        onBackToList={() => { setLocalMapOpen(false); navigation.goBack(); }}
+        onRetry={() => fullReconnect()}
+      />
+
+      <CityPickerModal
+        visible={cityPickerOpen}
+        onClose={() => setCityPickerOpen(false)}
+        onPick={(c) => {
+          recvLocRef.current = { lat: c.lat, lon: c.lon };
+          setRecvLoc({ lat: c.lat, lon: c.lon });
+          setCityPickerOpen(false);
+        }}
       />
 
       {/* Admin pages — in-app browser with ← SDR bar */}

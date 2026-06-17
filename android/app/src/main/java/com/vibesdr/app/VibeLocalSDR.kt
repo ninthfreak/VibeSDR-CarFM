@@ -75,6 +75,7 @@ object VibeLocalSDR {
     // returned -1 and feedDecoderPcm no-op'd → decoders/spots produced no output.
     fun startDecoderService(): Int { ensureLoaded(); return if (loaded) nativeStartDecoderService() else -1 }
     fun feedDecoderPcm(b64: String, rate: Int) { if (loaded) nativeFeedDecoderPcm(b64, rate) }
+    fun setDecoderFreq(hz: Double) { if (loaded) nativeSetDecoderFreq(hz) }
     fun getTunerGains(): IntArray { return if (loaded) nativeGetTunerGains() ?: IntArray(0) else IntArray(0) }
 
     private external fun nativeHello(): String
@@ -98,5 +99,6 @@ object VibeLocalSDR {
     private external fun nativeGetNrCpu(): Float
     private external fun nativeStartDecoderService(): Int
     private external fun nativeFeedDecoderPcm(b64: String, rate: Int)
+    private external fun nativeSetDecoderFreq(hz: Double)
     private external fun nativeGetTunerGains(): IntArray?
 }

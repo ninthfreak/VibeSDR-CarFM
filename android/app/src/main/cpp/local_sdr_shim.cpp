@@ -1198,6 +1198,13 @@ void LocalSdrShim::feedDecoderPcm(const int16_t* pcm, int n, int rate) {
     p->feedSpots(buf.data(), (int)buf.size());
 }
 
+void LocalSdrShim::setDecoderFreq(double hz) {
+    if (!p || hz <= 0) return;
+    // Dial frequency for the sidecar: FT8 spots are emitted at audioFreq + offset,
+    // so without this they'd land at the 100 MHz default (empty band, wrong freq).
+    p->audioFreq.store(hz);
+}
+
 // ── Hardware controls ─────────────────────────────────────────────────────────
 void LocalSdrShim::setGain(int gainTenthDb) {
     if (!p || !p->dev) return;

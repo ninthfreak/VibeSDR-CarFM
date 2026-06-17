@@ -175,6 +175,11 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeFeedDecoderPcm(JNIEnv* env, jobject, jst
     vibe::LocalSdrShim::instance().feedDecoderPcm((const int16_t*)bytes.data(), n, (int)rate);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetDecoderFreq(JNIEnv*, jobject, jdouble hz) {
+    vibe::LocalSdrShim::instance().setDecoderFreq((double)hz);
+}
+
 extern "C" JNIEXPORT jintArray JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeGetTunerGains(JNIEnv* env, jobject) {
     auto gains = vibe::LocalSdrShim::instance().getTunerGains();

@@ -100,9 +100,12 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
         {s.call}
       </Text>
       <Text style={[dp.spotCell, dp.spotCountry, { fontFamily: font }]} numberOfLines={1}>
-        {/* On-device FT8 spots (Local/Kiwi) carry no country but a TX grid →
-            show distance-to-receiver here instead; UberSDR keeps its country. */}
-        {abbrCountry(s.country) || (s.distKm != null ? `${s.distKm}km` : '')}
+        {abbrCountry(s.country)}
+      </Text>
+      {/* Distance-to-receiver (FT8: from the TX grid). Its own cell so country +
+          distance both show; blank when unknown. */}
+      <Text style={[dp.spotCell, dp.spotDist, { fontFamily: font }]} numberOfLines={1}>
+        {s.distKm != null ? `${s.distKm}km` : ''}
       </Text>
     </TouchableOpacity>
   );
@@ -445,8 +448,9 @@ const dp = StyleSheet.create({
   spotBand:    { width: 36 },
   spotMode:    { width: 38 },
   spotSnr:     { width: 28, textAlign: 'right' },
-  spotCall:    { flex: 1.3, fontSize: 11, marginLeft: 6 },
+  spotCall:    { flex: 1.2, fontSize: 11, marginLeft: 6 },
   spotCountry: { flex: 0.9, textAlign: 'right' },
+  spotDist:    { width: 52, textAlign: 'right', marginLeft: 4 },
   settingsRow: {
     flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 5,
     paddingHorizontal: 12, paddingVertical: 6,

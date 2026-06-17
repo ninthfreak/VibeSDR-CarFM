@@ -73,6 +73,8 @@ export interface MenuSheetProps {
   onSpotsToggle?:  (k: 'digi'|'cw') => void;
   /** Server map overlays (skin lsv-hfdl / lsv-digmap / lsv-cwmap). */
   onServerMap?:    (k: 'hfdl'|'digi'|'cw') => void;
+  /** Local/Kiwi: open the on-device-decoder FT8 spots map. */
+  onSpotsMap?:     () => void;
   rttySettings?:   RttySettings;
   onRttySettings?: (s: RttySettings) => void;
   wefaxLpm?:       number;
@@ -440,7 +442,7 @@ export default function MenuSheet({
   serverVersion = null, onAbout,
   onZoomIn, onZoomOut, onSetDefault, isDefaultInstance = false,
   decMode = null, decOn = false, onDecToggle,
-  spotsKind = null, onSpotsToggle, onServerMap,
+  spotsKind = null, onSpotsToggle, onServerMap, onSpotsMap,
   rttySettings, onRttySettings,
   wefaxLpm = 120, onWefaxLpm,
   vfoNeedle = '#ffffff', onVfoNeedle,
@@ -1474,7 +1476,12 @@ export default function MenuSheet({
                 ))}</OptRow>
               </View>
             )}
+            </>)}
 
+            {/* DECODED SPOTS / SERVER EXTENSIONS stays available in landscape (unlike
+                the client decoders above, which need portrait height) so the FT8 MAP
+                and Digital Spots are reachable in either orientation. */}
+            {serverType !== 'owrx' && (<>
             {/* ── SERVER EXTENSIONS — spots feeds + speech-to-text. DIGITAL SPOTS is
                    our ON-DEVICE FT8/FT4 decoder, so it works everywhere (local USB
                    hardware AND Kiwi, which has no server feed). CW SPOTS (server CW
@@ -1492,6 +1499,11 @@ export default function MenuSheet({
                 <Btn label="STT" active={decMode === 'whisper' && decOn}
                      style={decMode === 'whisper' && !decOn ? styles.btnSelected : undefined}
                      onPress={() => onDecToggle?.('whisper')} />
+              )}
+              {/* On-device FT8 map (Local/Kiwi) — plots Digital Spots by their
+                  Maidenhead grid; distance/centre from the receiver position. */}
+              {(isLocal || isKiwi) && (
+                <Btn label="🗺 MAP" onPress={() => onSpotsMap?.()} />
               )}
             </BtnRow>
             {spotsKind !== null && (

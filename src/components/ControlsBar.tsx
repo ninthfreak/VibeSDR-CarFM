@@ -21,6 +21,7 @@ import React, {
 import {
   Animated,
   AppState,
+  NativeModules,
   Platform,
   Share,
   StyleSheet,
@@ -428,6 +429,25 @@ function ChatIcon({ size, color }: { size: number; color: string }) {
 
 // ── PORTRAIT ──────────────────────────────────────────────────────────────────
 
+// Android: exclude the drum band from the system back-edge swipe so a horizontal
+// drag on the VFO/zoom drum doesn't trigger (and animate, blocking the drum) the
+// in-app-handled back gesture. Returns a ref + onLayout for the drum container.
+function useDrumSwipeGuard() {
+  const ref = useRef<View>(null);
+  const setExcl = (NativeModules.VibePowerModule as { setSwipeExclusion?: (t: number, h: number) => void } | undefined)?.setSwipeExclusion;
+  const onLayout = useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
+    if (Platform.OS !== 'android' || !setExcl) return;
+    const lh = e.nativeEvent.layout.height;
+    // Set the exclusion immediately (the drum sits high in the portrait controls,
+    // so top=0 covers it) — measureInWindow's callback proved unreliable here and
+    // often never fires. Still try to refine the absolute Y when measure works.
+    setExcl(0, lh);
+    ref.current?.measureInWindow((_x, y, _w, h) => { if (h > 0) setExcl(y, h); });
+  }, [setExcl]);
+  useEffect(() => () => { if (Platform.OS === 'android') setExcl?.(0, 0); }, [setExcl]);
+  return { ref, onLayout };
+}
+
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled }: any) {
@@ -496,6 +516,8 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
   const tight      = Platform.OS === 'android' || s.isSmall;
   const FREQ_FONT  = s.r(tight ? 19 : 22);
   const FREQ_W     = s.r(tight ? 112 : 130);
+
+  const { ref: drumRowRef, onLayout: guardDrums } = useDrumSwipeGuard();
   const UNIT_FONT  = s.r(9);
   const MODE_FONT  = s.r(tight ? 12 : 13);
   const MODE_LS    = s.f(t.modeLs);
@@ -575,7 +597,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
       </View>
 
       {/* Row 3 — drums 50/50 */}
-      <View style={{ flexDirection: 'row', gap: COL_GAP }}>
+      <View ref={drumRowRef} onLayout={guardDrums} style={{ flexDirection: 'row', gap: COL_GAP }}>
         <DrumWheel type="vfo"  height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} />
         <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta}  style={{ flex: 1 }} />
       </View>
@@ -627,6 +649,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
   const SIG_H     = s.r(40);  // was 48 — frame dwarfed the small pill
   const GAP       = s.r(6);
   const BTN_W     = s.r(56);
+  const { ref: drumRowRef, onLayout: guardDrums } = useDrumSwipeGuard();
   // Pill enlarged toward portrait proportions — at 20pt in a 48pt frame the
   // signal bar visually swallowed it (screenshots 2026-06-11).
   const FREQ_FONT = s.r(24);
@@ -645,7 +668,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
   const CLOCK_FONT = s.f(7);
 
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center', gap: GAP }}>
+    <View ref={drumRowRef} onLayout={guardDrums} style={{ flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center', gap: GAP }}>
 
       {/* VFO drum + clock */}
       <View style={{ flex: 1, minWidth: s.r(80) }}>
