@@ -262,6 +262,21 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         super.onDestroy()
     }
 
+    // App swiped from recents: release the local SDR (USB device + localhost
+    // port) and stop audio + the service immediately. Without this the
+    // foreground service lingered for several seconds holding the shim, so an
+    // immediate relaunch collided with the still-alive instance → spinning
+    // wheel. (Background audio still works on screen-lock — that's not a task
+    // removal.)
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.i(TAG, "onTaskRemoved — releasing local SDR + stopping service")
+        try { VibeLocalSDR.stopSpectrum() } catch (_: Throwable) {}
+        stopExternalAudio()
+        stopEngine()
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
+    }
+
     // ── Engine control (called from VibeStreamModule / media controls) ───────
 
     fun startAudioEngine(baseUrl: String, frequency: Long, mode: String, uuid: String, password: String) {
