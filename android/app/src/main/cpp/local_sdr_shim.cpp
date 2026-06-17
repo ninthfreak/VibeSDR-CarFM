@@ -1107,19 +1107,24 @@ void LocalSdrShim::stopLocked() {
     if (!p) return;
     Impl* impl = p; p = nullptr;
 
-    // Stop data producers/consumers FIRST (they touch impl + the sockets).
     impl->serverRunning.store(false);
+    // Close the client sockets FIRST. The FFT/audio worker threads write to them
+    // via sendWs; if a client has stopped reading (e.g. the app is tearing the
+    // spectrum/audio WS down while switching to a network instance), that send
+    // blocks — and teardownAudio()/frontend->stop() below would then hang joining
+    // a worker stuck mid-write. Closing the sockets makes the blocked send/recv
+    // fail so every thread can exit. (This was the "shim gets stuck" on
+    // local→network — long-standing, just never hit until that path was used.)
+    { std::lock_guard<std::mutex> lk(impl->clientMtx);
+      if (impl->specClient) impl->specClient->close();
+      if (impl->audioClient) impl->audioClient->close();
+      if (impl->dxClient) impl->dxClient->close(); }
+
     if (impl->dev) rtlsdr_cancel_async(impl->dev);
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
     impl->teardownAudio();
     if (impl->frontend) { impl->frontend->stop(); delete impl->frontend; impl->frontend = nullptr; }
 
-    // Then the server: close client sockets to unblock reader recv, stop the
-    // listener, join the accept + connection threads.
-    { std::lock_guard<std::mutex> lk(impl->clientMtx);
-      if (impl->specClient) impl->specClient->close();
-      if (impl->audioClient) impl->audioClient->close();
-      if (impl->dxClient) impl->dxClient->close(); }
     impl->stopDecoder();
     impl->stopSpots();
     { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; }

@@ -9,6 +9,8 @@
 #include <jni.h>
 #include <android/log.h>
 #include <string>
+#include <thread>
+#include <vector>
 #include <rtl-sdr.h>
 #include "local_sdr_shim.h"
 
@@ -85,7 +87,10 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStartSpectrum(
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeStopSpectrum(JNIEnv* /*env*/, jobject /*thiz*/) {
-    vibe::LocalSdrShim::instance().stop();
+    // Tear down on a detached thread so the JS/bridge caller never blocks if the
+    // teardown is slow (RTL cancel + thread joins) — the app must not lock up
+    // when leaving a local session. stop() is serialised internally (g_lifecycle).
+    std::thread([]{ vibe::LocalSdrShim::instance().stop(); }).detach();
 }
 
 extern "C" JNIEXPORT void JNICALL
