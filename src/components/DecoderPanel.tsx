@@ -100,7 +100,9 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
         {s.call}
       </Text>
       <Text style={[dp.spotCell, dp.spotCountry, { fontFamily: font }]} numberOfLines={1}>
-        {abbrCountry(s.country)}
+        {/* On-device FT8 spots (Local/Kiwi) carry no country but a TX grid →
+            show distance-to-receiver here instead; UberSDR keeps its country. */}
+        {abbrCountry(s.country) || (s.distKm != null ? `${s.distKm}km` : '')}
       </Text>
     </TouchableOpacity>
   );

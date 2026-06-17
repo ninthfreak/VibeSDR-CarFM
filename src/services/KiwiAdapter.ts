@@ -156,7 +156,12 @@ export class KiwiAdapter implements SDRBackend {
       const r = await fetch(http + '/status', { signal: AbortSignal.timeout(8000) });
       if (!r.ok) return;
       const m = /gps=\(([-\d.]+),\s*([-\d.]+)\)/.exec(await r.text());
-      if (m) { const lon = Number(m[2]); if (Number.isFinite(lon)) this.cb.onReceiverLon?.(lon); }
+      if (m) {
+        const lat = Number(m[1]); const lon = Number(m[2]);
+        if (Number.isFinite(lon)) this.cb.onReceiverLon?.(lon);
+        // Full receiver position → spot distances + FT8 map (on-device decoder).
+        if (Number.isFinite(lat) && Number.isFinite(lon)) this.cb.onReceiverLoc?.(lat, lon);
+      }
     } catch {}
   }
 

@@ -80,6 +80,7 @@ export interface SpotRow {
   wpm?:    number;
   freqHz:  number;
   distKm?: number;
+  grid?:   string;    // TX Maidenhead locator (on-device FT8 spots) → distance/map
   country: string;
 }
 
@@ -351,6 +352,7 @@ export class DecoderClient {
               snr:  typeof d.snr === 'number' ? d.snr : undefined,
               freqHz: spotFreqHz(d.frequency),
               distKm: typeof d.distance_km === 'number' ? d.distance_km : undefined,
+              grid: d.grid ? String(d.grid) : undefined,
               country: String(d.country ?? ''),
             });
           } else if (m.type === 'cw_spot' && m.data) {

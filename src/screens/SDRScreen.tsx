@@ -87,6 +87,8 @@ import {
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi } from '../services/eibi';
+import { getUserLocation } from '../services/instancesApi';
+import { distanceKmToGrid } from '../services/grid';
 import * as DocumentPicker from 'expo-document-picker';
 // SDK 56 moved readAsStringAsync to the legacy entry (new File API otherwise).
 import * as FileSystem from 'expo-file-system/legacy';
@@ -1243,6 +1245,20 @@ export default function SDRScreen({ route, navigation }: Props) {
   const spotsKindRef  = useRef<SpotsKind | null>(null);
   const spotBufRef    = useRef<SpotRow[]>([]);
   const spotTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Receiver position for FT8 spot distances (+ the on-device-decoder map).
+  // Kiwi: server gps=(lat,lon) via onReceiverLoc. Local hardware: the phone's GPS
+  // (same permission as instance-list distance sorting); null until resolved.
+  const recvLocRef = useRef<{ lat: number; lon: number } | null>(null);
+  const [recvLoc, setRecvLoc] = useState<{ lat: number; lon: number } | null>(null);
+  useEffect(() => {
+    if (!isLocal) return;
+    let cancelled = false;
+    getUserLocation().then(loc => {
+      if (cancelled || !loc) return;
+      recvLocRef.current = loc; setRecvLoc(loc);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [isLocal]);
 
   const stopSpotFlush = useCallback(() => {
     if (spotTimerRef.current) { clearInterval(spotTimerRef.current); spotTimerRef.current = null; }
@@ -1255,6 +1271,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       const buf = spotBufRef.current;
       if (buf.length === 0) return;
       spotBufRef.current = [];
+      // On-device decoder (Local/Kiwi) sends a TX grid but no distance — compute
+      // it from the receiver position. UberSDR spots already carry distKm.
+      const rx = recvLocRef.current;
+      if (rx) for (const s of buf) {
+        if (s.distKm == null && s.grid) s.distKm = distanceKmToGrid(rx, s.grid);
+      }
       buf.reverse(); // arrival order oldest→newest; display newest first
       setSpots((prev: SpotRow[]) => {
         const next = buf.concat(prev);
@@ -1521,6 +1543,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         (VibePowerModule as any)?.stopExternalAudio?.();
       },
       onReceiverLon: (lon) => { if (!destroyed.current) setRecvLon(lon); },
+      onReceiverLoc: (lat, lon) => { recvLocRef.current = { lat, lon }; if (!destroyed.current) setRecvLoc({ lat, lon }); },
       onLink: (q) => {
         if (destroyed.current) return;
         const b = meterBus.current;
