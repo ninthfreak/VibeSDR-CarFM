@@ -273,7 +273,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     // removal.)
     override fun onTaskRemoved(rootIntent: Intent?) {
         Log.i(TAG, "onTaskRemoved — releasing local SDR + stopping service")
-        try { VibeLocalSDR.stopSpectrum() } catch (_: Throwable) {}
+        // The shim teardown joins threads + closes USB and can be slow on
+        // low-end phones — do it OFF the main thread so onTaskRemoved can't block
+        // the process shutdown (a stall here left a wedged state on relaunch).
+        Thread { try { VibeLocalSDR.stopSpectrum() } catch (_: Throwable) {} }.start()
         stopExternalAudio()
         stopEngine()
         stopSelf()
