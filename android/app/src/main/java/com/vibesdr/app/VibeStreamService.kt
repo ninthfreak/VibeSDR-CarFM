@@ -1546,6 +1546,9 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 // LOCAL HARDWARE menu card) on a dark inset, so its card is distinct
                 // from a network UberSDR session.
                 npArtworkType == "local" -> drawInsetVector(canvas, dst, R.drawable.ic_local_sdr)
+                // RTL-TCP: the supplied rtltcp icon (black line art) amber-tinted on
+                // the same dark inset, matching its menu card.
+                npArtworkType == "rtltcp" -> drawInsetTintedBitmap(canvas, dst, R.drawable.logo_rtltcp, 0xFFFFB833.toInt())
                 else -> {
                     val overlayId = resources.getIdentifier("logo_$npArtworkType", "drawable", packageName)
                     if (overlayId != 0) {
@@ -1559,6 +1562,20 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         } catch (e: Exception) {
             Log.w(TAG, "artwork composite failed: ${e.message}")
         }
+    }
+
+    /** Inset a (black line-art) bitmap on the dark rounded box, tinted so it reads
+     *  over the app artwork — used for the supplied RTL-TCP icon. */
+    private fun drawInsetTintedBitmap(canvas: android.graphics.Canvas, dst: android.graphics.RectF, drawableId: Int, tint: Int) {
+        val bg = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC101418.toInt() }
+        val r = dst.width() * 0.18f
+        canvas.drawRoundRect(dst, r, r, bg)
+        val d = androidx.core.content.ContextCompat.getDrawable(this, drawableId) ?: return
+        d.mutate(); d.setTint(tint)
+        val padIn = dst.width() * 0.16f
+        d.setBounds((dst.left + padIn).toInt(), (dst.top + padIn).toInt(),
+                    (dst.right - padIn).toInt(), (dst.bottom - padIn).toInt())
+        d.draw(canvas)
     }
 
     /** Inset a vector drawable (e.g. the local USB-SDR icon) on the same dark

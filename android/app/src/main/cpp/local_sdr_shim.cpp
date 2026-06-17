@@ -168,6 +168,21 @@ struct LocalSdrShim::Impl {
     // Kotlin closing its copy can't pull the rug from libusb, and we close ours
     // after rtlsdr_close on the teardown thread.
     int usbFd = -1;
+    // RTL-TCP source (rtl_tcp protocol over the network, no USB/librtlsdr — so it
+    // works on iOS too). When tcpSock is set, the IQ comes from this socket and the
+    // hardware setters send rtl_tcp commands instead of calling rtlsdr_*.
+    std::shared_ptr<net::Socket> tcpSock;
+    std::atomic<bool> tcpRunning{false};
+    int tcpTunerType = 0;
+    std::vector<int> tcpGains;            // tuner gains (tenths dB) from the header
+    // rtl_tcp 5-byte command: [code][param big-endian u32].
+    void sendTcpCmd(uint8_t code, uint32_t param) {
+        auto s = tcpSock; if (!s) return;
+        uint8_t c[5] = { code, (uint8_t)(param >> 24), (uint8_t)(param >> 16),
+                         (uint8_t)(param >> 8), (uint8_t)param };
+        s->send(c, 5);
+    }
+    bool useTcp() const { return (bool)tcpSock; }
     double sampleRate = 2400000.0;
     int    fftSize    = 1024;
     double fftRate    = 20.0;
@@ -689,7 +704,8 @@ struct LocalSdrShim::Impl {
         double limit = sampleRate / 2.0 - 50000.0;
         if (std::fabs(freq - rtlCenter.load()) > limit) {
             rtlCenter.store(freq);
-            if (dev) rtlsdr_set_center_freq(dev, (uint32_t)llround(freq));
+            if (useTcp()) sendTcpCmd(0x01, (uint32_t)llround(freq));
+            else if (dev) rtlsdr_set_center_freq(dev, (uint32_t)llround(freq));
         }
         std::lock_guard<std::mutex> lk(modeMtx);
         if (vfo) vfo->setOffset(vfoOffsetNow());
@@ -769,7 +785,8 @@ struct LocalSdrShim::Impl {
                 // keeps the centre, so this avoids per-gesture retune clicks).
                 if (std::fabs(v - rtlCenter.load()) > 1.0) {
                     rtlCenter.store(v);
-                    if (dev) rtlsdr_set_center_freq(dev, (uint32_t)llround(v));
+                    if (useTcp()) sendTcpCmd(0x01, (uint32_t)llround(v));
+                    else if (dev) rtlsdr_set_center_freq(dev, (uint32_t)llround(v));
                     std::lock_guard<std::mutex> lk(modeMtx);
                     if (vfo) vfo->setOffset(vfoOffsetNow());
                 }
@@ -1038,6 +1055,30 @@ struct LocalSdrShim::Impl {
         }
         _this->iqStream.swap(sampCount);
     }
+
+    // RTL-TCP read loop: pull u8 I/Q from the socket in ~32 KB chunks and feed the
+    // same iqStream the USB path uses. Reads what's available (low latency) and
+    // carries a stray odd byte so I/Q pairs never misalign across reads.
+    void tcpReadLoop() {
+        const int CHUNK = 32768;                 // bytes (16384 IQ samples)
+        std::vector<uint8_t> buf(CHUNK + 1);
+        int carry = 0;                            // 0/1 leftover byte from last read
+        while (tcpRunning.load()) {
+            auto s = tcpSock; if (!s) break;
+            int got = s->recv(buf.data() + carry, CHUNK, false, 5000);
+            if (got <= 0) { if (!tcpRunning.load()) break; continue; }
+            int total = carry + got;
+            int sampCount = total / 2;
+            if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
+            for (int i = 0; i < sampCount; i++) {
+                iqStream.writeBuf[i].re = ((float)buf[i*2]     - 127.4f) / 128.0f;
+                iqStream.writeBuf[i].im = ((float)buf[i*2 + 1] - 127.4f) / 128.0f;
+            }
+            iqStream.swap(sampCount);
+            carry = total & 1;                    // keep the trailing half-sample byte
+            if (carry) buf[0] = buf[total - 1];
+        }
+    }
 };
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -1106,6 +1147,78 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     return chosen;
 }
 
+// Standard R820T/R828D tuner gains (tenths of dB) — rtl_tcp's header gives only a
+// gain COUNT, not the values, so we expose this well-known table for the slider.
+static const int kR820tGains[] = {
+    0, 9, 14, 27, 37, 77, 87, 125, 144, 157, 166, 197, 207, 229, 254, 280,
+    297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496
+};
+
+int LocalSdrShim::startTcp(const std::string& host, int port,
+                           double centerFreq, double sampleRate, int gainTenthDb,
+                           int fftSize, double fftRate, const std::string& mode, std::string& err) {
+    LOGI("startTcp ENTER %s:%d", host.c_str(), port);
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (p) { LOGI("stale shim found on TCP start — tearing down"); stopLocked(); }
+    auto* impl = new Impl();
+    impl->sampleRate = sampleRate;
+    impl->fftSize = fftSize;
+    impl->fftRate = fftRate;
+    impl->rtlCenter.store(centerFreq);
+    impl->audioFreq.store(centerFreq);
+    impl->mode = mode.empty() ? "nfm" : mode;
+    impl->fftBuf.assign(fftSize, -256.0f);
+
+    // Connect to the rtl_tcp server and read its 12-byte header.
+    LOGI("startTcp connecting...");
+    try { impl->tcpSock = net::connect(host, port); }
+    catch (...) { impl->tcpSock = nullptr; }
+    if (!impl->tcpSock) { err = "could not connect to rtl_tcp " + host + ":" + std::to_string(port); delete impl; return -1; }
+    uint8_t hdr[12];
+    if (impl->tcpSock->recv(hdr, 12, true, 8000) != 12 || memcmp(hdr, "RTL0", 4) != 0) {
+        err = "bad rtl_tcp header (not an rtl_tcp server?)"; impl->tcpSock->close(); impl->tcpSock = nullptr; delete impl; return -1;
+    }
+    impl->tcpTunerType = (hdr[4] << 24) | (hdr[5] << 16) | (hdr[6] << 8) | hdr[7];
+    impl->tcpGains.assign(kR820tGains, kR820tGains + (sizeof(kR820tGains) / sizeof(int)));
+
+    // Initial config via rtl_tcp commands (0x02 rate, 0x01 freq, 0x03/0x04 gain).
+    impl->sendTcpCmd(0x02, (uint32_t)sampleRate);
+    impl->sendTcpCmd(0x01, (uint32_t)llround(centerFreq));
+    if (gainTenthDb < 0) { impl->sendTcpCmd(0x03, 0); }                       // auto
+    else { impl->sendTcpCmd(0x03, 1); impl->sendTcpCmd(0x04, (uint32_t)gainTenthDb); }
+
+    impl->fftSize = fftSizeForRate(impl->sampleRate);
+    impl->fftBuf.assign(impl->fftSize, -256.0f);
+
+    impl->frontend = new IQFrontEnd();
+    impl->frontend->init(&impl->iqStream, impl->sampleRate, true, 1, true, impl->fftSize, fftRate * FFT_AVG,
+                         IQFrontEnd::FFTWindow::NUTTALL, &Impl::acquire, &Impl::release, impl);
+    impl->frontend->start();
+    impl->buildAudio();
+
+    int chosen = -1;
+    for (int p2 = 48000; p2 < 48050; p2++) {
+        try { impl->listener = net::listen("127.0.0.1", p2); chosen = p2; break; }
+        catch (...) { impl->listener = nullptr; }
+    }
+    if (!impl->listener) {
+        err = "could not bind localhost port";
+        impl->teardownAudio(); impl->frontend->stop(); delete impl->frontend;
+        impl->tcpSock->close(); impl->tcpSock = nullptr; delete impl; return -1;
+    }
+    impl->port = chosen;
+    impl->serverRunning.store(true);
+    impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
+
+    impl->tcpRunning.store(true);
+    impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); });
+
+    p = impl;
+    LOGI("RTL-TCP started: %s:%d center=%.0f rate=%.0f tuner=%d port=%d",
+         host.c_str(), port, centerFreq, sampleRate, impl->tcpTunerType, chosen);
+    return chosen;
+}
+
 void LocalSdrShim::stop() {
     // Serialise with start()/stop(): app teardown fires stopSpectrum from several
     // Kotlin paths (unmount + invalidate), possibly concurrently — without this
@@ -1131,7 +1244,10 @@ void LocalSdrShim::stopLocked() {
       if (impl->audioClient) impl->audioClient->close();
       if (impl->dxClient) impl->dxClient->close(); }
 
+    // Stop the IQ source. USB: cancel the async read. RTL-TCP: clear the run flag
+    // and close the socket so the blocked recv() returns and the read thread exits.
     if (impl->dev) rtlsdr_cancel_async(impl->dev);
+    if (impl->useTcp()) { impl->tcpRunning.store(false); if (impl->tcpSock) impl->tcpSock->close(); }
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
     impl->teardownAudio();
     if (impl->frontend) { impl->frontend->stop(); delete impl->frontend; impl->frontend = nullptr; }
@@ -1152,6 +1268,7 @@ void LocalSdrShim::stopLocked() {
       impl->connThreads.clear(); }
 
     if (impl->dev) rtlsdr_close(impl->dev);
+    impl->tcpSock = nullptr;             // RTL-TCP socket already closed above
     // Close our own dup last (rtlsdr_close/libusb don't own it). Kotlin's
     // UsbDeviceConnection.close() races us harmlessly now — it's a different fd.
     if (impl->usbFd >= 0) { ::close(impl->usbFd); impl->usbFd = -1; }
@@ -1207,25 +1324,39 @@ void LocalSdrShim::setDecoderFreq(double hz) {
 
 // ── Hardware controls ─────────────────────────────────────────────────────────
 void LocalSdrShim::setGain(int gainTenthDb) {
-    if (!p || !p->dev) return;
+    if (!p) return;
+    if (p->useTcp()) {
+        if (gainTenthDb < 0) p->sendTcpCmd(0x03, 0);
+        else { p->sendTcpCmd(0x03, 1); p->sendTcpCmd(0x04, (uint32_t)gainTenthDb); }
+        return;
+    }
+    if (!p->dev) return;
     if (gainTenthDb < 0) { rtlsdr_set_tuner_gain_mode(p->dev, 0); LOGI("gain: auto"); }
     else { rtlsdr_set_tuner_gain_mode(p->dev, 1); rtlsdr_set_tuner_gain(p->dev, gainTenthDb);
            LOGI("gain: %.1f dB", gainTenthDb / 10.0); }
 }
 void LocalSdrShim::setPpm(int ppm) {
-    if (!p || !p->dev) return;
+    if (!p) return;
+    if (p->useTcp()) { p->sendTcpCmd(0x05, (uint32_t)ppm); return; }
+    if (!p->dev) return;
     rtlsdr_set_freq_correction(p->dev, ppm); LOGI("ppm: %d", ppm);
 }
 void LocalSdrShim::setBiasTee(bool on) {
-    if (!p || !p->dev) return;
+    if (!p) return;
+    if (p->useTcp()) { p->sendTcpCmd(0x0e, on ? 1 : 0); return; }
+    if (!p->dev) return;
     rtlsdr_set_bias_tee(p->dev, on ? 1 : 0); LOGI("bias-tee: %d", on);
 }
 void LocalSdrShim::setAgc(bool on) {
-    if (!p || !p->dev) return;
+    if (!p) return;
+    if (p->useTcp()) { p->sendTcpCmd(0x08, on ? 1 : 0); return; }
+    if (!p->dev) return;
     rtlsdr_set_agc_mode(p->dev, on ? 1 : 0); LOGI("agc: %d", on);
 }
 void LocalSdrShim::setDirectSampling(int mode) {
-    if (!p || !p->dev) return;
+    if (!p) return;
+    if (p->useTcp()) { p->sendTcpCmd(0x09, (uint32_t)mode); return; }
+    if (!p->dev) return;
     rtlsdr_set_direct_sampling(p->dev, mode); LOGI("direct sampling: %d", mode);
 }
 void LocalSdrShim::setSquelch(bool on, float db) {
@@ -1247,18 +1378,27 @@ void LocalSdrShim::setNrStrength(float s) {
 }
 float LocalSdrShim::getNrCpu() { return p ? p->nrCpuPct.load() : 0.0f; }
 void LocalSdrShim::setSampleRate(double rate) {
-    if (!p || !p->dev || rate <= 0) return;
+    if (!p || rate <= 0) return;
     Impl* impl = p;
-    // Stop the IQ stream and recreate the front end at the new rate + auto FFT
+    const bool tcp = impl->useTcp();
+    if (!tcp && !impl->dev) return;
+    // Stop the IQ source and recreate the front end at the new rate + auto FFT
     // size (FFT scales with rate for uniform Hz/bin). setFFTSize/setSampleRate on
     // the live IQFrontEnd touch the headless GUI / abort, so rebuild the object.
-    rtlsdr_cancel_async(impl->dev);
+    if (tcp) { impl->tcpRunning.store(false); }
+    else     { rtlsdr_cancel_async(impl->dev); }
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
-    rtlsdr_set_sample_rate(impl->dev, (uint32_t)rate);
-    rtlsdr_reset_buffer(impl->dev);
-    // The RTL rounds to a supported rate — use the ACTUAL rate for the FFT/config
-    // or the waterfall calibration drifts (signals land off their true freq).
-    uint32_t actual = rtlsdr_get_sample_rate(impl->dev);
+    uint32_t actual;
+    if (tcp) {
+        impl->sendTcpCmd(0x02, (uint32_t)rate);   // rtl_tcp uses the rate as-is
+        actual = (uint32_t)rate;
+    } else {
+        rtlsdr_set_sample_rate(impl->dev, (uint32_t)rate);
+        rtlsdr_reset_buffer(impl->dev);
+        // The RTL rounds to a supported rate — use the ACTUAL for FFT/config or the
+        // waterfall calibration drifts (signals land off their true freq).
+        actual = rtlsdr_get_sample_rate(impl->dev);
+    }
     impl->sampleRate = actual > 0 ? (double)actual : rate;
     impl->fftSize = fftSizeForRate(impl->sampleRate);
 
@@ -1272,8 +1412,9 @@ void LocalSdrShim::setSampleRate(double rate) {
     impl->frontend->start();
     impl->buildAudio();
     { std::lock_guard<std::mutex> lk(impl->clientMtx); if (impl->specClient) impl->sendConfig(impl->specClient); }
-    impl->rtlThread = std::thread([impl]{ rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); });
-    LOGI("sample rate: %.0f (actual %u) fft=%d", rate, actual, impl->fftSize);
+    if (tcp) { impl->tcpRunning.store(true); impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); }); }
+    else     { impl->rtlThread = std::thread([impl]{ rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); }); }
+    LOGI("sample rate: %.0f (actual %u) fft=%d tcp=%d", rate, actual, impl->fftSize, tcp);
 }
 void LocalSdrShim::setDeemphasis(double tau) {
     std::lock_guard<std::mutex> life(g_lifecycle);
@@ -1285,7 +1426,9 @@ void LocalSdrShim::setDeemphasis(double tau) {
 }
 std::vector<int> LocalSdrShim::getTunerGains() {
     std::vector<int> out;
-    if (!p || !p->dev) return out;
+    if (!p) return out;
+    if (p->useTcp()) return p->tcpGains;     // rtl_tcp header has no values → R820T table
+    if (!p->dev) return out;
     int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
     if (n <= 0) return out;
     out.resize(n);

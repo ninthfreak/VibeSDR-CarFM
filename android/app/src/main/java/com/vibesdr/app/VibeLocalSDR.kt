@@ -53,6 +53,16 @@ object VibeLocalSDR {
         return nativeStartSpectrum(fd, vid, pid, centerFreq, sampleRate, gainTenthDb, fftSize, fftRate, mode)
     }
 
+    // RTL-TCP: IQ from an rtl_tcp server over the network (host:port) — no USB.
+    fun startTcp(
+        host: String, port: Int,
+        centerFreq: Double, sampleRate: Double, gainTenthDb: Int,
+        fftSize: Int, fftRate: Double, mode: String
+    ): Int {
+        ensureLoaded()
+        return nativeStartTcp(host, port, centerFreq, sampleRate, gainTenthDb, fftSize, fftRate, mode)
+    }
+
     fun stopSpectrum() {
         if (!loaded) return
         nativeStopSpectrum()
@@ -82,6 +92,11 @@ object VibeLocalSDR {
     private external fun nativeProbeRtl(fd: Int, vid: Int, pid: Int): String
     private external fun nativeStartSpectrum(
         fd: Int, vid: Int, pid: Int,
+        centerFreq: Double, sampleRate: Double, gainTenthDb: Int,
+        fftSize: Int, fftRate: Double, mode: String
+    ): Int
+    private external fun nativeStartTcp(
+        host: String, port: Int,
         centerFreq: Double, sampleRate: Double, gainTenthDb: Int,
         fftSize: Int, fftRate: Double, mode: String
     ): Int

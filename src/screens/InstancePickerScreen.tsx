@@ -6,6 +6,7 @@ import {
   FlatList,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   StyleSheet,
   Text,
@@ -37,7 +38,8 @@ import {
   getDefaultInstance,
   setDefaultInstance,
 } from '../services/defaultInstance';
-import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType } from '../services/favourites';
+import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
+         TcpFav, getTcpFavs, saveTcpFavs } from '../services/favourites';
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
 import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
 import PasswordModal from '../components/PasswordModal';
@@ -85,6 +87,12 @@ export default function InstancePickerScreen({ navigation }: Props) {
   const [sortMode,    setSortMode]      = useState<SortMode>('nearest');
   const [pwModal,     setPwModal]       = useState<{ url: string; name: string } | null>(null);
   const [favourites,  setFavourites]    = useState<Favourite[]>([]);
+  // RTL-TCP named favourites (host:port + friendly name), persisted locally.
+  const [tcpFavs,     setTcpFavs]       = useState<TcpFav[]>([]);
+  const [tcpModal,    setTcpModal]      = useState(false);
+  const [tcpName,     setTcpName]       = useState('');
+  const [tcpHost,     setTcpHost]       = useState('');
+  const [tcpPort,     setTcpPort]       = useState('1234');
   // null = directory CHOOSER (favourites + directory cards); set = that
   // directory's instance list.
   const [selectedDir, setSelectedDir]   = useState<DirectoryId | null>(null);
@@ -118,6 +126,8 @@ export default function InstancePickerScreen({ navigation }: Props) {
 
       const favs = await getFavourites();
       if (!cancelled) setFavourites(favs);
+      const tfavs = await getTcpFavs();
+      if (!cancelled) setTcpFavs(tfavs);
 
       const dEarly = await getDefaultInstance();
       if (!cancelled && dEarly) {
@@ -211,6 +221,58 @@ export default function InstancePickerScreen({ navigation }: Props) {
       Alert.alert('Local Hardware', e?.message ?? 'Could not start local SDR. Is an RTL-SDR plugged in via USB OTG?');
     }
   }, [navigation, viewMode]);
+
+  // RTL-TCP: connect to an rtl_tcp server (host:port) over the network and run the
+  // same on-device shim against it — no USB, so this also works on iOS. Reuses the
+  // local-SDR wiring (isLocal) with isTcp set for the RTL-TCP icon/labels.
+  const connectTcp = useCallback(async (host: string, port: number, name: string) => {
+    const Local = (NativeModules as any).VibeLocalSDR;
+    if (!Local?.startTcp) { Alert.alert('RTL-TCP', 'Not available on this build.'); return; }
+    setConnecting(true);
+    try {
+      const res = await Local.startTcp({
+        host, port,
+        centerFreq: 100_000_000, sampleRate: 2_400_000, fftSize: 8192, fftRate: 10, mode: 'wfm',
+      }) as { port: number; wsBaseUrl: string };
+      setConnecting(false);
+      navigation.navigate('SDR', {
+        baseUrl: res.wsBaseUrl, instanceName: name || `${host}:${port}`, viewMode,
+        serverType: 'ubersdr', isLocal: true, isTcp: true, localPort: res.port,
+        tcpHost: host, tcpPort: port,
+      });
+    } catch (e: any) {
+      setConnecting(false);
+      Alert.alert('RTL-TCP', e?.message ?? `Could not connect to ${host}:${port}. Is rtl_tcp running and reachable?`);
+    }
+  }, [navigation, viewMode]);
+
+  // Parse the add-RTL-TCP modal: accept "host", "host:port", or separate fields.
+  const parseTcpEntry = useCallback((): { host: string; port: number } | null => {
+    let h = tcpHost.trim();
+    let p = parseInt(tcpPort.trim(), 10);
+    if (h.includes(':')) { const [hh, pp] = h.split(':'); h = hh.trim(); if (pp) p = parseInt(pp.trim(), 10); }
+    if (!h) return null;
+    if (!Number.isFinite(p) || p <= 0 || p > 65535) p = 1234;
+    return { host: h, port: p };
+  }, [tcpHost, tcpPort]);
+
+  const tcpModalConnect = useCallback((save: boolean) => {
+    const parsed = parseTcpEntry();
+    if (!parsed) { Alert.alert('RTL-TCP', 'Enter a host (and optional :port).'); return; }
+    const name = tcpName.trim() || `${parsed.host}:${parsed.port}`;
+    if (save) {
+      const next = [...tcpFavs.filter(f => !(f.host === parsed.host && f.port === parsed.port)),
+                    { name, host: parsed.host, port: parsed.port }];
+      setTcpFavs(next); saveTcpFavs(next).catch(() => {});
+    }
+    setTcpModal(false); setTcpName(''); setTcpHost(''); setTcpPort('1234');
+    connectTcp(parsed.host, parsed.port, name);
+  }, [parseTcpEntry, tcpName, tcpFavs, connectTcp]);
+
+  const removeTcpFav = useCallback((fav: TcpFav) => {
+    const next = tcpFavs.filter(f => !(f.host === fav.host && f.port === fav.port));
+    setTcpFavs(next); saveTcpFavs(next).catch(() => {});
+  }, [tcpFavs]);
 
   // Connect a saved favourite: use its stored backend type, or detect it once
   // (and remember it) so an OpenWebRX/Kiwi favourite doesn't reconnect as UberSDR.
@@ -460,6 +522,35 @@ export default function InstancePickerScreen({ navigation }: Props) {
         onSubmit={pw => { const m = pwModal; setPwModal(null); if (m) connect(m.url, m.name, pw); }}
         onCancel={() => setPwModal(null)}
       />
+
+      {/* Add RTL-TCP server: friendly name + host:port; Connect, or Save & Connect. */}
+      <Modal visible={tcpModal} transparent animationType="fade" onRequestClose={() => setTcpModal(false)}>
+        <View style={styles.tcpBackdrop}>
+          <View style={[styles.tcpCard, { borderColor: C.amber }]}>
+            <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, letterSpacing: 1, marginBottom: 10 }}>RTL-TCP SERVER</Text>
+            <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
+              placeholder="Name (e.g. Shack Pi)" placeholderTextColor={C.textDim}
+              value={tcpName} onChangeText={setTcpName} autoCorrect={false} />
+            <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
+              placeholder="Host or IP (e.g. 192.168.1.50)" placeholderTextColor={C.textDim}
+              value={tcpHost} onChangeText={setTcpHost} autoCapitalize="none" autoCorrect={false} keyboardType="url" />
+            <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
+              placeholder="Port (default 1234)" placeholderTextColor={C.textDim}
+              value={tcpPort} onChangeText={setTcpPort} keyboardType="number-pad" />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 8, flexWrap: 'wrap' }}>
+              <TouchableOpacity style={styles.tcpBtnAlt} onPress={() => setTcpModal(false)}>
+                <Text style={{ fontFamily: F, fontSize: fs(13), color: C.textDim }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.tcpBtnAlt} onPress={() => tcpModalConnect(false)}>
+                <Text style={{ fontFamily: F, fontSize: fs(13), color: C.gold }}>Connect</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.tcpBtn, { backgroundColor: C.amber }]} onPress={() => tcpModalConnect(true)}>
+                <Text style={{ fontFamily: F, fontSize: fs(13), color: '#1a1205', fontWeight: '600' }}>Save & Connect</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
 
         {/* Header */}
@@ -643,8 +734,9 @@ export default function InstancePickerScreen({ navigation }: Props) {
             contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
             ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
             ListHeaderComponent={
-              Platform.OS === 'android' ? (
-                <View style={{ marginBottom: 4 }}>
+              <View style={{ marginBottom: 4 }}>
+                {/* Local USB hardware — Android only (iOS has no USB host SDR). */}
+                {Platform.OS === 'android' && (<>
                   <SectionHeader label="LOCAL HARDWARE" fs={fs} F={F} C={C} />
                   <TouchableOpacity
                     style={[styles.row, { borderColor: C.amber }]}
@@ -659,8 +751,44 @@ export default function InstancePickerScreen({ navigation }: Props) {
                     <View style={{ marginLeft: 4 }}><UsbSdrIcon size={26} color={C.amber} strokeWidth={2.4} /></View>
                     <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>
                   </TouchableOpacity>
+                </>)}
+
+                {/* RTL-TCP — networked rtl_tcp server; works on both platforms. */}
+                <View style={{ marginTop: Platform.OS === 'android' ? 10 : 0 }}>
+                  <SectionHeader label="RTL-TCP" fs={fs} F={F} C={C} />
+                  {tcpFavs.map((f) => (
+                    <TouchableOpacity key={`${f.host}:${f.port}`}
+                      style={[styles.row, { borderColor: C.amber }]}
+                      onPress={() => connectTcp(f.host, f.port, f.name)}
+                      onLongPress={() => Alert.alert(f.name, `${f.host}:${f.port}`, [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Delete', style: 'destructive', onPress: () => removeTcpFav(f) },
+                      ])}
+                    >
+                      <Image source={require('../../assets/rtltcp.png')}
+                        style={{ width: 26, height: 26, tintColor: C.amber, marginRight: 8 }} resizeMode="contain" />
+                      <View style={styles.rowMain}>
+                        <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>{f.name}</Text>
+                        <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
+                          rtl_tcp · {f.host}:{f.port}
+                        </Text>
+                      </View>
+                      <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>
+                    </TouchableOpacity>
+                  ))}
+                  <TouchableOpacity
+                    style={[styles.row, { borderColor: C.goldDim, borderStyle: 'dashed' }]}
+                    onPress={() => setTcpModal(true)}
+                  >
+                    <View style={styles.rowMain}>
+                      <Text style={{ fontFamily: F, fontSize: fs(15), color: C.gold }} numberOfLines={1}>+ Add RTL-TCP server</Text>
+                      <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
+                        host:port of an rtl_tcp server on your network
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
                 </View>
-              ) : null
+              </View>
             }
             ListFooterComponent={
               <View style={{ marginTop: 14 }}>
@@ -736,6 +864,11 @@ const styles = StyleSheet.create({
   sortBtn:       { height: 40, borderWidth: 1, borderRadius: 6, paddingHorizontal: 10, justifyContent: 'center', backgroundColor: 'rgba(10,8,4,0.60)' },
   row:           { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 10, paddingHorizontal: 12, backgroundColor: 'rgba(20,10,0,0.55)', borderWidth: 1, borderRadius: 6 },
   rowMain:       { flex: 1 },
+  tcpBackdrop:   { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'center', padding: 22 },
+  tcpCard:       { backgroundColor: 'rgba(16,10,2,0.98)', borderWidth: 1, borderRadius: 12, padding: 18 },
+  tcpInput:      { height: 44, backgroundColor: 'rgba(8,6,2,0.7)', borderWidth: 1, borderRadius: 6, paddingHorizontal: 12, marginBottom: 8 },
+  tcpBtn:        { borderRadius: 8, paddingHorizontal: 16, paddingVertical: 10 },
+  tcpBtnAlt:     { borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1, borderColor: 'rgba(255,184,77,0.45)' },
   rowRight:      { alignItems: 'center', gap: 6, flexDirection: 'row', marginLeft: 8 },
   nameRow:       { flexDirection: 'row', alignItems: 'center', gap: 6 },
   typeLogo:      { width: 20, height: 20 },

@@ -26,6 +26,24 @@ export async function toggleFavourite(fav: Favourite, current: Favourite[]): Pro
   return next;
 }
 
+// ── RTL-TCP named favourites (host:port + friendly name) ──────────────────────
+const TCP_KEY = 'vsdr_rtltcp_favs';
+
+export type TcpFav = { name: string; host: string; port: number };
+
+export async function getTcpFavs(): Promise<TcpFav[]> {
+  try {
+    const raw = await AsyncStorage.getItem(TCP_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveTcpFavs(favs: TcpFav[]): Promise<void> {
+  await AsyncStorage.setItem(TCP_KEY, JSON.stringify(favs));
+}
+
 /** Persist a learned serverType onto an existing favourite (after detection). */
 export async function setFavouriteServerType(url: string, serverType: 'ubersdr' | 'kiwi' | 'owrx'): Promise<void> {
   const favs = await getFavourites();

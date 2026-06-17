@@ -2702,10 +2702,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         artist = `VibeSDR: ${context}`;
       }
       VibePowerModule?.setNowPlaying(title, artist);
-      // Local hardware reuses serverType 'ubersdr' for the client, but gets its own
-      // album-art inset ('local' → 📡 glyph) so the card is distinct from a network
-      // UberSDR session.
-      VibePowerModule?.setArtwork(route.params.isLocal ? 'local' : (route.params.serverType ?? 'ubersdr'));  // native caches per type
+      // Local hardware / RTL-TCP reuse serverType 'ubersdr' for the client, but get
+      // their own album-art inset so the card is distinct from a network session.
+      const artType = route.params.isTcp ? 'rtltcp'
+                    : route.params.isLocal ? 'local'
+                    : (route.params.serverType ?? 'ubersdr');
+      VibePowerModule?.setArtwork(artType);  // native caches per type
     }, 300);
     return () => clearTimeout(t);
   }, [status.frequency, status.mode, step, freqUnit, ituRegion, mediaSkip,

@@ -176,6 +176,30 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(res)
     }
 
+    // RTL-TCP: connect to an rtl_tcp server (host:port) and run the same local
+    // spectrum/audio shim against it — no USB, so this also works on iOS.
+    @ReactMethod
+    fun startTcp(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
+        val host = opts.getString("host") ?: run { promise.reject("no_host", "host required"); return }
+        val port = if (opts.hasKey("port")) opts.getInt("port") else 1234
+        Log.i(TAG, "startTcp ENTER host=$host port=$port")
+        stopSpectrumInternal()
+        val centerFreq = if (opts.hasKey("centerFreq")) opts.getDouble("centerFreq") else 100_000_000.0
+        val sampleRate = if (opts.hasKey("sampleRate")) opts.getDouble("sampleRate") else 2_400_000.0
+        val gain       = if (opts.hasKey("gainTenthDb")) opts.getInt("gainTenthDb") else -1
+        val fftSize    = if (opts.hasKey("fftSize")) opts.getInt("fftSize") else 1024
+        val fftRate    = if (opts.hasKey("fftRate")) opts.getDouble("fftRate") else 20.0
+        val mode       = if (opts.hasKey("mode")) opts.getString("mode") ?: "nfm" else "nfm"
+
+        val bound = VibeLocalSDR.startTcp(host, port, centerFreq, sampleRate, gain, fftSize, fftRate, mode)
+        if (bound <= 0) { promise.reject("start_failed", "could not connect to rtl_tcp $host:$port (see logcat)"); return }
+        Log.i(TAG, "rtl_tcp $host:$port started on port $bound")
+        val res = Arguments.createMap()
+        res.putInt("port", bound)
+        res.putString("wsBaseUrl", "http://127.0.0.1:$bound")
+        promise.resolve(res)
+    }
+
     @ReactMethod
     fun stopSpectrum(promise: Promise) {
         stopSpectrumInternal()

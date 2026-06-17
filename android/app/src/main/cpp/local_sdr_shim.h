@@ -19,6 +19,12 @@ public:
               double centerFreq, double sampleRate, int gainTenthDb,
               int fftSize, double fftRate, const std::string& mode, std::string& err);
 
+    // RTL-TCP source (rtl_tcp protocol over the network — no USB/librtlsdr, so it
+    // works on iOS too). Same pipeline as start(), IQ from a TCP socket.
+    int startTcp(const std::string& host, int port,
+                 double centerFreq, double sampleRate, int gainTenthDb,
+                 int fftSize, double fftRate, const std::string& mode, std::string& err);
+
     void stop();
     bool isRunning() const;
 

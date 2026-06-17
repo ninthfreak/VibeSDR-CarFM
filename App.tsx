@@ -27,6 +27,12 @@ export type RootStackParamList = {
     // Audio comes from its /ws/audio (external-PCM engine), not the UberSDR /ws.
     isLocal?:        boolean;
     localPort?:      number;
+    // RTL-TCP: same on-device shim but fed IQ from an rtl_tcp server over the
+    // network (no USB → works on iOS). Reuses the isLocal wiring; isTcp drives the
+    // RTL-TCP icon/labels, tcpHost/tcpPort allow reconnect.
+    isTcp?:          boolean;
+    tcpHost?:        string;
+    tcpPort?:        number;
   };
 };
 
