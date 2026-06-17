@@ -75,7 +75,14 @@ export default function LocalAudioPlayer(
       const rate     = dv.getUint32(2, true);
       const pcm      = new Uint8Array(buf, 6);
       if (!started.current || rate !== lastRate.current) {
-        if (!started.current) { Vibe?.startExternalAudio?.(rate); started.current = true; }
+        if (!started.current) {
+          Vibe?.startExternalAudio?.(rate);
+          started.current = true;
+          // Mark LOCAL mode AFTER the service exists (startExternalAudio creates
+          // it) — the on-mount call no-ops because the service isn't up yet, and
+          // without the flag pause hit the OWRX/Kiwi full-teardown path.
+          Vibe?.setExternalLocalMode?.(true);
+        }
         lastRate.current = rate;
       }
       Vibe?.pushExternalPcm?.(bytesToBase64(pcm), rate, channels === 2 ? 2 : 1);
