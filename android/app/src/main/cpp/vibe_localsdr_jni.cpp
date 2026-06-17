@@ -132,15 +132,6 @@ extern "C" JNIEXPORT jfloat JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeGetNrCpu(JNIEnv*, jobject) {
     return vibe::LocalSdrShim::instance().getNrCpu();
 }
-extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativePauseRtl(JNIEnv*, jobject) {
-    vibe::LocalSdrShim::instance().pauseRtl();
-}
-extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeResumeRtl(JNIEnv*, jobject) {
-    vibe::LocalSdrShim::instance().resumeRtl();
-}
-
 // ── Decoder-only sidecar (Kiwi/OWRX): decode the backend's audio natively ────
 extern "C" JNIEXPORT jint JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeStartDecoderService(JNIEnv* env, jobject) {

@@ -155,8 +155,6 @@ ModeParams paramsFor(const std::string& mode) {
 // ── Impl ────────────────────────────────────────────────────────────────────
 struct LocalSdrShim::Impl {
     bool decoderOnly = false;             // sidecar mode: decoders only, no RTL
-    bool rtlPaused   = false;             // media-control pause: RTL powered down
-    bool biasTeeOn   = false;             // cached Bias-T state (restore on resume)
     std::vector<float> pcmResid;          // upsample carry (fractional sample pos)
     double pcmAcc = 0.0;
     // device / params
@@ -1111,15 +1109,8 @@ void LocalSdrShim::stopLocked() {
 
     // Stop data producers/consumers FIRST (they touch impl + the sockets).
     impl->serverRunning.store(false);
-    // Only cancel/join the IQ stream when it's actually running. If the RTL was
-    // media-paused (rtlPaused → async already cancelled, thread already joined),
-    // calling rtlsdr_cancel_async again blocks forever — that was the stop() hang
-    // that wedged the "Releasing local hardware" overlay on local→network.
-    if (impl->dev && impl->rtlThread.joinable()) {
-        rtlsdr_cancel_async(impl->dev);
-        impl->rtlThread.join();
-    }
-    if (impl->dev) rtlsdr_set_bias_tee(impl->dev, 0);   // power Bias-T off on release
+    if (impl->dev) rtlsdr_cancel_async(impl->dev);
+    if (impl->rtlThread.joinable()) impl->rtlThread.join();
     impl->teardownAudio();
     if (impl->frontend) { impl->frontend->stop(); delete impl->frontend; impl->frontend = nullptr; }
 
@@ -1147,29 +1138,6 @@ void LocalSdrShim::stopLocked() {
     if (impl->dev) rtlsdr_close(impl->dev);
     delete impl;
     LOGI("local SDR stopped");
-}
-
-// ── Media-control pause/resume (power the RTL down, keep the server up) ────────
-void LocalSdrShim::pauseRtl() {
-    std::lock_guard<std::mutex> life(g_lifecycle);
-    if (!p || !p->dev || p->decoderOnly || p->rtlPaused) return;
-    p->rtlPaused = true;
-    rtlsdr_set_bias_tee(p->dev, 0);                 // kill Bias-T (the big heat source)
-    rtlsdr_cancel_async(p->dev);                    // stop the IQ stream
-    if (p->rtlThread.joinable()) p->rtlThread.join();
-    p->teardownAudio();                             // stop demod/audio (FFT idles too)
-    LOGI("local RTL paused (powered down)");
-}
-
-void LocalSdrShim::resumeRtl() {
-    std::lock_guard<std::mutex> life(g_lifecycle);
-    if (!p || !p->dev || p->decoderOnly || !p->rtlPaused) return;
-    p->rtlPaused = false;
-    if (p->biasTeeOn) rtlsdr_set_bias_tee(p->dev, 1);  // restore Bias-T if it was on
-    p->buildAudio();                                // rebuild demod chain
-    Impl* impl = p;
-    impl->rtlThread = std::thread([impl]{ rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); });
-    LOGI("local RTL resumed");
 }
 
 // ── Decoder-only sidecar (network backends) ───────────────────────────────────
@@ -1223,9 +1191,7 @@ void LocalSdrShim::setPpm(int ppm) {
     rtlsdr_set_freq_correction(p->dev, ppm); LOGI("ppm: %d", ppm);
 }
 void LocalSdrShim::setBiasTee(bool on) {
-    if (!p) return;
-    p->biasTeeOn = on;                    // cache so resume restores it
-    if (!p->dev) return;
+    if (!p || !p->dev) return;
     rtlsdr_set_bias_tee(p->dev, on ? 1 : 0); LOGI("bias-tee: %d", on);
 }
 void LocalSdrShim::setAgc(bool on) {

@@ -98,9 +98,6 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
         var reactContext: ReactApplicationContext? = null
         @Volatile var instance: VibeStreamService? = null
-        // Set by LocalAudioPlayer BEFORE startExternalAudio (the service starts
-        // async, so instance is null at that point — a static survives the race).
-        @Volatile var nextExternalIsLocal = false
     }
 
     private var mediaSession: MediaSessionCompat? = null
@@ -108,8 +105,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     // ── Engine state ─────────────────────────────────────────────────────────
     @Volatile private var running = false
-    @Volatile private var externalAudio = false   // OWRX/Kiwi/local: raw PCM pushed from JS
-    @Volatile var localExternal = false           // external audio is LOCAL hardware (pause = mute, not stop)
+    @Volatile private var externalAudio = false   // OWRX/Kiwi: raw PCM pushed from JS
     @Volatile private var muted = false
     @Volatile private var volume = 1f
     @Volatile private var currentFreq = 14_074_000L
@@ -265,24 +261,6 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         super.onDestroy()
     }
 
-    // App swiped from recents: release the local SDR (USB device + localhost
-    // port) and stop audio + the service immediately. Without this the
-    // foreground service lingered for several seconds holding the shim, so an
-    // immediate relaunch collided with the still-alive instance → spinning
-    // wheel. (Background audio still works on screen-lock — that's not a task
-    // removal.)
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.i(TAG, "onTaskRemoved — releasing local SDR + stopping service")
-        // The shim teardown joins threads + closes USB and can be slow on
-        // low-end phones — do it OFF the main thread so onTaskRemoved can't block
-        // the process shutdown (a stall here left a wedged state on relaunch).
-        Thread { try { VibeLocalSDR.stopSpectrum() } catch (_: Throwable) {} }.start()
-        stopExternalAudio()
-        stopEngine()
-        stopSelf()
-        super.onTaskRemoved(rootIntent)
-    }
-
     // ── Engine control (called from VibeStreamModule / media controls) ───────
 
     fun startAudioEngine(baseUrl: String, frequency: Long, mode: String, uuid: String, password: String) {
@@ -395,30 +373,6 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         // WS on the VibeMuted event and shows an in-app reconnect prompt, so a
         // (profile-resetting) reconnect is always a deliberate user action.
         if (externalAudio) {
-            if (localExternal) {
-                // Local hardware: power the RTL down on pause (Bias-T off + stop
-                // the IQ stream/demod — saves battery + heat, RTL-SDRs run hot)
-                // and bring it back on play. The localhost server + clients stay
-                // connected so resume is instant. Run the (blocking) RTL stop/
-                // start off the main thread so the media button never ANRs.
-                if (m) {
-                    // Release audio focus on pause (symmetry with UberSDR's working
-                    // pause). Holding focus while silent makes the system disbelieve
-                    // a later PLAYING state → the play button "springs" back to pause.
-                    abandonAudioFocus()
-                    extQueue.clear()
-                    Thread { try { VibeLocalSDR.pauseRtl() } catch (_: Throwable) {} }.start()
-                } else {
-                    requestAudioFocus()
-                    Thread { try { VibeLocalSDR.resumeRtl() } catch (_: Throwable) {} }.start()
-                }
-                mainHandler.post {
-                    updatePlaybackState(if (m) PlaybackStateCompat.STATE_PAUSED else PlaybackStateCompat.STATE_PLAYING)
-                    updateMetadataSession()
-                    updateNotification()
-                }
-                return
-            }
             if (m) mainHandler.post { stopExternalAudio() }
             return
         }
@@ -521,10 +475,9 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private val extQueue = LinkedBlockingDeque<Triple<Int, Int, ShortArray>>(64)
 
     fun startExternalAudio(rate: Int) {
-        Log.i(TAG, "startExternalAudio $rate local=$nextExternalIsLocal")
+        Log.i(TAG, "startExternalAudio $rate")
         stopEngine()                       // tear down any opus path
         externalAudio = true
-        localExternal = nextExternalIsLocal   // pick up the flag set before start
         running = true
         muted = false
         dataSaverDisconnected = false

@@ -13,7 +13,6 @@ const Vibe = NativeModules.VibePowerModule as {
   pushExternalPcm?: (b64: string, rate: number, channels: number) => void;
   stopExternalAudio?: () => void;
   setInstanceName?: (name: string) => void;
-  setExternalLocalMode?: (on: boolean) => void;
 } | undefined;
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -52,10 +51,6 @@ export default function LocalAudioPlayer(
     if (port == null) return;
     let closed = false;
 
-    // Tell the native engine this external audio is LOCAL hardware, so a media
-    // pause mutes/resumes instead of the OWRX/Kiwi full-stop.
-    Vibe?.setExternalLocalMode?.(true);
-
     const sock = new WebSocket(`ws://127.0.0.1:${port}/ws/audio`);
     sock.binaryType = 'arraybuffer';
     ws.current = sock;
@@ -75,14 +70,7 @@ export default function LocalAudioPlayer(
       const rate     = dv.getUint32(2, true);
       const pcm      = new Uint8Array(buf, 6);
       if (!started.current || rate !== lastRate.current) {
-        if (!started.current) {
-          Vibe?.startExternalAudio?.(rate);
-          started.current = true;
-          // Mark LOCAL mode AFTER the service exists (startExternalAudio creates
-          // it) — the on-mount call no-ops because the service isn't up yet, and
-          // without the flag pause hit the OWRX/Kiwi full-teardown path.
-          Vibe?.setExternalLocalMode?.(true);
-        }
+        if (!started.current) { Vibe?.startExternalAudio?.(rate); started.current = true; }
         lastRate.current = rate;
       }
       Vibe?.pushExternalPcm?.(bytesToBase64(pcm), rate, channels === 2 ? 2 : 1);
@@ -95,7 +83,6 @@ export default function LocalAudioPlayer(
       closed = true;
       try { sock.close(); } catch {}
       ws.current = null;
-      Vibe?.setExternalLocalMode?.(false);
       if (started.current) { Vibe?.stopExternalAudio?.(); started.current = false; }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps

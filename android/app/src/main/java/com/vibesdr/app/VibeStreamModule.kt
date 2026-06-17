@@ -103,14 +103,6 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun setMuted(muted: Boolean) { VibeStreamService.instance?.setMutedNative(muted) }
 
-    /** Mark the external-audio source as LOCAL hardware (pause = mute, not the
-     *  OWRX/Kiwi full-stop). Set by LocalAudioPlayer for its lifetime. */
-    @ReactMethod
-    fun setExternalLocalMode(on: Boolean) {
-        VibeStreamService.nextExternalIsLocal = on     // survives the async service start
-        VibeStreamService.instance?.localExternal = on // also update a live instance
-    }
-
     @ReactMethod
     fun setVolume(volume: Double) {
         VibeStreamService.instance?.setVolumeNative(volume.toFloat())

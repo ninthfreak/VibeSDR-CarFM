@@ -75,7 +75,6 @@ export default function InstancePickerScreen({ navigation }: Props) {
   const [error,       setError]         = useState<string | null>(null);
   const [customUrl,   setCustomUrl]     = useState('');
   const [connecting,  setConnecting]    = useState(false);
-  const [localShutdown, setLocalShutdown] = useState(false);  // releasing local hw before a network connect
   const [filter,      setFilter]        = useState('');
   const [defaultInst, setDefaultInst]   = useState<DefaultInstance | null>(null);
   // Tell native the default-instance name (or '' = none) so the Siri "open and
@@ -168,22 +167,6 @@ export default function InstancePickerScreen({ navigation }: Props) {
   const connect = useCallback(async (url: string, name: string, password?: string, serverLongitude?: number | null, serverType?: 'ubersdr' | 'kiwi' | 'owrx') => {
     if (!url) return;
     const cleaned = url.trim().replace(/\/$/, '');
-    // Fully release any local-hardware shim FIRST — it shares the audio engine,
-    // and a half-torn-down shim wedged the new network session. stopSpectrum
-    // resolves only once the RTL/USB + server are down (instant if nothing's
-    // running), so awaiting it guarantees a clean slate.
-    const Local = (NativeModules as any).VibeLocalSDR;
-    if (Local?.stopSpectrum) {
-      setLocalShutdown(true);
-      // Race a 5s timeout so a native stall can never wedge the overlay.
-      try {
-        await Promise.race([
-          Local.stopSpectrum(),
-          new Promise((res) => setTimeout(res, 5000)),
-        ]);
-      } catch {}
-      setLocalShutdown(false);
-    }
     setConnecting(true);
     try {
       const result = await checkConnection(cleaned, password);
@@ -471,18 +454,6 @@ export default function InstancePickerScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: C.bg }]}>
-      {localShutdown && (
-        <View style={{
-          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100,
-          backgroundColor: 'rgba(0,0,0,0.86)', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <ActivityIndicator size="large" color={C.amber} style={{ marginBottom: 18 }} />
-          <Text style={{ fontFamily: F, fontSize: fs(15), color: C.amber }}>Releasing local hardware…</Text>
-          <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 6 }}>
-            powering down the RTL-SDR before connecting
-          </Text>
-        </View>
-      )}
       <PasswordModal
         visible={!!pwModal}
         serverUrl={pwModal?.url ?? ''}

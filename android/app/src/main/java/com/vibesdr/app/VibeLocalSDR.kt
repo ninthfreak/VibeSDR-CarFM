@@ -70,8 +70,6 @@ object VibeLocalSDR {
     fun setNR(on: Boolean) { if (loaded) nativeSetNR(on) }
     fun setNrStrength(s: Float) { if (loaded) nativeSetNrStrength(s) }
     fun getNrCpu(): Float { return if (loaded) nativeGetNrCpu() else 0f }
-    fun pauseRtl() { if (loaded) nativePauseRtl() }
-    fun resumeRtl() { if (loaded) nativeResumeRtl() }
     fun startDecoderService(): Int { return if (loaded) nativeStartDecoderService() else -1 }
     fun feedDecoderPcm(b64: String, rate: Int) { if (loaded) nativeFeedDecoderPcm(b64, rate) }
     fun getTunerGains(): IntArray { return if (loaded) nativeGetTunerGains() ?: IntArray(0) else IntArray(0) }
@@ -95,8 +93,6 @@ object VibeLocalSDR {
     private external fun nativeSetNR(on: Boolean)
     private external fun nativeSetNrStrength(s: Float)
     private external fun nativeGetNrCpu(): Float
-    private external fun nativePauseRtl()
-    private external fun nativeResumeRtl()
     private external fun nativeStartDecoderService(): Int
     private external fun nativeFeedDecoderPcm(b64: String, rate: Int)
     private external fun nativeGetTunerGains(): IntArray?
