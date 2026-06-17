@@ -106,7 +106,10 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     /** Mark the external-audio source as LOCAL hardware (pause = mute, not the
      *  OWRX/Kiwi full-stop). Set by LocalAudioPlayer for its lifetime. */
     @ReactMethod
-    fun setExternalLocalMode(on: Boolean) { VibeStreamService.instance?.localExternal = on }
+    fun setExternalLocalMode(on: Boolean) {
+        VibeStreamService.nextExternalIsLocal = on     // survives the async service start
+        VibeStreamService.instance?.localExternal = on // also update a live instance
+    }
 
     @ReactMethod
     fun setVolume(volume: Double) {

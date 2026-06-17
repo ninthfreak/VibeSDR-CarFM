@@ -98,6 +98,9 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
         var reactContext: ReactApplicationContext? = null
         @Volatile var instance: VibeStreamService? = null
+        // Set by LocalAudioPlayer BEFORE startExternalAudio (the service starts
+        // async, so instance is null at that point — a static survives the race).
+        @Volatile var nextExternalIsLocal = false
     }
 
     private var mediaSession: MediaSessionCompat? = null
@@ -515,9 +518,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private val extQueue = LinkedBlockingDeque<Triple<Int, Int, ShortArray>>(64)
 
     fun startExternalAudio(rate: Int) {
-        Log.i(TAG, "startExternalAudio $rate")
+        Log.i(TAG, "startExternalAudio $rate local=$nextExternalIsLocal")
         stopEngine()                       // tear down any opus path
         externalAudio = true
+        localExternal = nextExternalIsLocal   // pick up the flag set before start
         running = true
         muted = false
         dataSaverDisconnected = false
