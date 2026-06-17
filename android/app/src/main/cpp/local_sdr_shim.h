@@ -22,6 +22,13 @@ public:
     void stop();
     bool isRunning() const;
 
+    // Media-control pause/resume for local hardware: power the RTL down (Bias-T
+    // off, stop the IQ stream + demod) to save battery/heat, while keeping the
+    // localhost server + clients connected — so resume is instant (no USB
+    // reopen, no port change, no reconnect). No-op if not running / wrong state.
+    void pauseRtl();
+    void resumeRtl();
+
     // Decoder-only "sidecar" mode for network backends (Kiwi/OWRX): starts just
     // the localhost /ws/dxcluster server + the decoder modules, NO RTL/FFT/demod.
     // The app feeds it the backend's decoded audio via feedDecoderPcm(); the

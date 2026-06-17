@@ -155,6 +155,8 @@ ModeParams paramsFor(const std::string& mode) {
 // ── Impl ────────────────────────────────────────────────────────────────────
 struct LocalSdrShim::Impl {
     bool decoderOnly = false;             // sidecar mode: decoders only, no RTL
+    bool rtlPaused   = false;             // media-control pause: RTL powered down
+    bool biasTeeOn   = false;             // cached Bias-T state (restore on resume)
     std::vector<float> pcmResid;          // upsample carry (fractional sample pos)
     double pcmAcc = 0.0;
     // device / params
@@ -1140,6 +1142,29 @@ void LocalSdrShim::stopLocked() {
     LOGI("local SDR stopped");
 }
 
+// ── Media-control pause/resume (power the RTL down, keep the server up) ────────
+void LocalSdrShim::pauseRtl() {
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (!p || !p->dev || p->decoderOnly || p->rtlPaused) return;
+    p->rtlPaused = true;
+    rtlsdr_set_bias_tee(p->dev, 0);                 // kill Bias-T (the big heat source)
+    rtlsdr_cancel_async(p->dev);                    // stop the IQ stream
+    if (p->rtlThread.joinable()) p->rtlThread.join();
+    p->teardownAudio();                             // stop demod/audio (FFT idles too)
+    LOGI("local RTL paused (powered down)");
+}
+
+void LocalSdrShim::resumeRtl() {
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (!p || !p->dev || p->decoderOnly || !p->rtlPaused) return;
+    p->rtlPaused = false;
+    if (p->biasTeeOn) rtlsdr_set_bias_tee(p->dev, 1);  // restore Bias-T if it was on
+    p->buildAudio();                                // rebuild demod chain
+    Impl* impl = p;
+    impl->rtlThread = std::thread([impl]{ rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); });
+    LOGI("local RTL resumed");
+}
+
 // ── Decoder-only sidecar (network backends) ───────────────────────────────────
 int LocalSdrShim::startDecoderService(std::string& err) {
     std::lock_guard<std::mutex> life(g_lifecycle);
@@ -1191,7 +1216,9 @@ void LocalSdrShim::setPpm(int ppm) {
     rtlsdr_set_freq_correction(p->dev, ppm); LOGI("ppm: %d", ppm);
 }
 void LocalSdrShim::setBiasTee(bool on) {
-    if (!p || !p->dev) return;
+    if (!p) return;
+    p->biasTeeOn = on;                    // cache so resume restores it
+    if (!p->dev) return;
     rtlsdr_set_bias_tee(p->dev, on ? 1 : 0); LOGI("bias-tee: %d", on);
 }
 void LocalSdrShim::setAgc(bool on) {

@@ -390,17 +390,20 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         // (profile-resetting) reconnect is always a deliberate user action.
         if (externalAudio) {
             if (localExternal) {
-                // Local hardware: no server profile to reset, so pause just
-                // mutes/resumes the engine (keep it + the media controls alive).
-                // The ext writer silences while muted and PCM resumes on play.
+                // Local hardware: power the RTL down on pause (Bias-T off + stop
+                // the IQ stream/demod — saves battery + heat, RTL-SDRs run hot)
+                // and bring it back on play. The localhost server + clients stay
+                // connected so resume is instant. Run the (blocking) RTL stop/
+                // start off the main thread so the media button never ANRs.
+                if (m) {
+                    extQueue.clear()
+                    Thread { try { VibeLocalSDR.pauseRtl() } catch (_: Throwable) {} }.start()
+                } else {
+                    requestAudioFocus()
+                    Thread { try { VibeLocalSDR.resumeRtl() } catch (_: Throwable) {} }.start()
+                }
                 mainHandler.post {
-                    if (m) {
-                        extQueue.clear()
-                        updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
-                    } else {
-                        requestAudioFocus()
-                        updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
-                    }
+                    updatePlaybackState(if (m) PlaybackStateCompat.STATE_PAUSED else PlaybackStateCompat.STATE_PLAYING)
                     updateNotification()
                 }
                 return
