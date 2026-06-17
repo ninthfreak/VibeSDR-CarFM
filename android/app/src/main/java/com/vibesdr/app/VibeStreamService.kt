@@ -396,6 +396,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 // connected so resume is instant. Run the (blocking) RTL stop/
                 // start off the main thread so the media button never ANRs.
                 if (m) {
+                    // Release audio focus on pause (symmetry with UberSDR's working
+                    // pause). Holding focus while silent makes the system disbelieve
+                    // a later PLAYING state → the play button "springs" back to pause.
+                    abandonAudioFocus()
                     extQueue.clear()
                     Thread { try { VibeLocalSDR.pauseRtl() } catch (_: Throwable) {} }.start()
                 } else {
@@ -404,6 +408,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 }
                 mainHandler.post {
                     updatePlaybackState(if (m) PlaybackStateCompat.STATE_PAUSED else PlaybackStateCompat.STATE_PLAYING)
+                    updateMetadataSession()
                     updateNotification()
                 }
                 return
