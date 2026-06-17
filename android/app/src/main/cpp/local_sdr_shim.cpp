@@ -1111,8 +1111,15 @@ void LocalSdrShim::stopLocked() {
 
     // Stop data producers/consumers FIRST (they touch impl + the sockets).
     impl->serverRunning.store(false);
-    if (impl->dev) rtlsdr_cancel_async(impl->dev);
-    if (impl->rtlThread.joinable()) impl->rtlThread.join();
+    // Only cancel/join the IQ stream when it's actually running. If the RTL was
+    // media-paused (rtlPaused → async already cancelled, thread already joined),
+    // calling rtlsdr_cancel_async again blocks forever — that was the stop() hang
+    // that wedged the "Releasing local hardware" overlay on local→network.
+    if (impl->dev && impl->rtlThread.joinable()) {
+        rtlsdr_cancel_async(impl->dev);
+        impl->rtlThread.join();
+    }
+    if (impl->dev) rtlsdr_set_bias_tee(impl->dev, 0);   // power Bias-T off on release
     impl->teardownAudio();
     if (impl->frontend) { impl->frontend->stop(); delete impl->frontend; impl->frontend = nullptr; }
 

@@ -175,7 +175,13 @@ export default function InstancePickerScreen({ navigation }: Props) {
     const Local = (NativeModules as any).VibeLocalSDR;
     if (Local?.stopSpectrum) {
       setLocalShutdown(true);
-      try { await Local.stopSpectrum(); } catch {}
+      // Race a 5s timeout so a native stall can never wedge the overlay.
+      try {
+        await Promise.race([
+          Local.stopSpectrum(),
+          new Promise((res) => setTimeout(res, 5000)),
+        ]);
+      } catch {}
       setLocalShutdown(false);
     }
     setConnecting(true);
