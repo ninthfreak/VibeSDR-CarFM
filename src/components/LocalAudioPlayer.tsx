@@ -13,6 +13,7 @@ const Vibe = NativeModules.VibePowerModule as {
   pushExternalPcm?: (b64: string, rate: number, channels: number) => void;
   stopExternalAudio?: () => void;
   setInstanceName?: (name: string) => void;
+  setExternalLocalMode?: (on: boolean) => void;
 } | undefined;
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -51,6 +52,10 @@ export default function LocalAudioPlayer(
     if (port == null) return;
     let closed = false;
 
+    // Tell the native engine this external audio is LOCAL hardware, so a media
+    // pause mutes/resumes instead of the OWRX/Kiwi full-stop.
+    Vibe?.setExternalLocalMode?.(true);
+
     const sock = new WebSocket(`ws://127.0.0.1:${port}/ws/audio`);
     sock.binaryType = 'arraybuffer';
     ws.current = sock;
@@ -83,6 +88,7 @@ export default function LocalAudioPlayer(
       closed = true;
       try { sock.close(); } catch {}
       ws.current = null;
+      Vibe?.setExternalLocalMode?.(false);
       if (started.current) { Vibe?.stopExternalAudio?.(); started.current = false; }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps

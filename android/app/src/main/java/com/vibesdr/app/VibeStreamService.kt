@@ -105,7 +105,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     // ── Engine state ─────────────────────────────────────────────────────────
     @Volatile private var running = false
-    @Volatile private var externalAudio = false   // OWRX/Kiwi: raw PCM pushed from JS
+    @Volatile private var externalAudio = false   // OWRX/Kiwi/local: raw PCM pushed from JS
+    @Volatile var localExternal = false           // external audio is LOCAL hardware (pause = mute, not stop)
     @Volatile private var muted = false
     @Volatile private var volume = 1f
     @Volatile private var currentFreq = 14_074_000L
@@ -373,6 +374,22 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         // WS on the VibeMuted event and shows an in-app reconnect prompt, so a
         // (profile-resetting) reconnect is always a deliberate user action.
         if (externalAudio) {
+            if (localExternal) {
+                // Local hardware: no server profile to reset, so pause just
+                // mutes/resumes the engine (keep it + the media controls alive).
+                // The ext writer silences while muted and PCM resumes on play.
+                mainHandler.post {
+                    if (m) {
+                        extQueue.clear()
+                        updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
+                    } else {
+                        requestAudioFocus()
+                        updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
+                    }
+                    updateNotification()
+                }
+                return
+            }
             if (m) mainHandler.post { stopExternalAudio() }
             return
         }
