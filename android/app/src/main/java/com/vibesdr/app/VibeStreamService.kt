@@ -86,7 +86,19 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         const val ACTION_PREV = "com.vibesdr.app.PREV"
         const val ACTION_START = "com.vibesdr.app.START"
         const val ACTION_START_EXTERNAL = "com.vibesdr.app.START_EXTERNAL"
+        // Local hardware (V4): the on-device shim's /ws/audio consumed NATIVELY, so
+        // audio + the media card survive backgrounding (JS owns only the spectrum
+        // WS, which is paused in the background to save power).
+        const val ACTION_START_LOCAL = "com.vibesdr.app.START_LOCAL"
+        const val EXTRA_PORT = "port"
+        const val EXTRA_TUNE = "tune"
         const val EXTRA_RATE = "rate"
+        // External-audio pause behaviour: "release" (OWRX — pause disconnects AND
+        // drops the media card; reconnect resets the server profile so play isn't
+        // offered), "reconnect" (Kiwi — pause disconnects but keeps the card, play
+        // reconnects, same as UberSDR), "resume" (local USB SDR — pause mutes in
+        // place keeping USB/shim alive, play resumes).
+        const val EXTRA_PAUSE_MODE = "pauseMode"
         const val EXTRA_BASE_URL = "baseUrl"
         const val EXTRA_FREQUENCY = "frequency"
         const val EXTRA_MODE = "mode"
@@ -105,7 +117,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     // ── Engine state ─────────────────────────────────────────────────────────
     @Volatile private var running = false
-    @Volatile private var externalAudio = false   // OWRX/Kiwi: raw PCM pushed from JS
+    @Volatile private var externalAudio = false   // OWRX/Kiwi/local: raw PCM pushed from JS
+    @Volatile private var externalPauseMode = "release"  // see EXTRA_PAUSE_MODE
     @Volatile private var muted = false
     @Volatile private var volume = 1f
     @Volatile private var currentFreq = 14_074_000L
@@ -243,10 +256,17 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 val pw = intent.getStringExtra(EXTRA_PASSWORD) ?: ""
                 startAudioEngine(base, freq, mode, uuid, pw)
             }
-            ACTION_START_EXTERNAL -> startExternalAudio(intent.getIntExtra(EXTRA_RATE, 48000))
+            ACTION_START_EXTERNAL -> startExternalAudio(intent.getIntExtra(EXTRA_RATE, 48000), intent.getStringExtra(EXTRA_PAUSE_MODE) ?: "release")
+            ACTION_START_LOCAL -> startLocalAudio(intent.getIntExtra(EXTRA_PORT, 0), intent.getStringExtra(EXTRA_TUNE) ?: "")
             ACTION_PLAY -> setMutedNative(false)
             ACTION_PAUSE -> setMutedNative(true)
-            ACTION_STOP -> { stopEngine(); stopSelf(); return START_NOT_STICKY }
+            // stopSelf(startId) — NOT bare stopSelf() — so a reconnect (AudioPlayer
+            // fires stopAudioEngine→ACTION_STOP then startAudioEngine→ACTION_START
+            // back-to-back) doesn't destroy the service in the gap: if a newer START
+            // is already queued, stopSelf(startId) is ignored and the service (and
+            // its MediaSession/notification card) survives — startAudioEngine just
+            // reconfigures it. Bare stopSelf() killed the card on every reconnect.
+            ACTION_STOP -> { stopEngine(); stopSelf(startId); return START_NOT_STICKY }
             ACTION_NEXT -> tuneByStep(+1)
             ACTION_PREV -> tuneByStep(-1)
         }
@@ -296,6 +316,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         // engine in external mode (which made UberSDR pause take the external path
         // → media-control "pause springs back to play").
         externalAudio = false
+        externalPauseMode = "release"
+        localAudioWs?.cancel(); localAudioWs = null; lastLocalTune = null
         extThread?.interrupt(); extThread = null
         extQueue.clear()
         extTrack?.release(); extTrack = null; extRate = 0
@@ -373,7 +395,30 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         // WS on the VibeMuted event and shows an in-app reconnect prompt, so a
         // (profile-resetting) reconnect is always a deliberate user action.
         if (externalAudio) {
-            if (m) mainHandler.post { stopExternalAudio() }
+            when (externalPauseMode) {
+                "resume" -> {
+                    // Local USB SDR: no server to disconnect. The RTL/shim keep
+                    // running and pushExternalPcm drops samples while muted, so just
+                    // mute in place and keep the media card (▶ resumes). Preserves
+                    // USB state — no teardown.
+                    mainHandler.post {
+                        updatePlaybackState(if (m) PlaybackStateCompat.STATE_PAUSED else PlaybackStateCompat.STATE_PLAYING)
+                        updateNotification()
+                    }
+                }
+                "reconnect" -> {
+                    // Kiwi: behave like UberSDR — pause disconnects but keeps the
+                    // disconnect card (▶), play does a full reconnect. JS closes/
+                    // reopens its WS off the VibeDataSaver* events these emit.
+                    mainHandler.post { if (m) disconnectForPause() else resumeFromDataSaver() }
+                }
+                else -> {
+                    // OWRX ("release"): pause disconnects AND drops the card (an
+                    // OWRX reconnect resets the server profile, so no play-to-
+                    // reconnect). JS closes its WS off VibeMuted + shows a prompt.
+                    if (m) mainHandler.post { stopExternalAudio() }
+                }
+            }
             return
         }
         // UberSDR — Pause = disconnect, Play = reconnect (disconnect card + ▶).
@@ -474,10 +519,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     // (rate, channels, interleaved int16 samples)
     private val extQueue = LinkedBlockingDeque<Triple<Int, Int, ShortArray>>(64)
 
-    fun startExternalAudio(rate: Int) {
-        Log.i(TAG, "startExternalAudio $rate")
+    fun startExternalAudio(rate: Int, pauseMode: String = "release") {
+        Log.i(TAG, "startExternalAudio $rate pauseMode=$pauseMode")
         stopEngine()                       // tear down any opus path
         externalAudio = true
+        externalPauseMode = pauseMode
         running = true
         muted = false
         dataSaverDisconnected = false
@@ -511,6 +557,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     fun stopExternalAudio() {
         Log.i(TAG, "stopExternalAudio")
         externalAudio = false
+        externalPauseMode = "release"
+        localAudioWs?.cancel(); localAudioWs = null; lastLocalTune = null
         running = false
         extThread?.interrupt(); extThread = null
         extQueue.clear()
@@ -518,6 +566,79 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         mediaSession?.isActive = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
         else { @Suppress("DEPRECATION") stopForeground(true) }
+    }
+
+    // ── Local hardware audio (V4) — native /ws/audio consumer ────────────────
+    // The on-device shim serves demodulated PCM on ws://127.0.0.1:<port>/ws/audio.
+    // We read it HERE (OkHttp, native) rather than in JS so audio + the media card
+    // survive backgrounding — the foreground service keeps the process (and the
+    // in-process shim) alive. JS owns only the spectrum WS, which it pauses in the
+    // background to save power. Tune/mode/bandwidth changes ride this same WS as
+    // JSON (sendLocalTune), since that's the shim's control channel.
+    @Volatile private var localAudioWs: WebSocket? = null
+    @Volatile private var lastLocalTune: String? = null
+
+    fun startLocalAudio(port: Int, initialTune: String) {
+        Log.i(TAG, "startLocalAudio port=$port")
+        if (port <= 0) return
+        startExternalAudio(48_000, "resume")   // external PCM engine; local pause = mute
+        lastLocalTune = if (initialTune.isNotEmpty()) initialTune else null
+        val client = httpClient ?: OkHttpClient.Builder()
+            .pingInterval(20, TimeUnit.SECONDS)
+            .build().also { httpClient = it }
+        localAudioWs?.cancel()
+        localAudioWs = client.newWebSocket(
+            Request.Builder().url("ws://127.0.0.1:$port/ws/audio").build(),
+            object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    lastLocalTune?.let { webSocket.send(it) }
+                }
+                override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                    if (!externalAudio || muted) return
+                    val b = bytes.toByteArray()
+                    if (b.size <= 6) return
+                    // Frame: [0]=channels, [2..5]=rate (LE u32), [6..]=int16 LE PCM.
+                    val channels = b[0].toInt() and 0xFF
+                    val rate = ByteBuffer.wrap(b, 2, 4).order(ByteOrder.LITTLE_ENDIAN).int
+                    val n = (b.size - 6) / 2
+                    if (n <= 0 || rate <= 0) return
+                    val shorts = ShortArray(n)
+                    ByteBuffer.wrap(b, 6, n * 2).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts)
+                    lastPacketAt = SystemClock.elapsedRealtime()
+                    packetCount++
+                    extQueue.offer(Triple(rate, if (channels == 2) 2 else 1, shorts))  // drop when full
+                }
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    Log.w(TAG, "local audio WS failure: ${t.message}")
+                }
+            })
+    }
+
+    /** Forward a tune/mode/bandwidth change to the shim over the audio WS. Also
+     *  refresh the media metadata from the tune itself (frequency/mode) so the
+     *  now-playing title updates instantly when skipping in the BACKGROUND — JS's
+     *  setNowPlaying is debounced and Android throttles its timers when backgrounded,
+     *  so the title would otherwise lag. JS still refines it (station name) on the
+     *  next foreground tick. Mirrors the UberSDR tuneByStep behaviour. */
+    fun sendLocalTune(json: String) {
+        lastLocalTune = json
+        localAudioWs?.send(json)
+        try {
+            val o = JSONObject(json)
+            val f = o.optLong("frequency", -1)
+            val m = o.optString("mode", "")
+            if (f > 0) currentFreq = f
+            if (m.isNotEmpty()) currentMode = m
+            npTitle = null; npArtist = null   // fall back to "freq · mode" until JS catches up
+            mainHandler.post { updateMetadataSession(); updateNotification() }
+        } catch (_: Exception) { }
+    }
+
+    fun stopLocalAudio() {
+        Log.i(TAG, "stopLocalAudio")
+        localAudioWs?.cancel(); localAudioWs = null
+        lastLocalTune = null
+        stopExternalAudio()
     }
 
     private fun startExtWriter() {
@@ -1421,6 +1542,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             when {
                 reconnectFailed -> { drawInsetGlyph(canvas, dst, "⛔", null); drawBadge(canvas, dst, "❗") }
                 dataSaverDisconnected -> drawInsetGlyph(canvas, dst, "⛔", null)
+                // Local hardware (RTL-SDR): the custom USB-SDR icon (same as the
+                // LOCAL HARDWARE menu card) on a dark inset, so its card is distinct
+                // from a network UberSDR session.
+                npArtworkType == "local" -> drawInsetVector(canvas, dst, R.drawable.ic_local_sdr)
                 else -> {
                     val overlayId = resources.getIdentifier("logo_$npArtworkType", "drawable", packageName)
                     if (overlayId != 0) {
@@ -1434,6 +1559,19 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         } catch (e: Exception) {
             Log.w(TAG, "artwork composite failed: ${e.message}")
         }
+    }
+
+    /** Inset a vector drawable (e.g. the local USB-SDR icon) on the same dark
+     *  rounded box drawInsetGlyph uses, so it reads over the app artwork. */
+    private fun drawInsetVector(canvas: android.graphics.Canvas, dst: android.graphics.RectF, drawableId: Int) {
+        val bg = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC101418.toInt() }
+        val r = dst.width() * 0.18f
+        canvas.drawRoundRect(dst, r, r, bg)
+        val d = androidx.core.content.ContextCompat.getDrawable(this, drawableId) ?: return
+        val padIn = dst.width() * 0.16f
+        d.setBounds((dst.left + padIn).toInt(), (dst.top + padIn).toInt(),
+                    (dst.right - padIn).toInt(), (dst.bottom - padIn).toInt())
+        d.draw(canvas)
     }
 
     private fun drawInsetGlyph(canvas: android.graphics.Canvas, dst: android.graphics.RectF, glyph: String, sub: String?) {

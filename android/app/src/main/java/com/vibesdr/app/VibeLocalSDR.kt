@@ -70,7 +70,10 @@ object VibeLocalSDR {
     fun setNR(on: Boolean) { if (loaded) nativeSetNR(on) }
     fun setNrStrength(s: Float) { if (loaded) nativeSetNrStrength(s) }
     fun getNrCpu(): Float { return if (loaded) nativeGetNrCpu() else 0f }
-    fun startDecoderService(): Int { return if (loaded) nativeStartDecoderService() else -1 }
+    // ensureLoaded() FIRST: on Kiwi (and any network backend) the native lib is
+    // never loaded by a local-hardware session, so without this the decoder sidecar
+    // returned -1 and feedDecoderPcm no-op'd → decoders/spots produced no output.
+    fun startDecoderService(): Int { ensureLoaded(); return if (loaded) nativeStartDecoderService() else -1 }
     fun feedDecoderPcm(b64: String, rate: Int) { if (loaded) nativeFeedDecoderPcm(b64, rate) }
     fun getTunerGains(): IntArray { return if (loaded) nativeGetTunerGains() ?: IntArray(0) else IntArray(0) }
 

@@ -1222,8 +1222,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     }).catch(() => {});
 
     return () => { cancelled = true; dc.destroy(); decoderClient.current = null; };
+  // decoderBase is async for Kiwi (null until the native decoder sidecar's port
+  // arrives from startDecoderService) — it MUST be a dep, or the DecoderClient is
+  // never (re)built when the port lands, leaving Kiwi decoders/spots with no output.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl, sessionUuid]);
+  }, [baseUrl, sessionUuid, decoderBase]);
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
   const [selDecoder, setSelDecoder] =
@@ -2670,7 +2673,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         artist = `VibeSDR: ${context}`;
       }
       VibePowerModule?.setNowPlaying(title, artist);
-      VibePowerModule?.setArtwork(route.params.serverType ?? 'ubersdr');  // native caches per type
+      // Local hardware reuses serverType 'ubersdr' for the client, but gets its own
+      // album-art inset ('local' → 📡 glyph) so the card is distinct from a network
+      // UberSDR session.
+      VibePowerModule?.setArtwork(route.params.isLocal ? 'local' : (route.params.serverType ?? 'ubersdr'));  // native caches per type
     }, 300);
     return () => clearTimeout(t);
   }, [status.frequency, status.mode, step, freqUnit, ituRegion, mediaSkip,
@@ -2965,6 +2971,16 @@ export default function SDRScreen({ route, navigation }: Props) {
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
           onPress={() => { setDataSaverOff(false); unmute(); fullReconnect(); }} activeOpacity={0.85}>
           <Text style={styles.mutedBannerText}>⏸ PAUSED — TAP TO RECONNECT</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Local hardware muted (media-control pause): the RTL/waterfall keep running,
+          only audio is muted. Tap unmutes + clears the media-control paused state.
+          (Network instances disconnect on pause, so this is local-only.) */}
+      {isLocal && isMuted && !dataSaverOff && !reconnectFailedUi && (
+        <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
+          onPress={unmute} activeOpacity={0.85}>
+          <Text style={styles.mutedBannerText}>🔇 AUDIO MUTED — TAP TO UNMUTE</Text>
         </TouchableOpacity>
       )}
 

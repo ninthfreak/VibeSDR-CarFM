@@ -14,6 +14,7 @@
 
 #include <android/log.h>
 #include <rtl-sdr.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
@@ -159,6 +160,14 @@ struct LocalSdrShim::Impl {
     double pcmAcc = 0.0;
     // device / params
     rtlsdr_dev_t* dev = nullptr;
+    // Our OWN dup() of the USB fd. rtlsdr_open_sys_dev → libusb_wrap_sys_device
+    // does NOT take ownership of the fd, so if we used Kotlin's fd directly the
+    // detached teardown thread (rtlsdr_cancel_async / joins / rtlsdr_close) would
+    // race Kotlin's UsbDeviceConnection.close() on that same fd → use-after-free
+    // SIGSEGV. dup() gives us an independent fd to the same open file description:
+    // Kotlin closing its copy can't pull the rug from libusb, and we close ours
+    // after rtlsdr_close on the teardown thread.
+    int usbFd = -1;
     double sampleRate = 2400000.0;
     int    fftSize    = 1024;
     double fftRate    = 20.0;
@@ -1054,8 +1063,10 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     impl->mode = mode.empty() ? "nfm" : mode;
     impl->fftBuf.assign(fftSize, -256.0f);
 
-    int ret = rtlsdr_open_sys_dev(&impl->dev, (intptr_t)fd);
-    if (ret != 0 || !impl->dev) { err = "rtlsdr_open_sys_dev failed: " + std::to_string(ret); delete impl; return -1; }
+    impl->usbFd = dup(fd);
+    if (impl->usbFd < 0) { err = "dup(usb fd) failed"; delete impl; return -1; }
+    int ret = rtlsdr_open_sys_dev(&impl->dev, (intptr_t)impl->usbFd);
+    if (ret != 0 || !impl->dev) { err = "rtlsdr_open_sys_dev failed: " + std::to_string(ret); ::close(impl->usbFd); delete impl; return -1; }
     rtlsdr_set_sample_rate(impl->dev, (uint32_t)sampleRate);
     rtlsdr_set_center_freq(impl->dev, (uint32_t)llround(centerFreq));
     if (gainTenthDb < 0) rtlsdr_set_tuner_gain_mode(impl->dev, 0);
@@ -1081,7 +1092,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     }
     if (!impl->listener) {
         err = "could not bind localhost port";
-        impl->teardownAudio(); impl->frontend->stop(); delete impl->frontend; rtlsdr_close(impl->dev); delete impl; return -1;
+        impl->teardownAudio(); impl->frontend->stop(); delete impl->frontend; rtlsdr_close(impl->dev); ::close(impl->usbFd); delete impl; return -1;
     }
     impl->port = chosen;
     impl->serverRunning.store(true);
@@ -1141,6 +1152,9 @@ void LocalSdrShim::stopLocked() {
       impl->connThreads.clear(); }
 
     if (impl->dev) rtlsdr_close(impl->dev);
+    // Close our own dup last (rtlsdr_close/libusb don't own it). Kotlin's
+    // UsbDeviceConnection.close() races us harmlessly now — it's a different fd.
+    if (impl->usbFd >= 0) { ::close(impl->usbFd); impl->usbFd = -1; }
     delete impl;
     LOGI("local SDR stopped");
 }

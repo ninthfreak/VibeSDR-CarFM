@@ -1,0 +1,60 @@
+<!-- USB-SDR (local hardware) icon — mirrors src/components/UsbSdrIcon.tsx.
+     USB trident with an antenna (mast + tip dot + radio waves) rising from its
+     left node. Amber (#ffb833) to match the LOCAL HARDWARE menu card. Rendered
+     into the now-playing album-art inset by VibeStreamService.refreshArtwork(). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- radio waves off the top -->
+    <path android:pathData="M7.59,8.41 A2.3,2.3 0 0 0 6.26,5.57"
+        android:strokeColor="#ffb833" android:strokeWidth="1.4"
+        android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M9.58,9.06 A4.4,4.4 0 0 0 7.05,3.62"
+        android:strokeColor="#ffb833" android:strokeWidth="1.4"
+        android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M3.21,8.41 A2.3,2.3 0 0 1 4.54,5.57"
+        android:strokeColor="#ffb833" android:strokeWidth="1.4"
+        android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M1.22,9.06 A4.4,4.4 0 0 1 3.75,3.62"
+        android:strokeColor="#ffb833" android:strokeWidth="1.4"
+        android:strokeLineCap="round" android:strokeLineJoin="round" />
+
+    <!-- tip dot (filled circle r1.15 @ 5.4,7.7) -->
+    <path android:fillColor="#ffb833"
+        android:pathData="M4.25,7.7 a1.15,1.15 0 1,0 2.3,0 a1.15,1.15 0 1,0 -2.3,0 z" />
+
+    <!-- antenna mast -->
+    <path android:pathData="M5.4,8.9 L5.4,14.4"
+        android:strokeColor="#ffb833" android:strokeWidth="1.8"
+        android:strokeLineCap="round" android:strokeLineJoin="round" />
+
+    <!-- USB trident left node (filled circle r1.8 @ 5.4,15) -->
+    <path android:fillColor="#ffb833"
+        android:pathData="M3.6,15 a1.8,1.8 0 1,0 3.6,0 a1.8,1.8 0 1,0 -3.6,0 z" />
+
+    <!-- shaft -->
+    <path android:pathData="M5.4,15 L17.8,15"
+        android:strokeColor="#ffb833" android:strokeWidth="2.4"
+        android:strokeLineCap="round" android:strokeLineJoin="round" />
+
+    <!-- arrow head -->
+    <path android:fillColor="#ffb833"
+        android:pathData="M17.4,11.9 L22.3,15 L17.4,18.1 z" />
+
+    <!-- upper branch -> circle -->
+    <path android:pathData="M9.2,15 C9.2,12.1 11.2,11 12.6,11"
+        android:strokeColor="#ffb833" android:strokeWidth="2.4"
+        android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:fillColor="#ffb833"
+        android:pathData="M11.5,11 a1.6,1.6 0 1,0 3.2,0 a1.6,1.6 0 1,0 -3.2,0 z" />
+
+    <!-- lower branch -> square -->
+    <path android:pathData="M11.1,15 C11.1,17.9 13.1,19.4 14.1,19.4"
+        android:strokeColor="#ffb833" android:strokeWidth="2.4"
+        android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:fillColor="#ffb833"
+        android:pathData="M13.4,17.9 h3 v3 h-3 z" />
+</vector>

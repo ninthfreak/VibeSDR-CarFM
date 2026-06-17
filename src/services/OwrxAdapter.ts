@@ -23,7 +23,7 @@ import { NativeModules } from 'react-native';
 import { decodeOwrxFftFrame, OwrxAudioDecoder } from './imaAdpcm';
 
 const Vibe = NativeModules.VibePowerModule as {
-  startExternalAudio?: (rate: number) => void;
+  startExternalAudio?: (rate: number, pauseMode?: string) => void;
   pushExternalPcm?: (b64: string, rate: number, channels: number) => void;
   stopExternalAudio?: () => void;
 } | undefined;
@@ -784,7 +784,7 @@ export class OwrxAdapter implements SDRBackend {
     // the PCM rate by that factor and let the native resampler stretch it back to
     // correct speed + pitch. Only DAB (type-4) is scaled; WFM (also type-4) isn't.
     const playRate = String(this.mode) === 'dab' ? Math.round(rate * this.dabRateScale) : rate;
-    if (!this.audioStarted) { Vibe?.startExternalAudio?.(playRate); this.audioStarted = true; }
+    if (!this.audioStarted) { Vibe?.startExternalAudio?.(playRate, 'release'); this.audioStarted = true; }
     let pcm: Int16Array;
     if (this.cfg?.audioCompression === 'adpcm') {
       pcm = dec.decode(payload);

@@ -61,11 +61,12 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     // External PCM audio (OWRX/Kiwi): start the foreground service in external
     // mode; pushExternalPcm/stopExternalAudio go straight to the live instance.
     @ReactMethod
-    fun startExternalAudio(sampleRate: Double) {
+    fun startExternalAudio(sampleRate: Double, pauseMode: String = "release") {
         VibeStreamService.reactContext = reactContext
         val intent = Intent(reactContext, VibeStreamService::class.java).apply {
             action = VibeStreamService.ACTION_START_EXTERNAL
             putExtra(VibeStreamService.EXTRA_RATE, sampleRate.toInt())
+            putExtra(VibeStreamService.EXTRA_PAUSE_MODE, pauseMode)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) reactContext.startForegroundService(intent)
         else reactContext.startService(intent)
@@ -78,6 +79,27 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun stopExternalAudio() { VibeStreamService.instance?.stopExternalAudio() }
+
+    // Local hardware (V4): the foreground service reads the on-device shim's
+    // /ws/audio natively (background-safe), so JS no longer pushes PCM. JS just
+    // starts/stops it and forwards tune changes over the same WS.
+    @ReactMethod
+    fun startLocalAudio(port: Double, initialTune: String) {
+        VibeStreamService.reactContext = reactContext
+        val intent = Intent(reactContext, VibeStreamService::class.java).apply {
+            action = VibeStreamService.ACTION_START_LOCAL
+            putExtra(VibeStreamService.EXTRA_PORT, port.toInt())
+            putExtra(VibeStreamService.EXTRA_TUNE, initialTune)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) reactContext.startForegroundService(intent)
+        else reactContext.startService(intent)
+    }
+
+    @ReactMethod
+    fun sendLocalTune(json: String) { VibeStreamService.instance?.sendLocalTune(json) }
+
+    @ReactMethod
+    fun stopLocalAudio() { VibeStreamService.instance?.stopLocalAudio() }
 
     @ReactMethod
     fun revive() { VibeStreamService.instance?.revive() }

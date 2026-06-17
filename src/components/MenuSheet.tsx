@@ -1433,7 +1433,7 @@ export default function MenuSheet({
             {/* ── SERVER MAPS — UberSDR's per-feed Leaflet overlays (skin parity).
                    OWRX has its own combined map (opened from the OPENWEBRX section
                    below), so these UberSDR-specific feeds are hidden for it. ── */}
-            {serverType !== 'owrx' && !isLocal && (<>
+            {serverType !== 'owrx' && !isLocal && !isKiwi && (<>
               <SectionLabel label="SERVER MAPS" />
               <BtnRow>
                 <Btn label="✈ HFDL"     onPress={() => onServerMap?.('hfdl')} />
@@ -1475,18 +1475,20 @@ export default function MenuSheet({
               </View>
             )}
 
-            {/* ── SERVER EXTENSIONS — spots feeds + speech-to-text. Local hardware
-                   decodes FT8/FT4 itself (DIGITAL SPOTS), but has no CW skimmer
-                   or server STT, so those are hidden. ── */}
-            <SectionLabel label={isLocal ? 'DECODED SPOTS' : 'SERVER EXTENSIONS'} />
+            {/* ── SERVER EXTENSIONS — spots feeds + speech-to-text. DIGITAL SPOTS is
+                   our ON-DEVICE FT8/FT4 decoder, so it works everywhere (local USB
+                   hardware AND Kiwi, which has no server feed). CW SPOTS (server CW
+                   skimmer) and STT (server speech-to-text) are real server features,
+                   so they're hidden for local hardware and Kiwi. ── */}
+            <SectionLabel label={(isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS'} />
             <BtnRow>
               <Btn label="DIGITAL SPOTS" active={spotsKind === 'digi'}
                    onPress={() => onSpotsToggle?.('digi')} />
-              {!isLocal && (
+              {!isLocal && !isKiwi && (
                 <Btn label="CW SPOTS" active={spotsKind === 'cw'}
                      onPress={() => onSpotsToggle?.('cw')} />
               )}
-              {!isLocal && (
+              {!isLocal && !isKiwi && (
                 <Btn label="STT" active={decMode === 'whisper' && decOn}
                      style={decMode === 'whisper' && !decOn ? styles.btnSelected : undefined}
                      onPress={() => onDecToggle?.('whisper')} />

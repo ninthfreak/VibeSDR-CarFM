@@ -25,7 +25,7 @@ import { NativeModules } from 'react-native';
 import { ImaAdpcmDecoder, decodeKiwiWaterfallFrame } from './imaAdpcm';
 
 const Vibe = NativeModules.VibePowerModule as {
-  startExternalAudio?: (rate: number) => void;
+  startExternalAudio?: (rate: number, pauseMode?: string) => void;
   pushExternalPcm?: (b64: string, rate: number, channels: number) => void;
   stopExternalAudio?: () => void;
 } | undefined;
@@ -429,7 +429,7 @@ export class KiwiAdapter implements SDRBackend {
     if (!pcm.length) return;
 
     const rate = Math.round(this.trueAudioRate);
-    if (!this.audioStarted) { Vibe?.startExternalAudio?.(rate); this.audioStarted = true; }
+    if (!this.audioStarted) { Vibe?.startExternalAudio?.(rate, 'reconnect'); this.audioStarted = true; }
     const b64 = bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength));
     Vibe?.pushExternalPcm?.(b64, rate, 1);
     // Also feed the native decoder sidecar (RTTY/WEFAX/SSTV/FT8 on Kiwi audio).
