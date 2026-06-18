@@ -2969,7 +2969,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>{lostLabel} server stopped responding</Text>
-            <Text style={styles.serverLostBody}>The receiver dropped the connection — {lostLabel} servers restart from time to time. Please wait a minute, then reconnect — or pick another from the list.</Text>
+            <Text style={styles.serverLostBody}>{route.params.serverType === 'kiwi'
+              ? "The receiver dropped the connection. KiwiSDR owners with few slots often restrict access: some allow only their own web page, so apps like VibeSDR are refused the moment they connect; some block broadcast / commercial bands and disconnect you when you tune there. If reconnecting drops the same way it's likely an owner restriction — try another receiver. Otherwise it may just be busy or restarting: wait a minute and reconnect."
+              : `The receiver dropped the connection — ${lostLabel} servers restart from time to time. Please wait a minute, then reconnect — or pick another from the list.`}</Text>
             <View style={styles.serverLostBtnRow}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
@@ -3014,13 +3016,6 @@ export default function SDRScreen({ route, navigation }: Props) {
             <Text style={styles.serverLostBody}>
               Lost connection to {instanceName || 'the instance'} — trying to reconnect…
             </Text>
-            {isKiwi && (
-              <Text style={[styles.serverLostBody, { marginTop: -8 }]}>
-                Many KiwiSDR owners block broadcast / commercial bands and disconnect you the
-                instant you tune there. If this keeps happening, move off that band — it's the
-                owner's restriction, not a fault in VibeSDR.
-              </Text>
-            )}
             <ActivityIndicator color="#ffb84d" style={{ marginBottom: 14 }} />
             <View style={styles.serverLostBtnRow}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
