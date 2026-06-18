@@ -230,9 +230,11 @@ export default function InstancePickerScreen({ navigation }: Props) {
     if (!Local?.startTcp) { Alert.alert('RTL-TCP', 'Not available on this build.'); return; }
     setConnecting(true);
     try {
+      // Default to 20m USB — most rtl_tcp sources people add are HF (e.g. UberSDR
+      // 0–30 MHz); the persisted last-tune overrides this on the SDR screen.
       const res = await Local.startTcp({
         host, port,
-        centerFreq: 100_000_000, sampleRate: 2_400_000, fftSize: 8192, fftRate: 10, mode: 'wfm',
+        centerFreq: 14_100_000, sampleRate: 2_400_000, fftSize: 8192, fftRate: 10, mode: 'usb',
       }) as { port: number; wsBaseUrl: string };
       setConnecting(false);
       navigation.navigate('SDR', {
@@ -773,7 +775,13 @@ export default function InstancePickerScreen({ navigation }: Props) {
                           rtl_tcp · {f.host}:{f.port}
                         </Text>
                       </View>
-                      <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>
+                      <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        onPress={() => Alert.alert('Delete', `Remove "${f.name}"?`, [
+                          { text: 'Cancel', style: 'cancel' },
+                          { text: 'Delete', style: 'destructive', onPress: () => removeTcpFav(f) },
+                        ])}>
+                        <Text style={{ fontFamily: F, fontSize: fs(18), color: C.goldDim, paddingHorizontal: 8 }}>✕</Text>
+                      </TouchableOpacity>
                     </TouchableOpacity>
                   ))}
                   <TouchableOpacity

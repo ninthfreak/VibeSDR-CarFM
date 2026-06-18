@@ -192,7 +192,11 @@ struct LocalSdrShim::Impl {
     std::atomic<double> zoomFactor{1.0}; // spectrum zoom: FFT-crop factor (>=1)
     std::string mode = "nfm";
     double demodOffset = 0.0;             // VFO offset for the mode (SSB = ±bw/2)
-    std::mutex modeMtx;
+    // Recursive: setSampleRate holds it across its full teardown+rebuild and then
+    // calls buildAudio() (which re-locks). Serialises EVERY audio-chain rebuild
+    // (WS handleControl mode/tune AND the JS-driven HW setters) so they can't race
+    // the shared resamp/demod members → dsp registerInput() double-init abort.
+    std::recursive_mutex modeMtx;
     // Squelch — keys off the pre-AGC tuned-channel power from the FFT (post-demod
     // audio is AGC-flattened, so its level can't gate). channelDb is the peak
     // dB in the demod passband, updated in onFFT.
@@ -582,7 +586,7 @@ struct LocalSdrShim::Impl {
     }
 
     void buildAudio() {
-        std::lock_guard<std::mutex> lk(modeMtx);
+        std::lock_guard<std::recursive_mutex> lk(modeMtx);
         teardownAudio();
         ModeParams mp = paramsFor(mode);
         audioChannels.store(mp.channels);
@@ -679,7 +683,7 @@ struct LocalSdrShim::Impl {
     void sendFmMeta(const std::shared_ptr<net::Socket>& sock) {
         std::string ps, rt; int pi = -1;
         bool wfm = false;
-        { std::lock_guard<std::mutex> lk(modeMtx);
+        { std::lock_guard<std::recursive_mutex> lk(modeMtx);
           wfm = (mode == "wfm");
           if (wfm && rdsDecoder) {
               if (rdsDecoder->PSNameValid())   ps = rdsDecoder->getPSName();
@@ -707,7 +711,7 @@ struct LocalSdrShim::Impl {
             if (useTcp()) sendTcpCmd(0x01, (uint32_t)llround(freq));
             else if (dev) rtlsdr_set_center_freq(dev, (uint32_t)llround(freq));
         }
-        std::lock_guard<std::mutex> lk(modeMtx);
+        std::lock_guard<std::recursive_mutex> lk(modeMtx);
         if (vfo) vfo->setOffset(vfoOffsetNow());
     }
 
@@ -787,7 +791,7 @@ struct LocalSdrShim::Impl {
                     rtlCenter.store(v);
                     if (useTcp()) sendTcpCmd(0x01, (uint32_t)llround(v));
                     else if (dev) rtlsdr_set_center_freq(dev, (uint32_t)llround(v));
-                    std::lock_guard<std::mutex> lk(modeMtx);
+                    std::lock_guard<std::recursive_mutex> lk(modeMtx);
                     if (vfo) vfo->setOffset(vfoOffsetNow());
                 }
             }
@@ -820,7 +824,7 @@ struct LocalSdrShim::Impl {
 
     void setBandwidth(double bw) {
         if (bw <= 0) return;
-        std::lock_guard<std::mutex> lk(modeMtx);
+        std::lock_guard<std::recursive_mutex> lk(modeMtx);
         if (vfo) vfo->setBandwidth(std::min(bw, sampleRate));
         // (demod-internal bandwidth left at construction default for Stage 4)
     }
@@ -1157,7 +1161,6 @@ static const int kR820tGains[] = {
 int LocalSdrShim::startTcp(const std::string& host, int port,
                            double centerFreq, double sampleRate, int gainTenthDb,
                            int fftSize, double fftRate, const std::string& mode, std::string& err) {
-    LOGI("startTcp ENTER %s:%d", host.c_str(), port);
     std::lock_guard<std::mutex> life(g_lifecycle);
     if (p) { LOGI("stale shim found on TCP start — tearing down"); stopLocked(); }
     auto* impl = new Impl();
@@ -1170,7 +1173,6 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
     impl->fftBuf.assign(fftSize, -256.0f);
 
     // Connect to the rtl_tcp server and read its 12-byte header.
-    LOGI("startTcp connecting...");
     try { impl->tcpSock = net::connect(host, port); }
     catch (...) { impl->tcpSock = nullptr; }
     if (!impl->tcpSock) { err = "could not connect to rtl_tcp " + host + ":" + std::to_string(port); delete impl; return -1; }
@@ -1382,6 +1384,11 @@ void LocalSdrShim::setSampleRate(double rate) {
     Impl* impl = p;
     const bool tcp = impl->useTcp();
     if (!tcp && !impl->dev) return;
+    // Serialise the whole teardown+rebuild against WS handleControl's buildAudio()
+    // and the other HW setters — otherwise this (JS-driven) rebuild races them on
+    // resamp/demod → registerInput() double-init abort (recursive: buildAudio below
+    // re-locks).
+    std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
     // Stop the IQ source and recreate the front end at the new rate + auto FFT
     // size (FFT scales with rate for uniform Hz/bin). setFFTSize/setSampleRate on
     // the live IQFrontEnd touch the headless GUI / abort, so rebuild the object.

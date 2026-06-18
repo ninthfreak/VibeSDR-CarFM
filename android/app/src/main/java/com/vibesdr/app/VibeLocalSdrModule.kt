@@ -182,7 +182,6 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     fun startTcp(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
         val host = opts.getString("host") ?: run { promise.reject("no_host", "host required"); return }
         val port = if (opts.hasKey("port")) opts.getInt("port") else 1234
-        Log.i(TAG, "startTcp ENTER host=$host port=$port")
         stopSpectrumInternal()
         val centerFreq = if (opts.hasKey("centerFreq")) opts.getDouble("centerFreq") else 100_000_000.0
         val sampleRate = if (opts.hasKey("sampleRate")) opts.getDouble("sampleRate") else 2_400_000.0
