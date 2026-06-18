@@ -1343,18 +1343,18 @@ export default function MenuSheet({
               </View>
             )}
 
-            {/* Kiwi server-side squelch (0=off..99). */}
+            {/* Kiwi squelch — client-side dBFS gate (dBm threshold, −130 = Off). */}
             {onKiwiSquelch && (
               <View style={styles.bwRow}>
                 <Text style={styles.bwLabel}>SQUELCH</Text>
                 <Slider style={styles.bwSlider}
-                  minimumValue={0} maximumValue={99} step={1}
-                  value={kiwiSquelch}
-                  onValueChange={(v: number) => onKiwiSquelch?.(v)}
-                  minimumTrackTintColor={kiwiSquelch > 0 ? C.gold : C.muted}
+                  minimumValue={-130} maximumValue={-20} step={1}
+                  value={kiwiSquelch <= -130 ? -130 : kiwiSquelch}
+                  onValueChange={(v: number) => onKiwiSquelch?.(v <= -130 ? -130 : v)}
+                  minimumTrackTintColor={kiwiSquelch > -130 ? C.gold : C.muted}
                   maximumTrackTintColor={C.muted}
                   thumbTintColor={C.gold} />
-                <Text style={styles.bwVal}>{kiwiSquelch <= 0 ? 'Off' : String(kiwiSquelch)}</Text>
+                <Text style={styles.bwVal}>{kiwiSquelch <= -130 ? 'Off' : `${kiwiSquelch}dBm`}</Text>
               </View>
             )}
 

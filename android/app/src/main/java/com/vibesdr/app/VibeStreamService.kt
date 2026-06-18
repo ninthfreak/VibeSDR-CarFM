@@ -162,6 +162,12 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private var notchF0 = FloatArray(0)
     private var notchF1 = FloatArray(0)
     fun setNotchOn(on: Boolean) { notchOn = on }
+
+    // Client-side audio squelch gate (network backends, e.g. Kiwi). JS drives it
+    // from the S-meter level vs the threshold; closed → output silence (the track
+    // keeps flowing — distinct from pause/muted). Defaults open.
+    @Volatile private var squelchOpen = true
+    fun setSquelchOpen(open: Boolean) { squelchOpen = open }
     @Volatile private var dspResetRequested = false
     private var dspRate = 0
     private var nbEngine: NoiseBlankerEngine? = null
@@ -659,6 +665,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     ensureExtTrack(item.first, item.second)
                     if (!muted) {
                         notchShorts(item.third, item.second)   // auto notch (network)
+                        if (!squelchOpen) java.util.Arrays.fill(item.third, 0)  // squelch gate
                         extTrack?.write(item.third, 0, item.third.size)  // blocking = backpressure
                     }
                     // Feed the recorder encoder (the UberSDR decode loop isn't
@@ -981,6 +988,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                             pcm = dspProcess(pcm)
                         }
                         notchBytes(pcm, trackChannels)   // auto notch (network)
+                        if (!squelchOpen) java.util.Arrays.fill(pcm, 0)  // squelch gate
                         if (recArmed) encodePcm(pcm)
                         if (!muted) track?.write(pcm, 0, pcm.size)  // blocking = backpressure
                     }

@@ -823,9 +823,11 @@ export default function InstancePickerScreen({ navigation }: Props) {
                 ))}
                 <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.textDim, lineHeight: fs(15),
                                paddingHorizontal: 6, paddingTop: 10, paddingBottom: 4 }}>
-                  ⚠ KiwiSDR support is experimental. Many public KiwiSDRs limit or block app
-                  connections, so some may refuse or drop out — this is a server-side restriction,
-                  not a fault in VibeSDR. For the most reliable experience, use UberSDR or OpenWebRX.
+                  ⚠ KiwiSDRs have very few listening slots, so owners choose who connects. Some
+                  allow only their own web page and refuse apps like VibeSDR; some block broadcast
+                  or commercial bands and disconnect you the moment you tune there. A refusal or
+                  sudden drop is the owner's restriction — not a fault in VibeSDR. For unrestricted
+                  access, use UberSDR or OpenWebRX.
                 </Text>
               </View>
             }

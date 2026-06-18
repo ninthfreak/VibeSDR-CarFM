@@ -127,6 +127,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // local → LocalHw.setNotch, network → here). One filter per output channel.
   private var notchOn       = false
   private var notch: [AutoNotch] = []
+  // Client-side audio squelch gate (network backends, e.g. Kiwi). JS drives it
+  // from the S-meter dBm vs the threshold; when closed we output silence (engine
+  // keeps running — distinct from pause/isMuted). Defaults open.
+  private var squelchOpen   = true
   // External-audio pause behaviour (matches Android): "release" (OWRX/Kiwi —
   // pause drops the card), "resume" (local/RTL-TCP — pause mutes in place, keeps
   // the card, play resumes; no server to disconnect).
@@ -403,6 +407,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       self.notchOn = on
       if !on { for nf in self.notch { nf.reset() } }
     }
+  }
+
+  /** Client-side audio squelch gate (network, e.g. Kiwi). JS opens/closes it
+   *  from the S-meter level vs the threshold. open=true is the default. */
+  @objc func setSquelchOpen(_ open: Bool) {
+    audioQ.async { [weak self] in self?.squelchOpen = open }
   }
 
   /** Forward a raw JSON command over the native audio WS (set_dsp,
@@ -1078,6 +1088,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       while notch.count < nch { notch.append(AutoNotch()) }
       let n = Int(buf.frameLength)
       for c in 0..<nch { notch[c].process(chans[c], n) }
+    }
+    // Squelch closed → output silence (keeps the player fed, no underrun).
+    if !squelchOpen, let chans = buf.floatChannelData {
+      let nch = Int(buf.format.channelCount)
+      let n = Int(buf.frameLength)
+      for c in 0..<nch { memset(chans[c], 0, n * MemoryLayout<Float>.size) }
     }
     // Live-edge bound: if a delivery burst piles up more than ~0.4s of queued
     // audio, drop instead of scheduling — latency stays bounded instead of

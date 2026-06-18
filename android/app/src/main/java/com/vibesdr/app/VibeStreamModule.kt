@@ -232,6 +232,12 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.setNotchOn(on)
     }
 
+    // Client-side audio squelch gate (Kiwi etc.) — JS opens/closes from the meter.
+    @ReactMethod
+    fun setSquelchOpen(open: Boolean) {
+        VibeStreamService.instance?.setSquelchOpen(open)
+    }
+
     // Recorder — MediaCodec AAC + MediaMuxer on the service decode thread
     @ReactMethod
     fun startRecording(frequency: Double, mode: String, promise: Promise) {

@@ -345,9 +345,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       const agc  = !!prefs.agc;
       const ds   = typeof prefs.directSampling === 'number' ? prefs.directSampling : 0;
       const deemph = typeof prefs.deemph === 'number' ? prefs.deemph : 50e-6;
-      const sql  = typeof prefs.squelch === 'number' ? prefs.squelch : -100;
-      const nrLvl = typeof prefs.nrLevel === 'number' ? prefs.nrLevel : 0;
-      const notch = !!prefs.notch;
+      // Squelch / NR / Notch are session-scoped DSP — NEVER restored, so a new
+      // connection always starts clean (no surprise muted/“funny” audio carried
+      // over from a previous session). Device config (gain/ppm/etc.) still persists.
+      const sql = -100, nrLvl = 0, notch = false;
       setHwAutoGain(auto); setHwPpm(ppm); setHwSampleRate(rate);
       setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwSquelch(sql); setHwNrLevel(nrLvl); setHwNotch(notch);
       if (typeof prefs.gain === 'number') setHwGain(prefs.gain);
@@ -381,9 +382,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_local_hw', JSON.stringify({
       autoGain: hwAutoGain, gain: hwGain, ppm: hwPpm, sampleRate: hwSampleRate,
       biasTee: hwBiasTee, agc: hwAgc, directSampling: hwDirectSamp, deemph: hwDeemph,
-      squelch: hwSquelch, nrLevel: hwNrLevel, notch: hwNotch,
     })).catch(() => {});
-  }, [isLocal, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwSquelch, hwNrLevel, hwNotch]);
+    // NB: squelch / nrLevel / notch are intentionally NOT saved (session-scoped).
+  }, [isLocal, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph]);
 
   const onHwAuto = useCallback((auto: boolean) => {
     setHwAutoGain(auto);
@@ -416,9 +417,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Network auto notch (UberSDR/OWRX/Kiwi): client-side, applied in the audio
   // engine (iOS VibePowerModule / Android VibeStreamService). Persisted globally
   // and (re)applied whenever the connection comes up — see the effect below.
+  // Session-scoped: NOT persisted, so it reverts to Off on a server change. It
+  // only survives pause/resume because the screen stays mounted (re-applied on
+  // reconnect by the effect below).
   const onNetNotch = useCallback((on: boolean) => {
     setNetNotch(on);
-    AsyncStorage.setItem('lsv_notch', on ? '1' : '0').catch(() => {});
   }, []);
 
   const insets = useSafeAreaInsets();
@@ -658,9 +661,31 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [serverDspFilter,  setServerDspFilter]  = useState('');
   const [serverDspParams,  setServerDspParams]  = useState<Record<string,string>>({});
   const [dspFilters,       setDspFilters]       = useState<DspFilterDesc[]>([]);
-  const [kiwiSquelch,      setKiwiSquelch]      = useState(0);   // Kiwi squelch 0=off..99
-  const onKiwiSquelch = useCallback((v: number) => {
-    setKiwiSquelch(v); client.current?.setSquelch?.(v);
+  // Kiwi squelch is a CLIENT-SIDE dBFS gate (the server SNR-based squelch is
+  // unreliable). Threshold in dBm: −130 = Off (open), up to −20. Driven from the
+  // S-meter dBm in onSMeter → native setSquelchOpen, with a short release tail.
+  const [kiwiSquelch,      setKiwiSquelch]      = useState(-130); // dBm threshold (−130 = off)
+  const kiwiSqDbmRef  = useRef(-130);
+  const kiwiSqOpenRef = useRef(true);
+  const kiwiSqAboveAt = useRef(0);
+  const onKiwiSquelch = useCallback((db: number) => {
+    setKiwiSquelch(db); kiwiSqDbmRef.current = db;
+    if (db <= -130) {  // Off → force the gate open immediately
+      kiwiSqOpenRef.current = true;
+      (NativeModules.VibePowerModule as { setSquelchOpen?: (o: boolean) => void })?.setSquelchOpen?.(true);
+    }
+  }, []);
+  // Evaluate the Kiwi squelch gate against a fresh S-meter reading (dBm).
+  const evalKiwiSquelch = useCallback((dbm: number) => {
+    const thr = kiwiSqDbmRef.current;
+    if (thr <= -130) return;                       // Off — handled in onKiwiSquelch
+    const now = Date.now();
+    if (dbm >= thr) kiwiSqAboveAt.current = now;
+    const open = (now - kiwiSqAboveAt.current) < 350;  // 350 ms release tail
+    if (open !== kiwiSqOpenRef.current) {
+      kiwiSqOpenRef.current = open;
+      (NativeModules.VibePowerModule as { setSquelchOpen?: (o: boolean) => void })?.setSquelchOpen?.(open);
+    }
   }, []);
   const [dspError,         setDspError]         = useState<string | null>(null);
 
@@ -896,8 +921,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (isKiwi) setDspFilters(KiwiAdapter.DSP_FILTERS as DspFilterDesc[]);
   }, [isKiwi]);
-  // OWRX has no SNR meter — default to the S-meter (the 'snr' default reads dead).
-  useEffect(() => { if (isOwrx && signalMode === 'snr') setSignalMode('smeter'); }, [isOwrx, signalMode]);
+  // OWRX and Kiwi have no SNR feed (radiod-only) — default to the S-meter
+  // (the 'snr' mode reads dead on those backends).
+  useEffect(() => { if ((isOwrx || isKiwi) && signalMode === 'snr') setSignalMode('smeter'); }, [isOwrx, isKiwi, signalMode]);
   const handleChatJoin = useCallback((cs: string) => {
     const clean = sanitizeCallsign(cs);
     if (!clean) return;
@@ -1065,17 +1091,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     VibePowerModule?.setVoiceConnected?.(connected);
   }, [connected]);
 
-  // Restore the saved network auto-notch preference once on mount.
-  useEffect(() => {
-    (async () => {
-      try { if ((await AsyncStorage.getItem('lsv_notch')) === '1') setNetNotch(true); } catch {}
-    })();
-  }, []);
   // (Re)apply the network notch to the audio engine whenever the connection is up
   // or the toggle changes. Local sources are notched in the shim, not here.
   useEffect(() => {
     if (!isLocal && connected) VibePowerModule?.setNotch?.(netNotch);
   }, [connected, netNotch, isLocal]);
+
+  // The squelch gate is a persistent native flag (iOS VibePowerModule is a
+  // singleton). Make sure non-Kiwi sessions start open, and always release the
+  // gate on unmount so a closed Kiwi squelch can't silence the next session.
+  useEffect(() => {
+    const setOpen = (NativeModules.VibePowerModule as { setSquelchOpen?: (o: boolean) => void })?.setSquelchOpen;
+    if (!isKiwi) setOpen?.(true);
+    return () => { kiwiSqOpenRef.current = true; setOpen?.(true); };
+  }, [isKiwi]);
 
   // Car-connected flag (iOS car-audio route / Android Auto client), updated by
   // the VibeCarConnected native event. Band-aware auto mode/step no longer gates
@@ -1602,7 +1631,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         }
       },
       onStatus:     (s) => { if (!destroyed.current) setStatus(s); },
-      onSMeter:     (dbm) => { if (!destroyed.current) owrxSmeterRef.current = dbm; },
+      onSMeter:     (dbm) => { if (!destroyed.current) { owrxSmeterRef.current = dbm; if (isKiwi) evalKiwiSquelch(dbm); } },
       onProfiles:   (list) => { if (!destroyed.current) setProfiles(list); },
       onSdrUsage:   (m) => { if (!destroyed.current) setSdrUsage(m); },
       onClients:    (n) => { if (!destroyed.current) setClientCount(n); },
@@ -2985,6 +3014,13 @@ export default function SDRScreen({ route, navigation }: Props) {
             <Text style={styles.serverLostBody}>
               Lost connection to {instanceName || 'the instance'} — trying to reconnect…
             </Text>
+            {isKiwi && (
+              <Text style={[styles.serverLostBody, { marginTop: -8 }]}>
+                Many KiwiSDR owners block broadcast / commercial bands and disconnect you the
+                instant you tune there. If this keeps happening, move off that band — it's the
+                owner's restriction, not a fault in VibeSDR.
+              </Text>
+            )}
             <ActivityIndicator color="#ffb84d" style={{ marginBottom: 14 }} />
             <View style={styles.serverLostBtnRow}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
@@ -3009,7 +3045,9 @@ export default function SDRScreen({ route, navigation }: Props) {
             <Text style={styles.serverLostBody}>
               No response from {instanceName || 'the receiver'}. {route.params.isLocal
                 ? 'Check the SDR is plugged in and try again, or pick another instance.'
-                : 'It may be offline or unreachable — try again or pick another instance.'}
+                : isKiwi
+                  ? "It may be offline or a temporary network issue — but if a retry also fails, this KiwiSDR's owner likely only allows their own web page and blocks apps like VibeSDR. Try another, or use UberSDR / OpenWebRX."
+                  : 'It may be offline or unreachable — try again or pick another instance.'}
             </Text>
             <View style={styles.serverLostBtnRow}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
@@ -3167,8 +3205,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         onWefaxLpm={onWefaxLpm}
         onNb={onNb}
         onRec={toggleRecording}
-        // OWRX has no SNR meter — skip 'snr' in the cycle, stay on S-meter/dBFS.
-        onSignalMode={(m: 'snr' | 'smeter' | 'dbfs') => setSignalMode(isOwrx && m === 'snr' ? 'smeter' : m)}
+        // OWRX/Kiwi have no SNR meter — skip 'snr' in the cycle, stay on S-meter/dBFS.
+        onSignalMode={(m: 'snr' | 'smeter' | 'dbfs') => setSignalMode((isOwrx || isKiwi) && m === 'snr' ? 'smeter' : m)}
         onDisplayStyle={handleDisplayStyle}
         onBack={onBackToPicker}
         onAdminLink={onAdminLink}

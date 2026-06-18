@@ -336,8 +336,9 @@ export class KiwiAdapter implements SDRBackend {
         }
         break;
       case 'badp':
-        // 0 = auth OK. Non-zero = bad password / slot/IP limit — surface it.
-        if (val !== '0') this.cb.onError('KiwiSDR refused the connection (badp=' + val + ')');
+        // 0 = auth OK. Non-zero = the owner restricts access (apps/non-web users
+        // blocked, slot/IP limit, or password) — an owner choice, not an app fault.
+        if (val !== '0') this.cb.onError("This KiwiSDR's owner has blocked the connection — many only allow their own web page, or limit who can connect. Try another KiwiSDR, or use UberSDR/OpenWebRX.");
         break;
       case 'version_maj': this.verMaj = val; this.emitServerInfo(); break;
       case 'version_min': this.verMin = val; this.emitServerInfo(); break;
