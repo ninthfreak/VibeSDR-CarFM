@@ -226,11 +226,20 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
           <Text style={styles.section}>LICENCE</Text>
           <Text style={styles.body}>
             VibeSDR is free software, released under the GNU General Public License
-            version 3 (GPL-3.0). You may redistribute and/or modify it under the terms
-            of that licence. This program is distributed in the hope that it will be
-            useful, but WITHOUT ANY WARRANTY — without even the implied warranty of
-            MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+            version 3 (GPL-3.0). Here “free” means freedom, not price: you’re free to
+            use, study, share and modify it, and the complete source code is public.
           </Text>
+          <Text style={styles.body}>
+            If you bought VibeSDR from an app store, that nominal price simply covers the
+            store’s distribution and developer-account fees — the GPL expressly allows
+            charging for distribution, and paying changes none of your freedoms. You can
+            always get the source and build it yourself for nothing. Distributed in the
+            hope that it’s useful, but WITHOUT ANY WARRANTY — without even the implied
+            warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+          </Text>
+          <TouchableOpacity onPress={() => Linking.openURL('https://github.com/Stuey3D/VibeSDR')}>
+            <Text style={styles.link}>Source code: github.com/Stuey3D/VibeSDR</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => Linking.openURL('https://www.gnu.org/licenses/gpl-3.0.html')}>
             <Text style={styles.link}>www.gnu.org/licenses/gpl-3.0</Text>
           </TouchableOpacity>
