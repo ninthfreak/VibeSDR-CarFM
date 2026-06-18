@@ -95,9 +95,9 @@ export interface MenuSheetProps {
   // Local SDR audio noise reduction strength (0=off..20).
   localNR?:        number;
   onLocalNR?:      (level: number) => void;
-  // Local SDR automatic notch (adaptive line enhancer) on/off.
-  localNotch?:     boolean;
-  onLocalNotch?:   (on: boolean) => void;
+  // Automatic notch (adaptive line enhancer) on/off — all backends.
+  notchOn?:        boolean;
+  onNotch?:        (on: boolean) => void;
   // Kiwi server-side squelch (0=off..99).
   kiwiSquelch?:    number;
   onKiwiSquelch?:  (v: number) => void;
@@ -425,7 +425,7 @@ export default function MenuSheet({
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
-  localNR = 0, onLocalNR, localNotch = false, onLocalNotch, kiwiSquelch = 0, onKiwiSquelch,
+  localNR = 0, onLocalNR, notchOn = false, onNotch, kiwiSquelch = 0, onKiwiSquelch,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
   serverLabel = null, onOwrxSquelch, onOwrxNr,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
@@ -1326,18 +1326,18 @@ export default function MenuSheet({
               </View>
             )}
 
-            {/* Local SDR automatic notch (adaptive line enhancer) — on/off. */}
-            {onLocalNotch && (
+            {/* Automatic notch (adaptive line enhancer) — on/off, all backends. */}
+            {onNotch && (
               <View style={styles.bwRow}>
-                <Text style={styles.bwLabel}>NOTCH</Text>
+                <Text style={[styles.bwLabel, { width: 78 }]}>AUTO NOTCH</Text>
                 <View style={{ flex: 1 }} />
-                <TouchableOpacity onPress={() => onLocalNotch?.(!localNotch)} hitSlop={8}
+                <TouchableOpacity onPress={() => onNotch?.(!notchOn)} hitSlop={8}
                   style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
-                           backgroundColor: localNotch ? C.gold : 'transparent',
-                           borderWidth: 1, borderColor: localNotch ? C.gold : C.muted }}>
-                  <Text style={{ color: localNotch ? C.bg : C.muted,
+                           backgroundColor: notchOn ? C.gold : 'transparent',
+                           borderWidth: 1, borderColor: notchOn ? C.gold : C.muted }}>
+                  <Text style={{ color: notchOn ? C.bg : C.muted,
                                  fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
-                    {localNotch ? 'ON' : 'OFF'}
+                    {notchOn ? 'ON' : 'OFF'}
                   </Text>
                 </TouchableOpacity>
               </View>

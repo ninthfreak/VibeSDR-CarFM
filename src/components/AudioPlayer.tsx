@@ -20,6 +20,7 @@ export const VibePowerModule = NativeModules.VibePowerModule as
       shareRecording:    (path: string) => void;
       setNrMode:         (mode: 'off' | 'nr' | 'nr2') => void;
       setNoiseBlanker:   (on: boolean) => void;
+      setNotch?:         (on: boolean) => void;
       sendAudioCommand:  (json: string) => void;
       setNowPlaying:     (title: string, artist: string) => void;
       setArtwork:        (serverType: string) => void;

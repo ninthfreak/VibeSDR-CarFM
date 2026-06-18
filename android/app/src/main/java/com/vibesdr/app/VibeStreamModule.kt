@@ -226,6 +226,12 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.let { it.nbOn = on; it.requestDspReset() }
     }
 
+    // Auto notch (NLMS) — client-side, network backends (UberSDR/OWRX/Kiwi).
+    @ReactMethod
+    fun setNotch(on: Boolean) {
+        VibeStreamService.instance?.setNotchOn(on)
+    }
+
     // Recorder — MediaCodec AAC + MediaMuxer on the service decode thread
     @ReactMethod
     fun startRecording(frequency: Double, mode: String, promise: Promise) {

@@ -325,7 +325,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwDeemph,      setHwDeemph]      = useState(50e-6);  // FM de-emphasis tau (0/50µs/75µs)
   const [hwSquelch,     setHwSquelch]     = useState(-100);   // audio squelch dBFS (-100 = off)
   const [hwNrLevel,     setHwNrLevel]     = useState(0);      // audio NR strength 0=off..20 (÷15 → native 0..1.33)
-  const [hwNotch,       setHwNotch]       = useState(false);  // auto notch (adaptive line enhancer)
+  const [hwNotch,       setHwNotch]       = useState(false);  // auto notch — LOCAL (shim)
+  const [netNotch,      setNetNotch]      = useState(false);  // auto notch — NETWORK (UberSDR/OWRX/Kiwi)
 
   // Load saved RTL-SDR hardware settings and apply them to the running session,
   // so gain/bias-T/PPM/etc. persist across connections.
@@ -412,6 +413,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onLocalNotch = useCallback((on: boolean) => {
     setHwNotch(on); LocalHw?.setNotch?.(on);
   }, [LocalHw]);
+  // Network auto notch (UberSDR/OWRX/Kiwi): client-side, applied in the audio
+  // engine (iOS VibePowerModule / Android VibeStreamService). Persisted globally
+  // and (re)applied whenever the connection comes up — see the effect below.
+  const onNetNotch = useCallback((on: boolean) => {
+    setNetNotch(on);
+    AsyncStorage.setItem('lsv_notch', on ? '1' : '0').catch(() => {});
+  }, []);
 
   const insets = useSafeAreaInsets();
   const { width: screenW, height: screenH } = Dimensions.get('window');
@@ -1056,6 +1064,18 @@ export default function SDRScreen({ route, navigation }: Props) {
     // Siri: when live, the intent emits the command now; otherwise it stashes it.
     VibePowerModule?.setVoiceConnected?.(connected);
   }, [connected]);
+
+  // Restore the saved network auto-notch preference once on mount.
+  useEffect(() => {
+    (async () => {
+      try { if ((await AsyncStorage.getItem('lsv_notch')) === '1') setNetNotch(true); } catch {}
+    })();
+  }, []);
+  // (Re)apply the network notch to the audio engine whenever the connection is up
+  // or the toggle changes. Local sources are notched in the shim, not here.
+  useEffect(() => {
+    if (!isLocal && connected) VibePowerModule?.setNotch?.(netNotch);
+  }, [connected, netNotch, isLocal]);
 
   // Car-connected flag (iOS car-audio route / Android Auto client), updated by
   // the VibeCarConnected native event. Band-aware auto mode/step no longer gates
@@ -3211,7 +3231,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         localSquelch={hwSquelch}        onLocalSquelch={isLocal ? onLocalSquelch : undefined}
         kiwiSquelch={kiwiSquelch}       onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
         localNR={hwNrLevel}             onLocalNR={isLocal ? onLocalNR : undefined}
-        localNotch={hwNotch}            onLocalNotch={isLocal ? onLocalNotch : undefined}
+        notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
         serverDspEnabled={serverDspEnabled}
         serverDspFilter={serverDspFilter}

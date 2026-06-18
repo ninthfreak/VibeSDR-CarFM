@@ -122,6 +122,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var lastSrCycleAt = Date(timeIntervalSince1970: 0)
   private var isRunning     = false
   private var isMuted       = false
+  // Client-side auto notch for NETWORK backends (UberSDR/OWRX/Kiwi). Local/RTL-TCP
+  // are notched in the shim, so this stays off for them (the JS toggle routes
+  // local → LocalHw.setNotch, network → here). One filter per output channel.
+  private var notchOn       = false
+  private var notch: [AutoNotch] = []
   // External-audio pause behaviour (matches Android): "release" (OWRX/Kiwi —
   // pause drops the card), "resume" (local/RTL-TCP — pause mutes in place, keeps
   // the card, play resumes; no server to disconnect).
@@ -387,6 +392,16 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       guard let self else { return }
       self.nbOn = on
       self.nbEngine?.reset()
+    }
+  }
+
+  /** Auto notch on/off for network backends (routed here by JS for
+   *  UberSDR/OWRX/Kiwi; local/RTL-TCP are handled by the shim). */
+  @objc func setNotch(_ on: Bool) {
+    audioQ.async { [weak self] in
+      guard let self else { return }
+      self.notchOn = on
+      if !on { for nf in self.notch { nf.reset() } }
     }
   }
 
@@ -1055,6 +1070,15 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   private func scheduleOut(_ buf: AVAudioPCMBuffer) {
     guard let player = playerNode, let fmt = audioFormat else { return }
+    // Auto notch (network backends): adaptive line enhancer per channel, applied
+    // on the final 48 kHz feed. Runs on audioQ (single-threaded), so the filter
+    // state is safe. Local/RTL-TCP never enable it here (shim already notched).
+    if notchOn, let chans = buf.floatChannelData {
+      let nch = Int(buf.format.channelCount)
+      while notch.count < nch { notch.append(AutoNotch()) }
+      let n = Int(buf.frameLength)
+      for c in 0..<nch { notch[c].process(chans[c], n) }
+    }
     // Live-edge bound: if a delivery burst piles up more than ~0.4s of queued
     // audio, drop instead of scheduling — latency stays bounded instead of
     // accumulating forever (runs on audioQ; queuedSeconds audioQ-only).
@@ -1578,5 +1602,46 @@ struct VibeShortcuts: AppShortcutsProvider {
       "Set \(.applicationName) step rate",
       "Change \(.applicationName) step rate",
     ], shortTitle: "Step", systemImageName: "arrow.left.and.right")
+  }
+}
+
+// MARK: - Auto notch (NLMS adaptive line enhancer)
+//
+// Swift port of the shared C++ vibe::AutoNotch (android/.../decoders/auto_notch).
+// Same spec/constants so local-shim and network notch sound identical: outputs
+// the prediction error so stationary tones (carriers/heterodynes) are removed
+// while broadband speech passes. Tap span (~3.5 ms) kept below the voice pitch
+// period so it can't subtract voiced speech; very slow adaptation so loud voice
+// neither builds a notch nor pulls the lock off the tone.
+final class AutoNotch {
+  private let D = 8, L = 160
+  private let mu: Float = 0.003, leak: Float = 0.9999, eps: Float = 1e-6
+  private var buf: [Float]
+  private var w:   [Float]
+  private var p = 0
+  init() { buf = [Float](repeating: 0, count: 2 * (8 + 160)); w = [Float](repeating: 0, count: 160) }
+  func reset() {
+    for i in 0..<buf.count { buf[i] = 0 }
+    for i in 0..<w.count { w[i] = 0 }
+    p = 0
+  }
+  func process(_ x: UnsafeMutablePointer<Float>, _ count: Int) {
+    let M = D + L
+    buf.withUnsafeMutableBufferPointer { b in
+      w.withUnsafeMutableBufferPointer { wp in
+        for n in 0..<count {
+          p = (p == 0) ? M - 1 : p - 1
+          let inp = x[n]
+          b[p] = inp; b[p + M] = inp
+          let base = p + D
+          var fir: Float = 0, pwr: Float = 0
+          for i in 0..<L { let s = b[base + i]; fir += wp[i] * s; pwr += s * s }
+          let err = inp - fir
+          x[n] = err
+          let g = mu * err / (eps + pwr)
+          for i in 0..<L { wp[i] = leak * wp[i] + g * b[base + i] }
+        }
+      }
+    }
   }
 }

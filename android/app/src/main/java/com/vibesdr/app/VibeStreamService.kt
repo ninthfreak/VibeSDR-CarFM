@@ -154,6 +154,14 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     @Volatile var nrMode = "off"        // "off" | "nr" | "nr2"
     @Volatile var nbOn = false
     @Volatile var nrBandwidthHz = 2700.0
+
+    // Client-side auto notch (NLMS), network backends only — local/RTL-TCP audio
+    // arrives already notched from the shim. One filter per channel.
+    @Volatile private var notchOn = false
+    private val notchCh = arrayOfNulls<AutoNotch>(2)
+    private var notchF0 = FloatArray(0)
+    private var notchF1 = FloatArray(0)
+    fun setNotchOn(on: Boolean) { notchOn = on }
     @Volatile private var dspResetRequested = false
     private var dspRate = 0
     private var nbEngine: NoiseBlankerEngine? = null
@@ -649,7 +657,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     handleRecRequests()   // arm/stop the recorder on this thread too
                     if (item == null) continue
                     ensureExtTrack(item.first, item.second)
-                    if (!muted) extTrack?.write(item.third, 0, item.third.size)  // blocking = backpressure
+                    if (!muted) {
+                        notchShorts(item.third, item.second)   // auto notch (network)
+                        extTrack?.write(item.third, 0, item.third.size)  // blocking = backpressure
+                    }
                     // Feed the recorder encoder (the UberSDR decode loop isn't
                     // running on this path, so recording is driven from here).
                     if (recArmed) {
@@ -969,6 +980,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                         if (trackChannels == 1 && (nbOn || nrMode != "off")) {
                             pcm = dspProcess(pcm)
                         }
+                        notchBytes(pcm, trackChannels)   // auto notch (network)
                         if (recArmed) encodePcm(pcm)
                         if (!muted) track?.write(pcm, 0, pcm.size)  // blocking = backpressure
                     }
@@ -983,6 +995,59 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     }
 
     // ── Client noise DSP (decode-thread only) ────────────────────────────────
+
+    // ── Auto notch (NLMS adaptive line enhancer) ─────────────────────────────
+    // Same spec as the shared C++ vibe::AutoNotch / the iOS Swift port, so all
+    // backends sound identical. Applied per channel on the final PCM, after any
+    // decoder taps and the existing NB/NR DSP, just before playback/record.
+    private fun notchShorts(sh: ShortArray, channels: Int) {
+        if (!notchOn) return
+        val frames = sh.size / channels
+        if (frames <= 0) return
+        if (notchF0.size < frames) notchF0 = FloatArray(frames)
+        if (channels >= 2 && notchF1.size < frames) notchF1 = FloatArray(frames)
+        if (channels == 1) {
+            val f = notchF0
+            for (i in 0 until frames) f[i] = sh[i] / 32768f
+            (notchCh[0] ?: AutoNotch().also { notchCh[0] = it }).process(f, frames)
+            for (i in 0 until frames) sh[i] = (f[i] * 32768f).toInt().coerceIn(-32768, 32767).toShort()
+        } else {
+            val fl = notchF0; val fr = notchF1
+            for (i in 0 until frames) { fl[i] = sh[i * 2] / 32768f; fr[i] = sh[i * 2 + 1] / 32768f }
+            (notchCh[0] ?: AutoNotch().also { notchCh[0] = it }).process(fl, frames)
+            (notchCh[1] ?: AutoNotch().also { notchCh[1] = it }).process(fr, frames)
+            for (i in 0 until frames) {
+                sh[i * 2]     = (fl[i] * 32768f).toInt().coerceIn(-32768, 32767).toShort()
+                sh[i * 2 + 1] = (fr[i] * 32768f).toInt().coerceIn(-32768, 32767).toShort()
+            }
+        }
+    }
+    private fun notchBytes(pcm: ByteArray, channels: Int) {
+        if (!notchOn) return
+        val sh = ShortArray(pcm.size / 2)
+        ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(sh)
+        notchShorts(sh, channels)
+        ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(sh)
+    }
+    private class AutoNotch {
+        private val D = 8; private val L = 160; private val M = D + L
+        private val buf = FloatArray(2 * M); private val w = FloatArray(L); private var p = 0
+        private val mu = 0.003f; private val leak = 0.9999f; private val eps = 1e-6f
+        fun process(x: FloatArray, count: Int) {
+            for (n in 0 until count) {
+                p = if (p == 0) M - 1 else p - 1
+                val inp = x[n]
+                buf[p] = inp; buf[p + M] = inp
+                val base = p + D
+                var fir = 0f; var pwr = 0f
+                for (i in 0 until L) { val s = buf[base + i]; fir += w[i] * s; pwr += s * s }
+                val err = inp - fir
+                x[n] = err
+                val g = mu * err / (eps + pwr)
+                for (i in 0 until L) w[i] = leak * w[i] + g * buf[base + i]
+            }
+        }
+    }
 
     /** 16-bit mono 48k PCM → decimate to streamSr → NB → NR/NR2 → back to 48k. */
     private fun dspProcess(pcm: ByteArray): ByteArray {
