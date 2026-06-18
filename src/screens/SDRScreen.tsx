@@ -324,7 +324,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwDirectSamp,  setHwDirectSamp]  = useState(0);
   const [hwDeemph,      setHwDeemph]      = useState(50e-6);  // FM de-emphasis tau (0/50µs/75µs)
   const [hwSquelch,     setHwSquelch]     = useState(-100);   // audio squelch dBFS (-100 = off)
-  const [hwNrLevel,     setHwNrLevel]     = useState(0);      // audio NR strength 0=off..15
+  const [hwNrLevel,     setHwNrLevel]     = useState(0);      // audio NR strength 0=off..20 (÷15 → native 0..1.33)
+  const [hwNotch,       setHwNotch]       = useState(false);  // auto notch (adaptive line enhancer)
 
   // Load saved RTL-SDR hardware settings and apply them to the running session,
   // so gain/bias-T/PPM/etc. persist across connections.
@@ -345,8 +346,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       const deemph = typeof prefs.deemph === 'number' ? prefs.deemph : 50e-6;
       const sql  = typeof prefs.squelch === 'number' ? prefs.squelch : -100;
       const nrLvl = typeof prefs.nrLevel === 'number' ? prefs.nrLevel : 0;
+      const notch = !!prefs.notch;
       setHwAutoGain(auto); setHwPpm(ppm); setHwSampleRate(rate);
-      setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwSquelch(sql); setHwNrLevel(nrLvl);
+      setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwSquelch(sql); setHwNrLevel(nrLvl); setHwNotch(notch);
       if (typeof prefs.gain === 'number') setHwGain(prefs.gain);
       // Re-apply to the native session (already running from startSpectrum).
       LocalHw?.setPpm?.(ppm);
@@ -357,6 +359,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       LocalHw?.setSquelch?.(sql > -100, sql);
       LocalHw?.setNrStrength?.(nrLvl / 15);
       LocalHw?.setNR?.(nrLvl > 0);
+      LocalHw?.setNotch?.(notch);
       if (rate !== 2_400_000) LocalHw?.setSampleRate?.(rate);
       LocalHw?.setGain?.(auto ? -1 : (typeof prefs.gain === 'number' ? prefs.gain : 0));
       try {
@@ -377,9 +380,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_local_hw', JSON.stringify({
       autoGain: hwAutoGain, gain: hwGain, ppm: hwPpm, sampleRate: hwSampleRate,
       biasTee: hwBiasTee, agc: hwAgc, directSampling: hwDirectSamp, deemph: hwDeemph,
-      squelch: hwSquelch, nrLevel: hwNrLevel,
+      squelch: hwSquelch, nrLevel: hwNrLevel, notch: hwNotch,
     })).catch(() => {});
-  }, [isLocal, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwSquelch, hwNrLevel]);
+  }, [isLocal, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwSquelch, hwNrLevel, hwNotch]);
 
   const onHwAuto = useCallback((auto: boolean) => {
     setHwAutoGain(auto);
@@ -405,6 +408,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     setHwNrLevel(level);
     LocalHw?.setNrStrength?.(level / 15);
     LocalHw?.setNR?.(level > 0);
+  }, [LocalHw]);
+  const onLocalNotch = useCallback((on: boolean) => {
+    setHwNotch(on); LocalHw?.setNotch?.(on);
   }, [LocalHw]);
 
   const insets = useSafeAreaInsets();
@@ -3205,6 +3211,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         localSquelch={hwSquelch}        onLocalSquelch={isLocal ? onLocalSquelch : undefined}
         kiwiSquelch={kiwiSquelch}       onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
         localNR={hwNrLevel}             onLocalNR={isLocal ? onLocalNR : undefined}
+        localNotch={hwNotch}            onLocalNotch={isLocal ? onLocalNotch : undefined}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
         serverDspEnabled={serverDspEnabled}
         serverDspFilter={serverDspFilter}

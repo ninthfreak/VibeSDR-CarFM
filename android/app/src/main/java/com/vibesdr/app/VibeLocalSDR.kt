@@ -78,6 +78,7 @@ object VibeLocalSDR {
     fun setDeemphasis(tau: Double) { if (loaded) nativeSetDeemphasis(tau) }
     fun setSquelch(on: Boolean, db: Float) { if (loaded) nativeSetSquelch(on, db) }
     fun setNR(on: Boolean) { if (loaded) nativeSetNR(on) }
+    fun setNotch(on: Boolean) { if (loaded) nativeSetNotch(on) }
     fun setNrStrength(s: Float) { if (loaded) nativeSetNrStrength(s) }
     fun getNrCpu(): Float { return if (loaded) nativeGetNrCpu() else 0f }
     // ensureLoaded() FIRST: on Kiwi (and any network backend) the native lib is
@@ -110,6 +111,7 @@ object VibeLocalSDR {
     private external fun nativeSetDeemphasis(tau: Double)
     private external fun nativeSetSquelch(on: Boolean, db: Float)
     private external fun nativeSetNR(on: Boolean)
+    private external fun nativeSetNotch(on: Boolean)
     private external fun nativeSetNrStrength(s: Float)
     private external fun nativeGetNrCpu(): Float
     private external fun nativeStartDecoderService(): Int

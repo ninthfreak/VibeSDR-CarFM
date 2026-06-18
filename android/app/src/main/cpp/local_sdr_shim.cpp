@@ -55,6 +55,7 @@
 #include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
 #include "decoders/sstv_decoder.h"  // SSTV (audio-extension image decoder)
 #include "decoders/audio_nr.h"      // self-contained spectral-subtraction audio NR
+#include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
 
 #define LOG_TAG "VibeLocalSDR"
 #ifdef __ANDROID__
@@ -225,6 +226,13 @@ struct LocalSdrShim::Impl {
     std::mutex         nrMtx;
     AudioNR*           nrEng = nullptr;
     double nrBusyNs = 0.0, nrWallNs = 0.0;  // CPU% accumulators
+
+    // Auto notch (NLMS adaptive line enhancer). Mono only; off by default.
+    // Listening-path only — applied AFTER the decoder taps so tone decoders
+    // (FT8/RTTY/CW) still see un-notched audio.
+    std::atomic<bool>  notchOn{false};
+    std::mutex         notchMtx;
+    AutoNotch*         notchEng = nullptr;
 
     // IQ + FFT. frontend is heap-allocated so a detail (FFT-size) change can
     // recreate it with fresh dsp blocks (re-init aborts; setFFTSize touches the
@@ -423,6 +431,16 @@ struct LocalSdrShim::Impl {
         { std::lock_guard<std::mutex> lk(clientMtx); sock = audioClient; }
         if (!sock || !sock->isOpen()) return;
         int ch = audioChannels.load();
+
+        // Auto notch (mono listening path, opt-in): removes steady tones before NR.
+        if (notchOn.load() && ch == 1) {
+            std::lock_guard<std::mutex> lk(notchMtx);
+            if (!notchEng) notchEng = new AutoNotch();
+            std::vector<float> mono((size_t)count);
+            for (int i = 0; i < count; i++) mono[i] = data[i].l;
+            notchEng->process(mono.data(), count);
+            for (int i = 0; i < count; i++) data[i].l = mono[i];
+        }
 
         // Audio NR (mono only, opt-in). Spectral subtraction with STFT latency —
         // output count differs from input, so the NR branch sends its own frame.
@@ -1301,6 +1319,7 @@ void LocalSdrShim::stopLocked() {
     impl->stopDecoder();
     impl->stopSpots();
     { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; }
+    { std::lock_guard<std::mutex> lk(impl->notchMtx); delete impl->notchEng; impl->notchEng = nullptr; }
     // NOTE: do NOT call listener->stop() here. acceptLoop polls accept() with a
     // 500ms timeout and checks serverRunning, so clearing it (above) exits the
     // loop on its own. net::Listener::stop() isn't idempotent (it closeSocket()s
@@ -1423,6 +1442,12 @@ void LocalSdrShim::setNrStrength(float s) {
     p->nrEng->setStrength(s);
 }
 float LocalSdrShim::getNrCpu() { return p ? p->nrCpuPct.load() : 0.0f; }
+void LocalSdrShim::setNotch(bool on) {
+    if (!p) return;
+    p->notchOn.store(on);
+    if (!on) { std::lock_guard<std::mutex> lk(p->notchMtx); if (p->notchEng) p->notchEng->reset(); }
+    LOGI("auto notch: %d", on);
+}
 void LocalSdrShim::setSampleRate(double rate) {
     if (!p || rate <= 0) return;
     Impl* impl = p;

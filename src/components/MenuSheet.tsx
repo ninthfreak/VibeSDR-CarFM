@@ -92,9 +92,12 @@ export interface MenuSheetProps {
   // squelch slider on local instances.
   localSquelch?:   number;
   onLocalSquelch?: (db: number) => void;
-  // Local SDR audio noise reduction strength (0=off..15).
+  // Local SDR audio noise reduction strength (0=off..20).
   localNR?:        number;
   onLocalNR?:      (level: number) => void;
+  // Local SDR automatic notch (adaptive line enhancer) on/off.
+  localNotch?:     boolean;
+  onLocalNotch?:   (on: boolean) => void;
   // Kiwi server-side squelch (0=off..99).
   kiwiSquelch?:    number;
   onKiwiSquelch?:  (v: number) => void;
@@ -422,7 +425,7 @@ export default function MenuSheet({
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
-  localNR = 0, onLocalNR, kiwiSquelch = 0, onKiwiSquelch,
+  localNR = 0, onLocalNR, localNotch = false, onLocalNotch, kiwiSquelch = 0, onKiwiSquelch,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
   serverLabel = null, onOwrxSquelch, onOwrxNr,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
@@ -1307,18 +1310,36 @@ export default function MenuSheet({
             </View>
             ) : null}
 
-            {/* Local SDR audio noise reduction — strength slider (0=off..15). */}
+            {/* Local SDR audio noise reduction — strength slider (0=off..20).
+                0..15 = standard depth; 16..20 push extra over-subtraction. */}
             {onLocalNR && (
               <View style={styles.bwRow}>
                 <Text style={styles.bwLabel}>NR</Text>
                 <Slider style={styles.bwSlider}
-                  minimumValue={0} maximumValue={15} step={1}
+                  minimumValue={0} maximumValue={20} step={1}
                   value={localNR}
                   onValueChange={(v: number) => onLocalNR?.(v)}
                   minimumTrackTintColor={localNR > 0 ? C.gold : C.muted}
                   maximumTrackTintColor={C.muted}
                   thumbTintColor={C.gold} />
                 <Text style={styles.bwVal}>{localNR <= 0 ? 'Off' : String(localNR)}</Text>
+              </View>
+            )}
+
+            {/* Local SDR automatic notch (adaptive line enhancer) — on/off. */}
+            {onLocalNotch && (
+              <View style={styles.bwRow}>
+                <Text style={styles.bwLabel}>NOTCH</Text>
+                <View style={{ flex: 1 }} />
+                <TouchableOpacity onPress={() => onLocalNotch?.(!localNotch)} hitSlop={8}
+                  style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
+                           backgroundColor: localNotch ? C.gold : 'transparent',
+                           borderWidth: 1, borderColor: localNotch ? C.gold : C.muted }}>
+                  <Text style={{ color: localNotch ? C.bg : C.muted,
+                                 fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
+                    {localNotch ? 'ON' : 'OFF'}
+                  </Text>
+                </TouchableOpacity>
               </View>
             )}
 

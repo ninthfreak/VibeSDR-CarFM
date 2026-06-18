@@ -1,8 +1,23 @@
-// VibeSDR V4 — self-contained spectral-subtraction audio NR.
+// VibeSDR V4 — MMSE spectral-weighting audio NR (Kim & Ruwisch / Ephraim-Malah).
 #include "audio_nr.h"
 #include <cmath>
+#include <algorithm>
 
 namespace vibe {
+
+// Fixed algorithm constants (from the KiwiSDR "spectral NR" reference).
+static const float kPsthr  = 0.99f;   // smoothed speech-probability threshold
+static const float kPnsaf  = 0.01f;   // noise-probability safety value
+static const float kPsini  = 0.5f;    // initial speech probability
+static const float kPspri  = 0.5f;    // prior speech probability
+static const float kAlpha  = 0.95f;   // decision-directed a-priori SNR smoothing
+static const float kAx     = 0.8f;    // noise PSD smoothing (per 21 ms frame)
+static const float kAp     = 0.9f;    // speech-prob smoothing
+static const float kAsnrDb = 30.0f;   // assumed a-priori SNR when speech present
+static const float kSnrPostMax = 1000.0f;
+static const float kSnrPrioMin = 0.001f;   // -30 dB
+static const int   kNRwidth = 4;      // musical-noise cross-bin average half-width
+static const int   kInitFrames = 16;  // ~0.34 s of noise priming after a reset
 
 AudioNR::AudioNR() {
     fwd = kiss_fftr_alloc(N, 0, nullptr, nullptr);
@@ -14,8 +29,19 @@ AudioNR::AudioNR() {
     }
     ola.assign(N, 0.0f);
     frame.resize(N);
-    noise.assign(N / 2 + 1, 0.0f);
-    spec.resize(N / 2 + 1);
+    spec.resize(K);
+    pw.assign(K, 0.0f);
+    xt.assign(K, 0.0f);
+    pslp.assign(K, kPsini);
+    hkOld.assign(K, 1.0f);
+    gain.assign(K, 1.0f);
+    gtmp.assign(K, 1.0f);
+
+    // a-priori-SNR (H1) constants — xih1 = 10^(asnr_dB/10).
+    xih1  = std::pow(10.0f, kAsnrDb / 10.0f);
+    xih1r = 1.0f / (1.0f + xih1) - 1.0f;
+    pfac  = (1.0f / kPspri - 1.0f) * (1.0f + xih1);
+    reset();
 }
 
 AudioNR::~AudioNR() {
@@ -26,47 +52,93 @@ AudioNR::~AudioNR() {
 void AudioNR::reset() {
     inBuf.clear();
     std::fill(ola.begin(), ola.end(), 0.0f);
-    std::fill(noise.begin(), noise.end(), 0.0f);
+    std::fill(xt.begin(), xt.end(), 0.0f);
+    std::fill(pslp.begin(), pslp.end(), kPsini);
+    std::fill(hkOld.begin(), hkOld.end(), 1.0f);
+    std::fill(gain.begin(), gain.end(), 1.0f);
+    initStage = 1;     // prime the noise estimate before reducing
+    initCount = 0;
     primed = false;
 }
 
 void AudioNR::process(const float* in, int count, std::vector<float>& out) {
     inBuf.insert(inBuf.end(), in, in + count);
-    // Map strength → floor gain (residual noise) + over-subtraction factor.
-    // weak:  beta 1.0, gmin 0.30 (gentle)   strong: beta 3.0, gmin 0.008 (deep)
-    const float beta = 1.0f + 2.0f * strength;
-    const float gmin = 0.30f - 0.292f * strength;
     const float invN = 1.0f / (float)N;
+    // Strength 0..1 → residual-noise floor: gentle (-14 dB) … deep (-60 dB).
+    const float gmin = std::max(0.001f, 0.2f - 0.199f * strength);
+    // Strength >1 (slider 16..20) → over-subtraction: scale the noise PSD used for
+    // the gain SNR (not the tracker) so weak-SNR bins are suppressed harder.
+    const float osf = 1.0f + 1.5f * std::max(0.0f, strength - 1.0f);
+    const int   lo = 1, hi = K - 1;
 
     while ((int)inBuf.size() >= N) {
-        // Analysis: window the current frame.
+        // Analysis: window then forward real-FFT.
         for (int i = 0; i < N; i++) frame[i] = inBuf[i] * win[i];
         kiss_fftr(fwd, frame.data(), spec.data());
+        for (int k = 0; k < K; k++) pw[k] = spec[k].r * spec[k].r + spec[k].i * spec[k].i;
 
-        // Per-bin spectral subtraction.
-        for (int k = 0; k <= N / 2; k++) {
-            float P = spec[k].r * spec[k].r + spec[k].i * spec[k].i;
-            float& Nn = noise[k];
-            if (Nn <= 0.0f) Nn = P;
-            if (P < Nn) Nn = P; else Nn += 0.02f * (P - Nn);   // fast-down / slow-up
-            float g = (P > beta * Nn) ? (P - beta * Nn) / P : 0.0f;  // over-subtraction
-            if (g < gmin) g = gmin;
-            float ag = std::sqrt(g);                            // amplitude gain
-            spec[k].r *= ag; spec[k].i *= ag;
+        if (initStage == 1) {
+            // Prime the noise PSD with a short running average (no reduction yet).
+            for (int k = 0; k < K; k++) xt[k] += pw[k] / (float)kInitFrames;
+            if (++initCount >= kInitFrames) {
+                for (int k = 0; k < K; k++) xt[k] *= kPsini;
+                initStage = 2;
+            }
+            // gain stays 1.0 — pass through during priming.
+        } else {
+            // 1) MMSE noise-PSD update via per-bin speech-presence probability.
+            for (int k = lo; k <= hi; k++) {
+                float xtk = xt[k] > 1e-12f ? xt[k] : 1e-12f;
+                float ph1y = 1.0f / (1.0f + pfac * std::exp(xih1r * pw[k] / xtk));
+                pslp[k] = kAp * pslp[k] + (1.0f - kAp) * ph1y;
+                if (pslp[k] > kPsthr) ph1y = 1.0f - kPnsaf;
+                else                  ph1y = std::min(ph1y, 1.0f);
+                float xtr = (1.0f - ph1y) * pw[k] + ph1y * xtk;
+                xt[k] = kAx * xtk + (1.0f - kAx) * xtr;
+            }
+            // 2) a-posteriori + decision-directed a-priori SNR → MMSE-STSA gain.
+            for (int k = lo; k <= hi; k++) {
+                float xtk = (xt[k] > 1e-12f ? xt[k] : 1e-12f) * osf;
+                float post = std::max(std::min(pw[k] / xtk, kSnrPostMax), kSnrPrioMin);
+                float prio = std::max(kAlpha * hkOld[k]
+                                      + (1.0f - kAlpha) * std::max(post - 1.0f, 0.0f), 0.0f);
+                float v = prio * post / (1.0f + prio);
+                float g = std::max((1.0f / post) * std::sqrt(0.7212f * v + v * v), gmin);
+                gain[k] = g;
+                hkOld[k] = post * g * g;
+            }
+            // 3) Musical-noise reduction: dynamically average the gains across bins
+            //    when the band-wide reduction is deep (low post/pre power ratio).
+            float pre = 0.0f, postP = 0.0f;
+            for (int k = lo; k <= hi; k++) { pre += pw[k]; postP += gain[k] * gain[k] * pw[k]; }
+            float ratio = pre > 0.0f ? postP / pre : 1.0f;
+            const float pth = 0.4f;
+            int NN = (ratio > pth) ? 1
+                                   : 1 + 2 * (int)(0.5f + kNRwidth * (1.0f - ratio / pth));
+            if (NN > 1) {
+                int h2 = NN / 2;
+                for (int k = lo; k <= hi; k++) {
+                    int a = std::max(lo, k - h2), b = std::min(hi, k + h2);
+                    float s = 0.0f; for (int m = a; m <= b; m++) s += gain[m];
+                    gtmp[k] = s / (float)(b - a + 1);
+                }
+                for (int k = lo; k <= hi; k++) gain[k] = gtmp[k];
+            }
+            gain[0] = gain[lo];
+            // 4) Apply the spectral weighting.
+            for (int k = 0; k < K; k++) { spec[k].r *= gain[k]; spec[k].i *= gain[k]; }
         }
 
         kiss_fftri(inv, spec.data(), frame.data());
 
-        // Synthesis window + overlap-add; emit HOP samples.
+        // Synthesis window + overlap-add; emit HOP samples once the OLA is primed.
         for (int i = 0; i < N; i++) ola[i] += frame[i] * invN * win[i];
         if (primed) {
             for (int i = 0; i < HOP; i++) out.push_back(ola[i]);
         }
         primed = true;
-        // Shift OLA buffer left by HOP, zero the tail.
         for (int i = 0; i < N - HOP; i++) ola[i] = ola[i + HOP];
         for (int i = N - HOP; i < N; i++) ola[i] = 0.0f;
-        // Consume HOP input samples.
         inBuf.erase(inBuf.begin(), inBuf.begin() + HOP);
     }
 }
