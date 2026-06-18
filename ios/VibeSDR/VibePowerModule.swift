@@ -122,6 +122,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var lastSrCycleAt = Date(timeIntervalSince1970: 0)
   private var isRunning     = false
   private var isMuted       = false
+  // External-audio pause behaviour (matches Android): "release" (OWRX/Kiwi —
+  // pause drops the card), "resume" (local/RTL-TCP — pause mutes in place, keeps
+  // the card, play resumes; no server to disconnect).
+  private var externalPauseMode = "release"
   // Pause disconnects the SDR (the server drops it almost instantly on suspend
   // anyway) and Play reconnects; these track the two non-playing media-card
   // states: cleanly disconnected vs a reconnect that failed (server full /
@@ -210,10 +214,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var externalAudio = false
   private var externalRate: Double = 12000
 
-  @objc func startExternalAudio(_ sampleRate: NSNumber) {
-    NSLog("[VibePowerModule] startExternalAudio %@", sampleRate)
+  @objc func startExternalAudio(_ sampleRate: NSNumber, pauseMode: String) {
+    NSLog("[VibePowerModule] startExternalAudio %@ pauseMode=%@", sampleRate, pauseMode)
     stopEngine()
     externalAudio = true
+    externalPauseMode = pauseMode.isEmpty ? "release" : pauseMode
     externalRate  = max(8000, sampleRate.doubleValue)
     isRunning     = true
     isMuted       = false
@@ -231,21 +236,29 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   /// base64 of little-endian Int16 mono PCM at `sampleRate` → resample → play.
   /// Per-frame rate so type-2 (12 kHz) and type-4 HD/WFM (48 kHz) both work.
-  @objc func pushExternalPcm(_ base64: String, sampleRate: NSNumber) {
+  @objc func pushExternalPcm(_ base64: String, sampleRate: NSNumber, channels: NSNumber) {
     guard externalAudio, !isMuted,
           let data = Data(base64Encoded: base64), data.count >= 2 else { return }
     let rate = max(8000, sampleRate.doubleValue)
+    let ch2  = channels.intValue == 2   // interleaved L,R (local WFM stereo)
     audioQ.async { [weak self] in
       guard let self else { return }
-      let n = data.count / 2
-      guard let inFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+      let total = data.count / 2
+      let n = ch2 ? total / 2 : total
+      guard n > 0,
+            let inFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                       sampleRate: rate, channels: 1, interleaved: false),
             let inBuf = AVAudioPCMBuffer(pcmFormat: inFmt, frameCapacity: AVAudioFrameCount(n)) else { return }
       inBuf.frameLength = AVAudioFrameCount(n)
       let ch = inBuf.floatChannelData![0]
       data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
         let s16 = raw.bindMemory(to: Int16.self)
-        for i in 0..<n { ch[i] = Float(Int16(littleEndian: s16[i])) / 32768.0 }
+        if ch2 {
+          // Downmix interleaved L,R → mono (the engine plays mono).
+          for i in 0..<n { ch[i] = (Float(Int16(littleEndian: s16[i*2])) + Float(Int16(littleEndian: s16[i*2+1]))) / 65536.0 }
+        } else {
+          for i in 0..<n { ch[i] = Float(Int16(littleEndian: s16[i])) / 32768.0 }
+        }
       }
       self.packetCount += 1
       self.lastPacketAt = Date()
@@ -477,7 +490,29 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // WS on the VibeMuted event and shows an in-app reconnect prompt instead, so
     // reconnection (and the profile reset) is always a deliberate user action.
     if externalAudio {
-      if muted { DispatchQueue.main.async { self.stopExternalAudio() } }
+      switch externalPauseMode {
+      case "resume":
+        // Local / RTL-TCP: no server to disconnect. The shim keeps running and
+        // pushExternalPcm drops samples while muted, so mute in place and keep the
+        // media card (▶ resumes). We must actually pause()/play() the player node:
+        // if we only gate the buffers, iOS still sees a "playing" node and springs
+        // the lock-screen button back to ▶. updateNowPlaying() reads isMuted so the
+        // card reflects the paused state.
+        DispatchQueue.main.async {
+          if muted { self.playerNode?.pause() }
+          else     { try? self.audioEngine?.start(); self.playerNode?.play() }
+          self.updateNowPlaying()
+        }
+      case "reconnect":
+        // Kiwi: behave like UberSDR — pause disconnects but keeps the card, play
+        // reconnects. JS closes/reopens the Kiwi WS off the VibeDataSaver* events.
+        DispatchQueue.main.async {
+          if muted { self.disconnectForPause() }
+          else if self.dataSaverDisconnected { self.resumeFromDataSaver() }
+        }
+      default:  // "release" — OWRX: pause drops the card; reconnect is manual in-app.
+        if muted { DispatchQueue.main.async { self.stopExternalAudio() } }
+      }
       return
     }
     // Pause = disconnect, Play = reconnect. The server drops the session almost
@@ -787,6 +822,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // mode (which made UberSDR pause take the external release path).
     // startExternalAudio re-sets it true right after its stopEngine() call.
     externalAudio = false
+    externalPauseMode = "release"
     healthTimer?.invalidate()
     healthTimer = nil
     wsTask?.cancel(with: .goingAway, reason: nil)
@@ -1066,11 +1102,15 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       title  = npTitleOverride ?? fallbackTitle
       artist = npArtistOverride ?? fallbackArtist
     }
+    // RTL-TCP/local "resume" pause = muted in place (engine kept alive) — that's a
+    // paused state for the lock screen even though we're not disconnected.
+    let paused = dataSaverDisconnected || reconnectFailed
+              || (externalAudio && externalPauseMode == "resume" && isMuted)
     var info: [String: Any] = [
       MPMediaItemPropertyTitle:             title,
       MPMediaItemPropertyArtist:            artist,
       MPMediaItemPropertyAlbumTitle:        "VibeSDR",
-      MPNowPlayingInfoPropertyPlaybackRate: (dataSaverDisconnected || reconnectFailed) ? 0.0 : 1.0,
+      MPNowPlayingInfoPropertyPlaybackRate: paused ? 0.0 : 1.0,
       MPNowPlayingInfoPropertyIsLiveStream: true,
     ]
     if let art = npArtwork { info[MPMediaItemPropertyArtwork] = art }
@@ -1081,7 +1121,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // in the info dict. Without this the button springs back to ▶ on pause and
     // iOS keeps grabbing shared AirPods from the Mac because it thinks we're
     // still playing.
-    center.playbackState = (dataSaverDisconnected || reconnectFailed) ? .paused : .playing
+    center.playbackState = paused ? .paused : .playing
   }
 
   /** VTS-aware now-playing strings from JS (empty string clears). */
@@ -1128,6 +1168,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         drawSymbol("exclamationmark.circle.fill", in: b, tint: amber)
       } else if dataSaverDisconnected {
         drawSymbol("wifi.slash", in: rect, tint: red)
+      } else if npArtworkType == "rtltcp", let icon = UIImage(named: "logo_rtltcp") {
+        // RTL-TCP icon is black line art → amber-tint it (matches the Android card
+        // + the RTL-TCP menu icon) so it reads on the dark album base.
+        icon.withTintColor(amber, renderingMode: .alwaysOriginal).draw(in: rect)
       } else if let overlay = UIImage(named: "logo_\(npArtworkType)") {
         overlay.draw(in: rect)
       }

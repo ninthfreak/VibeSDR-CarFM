@@ -54,3 +54,7 @@ Reference/
 android/keystore.properties
 android/app/upload-keystore.jks
 *.keystore
+
+# stray local iOS build/derived-data dirs
+ios/build-check/
+ios/build/

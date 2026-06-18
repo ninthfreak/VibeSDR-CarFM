@@ -292,8 +292,10 @@ function chatTs(rfc: string): string {
 // SAM omitted — SDR++ (the local-SDR DSP) has no synchronous-AM demodulator.
 const LOCAL_MODES: { id: string; label: string }[] = [
   { id: 'wfm', label: 'WFM' }, { id: 'nfm', label: 'NFM' }, { id: 'am', label: 'AM' },
-  { id: 'usb', label: 'USB' }, { id: 'lsb', label: 'LSB' },
   { id: 'cwu', label: 'CW' },
+  // LSB + USB last so they're the two large bottom buttons (the SSB pair),
+  // with USB as the final option (sits below LSB in the grid).
+  { id: 'lsb', label: 'LSB' }, { id: 'usb', label: 'USB' },
 ];
 
 export default function SDRScreen({ route, navigation }: Props) {
@@ -3109,6 +3111,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         serverUrl={baseUrl}
         onClose={() => setMenuOpen(false)}
         onLocalHardware={isLocal ? () => { setMenuOpen(false); setHwOpen(true); } : undefined}
+        isTcp={!!route.params.isTcp}
         onColormap={setColormap}
         onDbMin={setDbMin}
         onDbMax={setDbMax}

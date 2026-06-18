@@ -169,6 +169,8 @@ export interface MenuSheetProps {
   onBack?:          () => void;
   /** V4 local hardware: opens the RTL-SDR controls submenu (Android only). */
   onLocalHardware?: () => void;
+  /** RTL-TCP session — footer shows the RTL-TCP icon + label (vs USB for direct). */
+  isTcp?:          boolean;
   onAdminLink?:     (path: string, title: string) => void;
   onResetSettings?: () => void;
   onDisplaySettings?: () => void;
@@ -438,7 +440,7 @@ export default function MenuSheet({
   searchBookmarks = [], searchBands = [], onSearchTune,
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
-  onClose, onBack, onLocalHardware, onAdminLink, onResetSettings, onDisplaySettings,
+  onClose, onBack, onLocalHardware, isTcp, onAdminLink, onResetSettings, onDisplaySettings,
   serverVersion = null, onAbout,
   onZoomIn, onZoomOut, onSetDefault, isDefaultInstance = false,
   decMode = null, decOn = false, onDecToggle,
@@ -1595,7 +1597,10 @@ export default function MenuSheet({
               <View style={styles.footerServer}>
                 {/* OWRX's logo is a black antenna that vanishes on the dark UI —
                     give it a light chip so it reads. */}
-                {isLocal ? (
+                {isTcp ? (
+                  <Image source={require('../../assets/rtltcp.png')}
+                    style={[styles.footerLogo, { tintColor: '#cfe3ff' }]} resizeMode="contain" />
+                ) : isLocal ? (
                   <View style={styles.footerLogo}>
                     <UsbSdrIcon size={30} color="#cfe3ff" strokeWidth={2.4} />
                   </View>
@@ -1605,7 +1610,7 @@ export default function MenuSheet({
                   </View>
                 )}
                 <View>
-                  <Text style={styles.footerServerName}>{isLocal ? 'Local Hardware'
+                  <Text style={styles.footerServerName}>{isTcp ? 'RTL-TCP' : isLocal ? 'Local Hardware'
                     : serverLabel ?? (serverType === 'kiwi' ? 'KiwiSDR' : isOwrx ? 'OpenWebRX' : 'UberSDR')}</Text>
                   {isLocal ? (
                     <Text style={styles.footerServerVer}>via SDR++ Brown 1.2.1</Text>

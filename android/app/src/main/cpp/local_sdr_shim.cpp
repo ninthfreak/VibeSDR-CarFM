@@ -12,8 +12,16 @@
 
 #include "local_sdr_shim.h"
 
-#include <android/log.h>
-#include <rtl-sdr.h>
+// Android builds the USB/librtlsdr local-hardware path; iOS builds only the
+// RTL-TCP path (no USB host SDR on iOS). The USB code stays compiled on iOS via a
+// no-op rtl-sdr stub (start() is never invoked there), so the shared DSP/net/
+// RTL-TCP code below needs no per-call-site #ifdefs.
+#ifdef __ANDROID__
+  #include <android/log.h>
+  #include <rtl-sdr.h>
+#else
+  #include "rtl_sdr_stub.h"   // iOS: no-op rtlsdr_* decls so the USB path compiles
+#endif
 #include <unistd.h>
 
 #include <algorithm>
@@ -49,8 +57,14 @@
 #include "decoders/audio_nr.h"      // self-contained spectral-subtraction audio NR
 
 #define LOG_TAG "VibeLocalSDR"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#ifdef __ANDROID__
+  #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+  #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#else
+  #include <cstdio>
+  #define LOGI(...) do { fprintf(stderr, "[" LOG_TAG "] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while (0)
+  #define LOGE(...) do { fprintf(stderr, "[" LOG_TAG " E] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while (0)
+#endif
 
 namespace vibe {
 namespace {
@@ -222,8 +236,23 @@ struct LocalSdrShim::Impl {
     int accumCount = 0;
     std::thread rtlThread;
 
-    // VFO offset for the current dial freq + mode (SSB sideband correction).
-    double vfoOffsetNow() { return audioFreq.load() - rtlCenter.load() + demodOffset; }
+    // Offset tuning: the RTL is physically tuned HW_OFFSET_HZ ABOVE the logical
+    // centre (rtlCenter) so the zero-IF DC spike never lands on the channel —
+    // on-carrier AM otherwise breaks up. This is purely internal: the client
+    // protocol (rtlCenter as the display centre) is unchanged; we compensate in
+    // the VFO offset and shift the displayed FFT crop back by the same amount.
+    static constexpr double HW_OFFSET_HZ = 15000.0;
+
+    // Physical DC of the FFT = rtlCenter + HW_OFFSET_HZ, so the VFO (at audioFreq)
+    // sits HW_OFFSET_HZ below DC.
+    double vfoOffsetNow() { return audioFreq.load() - rtlCenter.load() - HW_OFFSET_HZ + demodOffset; }
+
+    // Tune the radio to (logical centre + HW_OFFSET_HZ).
+    void tuneHw(double logicalCenter) {
+        uint32_t hz = (uint32_t)llround(logicalCenter + HW_OFFSET_HZ);
+        if (useTcp()) sendTcpCmd(0x01, hz);
+        else if (dev) rtlsdr_set_center_freq(dev, hz);
+    }
 
     // audio chain (rebuilt on mode change)
     dsp::channel::RxVFO* vfo = nullptr;
@@ -236,6 +265,7 @@ struct LocalSdrShim::Impl {
     dsp::filter::Deemphasis<dsp::stereo_t>* deemph = nullptr;   // FM de-emphasis (50/75us)
     dsp::sink::Handler<dsp::stereo_t>* audioSink = nullptr;
     std::atomic<int> audioChannels{1};
+    std::atomic<float> audioGain{1.0f};   // per-mode output trim (AM is hotter)
     double deempTau = 50e-6;   // FM de-emphasis time constant (0 = off); 50us EU / 75us US
 
     // FM extras (WFM): RDS decode + stereo-pilot detection.
@@ -315,11 +345,17 @@ struct LocalSdrShim::Impl {
             uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count();
             std::memcpy(&frame[6], &ts, 8);
+            // Offset tuning: the physical DC sits HW_OFFSET_HZ above rtlCenter, so
+            // shift the crop down by that many source bins to keep the display
+            // centred on the logical centre (rtlCenter) — the DC spike then draws
+            // HW_OFFSET_HZ off-centre, harmlessly outside the channel. Protocol
+            // (rtlCenter as the centre) is unchanged, so tuning/zoom stay solid.
+            const double hwOffsetBin = HW_OFFSET_HZ * (double)bins / sampleRate;
             uint64_t f = (uint64_t)llround(rtlCenter.load());
             std::memcpy(&frame[14], &f, 8);
             for (int i = 0; i < outBins; i++) {
                 int signedOut = (i <= outBins / 2) ? i : i - outBins;
-                double center = signedOut * step;          // fractional src index (signed)
+                double center = signedOut * step - hwOffsetBin;  // fractional src index (signed)
                 int lo = (int)std::floor(center - step / 2.0);
                 int hi = (int)std::ceil(center + step / 2.0);
                 if (hi <= lo) hi = lo + 1;
@@ -423,8 +459,9 @@ struct LocalSdrShim::Impl {
         frame[0] = (uint8_t)ch; frame[1] = 0;
         uint32_t sr = (uint32_t)AUDIO_SR; std::memcpy(&frame[2], &sr, 4);
         int16_t* pcm = (int16_t*)(frame.data() + 6);
-        auto cvt = [](float v) -> int16_t {
-            int s = (int)lround(v * 32767.0f);
+        const float g = audioGain.load();
+        auto cvt = [g](float v) -> int16_t {
+            int s = (int)lround(v * g * 32767.0f);
             return (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
         };
         if (ch == 2) {
@@ -590,6 +627,10 @@ struct LocalSdrShim::Impl {
         teardownAudio();
         ModeParams mp = paramsFor(mode);
         audioChannels.store(mp.channels);
+        // AM envelope-detected audio (DSB full-carrier) lands ~2x hotter than the
+        // SSB/FM paths at the same AGC setpoint, so trim it to match level with the
+        // rest (and with the server-side UberSDR demod).
+        audioGain.store(mp.kind == ModeParams::AM ? 0.5f : 1.0f);
         // SSB sideband correction: USB passband sits above the carrier (tune at
         // lower edge → VFO +bw/2), LSB below (−bw/2). Without this the audio is
         // shifted ±bw/2 → the SSB "beat"/high-pitch.
@@ -603,7 +644,11 @@ struct LocalSdrShim::Impl {
         switch (mp.kind) {
             case ModeParams::AM: {
                 auto* d = new dsp::demod::AM<dsp::stereo_t>();
-                d->init(&vfo->out, dsp::demod::AM<dsp::stereo_t>::AGCMode::CARRIER,
+                // AUDIO AGC (SDR++'s default), NOT CARRIER: carrier-AGC normalises by
+                // the carrier-magnitude estimate and distorts on fading/weak carriers.
+                // The real on-carrier distortion was the RTL DC spike (see HW_OFFSET_HZ
+                // offset tuning), not the AGC — so we use SDR++'s exact defaults here.
+                d->init(&vfo->out, dsp::demod::AM<dsp::stereo_t>::AGCMode::AUDIO,
                         mp.bandwidth, 50.0/mp.ifRate, 5.0/mp.ifRate, 100.0/mp.ifRate, mp.ifRate);
                 demod = d; demodDeleter = [](void* x){ delete (dsp::demod::AM<dsp::stereo_t>*)x; };
                 break;
@@ -708,8 +753,7 @@ struct LocalSdrShim::Impl {
         double limit = sampleRate / 2.0 - 50000.0;
         if (std::fabs(freq - rtlCenter.load()) > limit) {
             rtlCenter.store(freq);
-            if (useTcp()) sendTcpCmd(0x01, (uint32_t)llround(freq));
-            else if (dev) rtlsdr_set_center_freq(dev, (uint32_t)llround(freq));
+            tuneHw(freq);
         }
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
         if (vfo) vfo->setOffset(vfoOffsetNow());
@@ -789,8 +833,7 @@ struct LocalSdrShim::Impl {
                 // keeps the centre, so this avoids per-gesture retune clicks).
                 if (std::fabs(v - rtlCenter.load()) > 1.0) {
                     rtlCenter.store(v);
-                    if (useTcp()) sendTcpCmd(0x01, (uint32_t)llround(v));
-                    else if (dev) rtlsdr_set_center_freq(dev, (uint32_t)llround(v));
+                    tuneHw(v);
                     std::lock_guard<std::recursive_mutex> lk(modeMtx);
                     if (vfo) vfo->setOffset(vfoOffsetNow());
                 }
@@ -1113,7 +1156,8 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     int ret = rtlsdr_open_sys_dev(&impl->dev, (intptr_t)impl->usbFd);
     if (ret != 0 || !impl->dev) { err = "rtlsdr_open_sys_dev failed: " + std::to_string(ret); ::close(impl->usbFd); delete impl; return -1; }
     rtlsdr_set_sample_rate(impl->dev, (uint32_t)sampleRate);
-    rtlsdr_set_center_freq(impl->dev, (uint32_t)llround(centerFreq));
+    // Offset tuning: physically tune HW_OFFSET_HZ above the logical centre.
+    impl->tuneHw(centerFreq);
     if (gainTenthDb < 0) rtlsdr_set_tuner_gain_mode(impl->dev, 0);
     else { rtlsdr_set_tuner_gain_mode(impl->dev, 1); rtlsdr_set_tuner_gain(impl->dev, gainTenthDb); }
     rtlsdr_reset_buffer(impl->dev);
@@ -1185,7 +1229,7 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
 
     // Initial config via rtl_tcp commands (0x02 rate, 0x01 freq, 0x03/0x04 gain).
     impl->sendTcpCmd(0x02, (uint32_t)sampleRate);
-    impl->sendTcpCmd(0x01, (uint32_t)llround(centerFreq));
+    impl->tuneHw(impl->rtlCenter.load());   // offset tuning (HW_OFFSET_HZ above centre)
     if (gainTenthDb < 0) { impl->sendTcpCmd(0x03, 0); }                       // auto
     else { impl->sendTcpCmd(0x03, 1); impl->sendTcpCmd(0x04, (uint32_t)gainTenthDb); }
 

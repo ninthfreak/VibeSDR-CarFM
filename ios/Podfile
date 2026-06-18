@@ -24,6 +24,9 @@ prepare_react_native_project!
 target 'VibeSDR' do
   use_expo_modules!
 
+  # VibeSDR local-SDR shim (RTL-TCP) — SDR++ Brown core + shim as a local pod.
+  pod 'VibeLocalSDR', :path => '../modules/vibe-local-sdr'
+
   if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
     config_command = ['node', '-e', "process.argv=['', '', 'config'];require('@react-native-community/cli').run()"];
   else
