@@ -74,6 +74,18 @@ void RxPipeline::rebuildAudio() {
             const int rch = (int)std::llround(chFs_);
             resampR_ = std::make_unique<RationalResampler>(rch, outRate_);
             stereo_ = true; lastStereo_ = false;
+
+            // RDS: coherent 57 kHz demod -> parallel-phase data-link decoders.
+            RdsDecoder::Callbacks rcb; rcb.ctx = this;
+            rcb.ps = [](void* c, uint16_t pi, const char* ps) {
+                auto* self = (RxPipeline*)c;
+                if (self->cb_.rdsPs) self->cb_.rdsPs(self->cb_.ctx, pi, ps);
+            };
+            rcb.radiotext = [](void* c, const char* rt) {
+                auto* self = (RxPipeline*)c;
+                if (self->cb_.rdsText) self->cb_.rdsText(self->cb_.ctx, rt);
+            };
+            rdsDemod_.configure(chFs_, rcb);
             break;
         }
     }
@@ -126,12 +138,17 @@ void RxPipeline::feed(const cf32* iq, int n) {
             // ── WFM stereo MPX decode ────────────────────────────────────────
             // demodBuf_ is the MPX. L+R = LPF(mpx); L-R = LPF(mpx * 38kHz_ref).
             lprBuf_.resize(nc); lmrBuf_.resize(nc);
+            ref57Buf_.resize(nc); bitClkBuf_.resize(nc);
             for (int i = 0; i < nc; ++i) {
-                float r38 = 0.0f;
-                pll_.step(demodBuf_[i], &r38, nullptr);
+                float r38 = 0.0f, r57 = 0.0f, bclk = 0.0f;
+                pll_.step(demodBuf_[i], &r38, &r57, &bclk);
                 lprBuf_[i] = demodBuf_[i];
                 lmrBuf_[i] = demodBuf_[i] * r38 * 2.0f;   // coherent gain comp
+                ref57Buf_[i] = r57; bitClkBuf_[i] = bclk;
             }
+            // RDS (only meaningful once the pilot is locked).
+            if ((cb_.rdsPs || cb_.rdsText) && pll_.locked())
+                rdsDemod_.process(demodBuf_.data(), ref57Buf_.data(), bitClkBuf_.data(), nc);
             leftBuf_.resize(audioLpf_->maxOut(nc));
             rightBuf_.resize(lmrLpf_->maxOut(nc));
             const int n1 = audioLpf_->process(lprBuf_.data(), nc, leftBuf_.data()); // L+R

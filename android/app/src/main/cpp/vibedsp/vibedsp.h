@@ -208,14 +208,17 @@ private:
 class StereoPLL {
 public:
     void configure(double pilotHz, double rate);
-    // Advance one MPX sample; outputs coherent references. ref38/ref57 may be null.
-    void step(float mpx, float* ref38, float* ref57);
+    // Advance one MPX sample; outputs coherent references (any may be null):
+    // ref38 (L-R detection), ref57 (RDS carrier), bitClk (RDS 1187.5 Hz data
+    // clock = pilot/16, phase in [0,2*pi)).
+    void step(float mpx, float* ref38, float* ref57, float* bitClk = nullptr);
     bool locked() const { return lockAmp_ > 0.05f; }
     float lockAmp() const { return lockAmp_; }
-    void reset() { phase_ = 0.0; dphase_ = w0_; lockAmp_ = 0.0f; }
+    void reset() { phase_ = 0.0; dphase_ = w0_; lockAmp_ = 0.0f; cycle_ = 0; }
 private:
     double w0_ = 0.0, phase_ = 0.0, dphase_ = 0.0;
     double alpha_ = 0.0, beta_ = 0.0;
+    int cycle_ = 0;            // pilot-cycle counter within a bit (0..15)
     float lockAmp_ = 0.0f;
 };
 
@@ -265,6 +268,32 @@ private:
     Callbacks cb_{};
 };
 
+// ── RDS DSP front-end ────────────────────────────────────────────────────--
+// Coherent 57 kHz demod of the MPX -> biphase symbol recovery -> differential
+// decode -> data bits into an RdsDecoder. Uses the StereoPLL's coherent 57 kHz
+// reference and pilot-locked bit clock (no separate timing loop). Original code.
+class RdsDemod {
+public:
+    // The bit clock is frequency-accurate (pilot-locked) but its symbol-boundary
+    // phase is unknown, so we run NPH timing-phase hypotheses in parallel, each
+    // feeding its own RdsDecoder; only the aligned one achieves block sync and
+    // emits PS/RadioText via the shared callbacks.
+    void configure(double mpxRate, const RdsDecoder::Callbacks& cb);
+    void reset();
+    // Per-block: mpx samples + the PLL's coherent ref57 and bitClk arrays.
+    void process(const float* mpx, const float* ref57, const float* bitClk, int n);
+private:
+    static constexpr int NPH = 16;
+    std::unique_ptr<RealFir> lpf_;     // isolate the RDS baseband after downconvert
+    double groupDelayPhase_ = 0.0;     // LPF delay expressed in bit-clock phase
+    float acc_[NPH] = {0};
+    float prevPhC_[NPH] = {0};
+    int   prevSym_[NPH] = {0};
+    bool  started_ = false;
+    RdsDecoder dec_[NPH];
+    std::vector<float> xbuf_, sbuf_;
+};
+
 // ── RxPipeline (the native engine) ───────────────────────────────────────--
 // The complete IQ -> {spectrum, audio} chain that the shim's "Local Hardware
 // (Native)" path runs, replacing the SDR++ Brown graph. Feed it raw IQ from the
@@ -282,9 +311,10 @@ public:
         // float audio at exactly outRate Hz. channels=1 -> mono (length frames);
         // channels=2 -> interleaved L,R (length 2*frames). WFM stereo uses 2.
         void (*audio)(void* ctx, const float* pcm, int frames, int channels, int outRate) = nullptr;
-        // Optional: WFM RDS group (4x 16-bit blocks A,B,C,D) when block sync is
-        // good. The shim feeds these to its existing rds::Decoder UI path.
-        void (*rdsGroup)(void* ctx, const uint16_t blocks[4], bool valid[4]) = nullptr;
+        // Optional: WFM RDS programme-service name (8 chars) + station PI code.
+        void (*rdsPs)(void* ctx, uint16_t pi, const char* ps8) = nullptr;
+        // Optional: WFM RDS RadioText (up to 64 chars).
+        void (*rdsText)(void* ctx, const char* rt64) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
         void (*stereo)(void* ctx, bool locked) = nullptr;
     };
@@ -333,6 +363,9 @@ private:
     std::unique_ptr<RationalResampler> resampR_;    // right channel
     std::vector<float> lprBuf_, lmrBuf_, leftBuf_, rightBuf_, rOutBuf_, ilvBuf_;
     bool lastStereo_ = false;
+    // WFM RDS
+    RdsDemod rdsDemod_;
+    std::vector<float> ref57Buf_, bitClkBuf_;
     int chDecim_ = 1;
     double chFs_ = 0.0;
     std::vector<cf32> baseBuf_, chBuf_;

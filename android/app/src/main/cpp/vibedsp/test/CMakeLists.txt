@@ -38,3 +38,7 @@ target_compile_options(vibedsp_pipeline_tests PRIVATE -O2 -Wall)
 add_executable(vibedsp_rds_tests test_rds.cpp ${DSP_SRC})
 target_include_directories(vibedsp_rds_tests PRIVATE ${DSP})
 target_compile_options(vibedsp_rds_tests PRIVATE -O2 -Wall)
+
+add_executable(vibedsp_rds_dsp_tests test_rds_dsp.cpp ${DSP_SRC})
+target_include_directories(vibedsp_rds_dsp_tests PRIVATE ${DSP})
+target_compile_options(vibedsp_rds_dsp_tests PRIVATE -O2 -Wall)

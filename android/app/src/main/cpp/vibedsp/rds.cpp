@@ -2,8 +2,64 @@
 // Clean-room implementation of EN 50067 / IEC 62106. Original VibeSDR code.
 #include "vibedsp.h"
 #include <cstring>
+#include <cmath>
 
 namespace vibedsp {
+
+// ── RDS DSP front-end ─────────────────────────────────────────────────────
+static constexpr double kRdsBit = 1187.5;     // bits/sec
+
+void RdsDemod::configure(double mpxRate, const RdsDecoder::Callbacks& cb) {
+    // Gentle low-pass to isolate the RDS baseband (±~2.4 kHz) after the coherent
+    // 57 kHz downconvert. After downconversion the nearest MPX content (stereo,
+    // pilot, L+R) lands well above 2.4 kHz, so a wide transition is fine.
+    const double cut = 2400.0 / mpxRate;
+    std::vector<float> taps = designLowpass(cut, cut);
+    lpf_ = std::make_unique<RealFir>(taps);
+    const double groupDelay = (taps.size() - 1) / 2.0;     // samples
+    const double bitStep = 2.0 * M_PI * kRdsBit / mpxRate; // bit-phase per sample
+    groupDelayPhase_ = std::fmod(groupDelay * bitStep, 2.0 * M_PI);
+    for (int p = 0; p < NPH; ++p) dec_[p].setCallbacks(cb);
+    reset();
+}
+
+void RdsDemod::reset() {
+    if (lpf_) lpf_->reset();
+    started_ = false;
+    for (int p = 0; p < NPH; ++p) { acc_[p] = 0.0f; prevPhC_[p] = 0.0f; prevSym_[p] = 0; dec_[p].reset(); }
+}
+
+void RdsDemod::process(const float* mpx, const float* ref57, const float* bitClk, int n) {
+    if (!lpf_) return;
+    // Coherent downconvert: mpx * cos(57k) * 2 -> RDS baseband + image @114k.
+    xbuf_.resize(n);
+    for (int i = 0; i < n; ++i) xbuf_[i] = mpx[i] * ref57[i] * 2.0f;
+    sbuf_.resize(lpf_->maxOut(n));
+    const int ns = lpf_->process(xbuf_.data(), n, sbuf_.data());
+
+    const float twoPi = 2.0f * (float)M_PI;
+    const float phaseStep = twoPi / NPH;
+    for (int i = 0; i < ns; ++i) {
+        const float s = sbuf_[i];
+        // Base symbol phase for this filtered sample (LPF delay compensated).
+        float base = bitClk[i] - (float)groupDelayPhase_;
+        for (int p = 0; p < NPH; ++p) {
+            float phC = base - p * phaseStep;
+            phC = std::fmod(phC, twoPi);
+            if (phC < 0.0f) phC += twoPi;
+            // Biphase matched integration: +1 first half-bit, -1 second.
+            acc_[p] += s * ((phC < (float)M_PI) ? 1.0f : -1.0f);
+            if (started_ && phC < prevPhC_[p]) {       // bit-clock wrap = boundary
+                const int sym = (acc_[p] >= 0.0f) ? 1 : 0;
+                dec_[p].pushBit(sym ^ prevSym_[p]);     // differential decode
+                prevSym_[p] = sym;
+                acc_[p] = 0.0f;
+            }
+            prevPhC_[p] = phC;
+        }
+        started_ = true;
+    }
+}
 
 // Generator g(x) = x^10+x^8+x^7+x^5+x^4+x^3+1 = 0x5B9. Offset words A,B,C,C',D.
 // For a valid block the syndrome (block mod g) equals the offset word value.

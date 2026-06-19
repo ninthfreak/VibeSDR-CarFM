@@ -17,7 +17,7 @@ void StereoPLL::configure(double pilotHz, double rate) {
     lockAmp_ = 0.0f;
 }
 
-void StereoPLL::step(float mpx, float* ref38, float* ref57) {
+void StereoPLL::step(float mpx, float* ref38, float* ref57, float* bitClk) {
     const double s = std::sin(phase_);
     const double c = std::cos(phase_);
     // Phase detector: pilot * quadrature. When locked, cos(phase) aligns with the
@@ -25,15 +25,18 @@ void StereoPLL::step(float mpx, float* ref38, float* ref57) {
     const double err = (double)mpx * (-s);
     dphase_ += beta_ * err;
     phase_  += dphase_ + alpha_ * err;
-    if (phase_ > 2.0 * M_PI) phase_ -= 2.0 * M_PI;
-    else if (phase_ < 0.0)   phase_ += 2.0 * M_PI;
+    if (phase_ >= 2.0 * M_PI) { phase_ -= 2.0 * M_PI; cycle_ = (cycle_ + 1) & 15; }
+    else if (phase_ < 0.0)    { phase_ += 2.0 * M_PI; cycle_ = (cycle_ + 15) & 15; }
 
     // Lock metric: smoothed in-phase pilot energy (mpx correlated with cos).
     lockAmp_ += 0.0005f * ((float)(mpx * c) * 2.0f - lockAmp_);
 
     // Phase-coherent harmonics via angle doubling/tripling.
-    if (ref38) *ref38 = (float)std::cos(2.0 * phase_);
-    if (ref57) *ref57 = (float)std::cos(3.0 * phase_);
+    if (ref38)  *ref38 = (float)std::cos(2.0 * phase_);
+    if (ref57)  *ref57 = (float)std::cos(3.0 * phase_);
+    // RDS bit clock (1187.5 Hz = pilot/16) derived directly from the pilot phase
+    // + cycle counter, so it inherits the PLL's stability without integral drift.
+    if (bitClk) *bitClk = (float)((cycle_ * 2.0 * M_PI + phase_) / 16.0);
 }
 
 } // namespace vibedsp
