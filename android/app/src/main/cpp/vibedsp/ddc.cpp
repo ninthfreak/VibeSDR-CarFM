@@ -103,4 +103,36 @@ void SsbDemod::process(const cf32* in, float* out, int n) {
     for (int i = 0; i < n; ++i) out[i] = gain_ * in[i].real();
 }
 
+// ── Real FIR (low-pass / optional decimate) ──────────────────────────────--
+RealFir::RealFir(std::vector<float> taps, int decim)
+    : taps_(std::move(taps)), decim_(decim), count_(decim) {
+    hist_.assign(taps_.size(), 0.0f);
+}
+
+void RealFir::reset() {
+    std::fill(hist_.begin(), hist_.end(), 0.0f);
+    head_ = 0; count_ = decim_;
+}
+
+int RealFir::process(const float* in, int n, float* out) {
+    const int K = (int)taps_.size();
+    int outn = 0;
+    for (int i = 0; i < n; ++i) {
+        hist_[head_] = in[i];
+        head_ = (head_ + 1) % K;
+        if (--count_ == 0) {
+            count_ = decim_;
+            float acc = 0.0f;
+            int idx = head_ - 1;
+            for (int j = 0; j < K; ++j) {
+                if (idx < 0) idx += K;
+                acc += taps_[j] * hist_[idx];
+                --idx;
+            }
+            out[outn++] = acc;
+        }
+    }
+    return outn;
+}
+
 } // namespace vibedsp

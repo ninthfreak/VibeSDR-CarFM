@@ -139,12 +139,52 @@ static void testSSB() {
     checkTone(runPipe(iq, fs, fc, RxPipeline::Mode::SSB_USB, 3000.0), fa, "SSB tone");
 }
 
+static void testWFM() {
+    std::printf("-- RxPipeline (WFM mono) --\n");
+    // Wideband FM: MPX = mono audio tone + a 19 kHz stereo pilot. The mono path
+    // must recover the audio AND reject the pilot (no audible whine).
+    const double fs = 1920000.0, fc = 250000.0, fm = 1000.0;
+    const double dev = 75000.0, pilot = 19000.0, pilotDev = 7500.0;
+    const int Ni = 1 << 21;
+    std::vector<cf32> iq(Ni);
+    double ph = 0.0;
+    for (int i = 0; i < Ni; ++i) {
+        const double t = i / fs;
+        const double mpx = dev * std::cos(2.0 * M_PI * fm * t)
+                         + pilotDev * std::cos(2.0 * M_PI * pilot * t);
+        const double inst = fc + mpx;
+        ph += 2.0 * M_PI * inst / fs;
+        iq[i] = cf32((float)std::cos(ph), (float)std::sin(ph));
+    }
+    auto audio = runPipe(iq, fs, fc, RxPipeline::Mode::WFM, 200000.0);
+    checkTone(audio, fm, "WFM mono tone");
+
+    // Pilot rejection: measure energy in a band around 19 kHz vs the 1 kHz tone.
+    // (19 kHz is above the 48 kHz Nyquist image fold? No: 19k < 24k, so if the
+    // 15 kHz LPF failed, a 19 kHz component would survive.) Check the spectrum.
+    const int N = 1 << 14;
+    if ((int)audio.size() > N + 2000) {
+        RealFFT fft(N);
+        std::vector<float> win(N), buf(N), db(fft.bins());
+        nuttallWindow(win.data(), N);
+        int off = (int)audio.size() - N - 1000;
+        for (int i = 0; i < N; ++i) buf[i] = win[i] * audio[off + i];
+        fft.powerDb(buf.data(), db.data(), 1.0f);
+        auto binOf = [&](double hz){ return (int)std::lround(hz * N / 48000.0); };
+        float toneDb = db[binOf(fm)], pilotDb = db[binOf(pilot)];
+        std::printf("  1kHz tone = %.1f dB, 19kHz pilot = %.1f dB (want pilot << tone)\n",
+                    toneDb, pilotDb);
+        check(toneDb - pilotDb > 40.0f, "19 kHz pilot rejected >40 dB below audio");
+    } else check(false, "enough WFM audio for analysis");
+}
+
 int main() {
     std::printf("== vibedsp resampler + pipeline host test ==\n");
     testResampler();
     testPipeline();
     testNFM();
     testSSB();
+    testWFM();
     std::printf(failures ? "\n%d FAILURE(S)\n" : "\nALL PASS\n", failures);
     return failures ? 1 : 0;
 }

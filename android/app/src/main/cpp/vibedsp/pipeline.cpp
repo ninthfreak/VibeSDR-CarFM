@@ -52,12 +52,24 @@ void RxPipeline::rebuildAudio() {
 
     // Construct the demod for the active mode. FM gain maps radians/sample to a
     // unit-ish audio level at the channel rate.
-    am_.reset(); fm_.reset(); ssb_.reset();
+    am_.reset(); fm_.reset(); ssb_.reset(); audioLpf_.reset();
+    useDeemph_ = false;
     switch (mode_) {
         case Mode::AM:                          am_ = std::make_unique<AmDemod>(); break;
         case Mode::SSB_USB: case Mode::SSB_LSB:
         case Mode::CW:                          ssb_ = std::make_unique<SsbDemod>(); break;
         case Mode::NFM:                         fm_  = std::make_unique<FmDemod>((float)(chFs_ / (2.0 * M_PI * std::max(1.0, bwHz_ * 0.5)))); break;
+        case Mode::WFM: {
+            // Wideband FM mono: discriminator + de-emphasis + 15 kHz LPF (rejects
+            // the 19 kHz stereo pilot) before resampling to outRate.
+            fm_ = std::make_unique<FmDemod>((float)(chFs_ / (2.0 * M_PI * 75000.0)));
+            deemph_.configure(50e-6, chFs_);   // 50 us EU (config exposes 75 us later)
+            deemph_.reset();
+            useDeemph_ = true;
+            const double cut = 15000.0 / chFs_;
+            audioLpf_ = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4));
+            break;
+        }
     }
     resamp_ = std::make_unique<RationalResampler>((int)std::llround(chFs_), outRate_);
 
@@ -104,8 +116,18 @@ void RxPipeline::feed(const cf32* iq, int n) {
         else if (fm_)  fm_->process(chBuf_.data(), demodBuf_.data(), nc);
         else if (ssb_) ssb_->process(chBuf_.data(), demodBuf_.data(), nc);
 
-        audioBuf_.resize(resamp_->maxOut(nc));
-        const int na = resamp_->process(demodBuf_.data(), nc, audioBuf_.data());
+        // WFM mono post-chain: de-emphasis then 15 kHz LPF (pilot reject).
+        int nd = nc;
+        float* audioIn = demodBuf_.data();
+        if (useDeemph_) deemph_.process(demodBuf_.data(), nc);
+        if (audioLpf_) {
+            lpfBuf_.resize(audioLpf_->maxOut(nc));
+            nd = audioLpf_->process(demodBuf_.data(), nc, lpfBuf_.data());
+            audioIn = lpfBuf_.data();
+        }
+
+        audioBuf_.resize(resamp_->maxOut(nd));
+        const int na = resamp_->process(audioIn, nd, audioBuf_.data());
         if (na > 0) cb_.audio(cb_.ctx, audioBuf_.data(), na, outRate_);
     }
 }

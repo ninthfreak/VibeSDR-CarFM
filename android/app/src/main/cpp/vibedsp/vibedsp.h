@@ -171,6 +171,36 @@ private:
     float gain_;
 };
 
+// ── De-emphasis (one-pole, real) ─────────────────────────────────────────--
+// FM de-emphasis: y[n] = y[n-1] + a*(x[n]-y[n-1]), a = dt/(tau+dt). 50 us (EU)
+// or 75 us (US). Reconstructs the audio's HF balance after FM and helps reject
+// the 19 kHz pilot in mono.
+class Deemphasis {
+public:
+    void configure(double tauSec, double rate) {
+        const double dt = 1.0 / rate;
+        a_ = (tauSec > 0.0) ? (float)(dt / (tauSec + dt)) : 1.0f;
+    }
+    void process(float* x, int n) { for (int i = 0; i < n; ++i) { y_ += a_ * (x[i] - y_); x[i] = y_; } }
+    void reset() { y_ = 0.0f; }
+private:
+    float a_ = 1.0f, y_ = 0.0f;
+};
+
+// ── Real FIR (low-pass / optional decimate) ──────────────────────────────--
+// Real-input FIR for audio shaping (e.g. the 15 kHz mono low-pass that removes
+// the 19 kHz pilot). decim=1 = plain filter. Streaming.
+class RealFir {
+public:
+    RealFir(std::vector<float> taps, int decim = 1);
+    int process(const float* in, int n, float* out);  // returns #outputs
+    int maxOut(int n) const { return n / decim_ + 1; }
+    void reset();
+private:
+    std::vector<float> taps_, hist_;
+    int decim_, head_ = 0, count_;
+};
+
 // ── SSB / CW demodulator ──────────────────────────────────────────────────--
 // With the channel tuned so the (suppressed) carrier sits at 0 Hz, the audio is
 // the real part of the baseband. USB/LSB and CW differ only in the tuning offset
@@ -192,7 +222,7 @@ private:
 // land in later phases behind the same interface.
 class RxPipeline {
 public:
-    enum class Mode { AM, SSB_USB, SSB_LSB, CW, NFM /*, WFM (later phase) */ };
+    enum class Mode { AM, SSB_USB, SSB_LSB, CW, NFM, WFM /* mono; stereo+RDS later */ };
 
     struct Callbacks {
         void* ctx = nullptr;
@@ -234,11 +264,14 @@ private:
     std::unique_ptr<AmDemod> am_;
     std::unique_ptr<FmDemod> fm_;
     std::unique_ptr<SsbDemod> ssb_;
+    std::unique_ptr<RealFir> audioLpf_;     // WFM: 15 kHz mono LPF (pilot reject)
+    Deemphasis deemph_;
+    bool useDeemph_ = false;
     std::unique_ptr<RationalResampler> resamp_;
     int chDecim_ = 1;
     double chFs_ = 0.0;
     std::vector<cf32> baseBuf_, chBuf_;
-    std::vector<float> demodBuf_, audioBuf_;
+    std::vector<float> demodBuf_, lpfBuf_, audioBuf_;
 };
 
 } // namespace vibedsp
