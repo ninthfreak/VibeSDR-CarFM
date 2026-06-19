@@ -54,6 +54,22 @@ set(CMAKE_CXX14_EXTENSION_COMPILE_OPTION "-std=c++17")
 add_subdirectory("${SDRPP_SRC_ROOT}/core" sdrpp_core_build)
 add_subdirectory("${SDRPP_SRC_ROOT}/source_modules/rtl_sdr_source" rtl_sdr_source_build)
 
+# --- vibedsp: V5 clean-room GPL-free DSP (built alongside SDR++ for A/B) ------
+# Static lib so it links into the shim. Its vendored KissFFT symbols are PREFIXED
+# (vibe_*) to avoid colliding with ft8_lib's own KissFFT, also linked into the
+# shim. Plain C++17; no SDR++/GPL dependency.
+add_library(vibedsp STATIC
+    vibedsp/fft.cpp vibedsp/ddc.cpp vibedsp/resampler.cpp vibedsp/stereo.cpp
+    vibedsp/rds.cpp vibedsp/pipeline.cpp
+    vibedsp/third_party/kissfft/kiss_fft.c
+    vibedsp/third_party/kissfft/kiss_fftr.c)
+set_target_properties(vibedsp PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(vibedsp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vibedsp")
+target_compile_definitions(vibedsp PRIVATE
+    kiss_fft_alloc=vibe_kiss_fft_alloc kiss_fft=vibe_kiss_fft
+    kiss_fft_stride=vibe_kiss_fft_stride kiss_fft_cleanup=vibe_kiss_fft_cleanup
+    kiss_fftr_alloc=vibe_kiss_fftr_alloc kiss_fftr=vibe_kiss_fftr kiss_fftri=vibe_kiss_fftri)
+
 # --- VibeSDR local-SDR shim -------------------------------------------------
 # Stage 2: opens an RTL-SDR from a USB fd via librtlsdr (rtlsdr_open_sys_dev).
 # Include the radio module's RDS decoder source (FM RDS = station name etc.).
@@ -83,10 +99,12 @@ target_include_directories(vibelocalsdr PRIVATE
     "${SDRPP_SRC_ROOT}/core/src"
     "${SDRPP_SRC_ROOT}/decoder_modules/radio/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vibedsp"
     "${SDR_KIT_ROOT}/${ANDROID_ABI}/include")
 # --no-as-needed keeps the DT_NEEDED on libsdrpp_core.so so loading the shim
 # actually pulls the SDR++ core in (proves the link, not just that it compiled).
 target_link_libraries(vibelocalsdr PRIVATE
     -Wl,--no-as-needed sdrpp_core -Wl,--as-needed
+    vibedsp
     "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/librtlsdr.so"
     log)
