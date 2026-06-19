@@ -52,6 +52,30 @@ private:
     std::vector<cf32> scratch_;      // bins() complex outputs
 };
 
+// ── ComplexFFT ───────────────────────────────────────────────────────────--
+// Forward complex-to-complex FFT for the IQ WATERFALL. Output spans the full
+// band -fs/2 .. +fs/2 (positive AND negative frequencies), so this — not RealFFT
+// — is what the spectrum display uses. `size` is the bin count (power of two).
+class ComplexFFT {
+public:
+    explicit ComplexFFT(int size);
+    ~ComplexFFT();
+    ComplexFFT(const ComplexFFT&) = delete;
+    ComplexFFT& operator=(const ComplexFFT&) = delete;
+
+    int size() const { return n_; }
+    void forward(const cf32* in, cf32* out);  // raw, DC at bin 0
+
+    // Power spectrum in dB, fftshifted so bin 0 = -fs/2 and bin n/2 = DC (the
+    // layout a waterfall expects). `win` (length size) is applied if non-null.
+    void powerDbShifted(const cf32* in, const float* win, float* outDb, float scale = 1.0f);
+
+private:
+    int n_;
+    void* cfg_ = nullptr;            // kiss_fft_cfg
+    std::vector<cf32> in_, out_;     // working buffers (length n_)
+};
+
 // ── Windows ──────────────────────────────────────────────────────────────--
 // Fill `w` (length n) with the named window. Nuttall matches the current
 // IQFrontEnd::FFTWindow::NUTTALL used by the shim so waterfall look is preserved.

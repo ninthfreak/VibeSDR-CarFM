@@ -22,3 +22,7 @@ target_compile_options(vibedsp_tests PRIVATE -O2 -Wall)
 add_executable(vibedsp_demod_tests test_demod.cpp ${DSP_SRC})
 target_include_directories(vibedsp_demod_tests PRIVATE ${DSP})
 target_compile_options(vibedsp_demod_tests PRIVATE -O2 -Wall)
+
+add_executable(vibedsp_cfft_tests test_cfft.cpp ${DSP_SRC})
+target_include_directories(vibedsp_cfft_tests PRIVATE ${DSP})
+target_compile_options(vibedsp_cfft_tests PRIVATE -O2 -Wall)

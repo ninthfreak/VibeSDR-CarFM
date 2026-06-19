@@ -3,10 +3,43 @@
 #include <cmath>
 #include <cstring>
 
-// KissFFT real transform (BSD-3). kiss_fft_scalar defaults to float.
+// KissFFT transforms (BSD-3). kiss_fft_scalar defaults to float.
+#include "third_party/kissfft/kiss_fft.h"
 #include "third_party/kissfft/kiss_fftr.h"
 
 namespace vibedsp {
+
+// ── ComplexFFT (IQ waterfall) ────────────────────────────────────────────--
+ComplexFFT::ComplexFFT(int size) : n_(size) {
+    cfg_ = kiss_fft_alloc(n_, 0, nullptr, nullptr);  // forward
+    in_.resize(n_);
+    out_.resize(n_);
+}
+
+ComplexFFT::~ComplexFFT() {
+    if (cfg_) kiss_fft_free((kiss_fft_cfg)cfg_);
+}
+
+void ComplexFFT::forward(const cf32* in, cf32* out) {
+    kiss_fft((kiss_fft_cfg)cfg_,
+             reinterpret_cast<const kiss_fft_cpx*>(in),
+             reinterpret_cast<kiss_fft_cpx*>(out));
+}
+
+void ComplexFFT::powerDbShifted(const cf32* in, const float* win, float* outDb, float scale) {
+    if (win) for (int i = 0; i < n_; ++i) in_[i] = in[i] * win[i];
+    else     for (int i = 0; i < n_; ++i) in_[i] = in[i];
+    forward(in_.data(), out_.data());
+    // fftshift: raw bins 0..n/2-1 are 0..+fs/2, n/2..n-1 are -fs/2..0.
+    // Display order is -fs/2 .. +fs/2, so output bin j = raw bin (j + n/2) % n.
+    const int h = n_ / 2;
+    for (int j = 0; j < n_; ++j) {
+        const cf32& c = out_[(j + h) % n_];
+        float p = (c.real() * c.real() + c.imag() * c.imag()) * scale;
+        if (p < 1e-20f) p = 1e-20f;
+        outDb[j] = 10.0f * std::log10(p);
+    }
+}
 
 RealFFT::RealFFT(int size) : n_(size) {
     // inverse=0 (forward), no preallocated mem/lenmem -> KissFFT mallocs cfg.
