@@ -232,6 +232,39 @@ private:
     float gain_;
 };
 
+// ── RDS data-link decoder ────────────────────────────────────────────────--
+// Recovered RDS data bits -> block sync (syndrome + offset words) -> group
+// parsing (PI, PS name, RadioText). Clean-room implementation of EN 50067 /
+// IEC 62106; no GPL. The DSP front-end (57 kHz coherent demod + biphase symbol
+// recovery) feeds pushBit().
+class RdsDecoder {
+public:
+    struct Callbacks {
+        void* ctx = nullptr;
+        void (*ps)(void* ctx, uint16_t pi, const char* ps8) = nullptr;        // 8-char station name
+        void (*radiotext)(void* ctx, const char* rt64) = nullptr;             // up to 64 chars
+    };
+    void setCallbacks(const Callbacks& c) { cb_ = c; }
+    void reset();
+    void pushBit(int bit);            // one recovered data bit (post differential)
+
+    // Exposed for the DSP layer / tests (encoder round-trip).
+    static uint16_t checkword(uint16_t data);           // 10-bit, no offset
+    static const uint16_t OFFSET[5];                    // A, B, C, C', D
+    static uint16_t syndrome(uint32_t block26);
+
+private:
+    void parseGroup();
+    uint32_t reg_ = 0;
+    bool synced_ = false;
+    int bitsLeft_ = 0, nextBlk_ = 0, badRun_ = 0;
+    uint16_t blk_[4] = {0, 0, 0, 0};
+    bool blkOk_[4] = {false, false, false, false};
+    char ps_[9] = {0};
+    char rt_[65] = {0};
+    Callbacks cb_{};
+};
+
 // ── RxPipeline (the native engine) ───────────────────────────────────────--
 // The complete IQ -> {spectrum, audio} chain that the shim's "Local Hardware
 // (Native)" path runs, replacing the SDR++ Brown graph. Feed it raw IQ from the

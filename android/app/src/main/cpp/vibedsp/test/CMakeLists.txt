@@ -13,6 +13,7 @@ set(DSP_SRC
     ${DSP}/ddc.cpp
     ${DSP}/resampler.cpp
     ${DSP}/stereo.cpp
+    ${DSP}/rds.cpp
     ${DSP}/pipeline.cpp
     ${DSP}/third_party/kissfft/kiss_fft.c
     ${DSP}/third_party/kissfft/kiss_fftr.c
@@ -33,3 +34,7 @@ target_compile_options(vibedsp_cfft_tests PRIVATE -O2 -Wall)
 add_executable(vibedsp_pipeline_tests test_pipeline.cpp ${DSP_SRC})
 target_include_directories(vibedsp_pipeline_tests PRIVATE ${DSP})
 target_compile_options(vibedsp_pipeline_tests PRIVATE -O2 -Wall)
+
+add_executable(vibedsp_rds_tests test_rds.cpp ${DSP_SRC})
+target_include_directories(vibedsp_rds_tests PRIVATE ${DSP})
+target_compile_options(vibedsp_rds_tests PRIVATE -O2 -Wall)
