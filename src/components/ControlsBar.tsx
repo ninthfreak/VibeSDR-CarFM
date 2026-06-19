@@ -43,6 +43,7 @@ import DrumWheel from './DrumWheel';
 import { useTheme } from '../contexts/ThemeContext';
 import { useUiScale } from '../hooks/useUiScale';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
+import { tourRef, mergeRefs } from './Coachmark';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -557,6 +558,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
 
         {/* STEP */}
         <TouchableOpacity
+          ref={tourRef('stepBtn')}
           style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder }]}
           onPress={onStep} activeOpacity={0.75} hitSlop={10}
         >
@@ -568,6 +570,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
         {/* MENU */}
         <Animated.View style={[por.btn, { minHeight: BTN_H, borderColor: menuBorderColor, borderWidth: 1 }]}>
           <TouchableOpacity
+            ref={tourRef('menuBtn')}
             style={{ flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' }}
             onPress={onMenu} activeOpacity={0.75} hitSlop={10}
           >
@@ -597,7 +600,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
       </View>
 
       {/* Row 3 — drums 50/50 */}
-      <View ref={drumRowRef} onLayout={guardDrums} style={{ flexDirection: 'row', gap: COL_GAP }}>
+      <View ref={mergeRefs(drumRowRef, tourRef('vfoDrum'))} onLayout={guardDrums} style={{ flexDirection: 'row', gap: COL_GAP }}>
         <DrumWheel type="vfo"  height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} />
         <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta}  style={{ flex: 1 }} />
       </View>
@@ -671,7 +674,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
     <View ref={drumRowRef} onLayout={guardDrums} style={{ flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center', gap: GAP }}>
 
       {/* VFO drum + clock */}
-      <View style={{ flex: 1, minWidth: s.r(80) }}>
+      <View ref={tourRef('vfoDrum')} style={{ flex: 1, minWidth: s.r(80) }}>
         <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} />
         <Text style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
           {clock}
@@ -689,13 +692,14 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
 
       {/* STEP + MENU column */}
       <View style={{ width: BTN_W, gap: GAP }}>
-        <TouchableOpacity style={[lnd.lsBtn, { borderColor: t.btnBorder }]} onPress={onStep} activeOpacity={0.75} hitSlop={10}>
+        <TouchableOpacity ref={tourRef('stepBtn')} style={[lnd.lsBtn, { borderColor: t.btnBorder }]} onPress={onStep} activeOpacity={0.75} hitSlop={10}>
           <Text style={[lnd.lsTxt, { color: t.btnText, fontFamily: t.font, fontSize: s.f(11) }]}
                 numberOfLines={2} adjustsFontSizeToFit>
             {stepLabel}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
+          ref={tourRef('menuBtn')}
           style={[lnd.lsBtn, { borderColor: isRecording ? 'rgba(220,40,40,0.90)' : t.btnBorder }]}
           onPress={onMenu} activeOpacity={0.75} hitSlop={10}
         >

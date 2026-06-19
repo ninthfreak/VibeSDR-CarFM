@@ -58,6 +58,7 @@ import WaterfallView   from '../components/WaterfallView';
 import ControlsBar, { createMeterBus } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
+import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import AudioPlayer, { VibePowerModule } from '../components/AudioPlayer';
 import LocalAudioPlayer from '../components/LocalAudioPlayer';
 import LocalHardwarePanel from '../components/LocalHardwarePanel';
@@ -2830,6 +2831,40 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
   const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
 
+  // First-run guided tour (dismissable). Spotlights the drum, step rate, the
+  // disabled back-gesture, and the menu — opening it to show the route back to
+  // the instance list. Fail-safe: always skippable; a target that can't be
+  // measured falls back to a centred card.
+  const sdrTour = useCoachmarkTour([
+    { id: 'drum', title: 'Tune with the VFO drum',
+      body: 'Spin the drum to move up and down the band — the left wheel tunes, the right wheel zooms the waterfall.',
+      target: tourRef('vfoDrum') },
+    { id: 'step', title: 'Step rate',
+      body: 'Sets how far each move jumps: a small step for fine tuning, a large step to skip across bands. Tap it to change.',
+      target: tourRef('stepBtn') },
+    { id: 'back', title: 'No back-swipe here',
+      body: "The phone's Back gesture is switched off over the tuning area so it can't fight the drum. To leave, you use the menu — coming up next.",
+      target: tourRef('vfoDrum') },
+    { id: 'menu', title: 'Everything else: the menu',
+      body: 'Bandwidth, modes, noise reduction, the auto notch, decoders, bookmarks and settings all live in here.',
+      target: tourRef('menuBtn') },
+    { id: 'backToList', title: 'Back to the server list',
+      body: 'Since Back is disabled, you return to the instance list from here — and you can replay this tutorial anytime from this menu too.',
+      target: tourRef('backToList'), onEnter: () => setMenuOpen(true), enterDelay: 480 },
+  ], { storageKey: 'lsv_tour_sdr_v1' });
+  const onReplayTour = useCallback(() => {
+    setMenuOpen(false);
+    setTimeout(() => sdrTour.restart(), 320);
+  }, [sdrTour]);
+  // Auto-start once on the first successful connection, after the controls have
+  // laid out (so the drum/step/menu can be measured).
+  useEffect(() => {
+    if (!connected) return;
+    const t = setTimeout(() => { sdrTour.maybeAutoStart(); }, 1500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected]);
+
   // ── Layout ────────────────────────────────────────────────────────────────
 
   const bottomInset = insets.bottom;
@@ -3205,6 +3240,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onDisplayStyle={handleDisplayStyle}
         onBack={onBackToPicker}
         onAdminLink={onAdminLink}
+        onReplayTour={onReplayTour}
         onResetSettings={() => {
           setDbMin(-120); setDbMax(-20); setColormap('Jet');
           setStep(1000);
@@ -3283,6 +3319,9 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* About VibeSDR — V2 changes, credits, GPL-3.0 */}
       <AboutOverlay visible={aboutOpen} onClose={() => setAboutOpen(false)} />
+
+      {/* First-run guided tour (dismissable) — renders nothing until active */}
+      {sdrTour.overlay}
 
       {/* Step picker — bottom sheet */}
       <StepPicker

@@ -34,6 +34,7 @@ import {
 import { type UserBookmark } from '../services/userBookmarks';
 import { APP_VERSION } from '../constants/version';
 import UsbSdrIcon from './UsbSdrIcon';
+import { tourRef } from './Coachmark';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -176,6 +177,7 @@ export interface MenuSheetProps {
   isTcp?:          boolean;
   onAdminLink?:     (path: string, title: string) => void;
   onResetSettings?: () => void;
+  onReplayTour?:    () => void;
   onDisplaySettings?: () => void;
   /** UberSDR server software version (/api/description) — footer right side. */
   serverVersion?:   string | null;
@@ -443,7 +445,7 @@ export default function MenuSheet({
   searchBookmarks = [], searchBands = [], onSearchTune,
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
-  onClose, onBack, onLocalHardware, isTcp, onAdminLink, onResetSettings, onDisplaySettings,
+  onClose, onBack, onLocalHardware, isTcp, onAdminLink, onResetSettings, onReplayTour, onDisplaySettings,
   serverVersion = null, onAbout,
   onZoomIn, onZoomOut, onSetDefault, isDefaultInstance = false,
   decMode = null, decOn = false, onDecToggle,
@@ -1601,11 +1603,18 @@ export default function MenuSheet({
                    active={isDefaultInstance} onPress={onSetDefault} />
             </BtnRow>
             <BtnRow>
-              <Btn label="← BACK TO INSTANCE LIST" full onPress={onBack ?? onClose} />
+              <View ref={tourRef('backToList')} collapsable={false} style={{ flex: 1 }}>
+                <Btn label="← BACK TO INSTANCE LIST" full onPress={onBack ?? onClose} />
+              </View>
             </BtnRow>
             <BtnRow col>
               <Btn label="↺ RESET INTERFACE SETTINGS" full danger onPress={onResetSettings} />
             </BtnRow>
+            {onReplayTour && (
+              <BtnRow col>
+                <Btn label="❔ REPLAY TUTORIAL" full onPress={onReplayTour} />
+              </BtnRow>
+            )}
 
             {/* ── Footer — app version | server type + version. The logo
                 identifies WHICH backend this instance runs (UberSDR today;

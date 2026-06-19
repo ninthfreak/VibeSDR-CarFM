@@ -44,6 +44,7 @@ import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../serv
 import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
 import PasswordModal from '../components/PasswordModal';
 import { VibePowerModule } from '../components/AudioPlayer';
+import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import { APP_VERSION } from '../constants/version';
 import { DIRECTORIES, fetchDirectory, type DirectoryId } from '../services/directories';
 
@@ -96,6 +97,20 @@ export default function InstancePickerScreen({ navigation }: Props) {
   // null = directory CHOOSER (favourites + directory cards); set = that
   // directory's instance list.
   const [selectedDir, setSelectedDir]   = useState<DirectoryId | null>(null);
+
+  // First-run tour on the instance list — welcome + the custom-server box.
+  const pickerTour = useCoachmarkTour([
+    { id: 'welcome', title: 'Welcome to VibeSDR',
+      body: 'Browse public SDR servers below, or set a favourite as your default to skip straight in next time.' },
+    { id: 'custom', title: 'Your own server',
+      body: 'Got a private UberSDR, OpenWebRX or KiwiSDR? Enter its address here to connect to it directly.',
+      target: tourRef('customUrl') },
+  ], { storageKey: 'lsv_tour_picker_v1' });
+  useEffect(() => {
+    const t = setTimeout(() => { pickerTour.maybeAutoStart(); }, 1100);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const userLocRef = useRef<{ lat: number; lon: number } | null>(null);
 
   const openDirectory = useCallback((id: DirectoryId) => {
@@ -596,7 +611,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
 
         {/* Custom URL — chooser only */}
         {selectedDir === null && (
-        <View style={styles.customRow}>
+        <View ref={tourRef('customUrl')} collapsable={false} style={styles.customRow}>
           <TextInput
             style={[styles.urlInput, { fontFamily: F, fontSize: fs(12), color: C.amber, borderColor: C.border }]}
             placeholder="Custom URL  e.g. sdr.example.com"
@@ -835,6 +850,8 @@ export default function InstancePickerScreen({ navigation }: Props) {
         )}
       </KeyboardAvoidingView>
 
+      {/* First-run guided tour (dismissable) */}
+      {pickerTour.overlay}
     </SafeAreaView>
   );
 }
