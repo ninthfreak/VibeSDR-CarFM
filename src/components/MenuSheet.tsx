@@ -1221,12 +1221,11 @@ export default function MenuSheet({
                   <Btn label="30fps"  active={frameRate==='30fps'}  onPress={() => onFrameRate?.('30fps')} />
                 </BtnRow>
 
-                {/* Power saving — SMOOTH TUNE: 120Hz only while interacting,
-                    discrete rows + eased spectrum when settled. IDLE SAVER:
-                    ⅓ server frame rate after 30s without touch. */}
+                {/* Power saving — IDLE SAVER: ⅓ server frame rate after 30s
+                    without touch. (Smooth tune is always on — the 120 Hz boost
+                    while interacting; no toggle, to avoid confusion.) */}
                 <SubLabel label="Power Saving" />
                 <BtnRow>
-                  <Btn label="SMOOTH TUNE" active={smoothTune} onPress={() => onSmoothTune?.(!smoothTune)} />
                   <Btn label="IDLE SAVER"  active={idleSlow}   onPress={() => onIdleSlow?.(!idleSlow)} />
                 </BtnRow>
 

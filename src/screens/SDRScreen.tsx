@@ -715,9 +715,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.getItem('lsv_fq_unit').then((u: string | null) => {
       if (u === 'hz' || u === 'khz' || u === 'mhz') setFreqUnit(u);
     }).catch(() => {});
-    AsyncStorage.getItem('lsv_smooth_tune').then((v: string | null) => {
-      if (v !== null) setSmoothTune(v === '1');
-    }).catch(() => {});
+    // Smooth tune is always on now (no toggle) — don't restore an old saved "off".
     AsyncStorage.getItem('lsv_idle_slow').then((v: string | null) => {
       if (v !== null) setIdleSlow(v === '1');
     }).catch(() => {});
