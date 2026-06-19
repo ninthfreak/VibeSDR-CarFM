@@ -1,0 +1,77 @@
+// VibeSDR V5 — clean-room, GPL-free TCP socket wrapper.
+//
+// Replaces the SDR++ Brown `utils/net.h` (GPLv3) the local-SDR shim used for its
+// localhost HTTP/WebSocket server and the RTL-TCP client. This is original
+// VibeSDR code over plain POSIX sockets (works on Android + iOS/darwin). It
+// implements ONLY the TCP subset the shim calls — Socket {send/sendstr/recv/
+// recvline/isOpen/close}, Listener {accept/stop}, net::listen, net::connect —
+// keeping the same signatures so the shim's call sites are unchanged.
+#pragma once
+#include <cstdint>
+#include <cstddef>
+#include <memory>
+#include <string>
+
+namespace net {
+
+enum { NO_TIMEOUT = -1 };
+
+// Present only so the default-argument signatures match the old API; the shim
+// never passes one (TCP, address ignored).
+struct Address;
+
+class Socket {
+public:
+    explicit Socket(int fd) : fd_(fd) {}
+    ~Socket();
+    Socket(const Socket&) = delete;
+    Socket& operator=(const Socket&) = delete;
+
+    void close();
+    bool isOpen() { return open_; }
+
+    // Send all `len` bytes; returns len on success, -1 on error.
+    int send(const uint8_t* data, size_t len, const Address* dest = nullptr);
+    int sendstr(const std::string& str, const Address* dest = nullptr);
+
+    // Receive up to `maxLen` bytes. forceLen=true blocks until exactly maxLen are
+    // read (or error/timeout). `timeout` is milliseconds, or NO_TIMEOUT to block.
+    // Returns bytes read (>0), 0 on close/timeout-with-nothing, -1 on error.
+    int recv(uint8_t* data, size_t maxLen, bool forceLen = false,
+             int timeout = NO_TIMEOUT, Address* dest = nullptr);
+
+    // Read one '\n'-terminated line into `str` (newline stripped, any trailing
+    // '\r' kept). Returns line length (0 for a blank line), -1 on error/close.
+    int recvline(std::string& str, int maxLen = 0, int timeout = NO_TIMEOUT,
+                 Address* dest = nullptr);
+
+private:
+    int  recvRaw(uint8_t* data, size_t maxLen, int timeout);
+    int  fd_;
+    bool open_ = true;
+};
+
+class Listener {
+public:
+    explicit Listener(int fd) : fd_(fd) {}
+    ~Listener();
+    Listener(const Listener&) = delete;
+    Listener& operator=(const Listener&) = delete;
+
+    // Accept a connection, waiting up to `timeout` ms (NO_TIMEOUT = block).
+    // Returns the new Socket, or nullptr on timeout / would-block / closed.
+    std::shared_ptr<Socket> accept(Address* dest = nullptr, int timeout = NO_TIMEOUT);
+    void stop();
+    bool listening() { return open_; }
+
+private:
+    int  fd_;
+    bool open_ = true;
+};
+
+// Bind + listen on host:port. Throws std::runtime_error on failure.
+std::shared_ptr<Listener> listen(const std::string& host, int port);
+// Connect to host:port. Throws std::runtime_error on failure.
+std::shared_ptr<Socket> connect(const std::string& host, int port);
+
+} // namespace net

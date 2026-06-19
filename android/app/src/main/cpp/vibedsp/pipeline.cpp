@@ -101,22 +101,20 @@ void RxPipeline::feed(const cf32* iq, int n) {
     // ── Spectrum ───────────────────────────────────────────────────────────
     // Gather fftSize contiguous samples for a frame, then skip to the next slot.
     if (cb_.spectrum) {
-        // We keep a rolling buffer of the most recent fftSize samples.
+        // Gather fftSize contiguous samples into a frame, FFT + emit, then DROP the
+        // remaining (specStride - fftSize) samples to honour the frame rate. This is
+        // O(n) — never the per-sample buffer shift (O(n*fftSize)) that can't keep up
+        // at MS/s. `sinceFrame_` doubles as the inter-frame drop countdown.
+        cf32* sb = reinterpret_cast<cf32*>(specBuf_.data());
         for (int i = 0; i < n; ++i) {
-            // store as cf32 in specBuf_ reinterpreted
-            cf32* sb = reinterpret_cast<cf32*>(specBuf_.data());
-            if (specFill_ < fftSize_) {
-                sb[specFill_++] = iq[i];
-            } else {
-                // shift left by one (cheap enough at these sizes / could ring-buffer)
-                std::move(sb + 1, sb + fftSize_, sb);
-                sb[fftSize_ - 1] = iq[i];
-            }
-            if (++sinceFrame_ >= specStride_ && specFill_ >= fftSize_) {
-                sinceFrame_ = 0;
+            if (sinceFrame_ > 0) { --sinceFrame_; continue; }
+            sb[specFill_++] = iq[i];
+            if (specFill_ >= fftSize_) {
                 const float scale = 1.0f / (float)(fftSize_ * fftSize_);
                 cfft_->powerDbShifted(sb, win_.data(), specDb_.data(), scale);
                 cb_.spectrum(cb_.ctx, specDb_.data(), fftSize_);
+                specFill_   = 0;
+                sinceFrame_ = std::max(0LL, (long long)specStride_ - fftSize_);
             }
         }
     }

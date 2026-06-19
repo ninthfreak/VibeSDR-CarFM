@@ -1,61 +1,30 @@
-# VibeSDR V4 — local-SDR shim, Stage 1 (NDK/CMake skeleton).
+# VibeSDR V5 — local-SDR shim, NATIVE-ONLY (GPL-free).
 #
-# Builds SDR++ Brown's `sdrpp_core` + the `rtl_sdr_source` module headless-ish
-# into the VibeSDR APK (arm64-v8a / armeabi-v7a), plus a tiny JNI load-proof
-# library. We deliberately DO NOT use SDR++'s root CMakeLists.txt — it also
-# builds the `sdrpp` NativeActivity executable and several unconditional modules
-# (brown_audio_sink, websdr_view, reports_monitor) we don't want. Instead this
-# wrapper replicates just the root preamble those two targets rely on.
+# V5 rips out SDR++ Brown / FFTW / VOLK entirely. The on-device DSP is now the
+# clean-room `vibedsp` engine (RxPipeline) and the localhost HTTP/WebSocket +
+# RTL-TCP networking uses the clean-room `net_shim`. The ONLY remaining native
+# dependency is librtlsdr (prebuilt in the android-sdr-kit), needed to open the
+# USB RTL-SDR and drive its hardware controls — that is itself GPL but is the
+# device driver, linked as a shared lib, not bundled DSP.
 #
-# Prebuilt native deps (volk/fftw3f/zstd/libusb/librtlsdr) come from the
-# android-sdr-kit, extracted to ./sdr-kit/<ABI>/{include,lib}.
+# Prebuilt librtlsdr (+ rtl-sdr.h) comes from the android-sdr-kit, extracted to
+# ./sdr-kit/<ABI>/{include,lib}.
 
 cmake_minimum_required(VERSION 3.22)
 project(vibelocalsdr)
 
-# --- Locations ---------------------------------------------------------------
-# SDR++ Brown source. Defaults to the local Reference/ checkout (gitignored);
-# override with -DSDRPP_SRC_ROOT=… for CI / a vendored copy later.
-if (NOT DEFINED SDRPP_SRC_ROOT)
-    set(SDRPP_SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../Reference/SDRPlusPlusBrown-master")
-endif()
-get_filename_component(SDRPP_SRC_ROOT "${SDRPP_SRC_ROOT}" ABSOLUTE)
-
-set(SDR_KIT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/sdr-kit" CACHE PATH "Prebuilt SDR deps root")
-
-if (NOT EXISTS "${SDRPP_SRC_ROOT}/core/CMakeLists.txt")
-    message(FATAL_ERROR
-        "SDR++ Brown source not found at:\n  ${SDRPP_SRC_ROOT}\n"
-        "Set -DSDRPP_SRC_ROOT to the SDRPlusPlusBrown-master checkout.")
-endif()
-if (NOT EXISTS "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/libvolk.so")
-    message(FATAL_ERROR "sdr-kit missing for ABI '${ANDROID_ABI}' at ${SDR_KIT_ROOT}")
-endif()
-
-# --- SDR++ build options (consumed by core/CMakeLists.txt) -------------------
-set(OPT_BACKEND_GLFW    OFF CACHE BOOL "" FORCE)
-set(OPT_BACKEND_ANDROID ON  CACHE BOOL "" FORCE)
-
-# --- Root-preamble vars that core + sdrpp_module.cmake expect ----------------
-set(SDRPP_MODULE_CMAKE "${SDRPP_SRC_ROOT}/sdrpp_module.cmake")
-set(SDRPP_CORE_ROOT    "${SDRPP_SRC_ROOT}/core/src/")
-
-# Release compiler flags (mirrors SDRPlusPlusBrown/CMakeLists.txt, Clang branch)
-set(SDRPP_COMPILER_FLAGS -O3 -std=c++17 -Wno-unused-command-line-argument -Wno-deprecated-register)
-set(SDRPP_MODULE_COMPILER_FLAGS ${SDRPP_COMPILER_FLAGS})
-
-# Android toolchain flags (mirrors the `if (ANDROID)` block in the root file)
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -u ANativeActivity_onCreate")
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_CXX14_EXTENSION_COMPILE_OPTION "-std=c++17")
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# --- Build core + the RTL-SDR source module only ----------------------------
-add_subdirectory("${SDRPP_SRC_ROOT}/core" sdrpp_core_build)
-add_subdirectory("${SDRPP_SRC_ROOT}/source_modules/rtl_sdr_source" rtl_sdr_source_build)
+# --- Locations ---------------------------------------------------------------
+set(SDR_KIT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/sdr-kit" CACHE PATH "Prebuilt SDR deps root")
+if (NOT EXISTS "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/librtlsdr.so")
+    message(FATAL_ERROR "sdr-kit librtlsdr missing for ABI '${ANDROID_ABI}' at ${SDR_KIT_ROOT}")
+endif()
 
-# --- vibedsp: V5 clean-room GPL-free DSP (built alongside SDR++ for A/B) ------
-# Static lib so it links into the shim. Its vendored KissFFT symbols are PREFIXED
+# --- vibedsp: V5 clean-room GPL-free DSP -------------------------------------
+# Static lib linked into the shim. Its vendored KissFFT symbols are PREFIXED
 # (vibe_*) to avoid colliding with ft8_lib's own KissFFT, also linked into the
 # shim. Plain C++17; no SDR++/GPL dependency.
 add_library(vibedsp STATIC
@@ -70,10 +39,10 @@ target_compile_definitions(vibedsp PRIVATE
     kiss_fft_stride=vibe_kiss_fft_stride kiss_fft_cleanup=vibe_kiss_fft_cleanup
     kiss_fftr_alloc=vibe_kiss_fftr_alloc kiss_fftr=vibe_kiss_fftr kiss_fftri=vibe_kiss_fftri)
 
-# --- VibeSDR local-SDR shim -------------------------------------------------
-# Stage 2: opens an RTL-SDR from a USB fd via librtlsdr (rtlsdr_open_sys_dev).
-# Include the radio module's RDS decoder source (FM RDS = station name etc.).
-# ft8_lib (kgoba, MIT) — FT8/FT4 core, built with self-contained KISS FFT.
+# --- VibeSDR local-SDR shim --------------------------------------------------
+# Opens an RTL-SDR from a USB fd via librtlsdr (rtlsdr_open_sys_dev), runs the
+# vibedsp engine, and serves the UberSDR protocol over net_shim. ft8_lib (kgoba,
+# MIT) provides the FT8/FT4 core with its own self-contained KISS FFT.
 file(GLOB FT8_LIB_SRC
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/ft8/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/fft/kiss_fft.c"
@@ -81,30 +50,22 @@ file(GLOB FT8_LIB_SRC
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/common/monitor.c")
 
 add_library(vibelocalsdr SHARED
-    vibe_localsdr_jni.cpp local_sdr_shim.cpp
+    vibe_localsdr_jni.cpp local_sdr_shim.cpp net_shim.cpp
     decoders/fsk_decoder.cpp
     decoders/wefax_decoder.cpp
     decoders/ft8_decoder.cpp
     decoders/sstv_decoder.cpp
     decoders/audio_nr.cpp
     decoders/auto_notch.cpp
-    ${FT8_LIB_SRC}
-    "${SDRPP_SRC_ROOT}/decoder_modules/radio/src/rds.cpp")
-# ft8_lib (upstream kgoba) uses KISS FFT unconditionally — no extra define needed.
-# core headers (dsp/stream, iq_frontend) need C++17; the global CMAKE_CXX_STANDARD
-# is 14 (mirrors SDR++ root), so force this target like core forces its own.
+    ${FT8_LIB_SRC})
 set_target_properties(vibelocalsdr PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(vibelocalsdr PRIVATE -std=c++17)
 target_include_directories(vibelocalsdr PRIVATE
-    "${SDRPP_SRC_ROOT}/core/src"
-    "${SDRPP_SRC_ROOT}/decoder_modules/radio/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib"
     "${CMAKE_CURRENT_SOURCE_DIR}/vibedsp"
     "${SDR_KIT_ROOT}/${ANDROID_ABI}/include")
-# --no-as-needed keeps the DT_NEEDED on libsdrpp_core.so so loading the shim
-# actually pulls the SDR++ core in (proves the link, not just that it compiled).
 target_link_libraries(vibelocalsdr PRIVATE
-    -Wl,--no-as-needed sdrpp_core -Wl,--as-needed
     vibedsp
     "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/librtlsdr.so"
     log)

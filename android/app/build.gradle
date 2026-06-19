@@ -124,9 +124,16 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            // V5 installs BESIDE the v4.1 "VibeSDR" (com.vibesdr.app) for on-device
+            // A/B of the native GPL-free DSP vs the SDR++ build. Reverted when V5
+            // is promoted to the shipping app.
+            applicationIdSuffix ".v5"
+            manifestPlaceholders = [appLabel: "VibeSDRV5"]
         }
         release {
             signingConfig hasUploadKey ? signingConfigs.release : signingConfigs.debug
+            applicationIdSuffix ".v5"
+            manifestPlaceholders = [appLabel: "VibeSDRV5"]
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
@@ -157,24 +164,25 @@ android {
         }
     }
 
-    // Package the prebuilt SDR deps (volk/fftw3f/zstd/libusb/librtlsdr) that the
-    // SDR++ core links against. externalNativeBuild only packages libs it builds,
-    // so the kit .so are flattened into a jniLibs dir below.
+    // V5 only links librtlsdr (the USB driver) + its libusb dependency. The old
+    // SDR++ DSP deps (volk/fftw3f/zstd — volk/fftw being GPL) are no longer linked
+    // and are deliberately NOT packaged. externalNativeBuild only packages libs it
+    // builds, so the kit .so are flattened into a jniLibs dir below.
     sourceSets {
         main { jniLibs.srcDirs += ["${buildDir}/sdrkit-jniLibs"] }
     }
 }
 
-// Flatten src/main/cpp/sdr-kit/<ABI>/lib/lib*.so -> build/sdrkit-jniLibs/<ABI>/.
-// Only plain lib*.so (versioned .so.N and .a are skipped); symlinks like
-// libzstd.so are dereferenced to real files by Copy.
+// Flatten the needed src/main/cpp/sdr-kit/<ABI>/lib/*.so -> build/sdrkit-jniLibs.
+// V5: only librtlsdr + libusb (symlinks dereferenced to real files by Copy).
 def sdrKitDir = file("src/main/cpp/sdr-kit")
 def sdrKitJniLibs = file("${buildDir}/sdrkit-jniLibs")
 tasks.register('copySdrKitLibs', Copy) {
     into sdrKitJniLibs
     ['arm64-v8a', 'armeabi-v7a'].each { abi ->
         from("${sdrKitDir}/${abi}/lib") {
-            include 'lib*.so'
+            include 'librtlsdr.so'
+            include 'libusb*.so'
             into abi
         }
     }

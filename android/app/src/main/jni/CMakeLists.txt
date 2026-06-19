@@ -14,7 +14,7 @@ project(appmodules)
 # React Native application setup (libappmodules.so + autolinked TurboModules).
 include(${REACT_ANDROID_DIR}/cmake-utils/ReactNative-application.cmake)
 
-# V4 local-SDR shim (SDR++ Brown core + rtl_sdr + WS server). Lives in ../cpp;
-# builds libvibelocalsdr.so (+ libsdrpp_core.so / rtl_sdr_source.so), packaged
-# into the APK and loaded on demand by VibeLocalSDR.kt.
+# V5 local-SDR shim (clean-room vibedsp engine + net_shim + librtlsdr). Lives in
+# ../cpp; builds libvibelocalsdr.so, packaged into the APK and loaded on demand
+# by VibeLocalSDR.kt. SDR++ Brown / FFTW / VOLK are gone as of V5.
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../cpp vibelocalsdr_build)

@@ -1,14 +1,17 @@
-// VibeSDR V4 — local-SDR shim implementation (Stages 3 + 4).
+// VibeSDR V5 — local-SDR shim implementation (NATIVE-ONLY, GPL-free).
 //
-// Pipeline:
-//   RTL-SDR (USB fd) → librtlsdr async IQ → dsp::stream → IQFrontEnd
-//     ├─ FFT dB row → SPEC full-uint8 frames → /ws/user-spectrum (Stage 3)
-//     └─ RxVFO → demod (AM/SSB/CW/NFM/WFM) → resample 48k → int16 PCM
-//                → /ws/audio (Stage 4; WFM stereo, others mono)
+// Pipeline (SDR++ Brown / FFTW / VOLK all removed as of V5):
+//   RTL-SDR (USB fd) / RTL-TCP → u8 IQ → cf32 → vibedsp::RxPipeline
+//     ├─ fftshifted FFT dB row → SPEC full-uint8 frames → /ws/user-spectrum
+//     └─ DDC → demod (AM/SSB/CW/NFM/WFM stereo+RDS) → 48k float PCM
+//                → /ws/audio  (WFM stereo, others mono)
 //
-// A minimal localhost HTTP/WebSocket server (one thread per connection) speaks
-// the UberSDR contract so the VibeSDR client connects unchanged. Control
-// (zoom/tune/mode/bandwidth/set_rate/ping/reset) arrives as JSON text frames.
+// The on-device DSP is the clean-room `vibedsp` engine; the localhost HTTP/
+// WebSocket server + RTL-TCP client use the clean-room `net_shim`. A minimal
+// server (one thread per connection) speaks the UberSDR contract so the VibeSDR
+// client connects unchanged. Control (zoom/tune/mode/bandwidth/set_rate/ping/
+// reset) arrives as JSON text frames. librtlsdr (USB driver + HW controls) is
+// the only remaining native dependency.
 
 #include "local_sdr_shim.h"
 
@@ -36,20 +39,8 @@
 #include <thread>
 #include <vector>
 
-#include "signal_path/iq_frontend.h"
-#include "dsp/channel/rx_vfo.h"
-#include "dsp/demod/am.h"
-#include "dsp/demod/ssb.h"
-#include "dsp/demod/fm.h"
-#include "dsp/demod/cw.h"
-#include "dsp/demod/broadcast_fm.h"
-#include "dsp/multirate/rational_resampler.h"
-#include "dsp/filter/deephasis.h"
-#include "dsp/sink/handler_sink.h"
-#include "dsp/types.h"
-#include "utils/net.h"
-#include "rds_demod.h"   // radio module RDS demod
-#include "rds.h"         // radio module RDS decoder
+#include "vibedsp/vibedsp.h"        // V5 clean-room GPL-free DSP engine (RxPipeline)
+#include "net_shim.h"               // V5 clean-room GPL-free TCP socket wrapper
 #include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
 #include "decoders/wefax_decoder.h" // WEFAX (audio-extension decoder)
 #include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
@@ -69,6 +60,14 @@
 
 namespace vibe {
 namespace {
+
+// V5: the on-device DSP is now the clean-room GPL-free engine. These local
+// aliases replace the old SDR++ dsp:: sample types so the decoder/audio feed
+// code below is unchanged (it only ever touched .l / .r).
+using cf32     = vibedsp::cf32;       // interleaved IQ sample (std::complex<float>)
+using stereo_t = vibedsp::stereo;     // { float l, r; }
+// Cap on samples copied out of one IQ buffer (was SDR++'s STREAM_BUFFER_SIZE).
+constexpr int STREAM_BUFFER_SIZE = 1000000;
 
 // ── SHA1 + base64 (WebSocket handshake) ─────────────────────────────────────
 struct Sha1 {
@@ -166,6 +165,19 @@ ModeParams paramsFor(const std::string& mode) {
     /* nfm / fm */                return {ModeParams::NFM, 50000, 12500, 1};
 }
 
+// Map the shim's mode kind onto the V5 engine's demod mode.
+vibedsp::RxPipeline::Mode rxModeFor(ModeParams::Kind k) {
+    using M = vibedsp::RxPipeline::Mode;
+    switch (k) {
+        case ModeParams::AM:       return M::AM;
+        case ModeParams::SSB_USB:  return M::SSB_USB;
+        case ModeParams::SSB_LSB:  return M::SSB_LSB;
+        case ModeParams::CW:       return M::CW;
+        case ModeParams::WFM:      return M::WFM;
+        case ModeParams::NFM:      default: return M::NFM;
+    }
+}
+
 } // namespace
 
 // ── Impl ────────────────────────────────────────────────────────────────────
@@ -234,13 +246,14 @@ struct LocalSdrShim::Impl {
     std::mutex         notchMtx;
     AutoNotch*         notchEng = nullptr;
 
-    // IQ + FFT. frontend is heap-allocated so a detail (FFT-size) change can
-    // recreate it with fresh dsp blocks (re-init aborts; setFFTSize touches the
-    // GUI waterfall which doesn't exist headless).
-    dsp::stream<dsp::complex_t> iqStream;
-    IQFrontEnd* frontend = nullptr;
-    std::vector<float> fftBuf;
-    std::vector<float> fftAccum;   // running sum for FFT averaging
+    // V5 engine: the IQ -> {spectrum, audio} chain (replaces SDR++ IQFrontEnd +
+    // VFO + demod graph). Fed raw IQ from the USB/TCP worker; calls back with a
+    // fftshifted dB row (-> onSpectrum) and float PCM (-> onAudioPcm). Touch only
+    // under modeMtx — feed() runs rebuildAudio() inline, so setTune from the WS/HW
+    // threads must be serialised against the IQ worker.
+    vibedsp::RxPipeline rx;
+    std::vector<cf32> feedBuf;      // u8 IQ -> cf32 staging for rx.feed()
+    std::vector<float> fftAccum;    // running sum for FFT averaging (fftshifted)
     int accumCount = 0;
     std::thread rtlThread;
 
@@ -262,28 +275,21 @@ struct LocalSdrShim::Impl {
         else if (dev) rtlsdr_set_center_freq(dev, hz);
     }
 
-    // audio chain (rebuilt on mode change)
-    dsp::channel::RxVFO* vfo = nullptr;
-    dsp::Processor<dsp::complex_t, dsp::stereo_t>* demod = nullptr;
-    void (*demodDeleter)(void*) = nullptr;
-    // Heap-allocated + recreated on every rebuild: dsp::block::init() aborts() if
-    // called twice on the same block (registerInput guard), so member objects
-    // can't be re-init'd — each buildAudio() needs fresh ones.
-    dsp::multirate::RationalResampler<dsp::stereo_t>* resamp = nullptr;
-    dsp::filter::Deemphasis<dsp::stereo_t>* deemph = nullptr;   // FM de-emphasis (50/75us)
-    dsp::sink::Handler<dsp::stereo_t>* audioSink = nullptr;
+    // audio chain config (the engine itself lives in `rx`). buildAudio() maps the
+    // mode string -> these + rx.setTune(); retune/setBandwidth re-issue setTune
+    // with the cached mode/bw so a dial move doesn't need a full mode rebuild.
+    vibedsp::RxPipeline::Mode rxMode = vibedsp::RxPipeline::Mode::NFM;
+    double rxBwHz = 12500.0;
     std::atomic<int> audioChannels{1};
     std::atomic<float> audioGain{1.0f};   // per-mode output trim (AM is hotter)
     double deempTau = 50e-6;   // FM de-emphasis time constant (0 = off); 50us EU / 75us US
 
-    // FM extras (WFM): RDS decode + stereo-pilot detection.
-    dsp::demod::BroadcastFM* wfmDemod = nullptr;   // typed handle for demod.rdsOut
-    RDSDemod* rdsDemodB = nullptr;
-    dsp::sink::Handler<uint8_t>* rdsSink = nullptr;
-    rds::Decoder* rdsDecoder = nullptr;
+    // WFM RDS (fed by the engine's rdsPs/rdsText callbacks) + stereo-pilot lock.
+    std::mutex rdsMtx;
+    std::string rdsPsName, rdsText;
+    int rdsPi = -1;
     std::atomic<bool> stereoDetected{false};
-    float lrEma = 0.0f;
-    std::atomic<float> spectrumSnr{0.0f};   // peak−floor (dB); gates stereo (no station = static)
+    std::atomic<float> spectrumSnr{0.0f};   // peak−floor (dB), centre vs edges
 
     // Audio-extension decoder (RTTY etc.) on /ws/dxcluster — fed the demod audio.
     std::mutex decoderMtx;
@@ -321,16 +327,23 @@ struct LocalSdrShim::Impl {
 
     std::mutex sendMtx; // serialises all WS writes (both directions are split, sends here)
 
-    // ── FFT callback (Stage 3) ─────────────────────────────────────────────
-    static float* acquire(void* ctx) { return ((Impl*)ctx)->fftBuf.data(); }
-    static void release(void* ctx) { ((Impl*)ctx)->onFFT(); }
-    void onFFT() {
-        const int bins = fftSize;
-        // Block-average FFT_AVG independent FFTs (dB domain) to kill shimmer.
+    // ── Spectrum callback (Stage 3) ────────────────────────────────────────
+    // The V5 engine hands us a fftshifted dB row (bin 0 = -fs/2, bins/2 = DC),
+    // one per FFT, at FFT_AVG× the emit rate. We block-average FFT_AVG of them to
+    // kill shimmer, then crop/zoom to OUT_BINS and key squelch/SNR — all in the
+    // fftshifted layout (DC at bins/2), unlike the old raw-order IQFrontEnd path.
+    static void specCb(void* ctx, const float* db, int bins) { ((Impl*)ctx)->onSpectrum(db, bins); }
+    void onSpectrum(const float* db, int bins) {
         if ((int)fftAccum.size() != bins) { fftAccum.assign(bins, 0.0f); accumCount = 0; }
-        for (int i = 0; i < bins; i++) fftAccum[i] += fftBuf[i];
+        for (int i = 0; i < bins; i++) fftAccum[i] += db[i];
         if (++accumCount < FFT_AVG) return;
         float inv = 1.0f / (float)accumCount;
+        // Averaged dB at a signed bin offset from DC (DC = bins/2 in fftshifted).
+        auto dbAt = [&](int sOff) -> float {
+            int idx = bins / 2 + sOff;
+            if (idx < 0) idx = 0; else if (idx >= bins) idx = bins - 1;
+            return fftAccum[idx] * inv;
+        };
 
         uint64_t n = frameCounter.fetch_add(1);
         int div = rateDivisor.load();
@@ -341,10 +354,9 @@ struct LocalSdrShim::Impl {
         if (emit && sock && sock->isOpen()) {
             // Emit a FIXED OUT_BINS bins (GPU-safe waterfall texture width — a
             // 32768-wide texture exceeds mobile GPU limits and the waterfall
-            // silently fails). Map the fine internal FFT (fftSize bins) to the
-            // output, applying zoom: each output bin covers `step` source bins;
-            // peak-hold when downsampling (don't drop narrow carriers), nearest
-            // when zoomed in (step<1) so deep zoom stays sharp off the fine FFT.
+            // silently fails). Map the fine internal FFT (bins) to the output,
+            // applying zoom: each output bin covers `step` source bins; peak-hold
+            // when downsampling (don't drop narrow carriers).
             double zoom = zoomFactor.load();
             const int outBins = OUT_BINS;
             const double step = (double)bins / (zoom * (double)outBins); // src bins / out bin
@@ -356,52 +368,48 @@ struct LocalSdrShim::Impl {
             // Offset tuning: the physical DC sits HW_OFFSET_HZ above rtlCenter, so
             // shift the crop down by that many source bins to keep the display
             // centred on the logical centre (rtlCenter) — the DC spike then draws
-            // HW_OFFSET_HZ off-centre, harmlessly outside the channel. Protocol
-            // (rtlCenter as the centre) is unchanged, so tuning/zoom stay solid.
+            // HW_OFFSET_HZ off-centre, harmlessly outside the channel.
             const double hwOffsetBin = HW_OFFSET_HZ * (double)bins / sampleRate;
             uint64_t f = (uint64_t)llround(rtlCenter.load());
             std::memcpy(&frame[14], &f, 8);
             for (int i = 0; i < outBins; i++) {
                 int signedOut = (i <= outBins / 2) ? i : i - outBins;
-                double center = signedOut * step - hwOffsetBin;  // fractional src index (signed)
+                double center = signedOut * step - hwOffsetBin;  // signed src offset from DC
                 int lo = (int)std::floor(center - step / 2.0);
                 int hi = (int)std::ceil(center + step / 2.0);
                 if (hi <= lo) hi = lo + 1;
                 float best = -1e9f;
                 for (int s = lo; s < hi; s++) {
-                    int idx = ((s % bins) + bins) % bins;
-                    float val = fftAccum[idx] * inv;        // averaged dB
+                    float val = dbAt(s);                    // averaged dB
                     if (val > best) best = val;             // peak-hold
                 }
                 int v = (int)lround(best + 256.0);
                 frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
             }
-            // WFM station presence (off the full-span fine FFT, zoom-independent):
-            // a station is a broad hump at centre, static is flat. Compare centre
-            // band (±100 kHz, excluding the ±3 kHz DC spike) to the edges (Nyquist).
+            // Station presence (full-span, zoom-independent): a station is a broad
+            // hump at centre, static is flat. Compare centre band (±100 kHz, less
+            // the ±3 kHz DC spike) to the band edges.
             {
                 double binHz = sampleRate / (double)bins;
                 int half = std::min(bins / 4, (int)(100000.0 / binHz));
                 int skip = std::min(half - 1, std::max(1, (int)(3000.0 / binHz)));
                 double cSum = 0; int cN = 0;
-                for (int i = skip; i <= half; i++)           { cSum += fftAccum[i]*inv; cSum += fftAccum[bins-i]*inv; cN += 2; }
+                for (int i = skip; i <= half; i++)           { cSum += dbAt(i); cSum += dbAt(-i); cN += 2; }
                 double eSum = 0; int eN = 0;
-                for (int i = bins/2 - half/2; i <= bins/2 + half/2; i++) { eSum += fftAccum[((i%bins)+bins)%bins]*inv; eN++; }
+                for (int i = 0; i <= half / 2; i++)          { eSum += dbAt(-(bins/2) + i); eSum += dbAt((bins/2 - 1) - i); eN += 2; }
                 spectrumSnr.store((cN && eN) ? (float)(cSum/cN - eSum/eN) : 0.0f);
             }
             sendWs(sock, 0x2, frame.data(), frame.size());
             if (n % 10 == 0) sendFmMeta(sock);   // RDS + stereo ~1/sec
         }
-        // Tuned-channel power for squelch (peak dB in the demod passband, pre-AGC).
-        // Computed every averaged FFT so squelch keys even when spectrum is throttled.
+        // Tuned-channel power for squelch (peak dB in the demod passband).
         {
             double binHz = sampleRate / (double)bins;
             int cbin = (int)llround(vfoOffsetNow() / binHz);
             int hw = std::max(1, (int)(vfoBwHz.load() / 2.0 / binHz));
             float peak = -1e9f;
             for (int o = -hw; o <= hw; o++) {
-                int idx = (((cbin + o) % bins) + bins) % bins;
-                float v = fftAccum[idx] * inv;
+                float v = dbAt(cbin + o);
                 if (v > peak) peak = v;
             }
             channelDb.store(peak);
@@ -411,10 +419,35 @@ struct LocalSdrShim::Impl {
     }
 
     // ── Audio callback (Stage 4) ───────────────────────────────────────────
-    static void audioHandler(dsp::stereo_t* data, int count, void* ctx) {
-        ((Impl*)ctx)->onAudio(data, count);
+    // The V5 engine delivers float PCM (mono, or interleaved L/R for WFM stereo)
+    // at exactly AUDIO_SR. We re-pack it into the {l,r} buffer the existing
+    // decoder / NR / notch / squelch / PCM-send body already works on.
+    std::vector<stereo_t> audioPack;        // engine PCM -> {l,r} for onAudio()
+    static void audioCb(void* ctx, const float* pcm, int frames, int channels, int /*outRate*/) {
+        ((Impl*)ctx)->onEnginePcm(pcm, frames, channels);
     }
-    void onAudio(dsp::stereo_t* data, int count) {
+    void onEnginePcm(const float* pcm, int frames, int channels) {
+        if (frames <= 0) return;
+        audioPack.resize((size_t)frames);
+        if (channels == 2) {
+            for (int i = 0; i < frames; i++) { audioPack[i].l = pcm[2*i]; audioPack[i].r = pcm[2*i+1]; }
+        } else {
+            for (int i = 0; i < frames; i++) { audioPack[i].l = pcm[i]; audioPack[i].r = pcm[i]; }
+        }
+        onAudio(audioPack.data(), frames, channels);
+    }
+    // RDS programme-service name / RadioText / stereo-pilot lock from the engine.
+    static void rdsPsCb(void* ctx, uint16_t pi, const char* ps8) {
+        Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
+        t->rdsPi = pi; t->rdsPsName = ps8 ? ps8 : "";
+    }
+    static void rdsTextCb(void* ctx, const char* rt64) {
+        Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
+        t->rdsText = rt64 ? rt64 : "";
+    }
+    static void stereoCb(void* ctx, bool locked) { ((Impl*)ctx)->stereoDetected.store(locked); }
+
+    void onAudio(stereo_t* data, int count, int ch) {
         if (count <= 0) return;
         // Feed the audio-extension decoder (mono int16) — runs even with no audio
         // WS client. The decoder's onChar/onState push frames to the dxcluster WS.
@@ -430,7 +463,6 @@ struct LocalSdrShim::Impl {
         std::shared_ptr<net::Socket> sock;
         { std::lock_guard<std::mutex> lk(clientMtx); sock = audioClient; }
         if (!sock || !sock->isOpen()) return;
-        int ch = audioChannels.load();
 
         // Auto notch (mono listening path, opt-in): removes steady tones before NR.
         if (notchOn.load() && ch == 1) {
@@ -483,15 +515,8 @@ struct LocalSdrShim::Impl {
             return (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
         };
         if (ch == 2) {
-            // Stereo-pilot detection: a mono station has L==R (no difference
-            // signal); a stereo broadcast carries L−R, so the ratio of |L−R| to
-            // the total tracks the pilot. EMA-smoothed, thresholded.
-            float diff = 0.0f, tot = 1e-6f;
-            for (int i = 0; i < count; i++) { diff += std::fabs(data[i].l - data[i].r); tot += std::fabs(data[i].l) + std::fabs(data[i].r); }
-            lrEma += 0.1f * (diff / tot - lrEma);
-            // Stereo needs BOTH an L−R difference AND an actual carrier — static
-            // is uncorrelated noise (L≠R) but flat (no peak), so gate on SNR.
-            stereoDetected.store(lrEma > 0.04f && spectrumSnr.load() > 8.0f);
+            // Stereo lock comes from the engine's pilot-PLL callback (stereoCb),
+            // so we just pack the decoded L/R here.
             for (int i = 0; i < count; i++) { pcm[i*2] = cvt(data[i].l); pcm[i*2+1] = cvt(data[i].r); }
         } else {
             for (int i = 0; i < count; i++) pcm[i] = cvt(data[i].l);
@@ -500,7 +525,7 @@ struct LocalSdrShim::Impl {
     }
 
     // ── Audio-extension decoder (RTTY) ─────────────────────────────────────
-    void feedDecoder(dsp::stereo_t* data, int count) {
+    void feedDecoder(stereo_t* data, int count) {
         std::lock_guard<std::mutex> lk(decoderMtx);
         if (!decoder && !wefax && !sstv) return;
         // SSTV runs at 12 kHz — decimate 48k→12k (box-average 4) and feed.
@@ -601,7 +626,7 @@ struct LocalSdrShim::Impl {
         delete ft8; ft8 = nullptr;
         delete ft4; ft4 = nullptr;
     }
-    void feedSpots(dsp::stereo_t* data, int count) {
+    void feedSpots(stereo_t* data, int count) {
         std::lock_guard<std::mutex> lk(spotsMtx);
         if (!spotsActive) return;
         // Decimate 48k→12k by box-averaging 4 samples (mono).
@@ -621,23 +646,13 @@ struct LocalSdrShim::Impl {
     }
 
     // ── Demod chain (re)build ──────────────────────────────────────────────
+    // With the V5 engine there are no per-block dsp objects to destroy — the
+    // engine reconfigures itself on the next feed() after setTune(). teardownAudio
+    // just resets the derived UI state; the engine retains no audio across modes.
     void teardownAudio() {
-        if (audioSink) { audioSink->stop(); delete audioSink; audioSink = nullptr; }
-        if (deemph) { deemph->stop(); delete deemph; deemph = nullptr; }
-        // RDS chain (consumers before the demod that feeds them).
-        if (rdsSink) { rdsSink->stop(); delete rdsSink; rdsSink = nullptr; }
-        if (rdsDemodB) { rdsDemodB->stop(); delete rdsDemodB; rdsDemodB = nullptr; }
-        if (rdsDecoder) { delete rdsDecoder; rdsDecoder = nullptr; }
-        wfmDemod = nullptr;
-        stereoDetected.store(false); lrEma = 0.0f;
-        if (resamp) { resamp->stop(); delete resamp; resamp = nullptr; }
-        if (demod) { demod->stop(); if (demodDeleter) demodDeleter(demod); demod = nullptr; demodDeleter = nullptr; }
-        if (vfo) { frontend->removeVFO("audio"); vfo = nullptr; }
-    }
-
-    static void rdsSymbolHandler(uint8_t* data, int count, void* ctx) {
-        Impl* _this = (Impl*)ctx;
-        if (_this->rdsDecoder) _this->rdsDecoder->process(data, count);
+        std::lock_guard<std::mutex> lk(rdsMtx);
+        rdsPsName.clear(); rdsText.clear(); rdsPi = -1;
+        stereoDetected.store(false);
     }
 
     void buildAudio() {
@@ -646,92 +661,34 @@ struct LocalSdrShim::Impl {
         ModeParams mp = paramsFor(mode);
         audioChannels.store(mp.channels);
         // AM envelope-detected audio (DSB full-carrier) lands ~2x hotter than the
-        // SSB/FM paths at the same AGC setpoint, so trim it to match level with the
-        // rest (and with the server-side UberSDR demod).
+        // SSB/FM paths, so trim it to match level with the rest.
         audioGain.store(mp.kind == ModeParams::AM ? 0.5f : 1.0f);
-        // SSB sideband correction: USB passband sits above the carrier (tune at
-        // lower edge → VFO +bw/2), LSB below (−bw/2). Without this the audio is
-        // shifted ±bw/2 → the SSB "beat"/high-pitch.
-        demodOffset = (mp.kind == ModeParams::SSB_USB) ?  mp.bandwidth / 2.0
-                    : (mp.kind == ModeParams::SSB_LSB) ? -mp.bandwidth / 2.0 : 0.0;
+        // CW: tune a beat-note offset off the carrier so the engine's real-part
+        // (SSB) detector produces an audible ~700 Hz tone. SSB stays on-carrier;
+        // the engine filters a symmetric channel around it (USB/LSB image
+        // rejection is a future engine refinement).
+        demodOffset = (mp.kind == ModeParams::CW) ? 700.0 : 0.0;
 
-        double offset = vfoOffsetNow();
+        rxMode = rxModeFor(mp.kind);
+        rxBwHz = mp.bandwidth;
         vfoBwHz.store(mp.bandwidth);
-        vfo = frontend->addVFO("audio", mp.ifRate, mp.bandwidth, offset);
+        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        LOGI("audio chain: mode=%s bw=%.0f ch=%d", mode.c_str(), mp.bandwidth, mp.channels);
+    }
 
-        switch (mp.kind) {
-            case ModeParams::AM: {
-                auto* d = new dsp::demod::AM<dsp::stereo_t>();
-                // AUDIO AGC (SDR++'s default), NOT CARRIER: carrier-AGC normalises by
-                // the carrier-magnitude estimate and distorts on fading/weak carriers.
-                // The real on-carrier distortion was the RTL DC spike (see HW_OFFSET_HZ
-                // offset tuning), not the AGC — so we use SDR++'s exact defaults here.
-                d->init(&vfo->out, dsp::demod::AM<dsp::stereo_t>::AGCMode::AUDIO,
-                        mp.bandwidth, 50.0/mp.ifRate, 5.0/mp.ifRate, 100.0/mp.ifRate, mp.ifRate);
-                demod = d; demodDeleter = [](void* x){ delete (dsp::demod::AM<dsp::stereo_t>*)x; };
-                break;
-            }
-            case ModeParams::SSB_USB:
-            case ModeParams::SSB_LSB: {
-                auto* d = new dsp::demod::SSB<dsp::stereo_t>();
-                d->init(&vfo->out,
-                        mp.kind == ModeParams::SSB_USB ? dsp::demod::SSB<dsp::stereo_t>::Mode::USB
-                                                       : dsp::demod::SSB<dsp::stereo_t>::Mode::LSB,
-                        mp.bandwidth, mp.ifRate, 50.0/mp.ifRate, 5.0/mp.ifRate);
-                demod = d; demodDeleter = [](void* x){ delete (dsp::demod::SSB<dsp::stereo_t>*)x; };
-                break;
-            }
-            case ModeParams::CW: {
-                auto* d = new dsp::demod::CW<dsp::stereo_t>();
-                d->init(&vfo->out, 800.0, 100.0/mp.ifRate, 5.0/mp.ifRate, mp.ifRate);
-                demod = d; demodDeleter = [](void* x){ delete (dsp::demod::CW<dsp::stereo_t>*)x; };
-                break;
-            }
-            case ModeParams::NFM: {
-                auto* d = new dsp::demod::FM<dsp::stereo_t>();
-                d->init(&vfo->out, mp.ifRate, mp.bandwidth, true, false);
-                demod = d; demodDeleter = [](void* x){ delete (dsp::demod::FM<dsp::stereo_t>*)x; };
-                break;
-            }
-            case ModeParams::WFM: {
-                auto* d = new dsp::demod::BroadcastFM();
-                d->init(&vfo->out, 75000.0, mp.ifRate, /*stereo*/true, /*lowPass*/true, /*rds*/true);
-                demod = d; demodDeleter = [](void* x){ delete (dsp::demod::BroadcastFM*)x; };
-                wfmDemod = d;
-                break;
-            }
-        }
-
-        resamp = new dsp::multirate::RationalResampler<dsp::stereo_t>();
-        resamp->init(&demod->out, mp.ifRate, AUDIO_SR);
-
-        // FM de-emphasis (WFM/NFM) between the resampler and the sink.
-        dsp::stream<dsp::stereo_t>* af = &resamp->out;
-        if ((mp.kind == ModeParams::WFM || mp.kind == ModeParams::NFM) && deempTau > 0.0) {
-            deemph = new dsp::filter::Deemphasis<dsp::stereo_t>();
-            deemph->init(&resamp->out, deempTau, AUDIO_SR);
-            af = &deemph->out;
-        }
-        audioSink = new dsp::sink::Handler<dsp::stereo_t>();
-        audioSink->init(af, &Impl::audioHandler, this);
-
-        // RDS: BroadcastFM rdsOut → RDS demod → decoder (WFM only).
-        if (mp.kind == ModeParams::WFM && wfmDemod) {
-            rdsDecoder = new rds::Decoder();
-            rdsDemodB = new RDSDemod();
-            rdsDemodB->init(&wfmDemod->rdsOut, false);
-            rdsSink = new dsp::sink::Handler<uint8_t>();
-            rdsSink->init(&rdsDemodB->out, &Impl::rdsSymbolHandler, this);
-        }
-
-        demod->start();
-        resamp->start();
-        if (deemph) deemph->start();
-        audioSink->start();
-        if (rdsDemodB) rdsDemodB->start();
-        if (rdsSink) rdsSink->start();
-        LOGI("audio chain: mode=%s ifRate=%.0f bw=%.0f ch=%d deemp=%.0fus rds=%d",
-             mode.c_str(), mp.ifRate, mp.bandwidth, mp.channels, deempTau * 1e6, rdsDecoder != nullptr);
+    // (Re)start the V5 engine at the current sampleRate/fftSize. Wires the
+    // spectrum/audio/RDS/stereo callbacks. The engine emits FFT frames at FFT_AVG×
+    // the target rate; onSpectrum block-averages FFT_AVG of them.
+    void startEngine() {
+        vibedsp::RxPipeline::Callbacks cb;
+        cb.ctx      = this;
+        cb.spectrum = &Impl::specCb;
+        cb.audio    = &Impl::audioCb;
+        cb.rdsPs    = &Impl::rdsPsCb;
+        cb.rdsText  = &Impl::rdsTextCb;
+        cb.stereo   = &Impl::stereoCb;
+        fftAccum.assign(fftSize, 0.0f); accumCount = 0;
+        rx.start(sampleRate, fftSize, fftRate * FFT_AVG, (int)AUDIO_SR, cb);
     }
 
     // FM RDS + stereo status → client (reuses the OWRX metadata display).
@@ -745,14 +702,10 @@ struct LocalSdrShim::Impl {
     }
     void sendFmMeta(const std::shared_ptr<net::Socket>& sock) {
         std::string ps, rt; int pi = -1;
-        bool wfm = false;
-        { std::lock_guard<std::recursive_mutex> lk(modeMtx);
-          wfm = (mode == "wfm");
-          if (wfm && rdsDecoder) {
-              if (rdsDecoder->PSNameValid())   ps = rdsDecoder->getPSName();
-              if (rdsDecoder->radioTextValid()) rt = rdsDecoder->getRadioText();
-              if (rdsDecoder->piCodeValid())    pi = rdsDecoder->getPICode();
-          }
+        bool wfm = (mode == "wfm");
+        if (wfm) {
+            std::lock_guard<std::mutex> lk(rdsMtx);
+            ps = rdsPsName; rt = rdsText; pi = rdsPi;
         }
         // trim trailing spaces RDS pads with
         auto trim = [](std::string s){ size_t e = s.find_last_not_of(" \t\r\n"); return e==std::string::npos?std::string():s.substr(0,e+1); };
@@ -774,7 +727,7 @@ struct LocalSdrShim::Impl {
             tuneHw(freq);
         }
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
-        if (vfo) vfo->setOffset(vfoOffsetNow());
+        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
     }
 
     // ── WebSocket framing ──────────────────────────────────────────────────
@@ -853,7 +806,7 @@ struct LocalSdrShim::Impl {
                     rtlCenter.store(v);
                     tuneHw(v);
                     std::lock_guard<std::recursive_mutex> lk(modeMtx);
-                    if (vfo) vfo->setOffset(vfoOffsetNow());
+                    rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
                 }
             }
             double bb;
@@ -886,8 +839,9 @@ struct LocalSdrShim::Impl {
     void setBandwidth(double bw) {
         if (bw <= 0) return;
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
-        if (vfo) vfo->setBandwidth(std::min(bw, sampleRate));
-        // (demod-internal bandwidth left at construction default for Stage 4)
+        rxBwHz = std::min(bw, sampleRate);
+        vfoBwHz.store(rxBwHz);
+        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
     }
 
     // ── HTTP/WS server ─────────────────────────────────────────────────────
@@ -1110,20 +1064,28 @@ struct LocalSdrShim::Impl {
     }
 
     // ── RTL IQ worker ──────────────────────────────────────────────────────
-    static void asyncHandler(unsigned char* buf, uint32_t len, void* ctx) {
-        Impl* _this = (Impl*)ctx;
-        int sampCount = (int)(len / 2);
+    // Convert `sampCount` interleaved u8 I/Q samples to cf32 and feed the V5
+    // engine. Serialised against setTune (WS/HW threads) via modeMtx — feed()
+    // runs rebuildAudio() inline, so it must not race a mode/tune change.
+    void feedIq(const uint8_t* buf, int sampCount) {
+        if (sampCount <= 0) return;
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
+        feedBuf.resize((size_t)sampCount);
         for (int i = 0; i < sampCount; i++) {
-            _this->iqStream.writeBuf[i].re = ((float)buf[i*2]     - 127.4f) / 128.0f;
-            _this->iqStream.writeBuf[i].im = ((float)buf[i*2 + 1] - 127.4f) / 128.0f;
+            feedBuf[i] = cf32(((float)buf[i*2]     - 127.4f) / 128.0f,
+                              ((float)buf[i*2 + 1] - 127.4f) / 128.0f);
         }
-        _this->iqStream.swap(sampCount);
+        std::lock_guard<std::recursive_mutex> lk(modeMtx);
+        rx.feed(feedBuf.data(), sampCount);
+    }
+
+    static void asyncHandler(unsigned char* buf, uint32_t len, void* ctx) {
+        ((Impl*)ctx)->feedIq(buf, (int)(len / 2));
     }
 
     // RTL-TCP read loop: pull u8 I/Q from the socket in ~32 KB chunks and feed the
-    // same iqStream the USB path uses. Reads what's available (low latency) and
-    // carries a stray odd byte so I/Q pairs never misalign across reads.
+    // engine. Reads what's available (low latency) and carries a stray odd byte so
+    // I/Q pairs never misalign across reads.
     void tcpReadLoop() {
         const int CHUNK = 32768;                 // bytes (16384 IQ samples)
         std::vector<uint8_t> buf(CHUNK + 1);
@@ -1133,13 +1095,7 @@ struct LocalSdrShim::Impl {
             int got = s->recv(buf.data() + carry, CHUNK, false, 5000);
             if (got <= 0) { if (!tcpRunning.load()) break; continue; }
             int total = carry + got;
-            int sampCount = total / 2;
-            if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
-            for (int i = 0; i < sampCount; i++) {
-                iqStream.writeBuf[i].re = ((float)buf[i*2]     - 127.4f) / 128.0f;
-                iqStream.writeBuf[i].im = ((float)buf[i*2 + 1] - 127.4f) / 128.0f;
-            }
-            iqStream.swap(sampCount);
+            feedIq(buf.data(), total / 2);
             carry = total & 1;                    // keep the trailing half-sample byte
             if (carry) buf[0] = buf[total - 1];
         }
@@ -1167,7 +1123,6 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     impl->rtlCenter.store(centerFreq);
     impl->audioFreq.store(centerFreq);
     impl->mode = mode.empty() ? "nfm" : mode;
-    impl->fftBuf.assign(fftSize, -256.0f);
 
     impl->usbFd = dup(fd);
     if (impl->usbFd < 0) { err = "dup(usb fd) failed"; delete impl; return -1; }
@@ -1184,12 +1139,8 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     if (actualSr > 0) impl->sampleRate = (double)actualSr;
     // FFT size auto-scales with the rate for uniform Hz/bin (matches UberSDR).
     impl->fftSize = fftSizeForRate(impl->sampleRate);
-    impl->fftBuf.assign(impl->fftSize, -256.0f);
 
-    impl->frontend = new IQFrontEnd();
-    impl->frontend->init(&impl->iqStream, impl->sampleRate, true, 1, true, impl->fftSize, fftRate * FFT_AVG,
-                         IQFrontEnd::FFTWindow::NUTTALL, &Impl::acquire, &Impl::release, impl);
-    impl->frontend->start();
+    impl->startEngine();
     impl->buildAudio();
 
     int chosen = -1;
@@ -1199,7 +1150,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     }
     if (!impl->listener) {
         err = "could not bind localhost port";
-        impl->teardownAudio(); impl->frontend->stop(); delete impl->frontend; rtlsdr_close(impl->dev); ::close(impl->usbFd); delete impl; return -1;
+        impl->teardownAudio(); impl->rx.stop(); rtlsdr_close(impl->dev); ::close(impl->usbFd); delete impl; return -1;
     }
     impl->port = chosen;
     impl->serverRunning.store(true);
@@ -1232,7 +1183,6 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
     impl->rtlCenter.store(centerFreq);
     impl->audioFreq.store(centerFreq);
     impl->mode = mode.empty() ? "nfm" : mode;
-    impl->fftBuf.assign(fftSize, -256.0f);
 
     // Connect to the rtl_tcp server and read its 12-byte header.
     try { impl->tcpSock = net::connect(host, port); }
@@ -1252,12 +1202,8 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
     else { impl->sendTcpCmd(0x03, 1); impl->sendTcpCmd(0x04, (uint32_t)gainTenthDb); }
 
     impl->fftSize = fftSizeForRate(impl->sampleRate);
-    impl->fftBuf.assign(impl->fftSize, -256.0f);
 
-    impl->frontend = new IQFrontEnd();
-    impl->frontend->init(&impl->iqStream, impl->sampleRate, true, 1, true, impl->fftSize, fftRate * FFT_AVG,
-                         IQFrontEnd::FFTWindow::NUTTALL, &Impl::acquire, &Impl::release, impl);
-    impl->frontend->start();
+    impl->startEngine();
     impl->buildAudio();
 
     int chosen = -1;
@@ -1267,7 +1213,7 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
     }
     if (!impl->listener) {
         err = "could not bind localhost port";
-        impl->teardownAudio(); impl->frontend->stop(); delete impl->frontend;
+        impl->teardownAudio(); impl->rx.stop();
         impl->tcpSock->close(); impl->tcpSock = nullptr; delete impl; return -1;
     }
     impl->port = chosen;
@@ -1314,7 +1260,7 @@ void LocalSdrShim::stopLocked() {
     if (impl->useTcp()) { impl->tcpRunning.store(false); if (impl->tcpSock) impl->tcpSock->close(); }
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
     impl->teardownAudio();
-    if (impl->frontend) { impl->frontend->stop(); delete impl->frontend; impl->frontend = nullptr; }
+    impl->rx.stop();
 
     impl->stopDecoder();
     impl->stopSpots();
@@ -1368,7 +1314,7 @@ void LocalSdrShim::feedDecoderPcm(const int16_t* pcm, int n, int rate) {
     // buffer (l=r) and feed the decoder + digital-spots paths.
     double ratio = 48000.0 / (double)rate;
     double srcStep = 1.0 / ratio;
-    std::vector<dsp::stereo_t> buf;
+    std::vector<stereo_t> buf;
     buf.reserve((size_t)(n * ratio) + 2);
     for (double s = 0; s < n - 1; s += srcStep) {
         int i = (int)s; double f = s - i;
@@ -1453,17 +1399,15 @@ void LocalSdrShim::setSampleRate(double rate) {
     Impl* impl = p;
     const bool tcp = impl->useTcp();
     if (!tcp && !impl->dev) return;
-    // Serialise the whole teardown+rebuild against WS handleControl's buildAudio()
-    // and the other HW setters — otherwise this (JS-driven) rebuild races them on
-    // resamp/demod → registerInput() double-init abort (recursive: buildAudio below
-    // re-locks).
-    std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
-    // Stop the IQ source and recreate the front end at the new rate + auto FFT
-    // size (FFT scales with rate for uniform Hz/bin). setFFTSize/setSampleRate on
-    // the live IQFrontEnd touch the headless GUI / abort, so rebuild the object.
+    // Stop the IQ source FIRST and join its thread — BEFORE taking modeMtx. The IQ
+    // worker (feedIq) locks modeMtx per buffer, so holding modeMtx across the join
+    // would deadlock against a worker blocked on that same lock.
     if (tcp) { impl->tcpRunning.store(false); }
     else     { rtlsdr_cancel_async(impl->dev); }
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
+    // Now serialise the engine teardown+restart against WS handleControl's
+    // buildAudio() and the other HW setters (recursive: buildAudio below re-locks).
+    std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
     uint32_t actual;
     if (tcp) {
         impl->sendTcpCmd(0x02, (uint32_t)rate);   // rtl_tcp uses the rate as-is
@@ -1479,13 +1423,8 @@ void LocalSdrShim::setSampleRate(double rate) {
     impl->fftSize = fftSizeForRate(impl->sampleRate);
 
     impl->teardownAudio();
-    impl->frontend->stop();
-    delete impl->frontend;
-    impl->fftBuf.assign(impl->fftSize, -256.0f);
-    impl->frontend = new IQFrontEnd();
-    impl->frontend->init(&impl->iqStream, impl->sampleRate, true, 1, true, impl->fftSize, impl->fftRate * FFT_AVG,
-                         IQFrontEnd::FFTWindow::NUTTALL, &Impl::acquire, &Impl::release, impl);
-    impl->frontend->start();
+    impl->rx.stop();
+    impl->startEngine();
     impl->buildAudio();
     { std::lock_guard<std::mutex> lk(impl->clientMtx); if (impl->specClient) impl->sendConfig(impl->specClient); }
     if (tcp) { impl->tcpRunning.store(true); impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); }); }
