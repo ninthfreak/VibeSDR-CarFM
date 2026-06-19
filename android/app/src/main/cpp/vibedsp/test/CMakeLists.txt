@@ -12,6 +12,7 @@ set(DSP_SRC
     ${DSP}/fft.cpp
     ${DSP}/ddc.cpp
     ${DSP}/resampler.cpp
+    ${DSP}/stereo.cpp
     ${DSP}/pipeline.cpp
     ${DSP}/third_party/kissfft/kiss_fft.c
     ${DSP}/third_party/kissfft/kiss_fftr.c

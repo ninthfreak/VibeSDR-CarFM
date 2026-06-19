@@ -44,9 +44,19 @@ static void testResampler() {
 }
 
 // RxPipeline callback capture.
-struct Cap { std::vector<float> audio; int specFrames = 0; int bins = 0; };
+struct Cap {
+    std::vector<float> audio;     // mono, or LEFT channel when stereo
+    std::vector<float> audioR;    // RIGHT channel when stereo
+    int specFrames = 0, bins = 0, channels = 1;
+    bool stereoLocked = false;
+};
 static void onSpec(void* c, const float*, int b) { auto* p = (Cap*)c; p->specFrames++; p->bins = b; }
-static void onAud(void* c, const float* a, int n, int) { auto* p = (Cap*)c; p->audio.insert(p->audio.end(), a, a + n); }
+static void onAud(void* c, const float* a, int frames, int ch, int) {
+    auto* p = (Cap*)c; p->channels = ch;
+    if (ch == 2) for (int i = 0; i < frames; ++i) { p->audio.push_back(a[2*i]); p->audioR.push_back(a[2*i+1]); }
+    else         p->audio.insert(p->audio.end(), a, a + frames);
+}
+static void onStereo(void* c, bool lk) { ((Cap*)c)->stereoLocked = lk; }
 
 static void testPipeline() {
     std::printf("-- RxPipeline (AM) --\n");
@@ -178,6 +188,61 @@ static void testWFM() {
     } else check(false, "enough WFM audio for analysis");
 }
 
+// dB at a specific audio frequency over the last N samples.
+static float dbAt(const std::vector<float>& x, double hz) {
+    const int N = 1 << 14;
+    if ((int)x.size() <= N + 2000) return -999.0f;
+    RealFFT fft(N);
+    std::vector<float> win(N), buf(N), db(fft.bins());
+    nuttallWindow(win.data(), N);
+    int off = (int)x.size() - N - 1000;
+    for (int i = 0; i < N; ++i) buf[i] = win[i] * x[off + i];
+    fft.powerDb(buf.data(), db.data(), 1.0f);
+    return db[(int)std::lround(hz * N / 48000.0)];
+}
+
+static void testWFMStereo() {
+    std::printf("-- RxPipeline (WFM stereo) --\n");
+    // MPX with LEFT = 1 kHz tone, RIGHT = 4 kHz tone, plus 19 kHz pilot and the
+    // L-R difference on the 38 kHz subcarrier. Decoded L must have the 1 kHz and
+    // R the 4 kHz, with good cross-channel separation.
+    const double fs = 1920000.0, fc = 300000.0, Lf = 1000.0, Rf = 4000.0;
+    const int Ni = 1 << 21;
+    std::vector<cf32> iq(Ni);
+    double ph = 0.0;
+    for (int i = 0; i < Ni; ++i) {
+        const double t = i / fs;
+        const double L = 0.3 * std::cos(2.0 * M_PI * Lf * t);
+        const double R = 0.3 * std::cos(2.0 * M_PI * Rf * t);
+        const double mpx = (L + R)
+                         + 0.1 * std::cos(2.0 * M_PI * 19000.0 * t)
+                         + (L - R) * std::cos(2.0 * M_PI * 38000.0 * t);
+        ph += 2.0 * M_PI * (fc + 50000.0 * mpx) / fs;
+        iq[i] = cf32((float)std::cos(ph), (float)std::sin(ph));
+    }
+
+    Cap cap;
+    RxPipeline pipe;
+    RxPipeline::Callbacks cb; cb.ctx = &cap;
+    cb.spectrum = onSpec; cb.audio = onAud; cb.stereo = onStereo;
+    pipe.start(fs, 1024, 20.0, 48000, cb);
+    pipe.setTune(fc, RxPipeline::Mode::WFM, 200000.0);
+    for (int o = 0; o < Ni; o += 65536)
+        pipe.feed(iq.data() + o, std::min(65536, Ni - o));
+
+    std::printf("  channels=%d, stereo locked=%d, L samples=%zu R samples=%zu\n",
+                cap.channels, (int)cap.stereoLocked, cap.audio.size(), cap.audioR.size());
+    check(cap.channels == 2, "WFM emits stereo (2ch)");
+    check(cap.stereoLocked, "pilot PLL locked");
+
+    const float L_at_Lf = dbAt(cap.audio,  Lf), L_at_Rf = dbAt(cap.audio,  Rf);
+    const float R_at_Lf = dbAt(cap.audioR, Lf), R_at_Rf = dbAt(cap.audioR, Rf);
+    std::printf("  LEFT : 1kHz=%.1f 4kHz=%.1f dB | RIGHT: 1kHz=%.1f 4kHz=%.1f dB\n",
+                L_at_Lf, L_at_Rf, R_at_Lf, R_at_Rf);
+    check(L_at_Lf - L_at_Rf > 20.0f, "left channel dominated by its own tone");
+    check(R_at_Rf - R_at_Lf > 20.0f, "right channel dominated by its own tone");
+}
+
 int main() {
     std::printf("== vibedsp resampler + pipeline host test ==\n");
     testResampler();
@@ -185,6 +250,7 @@ int main() {
     testNFM();
     testSSB();
     testWFM();
+    testWFMStereo();
     std::printf(failures ? "\n%d FAILURE(S)\n" : "\nALL PASS\n", failures);
     return failures ? 1 : 0;
 }

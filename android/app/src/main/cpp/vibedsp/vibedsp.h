@@ -201,6 +201,24 @@ private:
     int decim_, head_ = 0, count_;
 };
 
+// ── Stereo pilot PLL ─────────────────────────────────────────────────────--
+// Locks to the 19 kHz FM stereo pilot in the MPX and generates phase-coherent
+// 38 kHz (for L-R coherent detection) and 57 kHz (for RDS) references. Reports
+// lock via a smoothed in-phase pilot amplitude.
+class StereoPLL {
+public:
+    void configure(double pilotHz, double rate);
+    // Advance one MPX sample; outputs coherent references. ref38/ref57 may be null.
+    void step(float mpx, float* ref38, float* ref57);
+    bool locked() const { return lockAmp_ > 0.05f; }
+    float lockAmp() const { return lockAmp_; }
+    void reset() { phase_ = 0.0; dphase_ = w0_; lockAmp_ = 0.0f; }
+private:
+    double w0_ = 0.0, phase_ = 0.0, dphase_ = 0.0;
+    double alpha_ = 0.0, beta_ = 0.0;
+    float lockAmp_ = 0.0f;
+};
+
 // ── SSB / CW demodulator ──────────────────────────────────────────────────--
 // With the channel tuned so the (suppressed) carrier sits at 0 Hz, the audio is
 // the real part of the baseband. USB/LSB and CW differ only in the tuning offset
@@ -228,8 +246,14 @@ public:
         void* ctx = nullptr;
         // fftshifted dB row, length == fftSize (bin 0 = -fs/2, fftSize/2 = DC).
         void (*spectrum)(void* ctx, const float* dbRow, int bins) = nullptr;
-        // mono float audio at exactly outRate Hz.
-        void (*audio)(void* ctx, const float* mono, int n, int outRate) = nullptr;
+        // float audio at exactly outRate Hz. channels=1 -> mono (length frames);
+        // channels=2 -> interleaved L,R (length 2*frames). WFM stereo uses 2.
+        void (*audio)(void* ctx, const float* pcm, int frames, int channels, int outRate) = nullptr;
+        // Optional: WFM RDS group (4x 16-bit blocks A,B,C,D) when block sync is
+        // good. The shim feeds these to its existing rds::Decoder UI path.
+        void (*rdsGroup)(void* ctx, const uint16_t blocks[4], bool valid[4]) = nullptr;
+        // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
+        void (*stereo)(void* ctx, bool locked) = nullptr;
     };
 
     // sampleRate = input IQ rate; fftSize = waterfall bins; fftRate = frames/sec;
@@ -264,10 +288,18 @@ private:
     std::unique_ptr<AmDemod> am_;
     std::unique_ptr<FmDemod> fm_;
     std::unique_ptr<SsbDemod> ssb_;
-    std::unique_ptr<RealFir> audioLpf_;     // WFM: 15 kHz mono LPF (pilot reject)
-    Deemphasis deemph_;
+    std::unique_ptr<RealFir> audioLpf_;     // WFM: 15 kHz (L+R / mono) LPF
+    Deemphasis deemph_;                     // mono / L+R de-emphasis
     bool useDeemph_ = false;
-    std::unique_ptr<RationalResampler> resamp_;
+    std::unique_ptr<RationalResampler> resamp_;     // mono / left
+    // WFM stereo
+    bool stereo_ = false;
+    StereoPLL pll_;
+    std::unique_ptr<RealFir> lmrLpf_;       // L-R 15 kHz LPF after 38 kHz mix
+    Deemphasis deemphR_;
+    std::unique_ptr<RationalResampler> resampR_;    // right channel
+    std::vector<float> lprBuf_, lmrBuf_, leftBuf_, rightBuf_, rOutBuf_, ilvBuf_;
+    bool lastStereo_ = false;
     int chDecim_ = 1;
     double chFs_ = 0.0;
     std::vector<cf32> baseBuf_, chBuf_;
