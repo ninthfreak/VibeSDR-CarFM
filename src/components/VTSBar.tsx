@@ -15,6 +15,15 @@ import { Animated, Easing, Image, ScrollView, StyleSheet, Text } from 'react-nat
 // genuine RDS (black logo sits in a white pill against the dark bar).
 const RDS_LOGO = require('../../assets/rds-logo.png');
 
+// Bookmark-source marks (uniform with the RDS logo): the backend logo for a
+// server bookmark, an "EiBi" text mark for the on-device EiBi schedule, and a
+// phone glyph for the user's own (local) bookmarks.
+const SERVER_LOGOS: Record<string, any> = {
+  ubersdr: require('../../assets/logo_ubersdr.png'),
+  owrx:    require('../../assets/logo_owrx.png'),
+  kiwi:    require('../../assets/logo_kiwi.png'),
+};
+
 export interface VtsNotifData {
   key:        number;   // bump to re-trigger even with identical text
   name:       string;
@@ -24,7 +33,9 @@ export interface VtsNotifData {
   kind:       'station-on' | 'station-off' | 'band';
   color?:     string;   // band-condition override for the primary text
   hold?:      boolean;  // stay up (no auto-dismiss) — digital-voice caller display
-  badge?:     string;   // source tag (e.g. 'RDS', 'DMR') — shown before the name
+  badge?:     string;   // live-data tag (e.g. 'RDS', 'DMR') — shown before the name
+  source?:    'eibi' | 'server' | 'user';  // bookmark origin → source icon
+  flag?:      string;   // transmitter-country flag (EiBi bookmarks)
 }
 
 const NOTIF_MS = 8000;
@@ -37,7 +48,7 @@ const COL = {
   sub:     'rgba(255,255,255,0.55)',
 };
 
-export default function VTSBar({ notif, bottom }: { notif: VtsNotifData | null; bottom: number }) {
+export default function VTSBar({ notif, bottom, serverType }: { notif: VtsNotifData | null; bottom: number; serverType?: string }) {
   const [shown, setShown] = useState<VtsNotifData | null>(null);
   const shownRef = useRef<VtsNotifData | null>(null);
   const fade    = useRef(new Animated.Value(0)).current;
@@ -119,9 +130,20 @@ export default function VTSBar({ notif, bottom }: { notif: VtsNotifData | null; 
   return (
     <Animated.View style={[styles.wrap, { bottom, opacity: fade }]} pointerEvents="none">
       <Text style={[styles.arrow, { color: leftCol }]}>◄</Text>
+      {/* Source mark: live-data badge (RDS logo / text) wins; otherwise the
+          bookmark-origin icon — backend logo, EiBi mark, or phone glyph. */}
       {shown.badge === 'RDS'
         ? <Image source={RDS_LOGO} style={styles.rdsLogo} resizeMode="contain" />
-        : !!shown.badge && <Text style={styles.badge}>{shown.badge}</Text>}
+        : !!shown.badge
+          ? <Text style={styles.badge}>{shown.badge}</Text>
+          : shown.source === 'server'
+            ? <Image source={SERVER_LOGOS[serverType ?? 'ubersdr'] ?? SERVER_LOGOS.ubersdr} style={styles.srcLogo} resizeMode="contain" />
+            : shown.source === 'eibi'
+              ? <Text style={styles.eibiMark}>EiBi</Text>
+              : shown.source === 'user'
+                ? <Text style={styles.phoneMark}>📱</Text>
+                : null}
+      {!!shown.flag && <Text style={styles.flag}>{shown.flag}</Text>}
       {!!shown.offset && tuneLeft && <Text style={styles.offset}>{shown.offset}</Text>}
       {/* Horizontal ScrollView = unconstrained content width, so the text
           measures at its TRUE size (a plain View clamps Text to the parent
@@ -189,6 +211,32 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     paddingHorizontal: 3,
     marginRight: 5,
+  },
+  srcLogo: {
+    width: 26,
+    height: 16,
+    marginRight: 5,
+  },
+  eibiMark: {
+    color: '#0a0a0a',
+    backgroundColor: '#7fb3ff',   // distinct from the green live badge
+    fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 10.5,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    overflow: 'hidden',
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    marginRight: 5,
+  },
+  phoneMark: {
+    fontSize: 14,
+    marginRight: 4,
+  },
+  flag: {
+    fontSize: 15,
+    marginRight: 3,
   },
   offset: {
     color: 'rgba(255,200,80,0.85)',

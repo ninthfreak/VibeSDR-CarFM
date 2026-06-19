@@ -77,7 +77,7 @@ import AboutOverlay from '../components/AboutOverlay';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import PasswordModal from '../components/PasswordModal';
 import {
-  fetchBookmarks, fetchBands, findNearest, findNextBookmark,
+  fetchBookmarks, findNearest, findNextBookmark,
   fmtBandFreq, deriveItuRegion, refreshBandSnr, getBandSnrDb, propCondition,
   fetchUiConfig, fetchReceiverInfo,
   VTS_ON_HZ, searchStations, type ServerBookmark, type ServerBand,
@@ -1653,7 +1653,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onBookmarks:  (list) => {
         // OWRX server bookmarks/dial markers (over the WS) → same path as
         // UberSDR's fetched bookmarks: VTS station readout + search bar.
-        if (!destroyed.current) setServerBookmarks(list.map((b) => ({ name: b.name, frequency: b.frequency, mode: b.mode, repeater: b.repeater })));
+        if (!destroyed.current) setServerBookmarks(list.map((b) => ({ name: b.name, frequency: b.frequency, mode: b.mode, repeater: b.repeater, source: 'server' as const })));
       },
       onDecoderText: (line, replace) => {
         // OWRX server-side text decoders (Packet/POCSAG/ADSB/…) → the decoder
@@ -2418,77 +2418,82 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const [serverBookmarks, setServerBookmarks] = useState<ServerBookmark[]>([]);
   const [userBookmarks,   setUserBookmarks]   = useState<UserBookmark[]>([]);
+  // EiBi shortwave schedule — the on-device fallback bookmark set. Toggleable
+  // (some people find it too busy); used only when the backend has no server
+  // bookmarks of its own. Persisted in lsv_eibi_enabled.
+  const [eibiEnabled,   setEibiEnabled]   = useState(true);
+  const [eibiBookmarks, setEibiBookmarks] = useState<ServerBookmark[]>([]);
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_eibi_enabled').then((v) => { if (v === '0') setEibiEnabled(false); }).catch(() => {});
+  }, []);
+  const onEibiToggle = useCallback((on: boolean) => {
+    setEibiEnabled(on);
+    AsyncStorage.setItem('lsv_eibi_enabled', on ? '1' : '0').catch(() => {});
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    const isOwrx = (route.params.serverType ?? 'ubersdr') === 'owrx';
-    // OWRX has no bookmark/band REST API — bookmarks arrive over the WS
-    // (onBookmarks) and bands come from the built-in plan; UberSDR fetches both.
-    if (isLocal) {
-      // Local hardware has no server bookmark API — use the EiBi shortwave
-      // schedule (fetched + cached daily), time-filtered so stations show only
-      // while scheduled, like the server feed. Bands come from the built-in plan.
-      setSearchBands(BAND_PLAN.map((b: Band) => ({
-        label: b.bandLabel ?? b.name, start: b.lo, end: b.hi, group: b.type, mode: b.mode,
-      })));
-      const load = () => {
-        loadActiveEibi()
-          .then((b: ServerBookmark[]) => { if (!cancelled) setServerBookmarks(b); })
-          .catch(() => {});
-      };
-      load();
-      const iv = setInterval(load, 10 * 60_000);   // re-filter as the schedule rolls
-      loadUserBookmarks()
-        .then((b: UserBookmark[]) => { if (!cancelled) setUserBookmarks(b); })
-        .catch(() => {});
-      return () => { cancelled = true; clearInterval(iv); };
-    } else if (isOwrx) {
-      setSearchBands(BAND_PLAN.map((b: Band) => ({
-        label: b.bandLabel ?? b.name, start: b.lo, end: b.hi, group: b.type, mode: b.mode,
-      })));
-    } else {
+    const st = route.params.serverType ?? 'ubersdr';
+    // OUR band plan is ALWAYS the search bar's band list, on every backend (the
+    // server /api/bands only exists on UberSDR; Kiwi/OWRX have none).
+    setSearchBands(BAND_PLAN.map((b: Band) => ({
+      label: b.bandLabel ?? b.name, start: b.lo, end: b.hi, group: b.type, mode: b.mode,
+    })));
+    // Server bookmarks: UberSDR via REST; OWRX/Kiwi arrive over the WS
+    // (onBookmarks, tagged source='server' there); local hardware has none.
+    // Whatever a backend yields is preferred; if it yields nothing, the EiBi
+    // fallback below fills in — that's how Kiwi/local get a searchable list.
+    if (!isLocal && st === 'ubersdr') {
       const load = () => {
         fetchBookmarks(baseUrl)
-          .then((b: ServerBookmark[]) => { if (!cancelled) setServerBookmarks(b); })
-          .catch(() => {});
+          .then((b: ServerBookmark[]) => { if (!cancelled) setServerBookmarks(b.map((x) => ({ ...x, source: 'server' as const }))); })
+          .catch(() => { if (!cancelled) setServerBookmarks([]); });
       };
       load();
-      fetchBands(baseUrl)
-        .then((b: ServerBand[]) => { if (!cancelled) setSearchBands(b); })
-        .catch(() => {});
       refreshBandSnr(baseUrl);
-      // EiBi augmentation is time-of-day dependent — refresh periodically
       const iv = setInterval(load, 10 * 60_000);
-      loadUserBookmarks()
-        .then((b: UserBookmark[]) => { if (!cancelled) setUserBookmarks(b); })
-        .catch(() => {});
+      loadUserBookmarks().then((b: UserBookmark[]) => { if (!cancelled) setUserBookmarks(b); }).catch(() => {});
       return () => { cancelled = true; clearInterval(iv); };
     }
-    loadUserBookmarks()
-      .then((b: UserBookmark[]) => { if (!cancelled) setUserBookmarks(b); })
-      .catch(() => {});
+    // OWRX: the WS onBookmarks callback populates serverBookmarks. Kiwi/local:
+    // none, so clear any stale set from a previous instance → EiBi takes over.
+    if (st !== 'owrx') setServerBookmarks([]);
+    loadUserBookmarks().then((b: UserBookmark[]) => { if (!cancelled) setUserBookmarks(b); }).catch(() => {});
     return () => { cancelled = true; };
   }, [baseUrl]);
 
-  // Server + user bookmarks (this instance's scope) merged — feeds the VTS
-  // lookups AND the search bar identically (user requirement: user bookmarks
-  // searchable and visible in VTS). User entries win name+freq collisions.
+  // EiBi fallback set — loaded when enabled, refreshed as the schedule rolls.
+  // Used only when the backend gave us no server bookmarks (see the merge).
+  useEffect(() => {
+    if (!eibiEnabled) { setEibiBookmarks([]); return; }
+    let cancelled = false;
+    const load = () => { loadActiveEibi().then((b) => { if (!cancelled) setEibiBookmarks(b); }).catch(() => {}); };
+    load();
+    const iv = setInterval(load, 10 * 60_000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [eibiEnabled]);
+
+  // Server (or EiBi fallback) + user bookmarks merged — feeds the VTS lookups AND
+  // the search bar identically. User entries win name+freq collisions. Each
+  // carries a `source` so the VTS can show its origin icon.
   useEffect(() => {
     const mine = bookmarksForInstance(userBookmarks, baseUrl);
     const seen = new Set(mine.map((b: UserBookmark) => `${b.name}|${b.frequency}`));
+    const fallback = serverBookmarks.length > 0 ? serverBookmarks : (eibiEnabled ? eibiBookmarks : []);
     const merged: ServerBookmark[] = [
       ...mine.map((b: UserBookmark) => ({
         name: b.name, frequency: b.frequency, mode: b.mode,
         group: b.group ?? undefined, comment: b.comment ?? undefined,
         bandwidth_low: b.bandwidth_low ?? undefined,
         bandwidth_high: b.bandwidth_high ?? undefined,
+        source: 'user' as const,
       })),
-      ...serverBookmarks.filter((b: ServerBookmark) => !seen.has(`${b.name}|${b.frequency}`)),
+      ...fallback.filter((b: ServerBookmark) => !seen.has(`${b.name}|${b.frequency}`)),
     ];
     vtsBookmarks.current = merged;
     setSearchBookmarks(merged);
     pushCarBrowse(merged);
-  }, [serverBookmarks, userBookmarks, baseUrl, ituRegion]);
+  }, [serverBookmarks, eibiBookmarks, eibiEnabled, userBookmarks, baseUrl, ituRegion]);
 
   // Push the car browse tree (Bookmarks + Band Plan folders) to the native
   // media-browser service. Bookmarks come from the merged list; the band plan is
@@ -2676,7 +2681,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // the QSO is live (rather than the bookmark timing out under the caller).
       const voiceMode = ['dmr', 'ysf', 'dstar', 'nxdn', 'm17', 'radel', 'radeu']
         .includes(String(client.current?.getStatus().mode ?? ''));
-      setVtsNotif({ key: vtsKey.current, name: nearest.name, kind: 'station-on', hold: voiceMode });
+      setVtsNotif({ key: vtsKey.current, name: nearest.name, kind: 'station-on', hold: voiceMode, source: nearest.source, flag: nearest.flag });
     }
   }, [ituRegion, showBandNotif, onMode]);
 
@@ -3178,7 +3183,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       </View>}
 
       {/* VTS popup — station / band-crossing notifications above the pill */}
-      {!controlsHidden && <VTSBar notif={vtsNotif} bottom={pillBottom + 8} />}
+      {!controlsHidden && <VTSBar notif={vtsNotif} bottom={pillBottom + 8} serverType={isLocal ? 'local' : route.params.serverType} />}
 
       {/* Menu sheet */}
       <MenuSheet
@@ -3321,6 +3326,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         kiwiSquelch={kiwiSquelch}       onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
         localNR={hwNrLevel}             onLocalNR={isLocal ? onLocalNR : undefined}
         notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
+        eibiEnabled={eibiEnabled}        onEibiToggle={onEibiToggle}
         isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
         serverDspEnabled={serverDspEnabled}
         serverDspFilter={serverDspFilter}

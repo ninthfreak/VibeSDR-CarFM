@@ -99,6 +99,9 @@ export interface MenuSheetProps {
   // Automatic notch (adaptive line enhancer) on/off — all backends.
   notchOn?:        boolean;
   onNotch?:        (on: boolean) => void;
+  // EiBi on-device shortwave schedule (fallback bookmarks) on/off.
+  eibiEnabled?:    boolean;
+  onEibiToggle?:   (on: boolean) => void;
   // Kiwi server-side squelch (0=off..99).
   kiwiSquelch?:    number;
   onKiwiSquelch?:  (v: number) => void;
@@ -427,7 +430,7 @@ export default function MenuSheet({
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
-  localNR = 0, onLocalNR, notchOn = false, onNotch, kiwiSquelch = 0, onKiwiSquelch,
+  localNR = 0, onLocalNR, notchOn = false, onNotch, eibiEnabled = true, onEibiToggle, kiwiSquelch = 0, onKiwiSquelch,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
   serverLabel = null, onOwrxSquelch, onOwrxNr,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
@@ -837,6 +840,7 @@ export default function MenuSheet({
                         </Text>
                         <Text style={styles.searchName} numberOfLines={1}>
                           {!r.isBand && r.bm?.repeater ? <Text style={styles.searchRpt}>📡 </Text> : null}
+                          {!r.isBand && r.bm?.flag ? r.bm.flag + ' ' : ''}
                           {r.isBand ? (r.band?.label ?? '') : (r.bm?.name ?? '')}
                         </Text>
                       </TouchableOpacity>
@@ -846,6 +850,25 @@ export default function MenuSheet({
                 </View>
               )}
             </View>
+
+            {/* EiBi shortwave schedule — on-device fallback bookmark set (off for
+                anyone who finds it too busy). Hidden when a backend has no place
+                for it would be over-engineering; always offered. */}
+            {onEibiToggle && (
+              <View style={styles.bwRow}>
+                <Text style={[styles.bwLabel, { width: 150 }]}>EiBi SCHEDULE</Text>
+                <View style={{ flex: 1 }} />
+                <TouchableOpacity onPress={() => onEibiToggle?.(!eibiEnabled)} hitSlop={8}
+                  style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
+                           backgroundColor: eibiEnabled ? C.gold : 'transparent',
+                           borderWidth: 1, borderColor: eibiEnabled ? C.gold : C.muted }}>
+                  <Text style={{ color: eibiEnabled ? C.bg : C.muted,
+                                 fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
+                    {eibiEnabled ? 'ON' : 'OFF'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
             {/* User bookmarks pane opener */}
             <BtnRow>

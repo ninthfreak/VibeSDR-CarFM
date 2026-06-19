@@ -25,6 +25,9 @@ export interface ServerBookmark {
   bandwidth_low?:  number;
   bandwidth_high?: number;
   repeater?:       boolean;   // OWRX: from the repeater database (vs a plain bookmark)
+  flag?:           string;    // emoji flag of the transmitter country (EiBi ITU)
+  itu?:            string;    // EiBi transmitter-country code (raw, col 4)
+  source?:         'eibi' | 'server' | 'user';   // origin — drives the VTS source icon
 }
 
 export interface ServerBand {
@@ -108,6 +111,8 @@ export interface NearestStation {
   name:   string;
   mode:   string | null;
   offset: number;  // curHz - bookmark hz
+  flag?:   string;
+  source?: 'eibi' | 'server' | 'user';
 }
 
 export function findNearest(bms: ServerBookmark[], curHz: number): NearestStation | null {
@@ -117,7 +122,7 @@ export function findNearest(bms: ServerBookmark[], curHz: number): NearestStatio
     const d = Math.abs(bm.frequency - curHz);
     if (d < bestDist) {
       bestDist = d;
-      best = { hz: bm.frequency, name: bm.name, mode: bm.mode ?? null, offset: curHz - bm.frequency };
+      best = { hz: bm.frequency, name: bm.name, mode: bm.mode ?? null, offset: curHz - bm.frequency, flag: bm.flag, source: bm.source };
     }
   }
   if (best && bestDist > VTS_MAX_KHZ * 1000) return null;

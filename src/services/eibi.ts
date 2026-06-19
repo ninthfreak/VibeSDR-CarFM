@@ -21,6 +21,28 @@ interface EibiEntry {
   days:   string;   // EiBi day code ("", "12345", "1-5", "Mo-Fr", "Sa", …)
   station: string;
   lang:   string;
+  itu:    string;   // transmitter-country code (EiBi ITU code, col 4)
+}
+
+// EiBi CSV files are Windows-1252 (Latin-1 superset) — decoding them as UTF-8
+// turns accented station names into the "�" replacement char. Map each byte:
+// 0x00–0x7F and 0xA0–0xFF straight to that code point (Latin-1); the 0x80–0x9F
+// band uses the cp1252 punctuation table. (Matches UberSDR's eibi.go fix.)
+const CP1252_HI: Record<number, number> = {
+  0x80: 0x20AC, 0x82: 0x201A, 0x83: 0x0192, 0x84: 0x201E, 0x85: 0x2026,
+  0x86: 0x2020, 0x87: 0x2021, 0x88: 0x02C6, 0x89: 0x2030, 0x8A: 0x0160,
+  0x8B: 0x2039, 0x8C: 0x0152, 0x8E: 0x017D, 0x91: 0x2018, 0x92: 0x2019,
+  0x93: 0x201C, 0x94: 0x201D, 0x95: 0x2022, 0x96: 0x2013, 0x97: 0x2014,
+  0x98: 0x02DC, 0x99: 0x2122, 0x9A: 0x0161, 0x9B: 0x203A, 0x9C: 0x0153,
+  0x9E: 0x017E, 0x9F: 0x0178,
+};
+function decodeWin1252(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i];
+    out += String.fromCharCode((b >= 0x80 && b <= 0x9F) ? (CP1252_HI[b] ?? b) : b);
+  }
+  return out;
 }
 
 let _entries: EibiEntry[] | null = null;
@@ -62,6 +84,7 @@ function parse(csv: string): EibiEntry[] {
       days:  (f[2] || '').trim(),
       station,
       lang:  (f[5] || '').trim(),
+      itu:   (f[3] || '').trim(),
     });
   }
   return out;
@@ -93,6 +116,38 @@ function dayActive(days: string, eibiDay: number): boolean {
   return true;   // dates / "irr" / "alt" / Ramadan etc. → don't hide
 }
 
+// EiBi transmitter-country (ITU) code → ISO 3166-1 alpha-2, for a flag. EiBi uses
+// its own ITU-style codes (col 4); the common broadcasters are covered, the rest
+// fall through to no flag.
+const EIBI_ITU2ISO: Record<string, string> = {
+  AFG:'AF', AFS:'ZA', AGL:'AO', ALB:'AL', ALG:'DZ', AND:'AD', ARG:'AR', ARM:'AM',
+  ARS:'SA', ASC:'SH', AUS:'AU', AUT:'AT', AZE:'AZ', B:'BR', BAH:'BS', BEL:'BE',
+  BEN:'BJ', BFA:'BF', BGD:'BD', BHR:'BH', BLR:'BY', BOL:'BO', BOT:'BW', BRU:'BN',
+  BUL:'BG', BUR:'MM', CAN:'CA', CBG:'KH', CHL:'CL', CHN:'CN', CKH:'CK', CLM:'CO',
+  CLN:'LK', CME:'CM', COD:'CD', COG:'CG', CTI:'CI', CTR:'CR', CUB:'CU', CVA:'VA',
+  CYP:'CY', CZE:'CZ', D:'DE', DJI:'DJ', DNK:'DK', DOM:'DO', E:'ES', EGY:'EG',
+  EQA:'EC', ERI:'ER', EST:'EE', ETH:'ET', F:'FR', FIN:'FI', FJI:'FJ', G:'GB',
+  GAB:'GA', GEO:'GE', GHA:'GH', GNB:'GW', GRC:'GR', GRL:'GL', GTM:'GT', GUF:'GF',
+  GUI:'GN', GUM:'GU', GUY:'GY', HKG:'HK', HND:'HN', HNG:'HU', HOL:'NL', HRV:'HR',
+  HWA:'US', I:'IT', ICE:'IS', IND:'IN', INS:'ID', IRL:'IE', IRN:'IR', IRQ:'IQ',
+  ISR:'IL', J:'JP', JOR:'JO', KAZ:'KZ', KEN:'KE', KGZ:'KG', KOR:'KR', KRE:'KP',
+  KWT:'KW', LAO:'LA', LBN:'LB', LBR:'LR', LBY:'LY', LTU:'LT', LUX:'LU', LVA:'LV',
+  MCO:'MC', MDA:'MD', MDG:'MG', MEX:'MX', MLA:'MY', MLD:'MV', MLI:'ML', MLT:'MT',
+  MNG:'MN', MOZ:'MZ', MRC:'MA', MRA:'MP', MTN:'MR', MWI:'MW', MYA:'MM', NCG:'NI',
+  NGR:'NG', NIG:'NE', NMB:'NA', NOR:'NO', NPL:'NP', NZL:'NZ', OMA:'OM', PAK:'PK',
+  PHL:'PH', PNG:'PG', PNR:'PA', POL:'PL', POR:'PT', PRG:'PY', PRU:'PE', QAT:'QA',
+  ROU:'RO', RRW:'RW', RUS:'RU', SDN:'SD', SEN:'SN', SEY:'SC', SNG:'SG', SOM:'SO',
+  SRB:'RS', SRL:'SL', SUI:'CH', SVK:'SK', SVN:'SI', SWZ:'SZ', SYR:'SY', TCD:'TD',
+  THA:'TH', TJK:'TJ', TKM:'TM', TUN:'TN', TUR:'TR', TWN:'TW', TZA:'TZ', UAE:'AE',
+  UGA:'UG', UKR:'UA', URG:'UY', USA:'US', UZB:'UZ', VEN:'VE', VTN:'VN', YEM:'YE',
+  ZMB:'ZM', ZWE:'ZW', S:'SE', SVK_:'SK',
+};
+function ituToFlag(itu: string): string | undefined {
+  const iso = EIBI_ITU2ISO[itu];
+  if (!iso || !/^[A-Z]{2}$/.test(iso)) return undefined;
+  return String.fromCodePoint(127397 + iso.charCodeAt(0), 127397 + iso.charCodeAt(1));
+}
+
 function activeNow(entries: EibiEntry[]): ServerBookmark[] {
   const now = new Date();
   const nowMin = now.getUTCHours() * 60 + now.getUTCMinutes();
@@ -101,7 +156,7 @@ function activeNow(entries: EibiEntry[]): ServerBookmark[] {
   for (const e of entries) {
     if (!timeActive(e.time, nowMin)) continue;
     if (!dayActive(e.days, eibiDay)) continue;
-    out.push({ name: e.station, frequency: e.freqHz, mode: 'am', group: 'EiBi', comment: e.lang || undefined });
+    out.push({ name: e.station, frequency: e.freqHz, mode: 'am', group: 'EiBi', comment: e.lang || undefined, flag: ituToFlag(e.itu), itu: e.itu || undefined, source: 'eibi' });
   }
   return out;
 }
@@ -115,9 +170,9 @@ async function ensureLoaded(): Promise<void> {
   if (!_entries || _season !== season) {
     try {
       const [cs, csv, cd] = await Promise.all([
-        AsyncStorage.getItem('lsv_eibi_season'),
-        AsyncStorage.getItem('lsv_eibi_csv'),
-        AsyncStorage.getItem('lsv_eibi_date'),
+        AsyncStorage.getItem('lsv_eibi_season2'),
+        AsyncStorage.getItem('lsv_eibi_csv2'),
+        AsyncStorage.getItem('lsv_eibi_date2'),
       ]);
       if (csv && cs === season) { _entries = parse(csv); _season = season; _date = cd || ''; }
     } catch {}
@@ -128,13 +183,13 @@ async function ensureLoaded(): Promise<void> {
     try {
       const res = await fetch(`http://www.eibispace.de/dx/${file}`);
       if (res.ok) {
-        const csv = await res.text();
+        const csv = decodeWin1252(new Uint8Array(await res.arrayBuffer()));
         const parsed = parse(csv);
         if (parsed.length > 0) {
           _entries = parsed; _season = season; _date = today;
-          AsyncStorage.setItem('lsv_eibi_csv', csv).catch(() => {});
-          AsyncStorage.setItem('lsv_eibi_season', season).catch(() => {});
-          AsyncStorage.setItem('lsv_eibi_date', today).catch(() => {});
+          AsyncStorage.setItem('lsv_eibi_csv2', csv).catch(() => {});
+          AsyncStorage.setItem('lsv_eibi_season2', season).catch(() => {});
+          AsyncStorage.setItem('lsv_eibi_date2', today).catch(() => {});
         }
       }
     } catch { /* keep whatever cache we have */ }
