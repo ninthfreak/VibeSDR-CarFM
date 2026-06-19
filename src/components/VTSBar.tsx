@@ -137,7 +137,8 @@ export default function VTSBar({ notif, bottom, serverType }: { notif: VtsNotifD
         : !!shown.badge
           ? <Text style={styles.badge}>{shown.badge}</Text>
           : shown.source === 'server'
-            ? <Image source={SERVER_LOGOS[serverType ?? 'ubersdr'] ?? SERVER_LOGOS.ubersdr} style={styles.srcLogo} resizeMode="contain" />
+            ? <Image source={SERVER_LOGOS[serverType ?? 'ubersdr'] ?? SERVER_LOGOS.ubersdr}
+                style={[styles.srcLogo, serverType === 'owrx' && styles.srcLogoLight]} resizeMode="contain" />
             : shown.source === 'eibi'
               ? <Text style={styles.eibiMark}>EiBi</Text>
               : shown.source === 'user'
@@ -216,6 +217,14 @@ const styles = StyleSheet.create({
     width: 26,
     height: 16,
     marginRight: 5,
+  },
+  // OWRX's logo is a black antenna that vanishes on the dark bar — sit it on a
+  // light chip, same as the menu footer.
+  srcLogoLight: {
+    backgroundColor: '#ffffff',
+    borderRadius: 4,
+    paddingHorizontal: 3,
+    width: 30,
   },
   eibiMark: {
     color: '#0a0a0a',
