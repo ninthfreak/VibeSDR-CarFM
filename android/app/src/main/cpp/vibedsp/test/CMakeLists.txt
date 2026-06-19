@@ -11,6 +11,8 @@ set(DSP ${CMAKE_CURRENT_SOURCE_DIR}/..)
 set(DSP_SRC
     ${DSP}/fft.cpp
     ${DSP}/ddc.cpp
+    ${DSP}/resampler.cpp
+    ${DSP}/pipeline.cpp
     ${DSP}/third_party/kissfft/kiss_fft.c
     ${DSP}/third_party/kissfft/kiss_fftr.c
 )
@@ -26,3 +28,7 @@ target_compile_options(vibedsp_demod_tests PRIVATE -O2 -Wall)
 add_executable(vibedsp_cfft_tests test_cfft.cpp ${DSP_SRC})
 target_include_directories(vibedsp_cfft_tests PRIVATE ${DSP})
 target_compile_options(vibedsp_cfft_tests PRIVATE -O2 -Wall)
+
+add_executable(vibedsp_pipeline_tests test_pipeline.cpp ${DSP_SRC})
+target_include_directories(vibedsp_pipeline_tests PRIVATE ${DSP})
+target_compile_options(vibedsp_pipeline_tests PRIVATE -O2 -Wall)

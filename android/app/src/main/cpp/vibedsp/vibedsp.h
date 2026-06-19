@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <complex>
+#include <memory>
 #include <vector>
 
 namespace vibedsp {
@@ -121,6 +122,25 @@ private:
     int decim_, head_ = 0, count_;
 };
 
+// ── Rational resampler (real/mono) ───────────────────────────────────────--
+// Polyphase up-by-L / down-by-M resampler giving an output rate of exactly
+// inRate*L/M, with L/M = outRate/inRate reduced. Used to land demod audio on an
+// exact 48 kHz so playback pitch is correct regardless of channel rate.
+class RationalResampler {
+public:
+    RationalResampler(int inRate, int outRate);
+    int process(const float* in, int n, float* out);   // returns #outputs
+    int maxOut(int n) const { return (int)((long long)n * L_ / M_) + 2; }
+    int L() const { return L_; }
+    int M() const { return M_; }
+    void reset();
+private:
+    int L_, M_, phaseLen_, cap_, head_ = 0;
+    long long inCount_ = 0, outCount_ = 0;
+    std::vector<float> h_;       // prototype low-pass, length phaseLen_*L_
+    std::vector<float> hist_;    // ring of last cap_ inputs
+};
+
 // ── AM demodulator ───────────────────────────────────────────────────────--
 // Envelope detector: audio = |z| with the carrier DC removed (one-pole DC
 // blocker), then a fixed gain. Input is the DDC'd baseband channel; output is
@@ -134,6 +154,61 @@ private:
     float dc_ = 0.0f;                  // DC-blocker state (running carrier level)
     static constexpr float kPole = 0.9995f;  // DC-blocker pole (~carrier removal)
     static constexpr float kGain = 2.0f;
+};
+
+// ── RxPipeline (the native engine) ───────────────────────────────────────--
+// The complete IQ -> {spectrum, audio} chain that the shim's "Local Hardware
+// (Native)" path runs, replacing the SDR++ Brown graph. Feed it raw IQ from the
+// same source the shim already has (USB/rtl_tcp); it calls back with fftshifted
+// spectrum dB rows and exact-48 kHz mono PCM. Phase 2 supports AM; more modes
+// land in later phases behind the same interface.
+class RxPipeline {
+public:
+    enum class Mode { AM /*, SSB_USB, SSB_LSB, CW, NFM, WFM (later phases) */ };
+
+    struct Callbacks {
+        void* ctx = nullptr;
+        // fftshifted dB row, length == fftSize (bin 0 = -fs/2, fftSize/2 = DC).
+        void (*spectrum)(void* ctx, const float* dbRow, int bins) = nullptr;
+        // mono float audio at exactly outRate Hz.
+        void (*audio)(void* ctx, const float* mono, int n, int outRate) = nullptr;
+    };
+
+    // sampleRate = input IQ rate; fftSize = waterfall bins; fftRate = frames/sec;
+    // outRate = audio rate (48000). Safe to call once before feed().
+    void start(double sampleRate, int fftSize, double fftRate, int outRate,
+               const Callbacks& cb);
+    // Tune the demod channel: offsetHz from band centre, mode, channel bandwidth.
+    void setTune(double offsetHz, Mode mode, double bwHz);
+    void feed(const cf32* iq, int n);   // raw IQ from the source
+    void stop();
+    int outRate() const { return outRate_; }
+
+private:
+    void rebuildAudio();
+    // config
+    double sampleRate_ = 0.0, fftRate_ = 20.0, offsetHz_ = 0.0, bwHz_ = 10000.0;
+    int fftSize_ = 1024, outRate_ = 48000;
+    Mode mode_ = Mode::AM;
+    Callbacks cb_{};
+    bool dirty_ = true;
+
+    // spectrum
+    std::unique_ptr<ComplexFFT> cfft_;
+    std::vector<float> win_, specBuf_, specDb_;
+    int specFill_ = 0;          // samples gathered toward the next frame
+    int specStride_ = 0;        // input samples between emitted frames
+    long long sinceFrame_ = 0;
+
+    // audio DDC chain
+    NCO nco_;
+    std::unique_ptr<FirDecimator> dec_;
+    std::unique_ptr<AmDemod> am_;
+    std::unique_ptr<RationalResampler> resamp_;
+    int chDecim_ = 1;
+    double chFs_ = 0.0;
+    std::vector<cf32> baseBuf_, chBuf_;
+    std::vector<float> demodBuf_, audioBuf_;
 };
 
 } // namespace vibedsp

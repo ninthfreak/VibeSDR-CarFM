@@ -1,0 +1,107 @@
+// VibeSDR V5 — RxPipeline: IQ -> {spectrum, audio}. Original VibeSDR code.
+#include "vibedsp.h"
+#include <cmath>
+#include <algorithm>
+
+namespace vibedsp {
+
+void RxPipeline::start(double sampleRate, int fftSize, double fftRate,
+                       int outRate, const Callbacks& cb) {
+    sampleRate_ = sampleRate;
+    fftSize_    = fftSize;
+    fftRate_    = fftRate;
+    outRate_    = outRate;
+    cb_         = cb;
+
+    // Spectrum: window + FFT, one frame every (sampleRate/fftRate) input samples.
+    cfft_ = std::make_unique<ComplexFFT>(fftSize_);
+    win_.resize(fftSize_);
+    nuttallWindow(win_.data(), fftSize_);
+    specBuf_.assign(fftSize_ * 2, 0.0f);   // interleaved? no — store cf32 below
+    specDb_.assign(fftSize_, 0.0f);
+    specStride_ = std::max(1, (int)std::llround(sampleRate_ / fftRate_));
+    specFill_   = 0;
+    sinceFrame_ = 0;
+
+    dirty_ = true;
+    rebuildAudio();
+}
+
+void RxPipeline::setTune(double offsetHz, Mode mode, double bwHz) {
+    offsetHz_ = offsetHz;
+    mode_     = mode;
+    bwHz_     = bwHz;
+    dirty_    = true;
+}
+
+void RxPipeline::rebuildAudio() {
+    // Channel decimation: bring the IQ down to a manageable channel rate that
+    // comfortably holds the demod bandwidth, then resample to exactly outRate.
+    const double targetCh = std::max((double)outRate_, bwHz_ * 3.0);
+    chDecim_ = std::max(1, (int)std::floor(sampleRate_ / targetCh));
+    chFs_    = sampleRate_ / chDecim_;
+
+    // Channel low-pass. The decimator filters at the INPUT rate, so cutoff is
+    // normalised to sampleRate: pass the demod bandwidth, but never exceed the
+    // post-decimation Nyquist (0.5/chDecim) or we alias.
+    const double cutoff = std::min(0.45 / chDecim_, (bwHz_ * 0.5) / sampleRate_);
+    const double trans  = std::max(cutoff * 0.5, 0.25 / chDecim_ - cutoff);
+    dec_  = std::make_unique<FirDecimator>(designLowpass(cutoff, std::max(trans, 1e-3)), chDecim_);
+
+    nco_.setFreq(offsetHz_ / sampleRate_);   // tune the channel to baseband
+
+    am_     = std::make_unique<AmDemod>();
+    resamp_ = std::make_unique<RationalResampler>((int)std::llround(chFs_), outRate_);
+
+    baseBuf_.clear(); chBuf_.clear(); demodBuf_.clear(); audioBuf_.clear();
+    dirty_ = false;
+}
+
+void RxPipeline::feed(const cf32* iq, int n) {
+    if (dirty_) rebuildAudio();
+
+    // ── Spectrum ───────────────────────────────────────────────────────────
+    // Gather fftSize contiguous samples for a frame, then skip to the next slot.
+    if (cb_.spectrum) {
+        // We keep a rolling buffer of the most recent fftSize samples.
+        for (int i = 0; i < n; ++i) {
+            // store as cf32 in specBuf_ reinterpreted
+            cf32* sb = reinterpret_cast<cf32*>(specBuf_.data());
+            if (specFill_ < fftSize_) {
+                sb[specFill_++] = iq[i];
+            } else {
+                // shift left by one (cheap enough at these sizes / could ring-buffer)
+                std::move(sb + 1, sb + fftSize_, sb);
+                sb[fftSize_ - 1] = iq[i];
+            }
+            if (++sinceFrame_ >= specStride_ && specFill_ >= fftSize_) {
+                sinceFrame_ = 0;
+                const float scale = 1.0f / (float)(fftSize_ * fftSize_);
+                cfft_->powerDbShifted(sb, win_.data(), specDb_.data(), scale);
+                cb_.spectrum(cb_.ctx, specDb_.data(), fftSize_);
+            }
+        }
+    }
+
+    // ── Audio (DDC -> demod -> resample) ─────────────────────────────────────
+    if (cb_.audio) {
+        baseBuf_.resize(n);
+        nco_.mix(iq, baseBuf_.data(), n);
+
+        chBuf_.resize(dec_->maxOut(n));
+        const int nc = dec_->process(baseBuf_.data(), n, chBuf_.data());
+
+        demodBuf_.resize(nc);
+        am_->process(chBuf_.data(), demodBuf_.data(), nc);
+
+        audioBuf_.resize(resamp_->maxOut(nc));
+        const int na = resamp_->process(demodBuf_.data(), nc, audioBuf_.data());
+        if (na > 0) cb_.audio(cb_.ctx, audioBuf_.data(), na, outRate_);
+    }
+}
+
+void RxPipeline::stop() {
+    cfft_.reset(); dec_.reset(); am_.reset(); resamp_.reset();
+}
+
+} // namespace vibedsp
