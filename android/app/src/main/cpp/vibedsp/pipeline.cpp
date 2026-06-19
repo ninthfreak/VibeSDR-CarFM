@@ -50,7 +50,15 @@ void RxPipeline::rebuildAudio() {
 
     nco_.setFreq(offsetHz_ / sampleRate_);   // tune the channel to baseband
 
-    am_     = std::make_unique<AmDemod>();
+    // Construct the demod for the active mode. FM gain maps radians/sample to a
+    // unit-ish audio level at the channel rate.
+    am_.reset(); fm_.reset(); ssb_.reset();
+    switch (mode_) {
+        case Mode::AM:                          am_ = std::make_unique<AmDemod>(); break;
+        case Mode::SSB_USB: case Mode::SSB_LSB:
+        case Mode::CW:                          ssb_ = std::make_unique<SsbDemod>(); break;
+        case Mode::NFM:                         fm_  = std::make_unique<FmDemod>((float)(chFs_ / (2.0 * M_PI * std::max(1.0, bwHz_ * 0.5)))); break;
+    }
     resamp_ = std::make_unique<RationalResampler>((int)std::llround(chFs_), outRate_);
 
     baseBuf_.clear(); chBuf_.clear(); demodBuf_.clear(); audioBuf_.clear();
@@ -92,7 +100,9 @@ void RxPipeline::feed(const cf32* iq, int n) {
         const int nc = dec_->process(baseBuf_.data(), n, chBuf_.data());
 
         demodBuf_.resize(nc);
-        am_->process(chBuf_.data(), demodBuf_.data(), nc);
+        if (am_)       am_->process(chBuf_.data(), demodBuf_.data(), nc);
+        else if (fm_)  fm_->process(chBuf_.data(), demodBuf_.data(), nc);
+        else if (ssb_) ssb_->process(chBuf_.data(), demodBuf_.data(), nc);
 
         audioBuf_.resize(resamp_->maxOut(nc));
         const int na = resamp_->process(demodBuf_.data(), nc, audioBuf_.data());

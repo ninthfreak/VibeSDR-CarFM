@@ -156,6 +156,34 @@ private:
     static constexpr float kGain = 2.0f;
 };
 
+// ── FM demodulator (NFM/quadrature discriminator) ────────────────────────--
+// out[n] = gain * arg(z[n] * conj(z[n-1])): the instantaneous frequency, which
+// is the FM audio. Used for narrowband FM; wideband FM (stereo/RDS) is a later
+// phase built on the same discriminator.
+class FmDemod {
+public:
+    explicit FmDemod(float gain = 1.0f) : gain_(gain) {}
+    void setGain(float g) { gain_ = g; }
+    void process(const cf32* in, float* out, int n);
+    void reset() { prev_ = cf32(1.0f, 0.0f); }
+private:
+    cf32 prev_ = cf32(1.0f, 0.0f);
+    float gain_;
+};
+
+// ── SSB / CW demodulator ──────────────────────────────────────────────────--
+// With the channel tuned so the (suppressed) carrier sits at 0 Hz, the audio is
+// the real part of the baseband. USB/LSB and CW differ only in the tuning offset
+// (CW adds a BFO tone offset). One-sided image rejection is a later refinement.
+class SsbDemod {
+public:
+    explicit SsbDemod(float gain = 1.0f) : gain_(gain) {}
+    void setGain(float g) { gain_ = g; }
+    void process(const cf32* in, float* out, int n);
+private:
+    float gain_;
+};
+
 // ── RxPipeline (the native engine) ───────────────────────────────────────--
 // The complete IQ -> {spectrum, audio} chain that the shim's "Local Hardware
 // (Native)" path runs, replacing the SDR++ Brown graph. Feed it raw IQ from the
@@ -164,7 +192,7 @@ private:
 // land in later phases behind the same interface.
 class RxPipeline {
 public:
-    enum class Mode { AM /*, SSB_USB, SSB_LSB, CW, NFM, WFM (later phases) */ };
+    enum class Mode { AM, SSB_USB, SSB_LSB, CW, NFM /*, WFM (later phase) */ };
 
     struct Callbacks {
         void* ctx = nullptr;
@@ -204,6 +232,8 @@ private:
     NCO nco_;
     std::unique_ptr<FirDecimator> dec_;
     std::unique_ptr<AmDemod> am_;
+    std::unique_ptr<FmDemod> fm_;
+    std::unique_ptr<SsbDemod> ssb_;
     std::unique_ptr<RationalResampler> resamp_;
     int chDecim_ = 1;
     double chFs_ = 0.0;

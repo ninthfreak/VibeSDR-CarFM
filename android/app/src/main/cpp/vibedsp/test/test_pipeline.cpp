@@ -88,10 +88,63 @@ static void testPipeline() {
     } else check(false, "enough audio for analysis");
 }
 
+// Run the pipeline over a synthetic IQ stream and return the recovered audio.
+static std::vector<float> runPipe(const std::vector<cf32>& iq, double fs,
+                                  double offset, RxPipeline::Mode mode, double bw) {
+    Cap cap;
+    RxPipeline pipe;
+    RxPipeline::Callbacks cb; cb.ctx = &cap; cb.spectrum = onSpec; cb.audio = onAud;
+    pipe.start(fs, 1024, 20.0, 48000, cb);
+    pipe.setTune(offset, mode, bw);
+    for (int o = 0; o < (int)iq.size(); o += 65536)
+        pipe.feed(iq.data() + o, std::min(65536, (int)iq.size() - o));
+    return cap.audio;
+}
+
+static void checkTone(const std::vector<float>& audio, double expectHz, const char* label) {
+    const int N = 1 << 14;
+    if ((int)audio.size() <= N + 2000) { check(false, label); return; }
+    float lvl;
+    int pk = peakBinReal(audio, N, (int)audio.size() - N - 1000, &lvl);
+    const double hz = (double)pk * 48000.0 / N;
+    std::printf("  %s recovered = %.1f Hz (expected %.1f)\n", label, hz, expectHz);
+    check(std::abs(hz - expectHz) < 48000.0 / N * 3.0, label);
+}
+
+static void testNFM() {
+    std::printf("-- RxPipeline (NFM) --\n");
+    const double fs = 1200000.0, fc = 150000.0, fm = 1000.0, dev = 3000.0;
+    const int Ni = 1 << 20;
+    std::vector<cf32> iq(Ni);
+    double ph = 0.0;
+    for (int i = 0; i < Ni; ++i) {
+        const double t = i / fs;
+        const double inst = fc + dev * std::cos(2.0 * M_PI * fm * t); // FM
+        ph += 2.0 * M_PI * inst / fs;
+        iq[i] = cf32((float)std::cos(ph), (float)std::sin(ph));
+    }
+    checkTone(runPipe(iq, fs, fc, RxPipeline::Mode::NFM, 12000.0), fm, "NFM tone");
+}
+
+static void testSSB() {
+    std::printf("-- RxPipeline (SSB USB) --\n");
+    const double fs = 1200000.0, fc = 80000.0, fa = 1000.0;
+    const int Ni = 1 << 20;
+    std::vector<cf32> iq(Ni);
+    for (int i = 0; i < Ni; ++i) {
+        const double t = i / fs;
+        const double ph = 2.0 * M_PI * (fc + fa) * t;  // USB: carrier + audio
+        iq[i] = cf32((float)std::cos(ph), (float)std::sin(ph));
+    }
+    checkTone(runPipe(iq, fs, fc, RxPipeline::Mode::SSB_USB, 3000.0), fa, "SSB tone");
+}
+
 int main() {
     std::printf("== vibedsp resampler + pipeline host test ==\n");
     testResampler();
     testPipeline();
+    testNFM();
+    testSSB();
     std::printf(failures ? "\n%d FAILURE(S)\n" : "\nALL PASS\n", failures);
     return failures ? 1 : 0;
 }

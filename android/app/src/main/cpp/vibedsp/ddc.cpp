@@ -89,4 +89,18 @@ void AmDemod::process(const cf32* in, float* out, int n) {
     }
 }
 
+// ── FM demod (quadrature discriminator) ──────────────────────────────────--
+void FmDemod::process(const cf32* in, float* out, int n) {
+    for (int i = 0; i < n; ++i) {
+        const cf32 d = in[i] * std::conj(prev_);
+        out[i] = gain_ * std::atan2(d.imag(), d.real());
+        prev_ = in[i];
+    }
+}
+
+// ── SSB / CW demod (real part of the tuned baseband) ─────────────────────--
+void SsbDemod::process(const cf32* in, float* out, int n) {
+    for (int i = 0; i < n; ++i) out[i] = gain_ * in[i].real();
+}
+
 } // namespace vibedsp
