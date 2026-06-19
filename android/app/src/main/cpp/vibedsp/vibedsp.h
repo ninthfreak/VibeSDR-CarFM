@@ -58,4 +58,58 @@ private:
 void nuttallWindow(float* w, int n);
 double windowCoherentGain(const float* w, int n); // sum(w)/n, for normalisation
 
+// ── NCO / complex mixer ──────────────────────────────────────────────────--
+// Frequency translation: multiplies the input by exp(-j*2*pi*f*n), i.e. shifts
+// a signal at normalised frequency +f (cycles/sample, Hz/fs) down to 0 Hz.
+// This is the "tune" stage of the DDC. Streaming; keeps phase across calls.
+class NCO {
+public:
+    explicit NCO(double normFreq = 0.0) { setFreq(normFreq); }
+    void setFreq(double normFreq);               // cycles/sample
+    void mix(const cf32* in, cf32* out, int n);  // out[i] = in[i]*exp(-j*phase)
+    void reset() { phase_ = 0.0; }
+private:
+    double phase_ = 0.0, step_ = 0.0;            // radians, radians/sample
+};
+
+// ── FIR low-pass design ──────────────────────────────────────────────────--
+// Windowed-sinc real low-pass. `cutoff` and `transition` are normalised
+// (cycles/sample). Returns unity-DC-gain taps. Used as the DDC anti-alias /
+// channel filter ahead of decimation, and reusable for audio shaping.
+std::vector<float> designLowpass(double cutoff, double transition);
+
+// ── FIR decimator (complex) ──────────────────────────────────────────────--
+// Applies a real-tap low-pass to a complex stream and keeps every Dth sample.
+// Streaming: state persists across process() calls. Only computes the outputs
+// it keeps (no wasted MACs on discarded samples).
+class FirDecimator {
+public:
+    FirDecimator(std::vector<float> taps, int decim);
+    // Filters `n` inputs; writes up to n/D (+/-1) outputs; returns the count.
+    // `out` must hold at least n/decim + 1 samples.
+    int process(const cf32* in, int n, cf32* out);
+    int decim() const { return decim_; }
+    int maxOut(int n) const { return n / decim_ + 1; }
+    void reset();
+private:
+    std::vector<float> taps_;
+    std::vector<cf32> hist_;     // circular delay line, length == taps
+    int decim_, head_ = 0, count_;
+};
+
+// ── AM demodulator ───────────────────────────────────────────────────────--
+// Envelope detector: audio = |z| with the carrier DC removed (one-pole DC
+// blocker), then a fixed gain. Input is the DDC'd baseband channel; output is
+// mono float audio at the channel rate. Streaming.
+class AmDemod {
+public:
+    AmDemod() = default;
+    void process(const cf32* in, float* out, int n);
+    void reset() { dc_ = 0.0f; }
+private:
+    float dc_ = 0.0f;                  // DC-blocker state (running carrier level)
+    static constexpr float kPole = 0.9995f;  // DC-blocker pole (~carrier removal)
+    static constexpr float kGain = 2.0f;
+};
+
 } // namespace vibedsp
