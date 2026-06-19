@@ -315,6 +315,7 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
     // absorbs the squeeze (meter stays visible ≥13% each side).
     <View style={[pm.row, { maxWidth: tight ? '66%' : '74%', alignSelf: 'center' }]}>
       <TouchableOpacity
+        ref={tourRef('freqBox')}
         style={[pm.freqBox, { backgroundColor: t.pillBg, paddingHorizontal: pillPadH, paddingVertical: pillPadV, gap }]}
         onPress={onFreqTap} activeOpacity={0.80} hitSlop={8}
       >
@@ -334,6 +335,7 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
         </Text>
       </TouchableOpacity>
       <TouchableOpacity
+        ref={tourRef('modeBtn')}
         style={[pm.modeBtn, { backgroundColor: t.pillBg, paddingHorizontal: modePadH, paddingVertical: modePadV, minWidth: tight ? 72 : 84 }]}
         onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
       >

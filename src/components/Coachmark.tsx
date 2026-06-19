@@ -28,6 +28,7 @@ export interface TourStep {
   onEnter?: () => void;            // run before measuring (e.g. open the menu)
   enterDelay?: number;             // ms to wait for layout before measuring
   padding?: number;                // spotlight padding around the target
+  illustration?: React.ReactNode;  // optional mock/render shown inside the bubble
 }
 
 interface Rect { x: number; y: number; width: number; height: number; }
@@ -202,6 +203,7 @@ function CoachmarkOverlay({
       <View style={[styles.bubble, { width: BUBBLE_W, left: bubbleLeft, top: bubbleTop as number, bottom: bubbleBottom as number }]}>
         {!!step.title && <Text style={styles.title}>{step.title}</Text>}
         <Text style={styles.body}>{step.body}</Text>
+        {!!step.illustration && <View style={styles.illo}>{step.illustration}</View>}
         <View style={styles.row}>
           <Text style={styles.count}>{index + 1} / {count}</Text>
           <View style={styles.btns}>
@@ -227,6 +229,7 @@ const styles = StyleSheet.create({
   },
   title: { color: GOLD, fontFamily: F, fontSize: 14, fontWeight: 'bold', marginBottom: 5, letterSpacing: 0.5 },
   body:  { color: 'rgba(255,255,255,0.92)', fontFamily: F, fontSize: 13.5, lineHeight: 19 },
+  illo:  { marginTop: 12 },
   row:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14 },
   count: { color: 'rgba(255,255,255,0.45)', fontFamily: F, fontSize: 11, letterSpacing: 1 },
   btns:  { flexDirection: 'row', alignItems: 'center', gap: 10 },

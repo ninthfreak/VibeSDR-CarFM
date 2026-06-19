@@ -2835,23 +2835,43 @@ export default function SDRScreen({ route, navigation }: Props) {
   // disabled back-gesture, and the menu — opening it to show the route back to
   // the instance list. Fail-safe: always skippable; a target that can't be
   // measured falls back to a centred card.
+  // A small render of the menu's instance section — shown in the tour instead of
+  // opening the real menu (a second Modal over the coachmark wedges iOS).
+  const menuMock = (
+    <View style={{ borderRadius: 9, borderWidth: 1, borderColor: 'rgba(255,229,102,0.30)', backgroundColor: 'rgba(0,0,0,0.45)', padding: 9, gap: 7 }}>
+      <Text style={{ color: 'rgba(255,255,255,0.45)', fontFamily: 'Atkinson Hyperlegible', fontSize: 9.5, letterSpacing: 2, marginBottom: 1 }}>☰  MENU</Text>
+      <View style={{ borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', borderRadius: 5, paddingVertical: 7, paddingHorizontal: 10 }}>
+        <Text style={{ color: 'rgba(255,255,255,0.82)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11.5, letterSpacing: 0.5 }}>☆  SET DEFAULT</Text>
+      </View>
+      <View style={{ borderWidth: 1.5, borderColor: '#ffe566', backgroundColor: 'rgba(255,229,102,0.12)', borderRadius: 5, paddingVertical: 7, paddingHorizontal: 10 }}>
+        <Text style={{ color: '#ffe566', fontFamily: 'Atkinson Hyperlegible', fontSize: 11.5, fontWeight: 'bold', letterSpacing: 0.5 }}>←  BACK TO INSTANCE LIST</Text>
+      </View>
+      <View style={{ borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', borderRadius: 5, paddingVertical: 7, paddingHorizontal: 10 }}>
+        <Text style={{ color: 'rgba(255,255,255,0.82)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11.5, letterSpacing: 0.5 }}>❔  REPLAY TUTORIAL</Text>
+      </View>
+    </View>
+  );
+
   const sdrTour = useCoachmarkTour([
-    { id: 'drum', title: 'Tune with the VFO drum',
-      body: 'Spin the drum to move up and down the band — the left wheel tunes, the right wheel zooms the waterfall.',
+    { id: 'freq', title: 'Set the frequency',
+      body: 'Tap the frequency readout to type one in directly (kHz or MHz).',
+      target: tourRef('freqBox') },
+    { id: 'mode', title: 'Choose the demodulator',
+      body: 'Tap the mode to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more.',
+      target: tourRef('modeBtn') },
+    { id: 'drum', title: 'Fine-tune with the VFO drum',
+      body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall.',
       target: tourRef('vfoDrum') },
     { id: 'step', title: 'Step rate',
-      body: 'Sets how far each move jumps: a small step for fine tuning, a large step to skip across bands. Tap it to change.',
+      body: 'Sets how far each drum move jumps — a small step for fine tuning, a large one to skip across bands. Tap it to change.',
       target: tourRef('stepBtn') },
     { id: 'back', title: 'No back-swipe here',
-      body: "The phone's Back gesture is switched off over the tuning area so it can't fight the drum. To leave, you use the menu — coming up next.",
+      body: "The phone's Back gesture is switched off over the tuning area so it can't fight the drum.",
       target: tourRef('vfoDrum') },
     { id: 'menu', title: 'Everything else: the menu',
-      body: 'Bandwidth, modes, noise reduction, the auto notch, decoders, bookmarks and settings all live in here.',
-      target: tourRef('menuBtn') },
-    { id: 'backToList', title: 'Back to the server list',
-      body: 'Since Back is disabled, you return to the instance list from here — and you can replay this tutorial anytime from this menu too.',
-      target: tourRef('backToList'), onEnter: () => setMenuOpen(true), enterDelay: 480 },
-  ], { storageKey: 'lsv_tour_sdr_v1' });
+      body: 'Bandwidth, modes, noise reduction, the auto notch, decoders, bookmarks and settings all live here. And since Back is off, this is where you return to the server list:',
+      target: tourRef('menuBtn'), illustration: menuMock },
+  ], { storageKey: 'lsv_tour_sdr_v3' });
   const onReplayTour = useCallback(() => {
     setMenuOpen(false);
     setTimeout(() => sdrTour.restart(), 320);
