@@ -61,3 +61,6 @@ ios/build/
 
 # local storage cleanup helper (not part of the app)
 cleanup.sh
+
+# V5 vibedsp host-test build output (dev machine only)
+android/app/src/main/cpp/vibedsp/test/build/
