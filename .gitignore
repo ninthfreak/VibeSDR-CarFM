@@ -58,3 +58,6 @@ android/app/upload-keystore.jks
 # stray local iOS build/derived-data dirs
 ios/build-check/
 ios/build/
+
+# local storage cleanup helper (not part of the app)
+cleanup.sh
