@@ -59,6 +59,13 @@ function formatHz(hz: number, unit: FreqUnit): string {
 function freqUnitLabel(unit: FreqUnit): string {
   return unit === 'hz' ? 'Hz' : unit === 'mhz' ? 'MHz' : 'kHz';
 }
+
+// Mode pill label: there's a single CW button (the sideband id cwu/cwl is an
+// internal demod detail), so show it as plain "CW" to match the button.
+function modeDisplay(mode: string): string {
+  const m = mode.toLowerCase();
+  return (m === 'cwu' || m === 'cwl' || m === 'cw') ? 'CW' : mode.toUpperCase();
+}
 function formatStep(s: number): string {
   return s >= 1_000_000 ? s / 1_000_000 + 'M'
        : s >= 1_000     ? s / 1_000 + 'k'
@@ -809,7 +816,7 @@ function ControlsBar({
   const RADIUS  = s.r(18);
 
   const shared = {
-    freqStr, unit, modeLabel: mode.toUpperCase(), snrText, fmStereo,
+    freqStr, unit, modeLabel: modeDisplay(mode), snrText, fmStereo,
     connected, signalActive, bus: meterBus, meterMode: signalMode,
     signal: signalLevel, peak: peakLevel,
     stepLabel, onFreqTap, onModeTap,

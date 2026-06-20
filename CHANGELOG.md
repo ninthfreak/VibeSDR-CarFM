@@ -4,6 +4,21 @@ VibeSDR is free software under the **GNU GPL v3**. Source: https://github.com/St
 
 ---
 
+## v5.0.1 — CW fix on local hardware (2026-06-20)
+
+### Fixed
+- **CW now demodulates correctly on the Local Hardware (USB RTL-SDR) backend.**
+  The beat-note offset and the actual filter width had drifted apart: the client
+  applies a narrow CW passband, but the demodulator was placing the carrier
+  outside it, so a signal tuned dead-on produced silence and you could only hear
+  morse when tuned well off the signal. The CW filter and beat note are now kept
+  in sync — tune straight onto a CW signal and you get a clear, audible ~600 Hz
+  tone with readable morse.
+- The mode pill now reads **CW** (matching the single CW button) instead of the
+  internal sideband id.
+
+---
+
 ## v5.0.0 — Native, GPL-free on-device DSP (2026-06-20)
 
 **The headline: the on-device radio no longer uses any third-party GPL DSP.**

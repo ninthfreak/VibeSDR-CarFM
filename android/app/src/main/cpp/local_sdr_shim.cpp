@@ -190,7 +190,7 @@ ModeParams paramsFor(const std::string& mode) {
     if (mode == "usb")            return {ModeParams::SSB_USB, 24000, 2700, 1};
     if (mode == "lsb")            return {ModeParams::SSB_LSB, 24000, 2700, 1};
     if (mode == "am" || mode == "sam") return {ModeParams::AM, 15000, 10000, 1};
-    if (mode == "cwu" || mode == "cwl" || mode == "cw") return {ModeParams::CW, 8000, 500, 1};
+    if (mode == "cwu" || mode == "cwl" || mode == "cw") return {ModeParams::CW, 8000, 1200, 1};
     if (mode == "wfm")            return {ModeParams::WFM, 250000, 200000, 2};
     /* nfm / fm */                return {ModeParams::NFM, 50000, 12500, 1};
 }
@@ -707,10 +707,18 @@ struct LocalSdrShim::Impl {
         // SSB/FM paths, so trim it to match level with the rest.
         audioGain.store(mp.kind == ModeParams::AM ? 0.5f : 1.0f);
         // CW: tune a beat-note offset off the carrier so the engine's real-part
-        // (SSB) detector produces an audible ~700 Hz tone. SSB stays on-carrier;
-        // the engine filters a symmetric channel around it (USB/LSB image
-        // rejection is a future engine refinement).
-        demodOffset = (mp.kind == ModeParams::CW) ? 700.0 : 0.0;
+        // (SSB) detector produces an audible tone. The USB-side SSB demod passes
+        // 0..+bw (it mixes down by bw/2 then low-passes at bw/2), so the carrier
+        // must appear at a POSITIVE audio frequency. The channel is tuned to
+        // (dial + demodOffset), so a carrier on the dial lands at baseband
+        // -demodOffset — meaning we need a NEGATIVE offset to push it up into the
+        // passband. Use -bw/2 so the carrier sits at +bw/2 (here +600 Hz with the
+        // 1200 Hz CW bandwidth): the CENTRE of the passband, with symmetric ±bw/2
+        // filtering around the tone. (A positive offset put the carrier at a
+        // negative audio freq the USB filter rejected — silent on-signal, audible
+        // only when tuned below the carrier.) A true narrow band-pass around the
+        // pitch is a future engine refinement.
+        demodOffset = (mp.kind == ModeParams::CW) ? -mp.bandwidth * 0.5 : 0.0;
 
         rxMode = rxModeFor(mp.kind);
         rxBwHz = mp.bandwidth;
@@ -896,6 +904,19 @@ struct LocalSdrShim::Impl {
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
         rxBwHz = std::min(bw, sampleRate);
         vfoBwHz.store(rxBwHz);
+        // CW: ignore the client's narrow passband override (cwu/cwl send ±200 Hz =
+        // 400 Hz wide). With the USB demod the carrier must sit at a POSITIVE audio
+        // freq inside the 0..bw passband; a 400 Hz filter forces the beat note down
+        // to ~200 Hz, which a phone speaker barely reproduces (it sounded silent).
+        // Keep the mode's fixed CW filter (buildAudio's 1200 Hz) and -bw/2 beat-note
+        // offset so the tone stays a clear ~600 Hz, centred, audible on-signal.
+        if (rxMode == vibedsp::RxPipeline::Mode::CW) {
+            rxBwHz = paramsFor(mode).bandwidth;     // restore the CW filter width
+            vfoBwHz.store(rxBwHz);
+            demodOffset = -rxBwHz * 0.5;
+            rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+            return;
+        }
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
     }
 
