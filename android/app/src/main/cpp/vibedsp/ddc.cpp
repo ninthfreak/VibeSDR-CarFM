@@ -2,66 +2,11 @@
 // Original VibeSDR code. The FIR inner loops and the NCO are the per-sample hot
 // paths (they run at the full IQ rate), so they are SIMD-friendly + trig-free.
 #include "vibedsp.h"
+#include "simd_internal.h"   // dotReal/dotCplx (NEON), fastAtan2
 #include <cmath>
 #include <algorithm>
 
-#if defined(__aarch64__)
-  #include <arm_neon.h>
-  #define VIBE_NEON 1
-#endif
-
 namespace vibedsp {
-
-// ── SIMD dot products ──────────────────────────────────────────────────────-
-// Real: sum(a[j]*b[j]). Complex: sum(t[j]*z[j]) where z is interleaved re/im.
-static inline float dotReal(const float* a, const float* b, int K) {
-#if VIBE_NEON
-    float32x4_t acc = vdupq_n_f32(0.0f);
-    int j = 0;
-    for (; j + 4 <= K; j += 4)
-        acc = vmlaq_f32(acc, vld1q_f32(a + j), vld1q_f32(b + j));
-    float s = vaddvq_f32(acc);
-    for (; j < K; ++j) s += a[j] * b[j];
-    return s;
-#else
-    float s = 0.0f;
-    for (int j = 0; j < K; ++j) s += a[j] * b[j];
-    return s;
-#endif
-}
-static inline cf32 dotCplx(const float* t, const float* z, int K) {
-#if VIBE_NEON
-    float32x4_t ar = vdupq_n_f32(0.0f), ai = vdupq_n_f32(0.0f);
-    int j = 0;
-    for (; j + 4 <= K; j += 4) {
-        const float32x4_t tv = vld1q_f32(t + j);
-        const float32x4x2_t zv = vld2q_f32(z + 2 * j);  // de-interleave re/im
-        ar = vmlaq_f32(ar, tv, zv.val[0]);
-        ai = vmlaq_f32(ai, tv, zv.val[1]);
-    }
-    float re = vaddvq_f32(ar), im = vaddvq_f32(ai);
-    for (; j < K; ++j) { re += t[j] * z[2 * j]; im += t[j] * z[2 * j + 1]; }
-    return cf32(re, im);
-#else
-    float re = 0.0f, im = 0.0f;
-    for (int j = 0; j < K; ++j) { re += t[j] * z[2 * j]; im += t[j] * z[2 * j + 1]; }
-    return cf32(re, im);
-#endif
-}
-
-// Fast atan2 (Rajan polynomial), max error ~0.0038 rad — inaudible for FM, and
-// far cheaper than std::atan2 at the channel rate.
-static inline float fastAtan2(float y, float x) {
-    if (x == 0.0f && y == 0.0f) return 0.0f;
-    const float ax = std::fabs(x), ay = std::fabs(y);
-    const float a  = std::min(ax, ay) / (std::max(ax, ay) + 1e-20f);
-    const float s  = a * a;
-    float r = ((-0.0464964749f * s + 0.15931422f) * s - 0.327622764f) * s * a + a;
-    if (ay > ax) r = 1.57079637f - r;
-    if (x < 0.0f) r = 3.14159274f - r;
-    if (y < 0.0f) r = -r;
-    return r;
-}
 
 // ── NCO ──────────────────────────────────────────────────────────────────--
 void NCO::setFreq(double normFreq) {
@@ -150,12 +95,13 @@ void AmDemod::process(const cf32* in, float* out, int n) {
 
 // ── FM demod (quadrature discriminator) ──────────────────────────────────--
 void FmDemod::process(const cf32* in, float* out, int n) {
-    // Accurate atan2: the discriminator runs at the channel rate (cheap), and any
-    // approximation error spreads into the 23-53 kHz MPX -> straight into the L-R
-    // stereo difference. Quality here matters more than the few % CPU it costs.
+    // Accurate fast atan2 (~1e-6 error): the discriminator feeds the 23-53 kHz MPX
+    // and thus the L-R stereo difference, so it must stay clean — the earlier crude
+    // approximation (~3.8e-3) audibly corrupted stereo. This minimax version is
+    // inaudible and far cheaper than std::atan2 at the channel rate.
     for (int i = 0; i < n; ++i) {
         const cf32 d = in[i] * std::conj(prev_);
-        out[i] = gain_ * std::atan2(d.imag(), d.real());
+        out[i] = gain_ * fastAtan2(d.imag(), d.real());
         prev_ = in[i];
     }
 }
@@ -167,8 +113,9 @@ void SsbDemod::configure(Side side, double bwHz, double rate) {
     // SIGNED: USB centres the upper sideband (mix down by +fc), LSB centres the
     // lower (mix down by -fc = up). Both mix stages must flip together or the
     // sidebands swap and the image isn't rejected (it appears frequency-mirrored).
-    omega_ = (side == Side::LSB ? -1.0 : 1.0) * 2.0 * M_PI * fc / rate;
-    phase_ = 0.0;
+    const double w = (side == Side::LSB ? -1.0 : 1.0) * 2.0 * M_PI * fc / rate;
+    rot_ = cf32((float)std::cos(w), (float)std::sin(w));   // e^{j*w} per sample
+    cur_ = cf32(1.0f, 0.0f); sinceNorm_ = 0;
     // Low-pass at bw/2 (normalised): keeps the centred wanted sideband, rejects
     // the image (which the down-mix pushed just past +/- bw/2). The wanted and
     // unwanted sidebands MEET at the carrier (= +/- bw/2 after centring), so the
@@ -184,25 +131,28 @@ void SsbDemod::configure(Side side, double bwHz, double rate) {
 }
 
 void SsbDemod::reset() {
-    phase_ = 0.0;
+    cur_ = cf32(1.0f, 0.0f); sinceNorm_ = 0;
     if (lpfI_) lpfI_->reset();
     if (lpfQ_) lpfQ_->reset();
 }
 
 void SsbDemod::process(const cf32* in, float* out, int n) {
     aI_.resize(n); aQ_.resize(n); cbuf_.resize(n); sbuf_.resize(n);
-    // Mix by signed fc: a = z * e^{-j*phase} = z * (cos - j sin). phase carries the
-    // sideband sign (omega_ < 0 for LSB), so this is "down by +fc" for USB and
-    // "up by fc" for LSB.
+    // Mix by signed fc via a recursive rotator (c,s = cur_ advanced by rot_ each
+    // sample — no per-sample trig): a = z * e^{-j*phase} = z * (cos - j sin). The
+    // sideband sign lives in rot_ (down by +fc for USB, up by fc for LSB).
     for (int i = 0; i < n; ++i) {
-        const float c = std::cos(phase_), s = std::sin(phase_);
+        const float c = cur_.real(), s = cur_.imag();
         cbuf_[i] = c; sbuf_[i] = s;
         const float zr = in[i].real(), zi = in[i].imag();
         aI_[i] = zr * c + zi * s;
         aQ_[i] = zi * c - zr * s;
-        phase_ += omega_;
-        if (phase_ >  M_PI) phase_ -= 2.0 * M_PI;
-        else if (phase_ < -M_PI) phase_ += 2.0 * M_PI;
+        cur_ *= rot_;
+        if (++sinceNorm_ >= 1024) {           // renormalise to fight magnitude drift
+            sinceNorm_ = 0;
+            const float m = 1.0f / std::sqrt(cur_.real()*cur_.real() + cur_.imag()*cur_.imag());
+            cur_ *= m;
+        }
     }
     fI_.resize(n); fQ_.resize(n);
     lpfI_->process(aI_.data(), n, fI_.data());

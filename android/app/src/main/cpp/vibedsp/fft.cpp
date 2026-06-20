@@ -1,5 +1,6 @@
 // VibeSDR V5 — RealFFT + windows. Original VibeSDR code; FFT kernel = KissFFT.
 #include "vibedsp.h"
+#include "simd_internal.h"   // mulComplexReal (NEON window), powerToDb (fast log)
 #include <cmath>
 #include <cstring>
 
@@ -27,17 +28,22 @@ void ComplexFFT::forward(const cf32* in, cf32* out) {
 }
 
 void ComplexFFT::powerDbShifted(const cf32* in, const float* win, float* outDb, float scale) {
-    if (win) for (int i = 0; i < n_; ++i) in_[i] = in[i] * win[i];
-    else     for (int i = 0; i < n_; ++i) in_[i] = in[i];
+    if (win) mulComplexReal(in, win, in_.data(), n_);          // NEON windowing
+    else     std::copy(in, in + n_, in_.begin());
     forward(in_.data(), out_.data());
-    // fftshift: raw bins 0..n/2-1 are 0..+fs/2, n/2..n-1 are -fs/2..0.
-    // Display order is -fs/2 .. +fs/2, so output bin j = raw bin (j + n/2) % n.
+    // fftshift in two contiguous runs (no per-bin modulo): output bin j = raw bin
+    // (j + n/2) % n. powerToDb uses a fast log2 (the waterfall is a uint8 display,
+    // so the ~3e-4 error is invisible) instead of std::log10 — this runs over
+    // millions of bins/sec across every mode.
     const int h = n_ / 2;
-    for (int j = 0; j < n_; ++j) {
-        const cf32& c = out_[(j + h) % n_];
-        float p = (c.real() * c.real() + c.imag() * c.imag()) * scale;
-        if (p < 1e-20f) p = 1e-20f;
-        outDb[j] = 10.0f * std::log10(p);
+    const float* z = reinterpret_cast<const float*>(out_.data());
+    for (int j = 0; j < h; ++j) {
+        const int r = j + h;
+        outDb[j] = powerToDb((z[2*r]*z[2*r] + z[2*r+1]*z[2*r+1]) * scale);
+    }
+    for (int j = h; j < n_; ++j) {
+        const int r = j - h;
+        outDb[j] = powerToDb((z[2*r]*z[2*r] + z[2*r+1]*z[2*r+1]) * scale);
     }
 }
 
@@ -64,9 +70,7 @@ void RealFFT::powerDb(const float* in, float* outDb, float scale) {
     for (int i = 0; i < b; ++i) {
         const float re = scratch_[i].real();
         const float im = scratch_[i].imag();
-        float p = (re * re + im * im) * scale;
-        if (p < 1e-20f) p = 1e-20f;        // floor to avoid -inf
-        outDb[i] = 10.0f * std::log10(p);
+        outDb[i] = powerToDb((re * re + im * im) * scale);   // fast log2-based dB
     }
 }
 

@@ -257,7 +257,9 @@ public:
     void reset();
 private:
     Side side_ = Side::USB;
-    double omega_ = 0.0, phase_ = 0.0;     // bw/2 mix (rad/sample), running phase
+    // Fixed-frequency bw/2 mix via a recursive rotator (no per-sample trig).
+    cf32 rot_ = cf32(1.0f, 0.0f), cur_ = cf32(1.0f, 0.0f);
+    int  sinceNorm_ = 0;
     std::unique_ptr<RealFir> lpfI_, lpfQ_; // matched complex low-pass at bw/2
     std::vector<float> aI_, aQ_, cbuf_, sbuf_, fI_, fQ_;
 };

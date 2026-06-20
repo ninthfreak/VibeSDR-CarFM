@@ -41,6 +41,10 @@
 #include <thread>
 #include <vector>
 
+#if defined(__aarch64__)
+  #include <arm_neon.h>             // NEON u8->f32 IQ conversion
+#endif
+
 #include "vibedsp/vibedsp.h"        // V5 clean-room GPL-free DSP engine (RxPipeline)
 #include "net_shim.h"               // V5 clean-room GPL-free TCP socket wrapper
 #include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
@@ -70,6 +74,30 @@ using cf32     = vibedsp::cf32;       // interleaved IQ sample (std::complex<flo
 using stereo_t = vibedsp::stereo;     // { float l, r; }
 // Cap on samples copied out of one IQ buffer (was SDR++'s STREAM_BUFFER_SIZE).
 constexpr int STREAM_BUFFER_SIZE = 1000000;
+
+// Convert `nF` interleaved u8 I/Q bytes to floats: f = (b - 127.4)/128. Runs at
+// the full IQ rate (2.4 MHz) for every mode, so NEON it on AArch64.
+static inline void convU8ToF32(const uint8_t* in, float* out, int nF) {
+#if defined(__aarch64__)
+    const float32x4_t bias = vdupq_n_f32(127.4f), inv = vdupq_n_f32(1.0f / 128.0f);
+    int i = 0;
+    for (; i + 16 <= nF; i += 16) {
+        const uint8x16_t b = vld1q_u8(in + i);
+        const uint16x8_t lo = vmovl_u8(vget_low_u8(b)), hi = vmovl_u8(vget_high_u8(b));
+        const float32x4_t f0 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(lo)));
+        const float32x4_t f1 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(lo)));
+        const float32x4_t f2 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(hi)));
+        const float32x4_t f3 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(hi)));
+        vst1q_f32(out + i,      vmulq_f32(vsubq_f32(f0, bias), inv));
+        vst1q_f32(out + i + 4,  vmulq_f32(vsubq_f32(f1, bias), inv));
+        vst1q_f32(out + i + 8,  vmulq_f32(vsubq_f32(f2, bias), inv));
+        vst1q_f32(out + i + 12, vmulq_f32(vsubq_f32(f3, bias), inv));
+    }
+    for (; i < nF; ++i) out[i] = ((float)in[i] - 127.4f) * (1.0f / 128.0f);
+#else
+    for (int i = 0; i < nF; ++i) out[i] = ((float)in[i] - 127.4f) * (1.0f / 128.0f);
+#endif
+}
 
 // ── SHA1 + base64 (WebSocket handshake) ─────────────────────────────────────
 struct Sha1 {
@@ -1098,10 +1126,7 @@ struct LocalSdrShim::Impl {
         if (sampCount <= 0) return;
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
         std::vector<cf32> v((size_t)sampCount);
-        for (int i = 0; i < sampCount; i++) {
-            v[i] = cf32(((float)buf[i*2]     - 127.4f) / 128.0f,
-                        ((float)buf[i*2 + 1] - 127.4f) / 128.0f);
-        }
+        convU8ToF32(buf, reinterpret_cast<float*>(v.data()), sampCount * 2);  // NEON
         {
             std::lock_guard<std::mutex> lk(iqMtx);
             if (iqQueue.size() >= IQ_QUEUE_MAX) iqQueue.pop_front();   // overrun: drop oldest

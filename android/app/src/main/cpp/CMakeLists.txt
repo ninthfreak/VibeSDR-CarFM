@@ -33,6 +33,9 @@ add_library(vibedsp STATIC
     vibedsp/third_party/kissfft/kiss_fft.c
     vibedsp/third_party/kissfft/kiss_fftr.c)
 set_target_properties(vibedsp PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+# -O3 for the DSP hot loops (the RelWithDebInfo default is only -O2). AArch64 has
+# mandatory NEON; the engine also uses explicit NEON intrinsics (simd_internal.h).
+target_compile_options(vibedsp PRIVATE -O3 -ffp-contract=fast)
 target_include_directories(vibedsp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vibedsp")
 target_compile_definitions(vibedsp PRIVATE
     kiss_fft_alloc=vibe_kiss_fft_alloc kiss_fft=vibe_kiss_fft
@@ -60,7 +63,7 @@ add_library(vibelocalsdr SHARED
     decoders/auto_notch.cpp
     ${FT8_LIB_SRC})
 set_target_properties(vibelocalsdr PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
-target_compile_options(vibelocalsdr PRIVATE -std=c++17)
+target_compile_options(vibelocalsdr PRIVATE -std=c++17 -O3 -ffp-contract=fast)
 target_include_directories(vibelocalsdr PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib"
