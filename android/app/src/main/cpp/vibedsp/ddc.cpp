@@ -164,7 +164,10 @@ void FmDemod::process(const cf32* in, float* out, int n) {
 void SsbDemod::configure(Side side, double bwHz, double rate) {
     side_ = side;
     const double fc = bwHz * 0.5;              // sub-carrier = half the SSB bandwidth
-    omega_ = 2.0 * M_PI * fc / rate;
+    // SIGNED: USB centres the upper sideband (mix down by +fc), LSB centres the
+    // lower (mix down by -fc = up). Both mix stages must flip together or the
+    // sidebands swap and the image isn't rejected (it appears frequency-mirrored).
+    omega_ = (side == Side::LSB ? -1.0 : 1.0) * 2.0 * M_PI * fc / rate;
     phase_ = 0.0;
     // Low-pass at bw/2 (normalised): keeps the centred wanted sideband, rejects
     // the image (which the down-mix pushed just past +/- bw/2). The wanted and
@@ -188,7 +191,9 @@ void SsbDemod::reset() {
 
 void SsbDemod::process(const cf32* in, float* out, int n) {
     aI_.resize(n); aQ_.resize(n); cbuf_.resize(n); sbuf_.resize(n);
-    // Mix DOWN by bw/2: a = z * conj(e^{j*phase}) = z * (cos - j sin).
+    // Mix by signed fc: a = z * e^{-j*phase} = z * (cos - j sin). phase carries the
+    // sideband sign (omega_ < 0 for LSB), so this is "down by +fc" for USB and
+    // "up by fc" for LSB.
     for (int i = 0; i < n; ++i) {
         const float c = std::cos(phase_), s = std::sin(phase_);
         cbuf_[i] = c; sbuf_[i] = s;
@@ -196,15 +201,15 @@ void SsbDemod::process(const cf32* in, float* out, int n) {
         aI_[i] = zr * c + zi * s;
         aQ_[i] = zi * c - zr * s;
         phase_ += omega_;
-        if (phase_ > 2.0 * M_PI) phase_ -= 2.0 * M_PI;
+        if (phase_ >  M_PI) phase_ -= 2.0 * M_PI;
+        else if (phase_ < -M_PI) phase_ += 2.0 * M_PI;
     }
     fI_.resize(n); fQ_.resize(n);
     lpfI_->process(aI_.data(), n, fI_.data());
     lpfQ_->process(aQ_.data(), n, fQ_.data());
-    // Mix UP and take real: USB = Re{aLPF * e^{j*phase}} = fI*c - fQ*s;
-    // LSB = Re{aLPF * e^{-j*phase}} = fI*c + fQ*s.
-    if (side_ == Side::USB) for (int i = 0; i < n; ++i) out[i] = fI_[i] * cbuf_[i] - fQ_[i] * sbuf_[i];
-    else                    for (int i = 0; i < n; ++i) out[i] = fI_[i] * cbuf_[i] + fQ_[i] * sbuf_[i];
+    // Mix back and take real: out = Re{aLPF * e^{+j*phase}} = fI*c - fQ*s. The
+    // sideband sign already lives in phase, so the formula is the same for both.
+    for (int i = 0; i < n; ++i) out[i] = fI_[i] * cbuf_[i] - fQ_[i] * sbuf_[i];
 }
 
 // ── Real FIR (low-pass / optional decimate) ──────────────────────────────--

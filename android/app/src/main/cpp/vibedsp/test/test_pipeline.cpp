@@ -150,12 +150,20 @@ static void testSSB() {
     }
     checkTone(runPipe(iq, fs, fc, RxPipeline::Mode::SSB_USB, 3000.0), fa, "SSB tone");
 
-    // Sideband rejection: the SAME upper-sideband signal must be STRONG in USB
-    // and WEAK in LSB (and vice-versa). A DSB demod (just Re{}) would pass both.
-    const float usb = dbAt(runPipe(iq, fs, fc, RxPipeline::Mode::SSB_USB, 3000.0), fa);
-    const float lsb = dbAt(runPipe(iq, fs, fc, RxPipeline::Mode::SSB_LSB, 3000.0), fa);
-    std::printf("  USB-signal in USB=%.1f dB, in LSB=%.1f dB (want USB >> LSB)\n", usb, lsb);
-    check(usb - lsb > 30.0f, "SSB rejects the opposite sideband (>30 dB)");
+    // Sideband rejection: the SAME upper-sideband signal must be STRONG in USB and
+    // WEAK in LSB. Measure TOTAL RMS (not a single bin) so a frequency-MIRRORED
+    // image — the real failure mode — can't hide at a different audio frequency.
+    auto rms = [](const std::vector<float>& x) {
+        const int N = 1 << 14; if ((int)x.size() <= N + 2000) return 1e-9;
+        double s = 0; int o = (int)x.size() - N - 1000;
+        for (int i = 0; i < N; ++i) s += (double)x[o + i] * x[o + i];
+        return std::sqrt(s / N);
+    };
+    const double usb = rms(runPipe(iq, fs, fc, RxPipeline::Mode::SSB_USB, 3000.0));
+    const double lsb = rms(runPipe(iq, fs, fc, RxPipeline::Mode::SSB_LSB, 3000.0));
+    const float rej = (float)(20.0 * std::log10(usb / (lsb + 1e-12)));
+    std::printf("  USB-signal: USB rms=%.4f LSB rms=%.4f -> rejection %.1f dB\n", usb, lsb, rej);
+    check(rej > 35.0f, "SSB rejects the opposite sideband (>35 dB total energy)");
 }
 
 static void testWFM() {
