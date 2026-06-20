@@ -242,17 +242,24 @@ private:
     static constexpr float kLockRelease = 0.035f;  // pilot lost
 };
 
-// ── SSB / CW demodulator ──────────────────────────────────────────────────--
-// With the channel tuned so the (suppressed) carrier sits at 0 Hz, the audio is
-// the real part of the baseband. USB/LSB and CW differ only in the tuning offset
-// (CW adds a BFO tone offset). One-sided image rejection is a later refinement.
+// ── SSB / CW demodulator (Weaver / third method — true single-sideband) ────--
+// Taking just Re{baseband} folds BOTH sidebands together (= DSB). The Weaver
+// method gives real image rejection without a near-DC Hilbert: mix the complex
+// baseband DOWN by bw/2 so the wanted sideband centres on 0, low-pass at bw/2
+// (the unwanted sideband moves out of the passband and is rejected), then mix
+// back UP by bw/2 and take the real part. USB up-mixes by +bw/2, LSB by -bw/2.
+// CW is treated as USB (a BFO offset upstream gives the audible beat).
 class SsbDemod {
 public:
-    explicit SsbDemod(float gain = 1.0f) : gain_(gain) {}
-    void setGain(float g) { gain_ = g; }
+    enum class Side { USB, LSB };
+    void configure(Side side, double bwHz, double rate);
     void process(const cf32* in, float* out, int n);
+    void reset();
 private:
-    float gain_;
+    Side side_ = Side::USB;
+    double omega_ = 0.0, phase_ = 0.0;     // bw/2 mix (rad/sample), running phase
+    std::unique_ptr<RealFir> lpfI_, lpfQ_; // matched complex low-pass at bw/2
+    std::vector<float> aI_, aQ_, cbuf_, sbuf_, fI_, fQ_;
 };
 
 // ── Audio AGC (AM/SSB/CW) ──────────────────────────────────────────────────--

@@ -99,6 +99,8 @@ static void testPipeline() {
 }
 
 // Run the pipeline over a synthetic IQ stream and return the recovered audio.
+static float dbAt(const std::vector<float>& x, double hz);   // fwd (defined below)
+
 static std::vector<float> runPipe(const std::vector<cf32>& iq, double fs,
                                   double offset, RxPipeline::Mode mode, double bw) {
     Cap cap;
@@ -147,6 +149,13 @@ static void testSSB() {
         iq[i] = cf32((float)std::cos(ph), (float)std::sin(ph));
     }
     checkTone(runPipe(iq, fs, fc, RxPipeline::Mode::SSB_USB, 3000.0), fa, "SSB tone");
+
+    // Sideband rejection: the SAME upper-sideband signal must be STRONG in USB
+    // and WEAK in LSB (and vice-versa). A DSB demod (just Re{}) would pass both.
+    const float usb = dbAt(runPipe(iq, fs, fc, RxPipeline::Mode::SSB_USB, 3000.0), fa);
+    const float lsb = dbAt(runPipe(iq, fs, fc, RxPipeline::Mode::SSB_LSB, 3000.0), fa);
+    std::printf("  USB-signal in USB=%.1f dB, in LSB=%.1f dB (want USB >> LSB)\n", usb, lsb);
+    check(usb - lsb > 30.0f, "SSB rejects the opposite sideband (>30 dB)");
 }
 
 static void testWFM() {

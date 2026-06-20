@@ -160,9 +160,46 @@ void FmDemod::process(const cf32* in, float* out, int n) {
     }
 }
 
-// ── SSB / CW demod (real part of the tuned baseband) ─────────────────────--
+// ── SSB / CW demod (Weaver / third method) ───────────────────────────────--
+void SsbDemod::configure(Side side, double bwHz, double rate) {
+    side_ = side;
+    const double fc = bwHz * 0.5;              // sub-carrier = half the SSB bandwidth
+    omega_ = 2.0 * M_PI * fc / rate;
+    phase_ = 0.0;
+    // Low-pass at bw/2 (normalised): keeps the centred wanted sideband, rejects
+    // the image (which the down-mix pushed past +/- bw/2).
+    const double cutoff = fc / rate;
+    const double trans  = std::max(cutoff * 0.25, 0.0015);
+    std::vector<float> taps = designLowpass(cutoff, trans);
+    lpfI_ = std::make_unique<RealFir>(taps);
+    lpfQ_ = std::make_unique<RealFir>(taps);
+}
+
+void SsbDemod::reset() {
+    phase_ = 0.0;
+    if (lpfI_) lpfI_->reset();
+    if (lpfQ_) lpfQ_->reset();
+}
+
 void SsbDemod::process(const cf32* in, float* out, int n) {
-    for (int i = 0; i < n; ++i) out[i] = gain_ * in[i].real();
+    aI_.resize(n); aQ_.resize(n); cbuf_.resize(n); sbuf_.resize(n);
+    // Mix DOWN by bw/2: a = z * conj(e^{j*phase}) = z * (cos - j sin).
+    for (int i = 0; i < n; ++i) {
+        const float c = std::cos(phase_), s = std::sin(phase_);
+        cbuf_[i] = c; sbuf_[i] = s;
+        const float zr = in[i].real(), zi = in[i].imag();
+        aI_[i] = zr * c + zi * s;
+        aQ_[i] = zi * c - zr * s;
+        phase_ += omega_;
+        if (phase_ > 2.0 * M_PI) phase_ -= 2.0 * M_PI;
+    }
+    fI_.resize(n); fQ_.resize(n);
+    lpfI_->process(aI_.data(), n, fI_.data());
+    lpfQ_->process(aQ_.data(), n, fQ_.data());
+    // Mix UP and take real: USB = Re{aLPF * e^{j*phase}} = fI*c - fQ*s;
+    // LSB = Re{aLPF * e^{-j*phase}} = fI*c + fQ*s.
+    if (side_ == Side::USB) for (int i = 0; i < n; ++i) out[i] = fI_[i] * cbuf_[i] - fQ_[i] * sbuf_[i];
+    else                    for (int i = 0; i < n; ++i) out[i] = fI_[i] * cbuf_[i] + fQ_[i] * sbuf_[i];
 }
 
 // ── Real FIR (low-pass / optional decimate) ──────────────────────────────--

@@ -62,8 +62,11 @@ void RxPipeline::rebuildAudio() {
         case Mode::AM:                          am_ = std::make_unique<AmDemod>();
                                                 useAgc_ = true; agc_.configure(chFs_); agc_.reset(); break;
         case Mode::SSB_USB: case Mode::SSB_LSB:
-        case Mode::CW:                          ssb_ = std::make_unique<SsbDemod>();
-                                                useAgc_ = true; agc_.configure(chFs_); agc_.reset(); break;
+        case Mode::CW:
+            ssb_ = std::make_unique<SsbDemod>();
+            ssb_->configure(mode_ == Mode::SSB_LSB ? SsbDemod::Side::LSB : SsbDemod::Side::USB,
+                            bwHz_, chFs_);
+            useAgc_ = true; agc_.configure(chFs_); agc_.reset(); break;
         case Mode::NFM:
             fm_ = std::make_unique<FmDemod>((float)(chFs_ / (2.0 * M_PI * std::max(1.0, bwHz_ * 0.5))));
             if (deempTau_.load() > 0.0) { deemph_.configure(deempTau_.load(), chFs_); deemph_.reset(); useDeemph_ = true; }
