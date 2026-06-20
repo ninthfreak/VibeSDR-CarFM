@@ -37,6 +37,7 @@ target_include_directories(vibedsp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vibedsp"
 target_compile_definitions(vibedsp PRIVATE
     kiss_fft_alloc=vibe_kiss_fft_alloc kiss_fft=vibe_kiss_fft
     kiss_fft_stride=vibe_kiss_fft_stride kiss_fft_cleanup=vibe_kiss_fft_cleanup
+    kiss_fft_next_fast_size=vibe_kiss_fft_next_fast_size
     kiss_fftr_alloc=vibe_kiss_fftr_alloc kiss_fftr=vibe_kiss_fftr kiss_fftri=vibe_kiss_fftri)
 
 # --- VibeSDR local-SDR shim --------------------------------------------------
