@@ -62,15 +62,19 @@ void RxPipeline::rebuildAudio() {
         case Mode::AM:                          am_ = std::make_unique<AmDemod>(); break;
         case Mode::SSB_USB: case Mode::SSB_LSB:
         case Mode::CW:                          ssb_ = std::make_unique<SsbDemod>(); break;
-        case Mode::NFM:                         fm_  = std::make_unique<FmDemod>((float)(chFs_ / (2.0 * M_PI * std::max(1.0, bwHz_ * 0.5)))); break;
+        case Mode::NFM:
+            fm_ = std::make_unique<FmDemod>((float)(chFs_ / (2.0 * M_PI * std::max(1.0, bwHz_ * 0.5))));
+            if (deempTau_.load() > 0.0) { deemph_.configure(deempTau_.load(), chFs_); deemph_.reset(); useDeemph_ = true; }
+            break;
         case Mode::WFM: {
             // Wideband FM. Discriminator -> MPX. Mono path = 15 kHz L+R LPF +
             // de-emphasis. Stereo path adds a 19 kHz pilot PLL, 38 kHz coherent
             // L-R recovery, a second 15 kHz LPF, and per-channel de-emphasis.
             fm_ = std::make_unique<FmDemod>((float)(chFs_ / (2.0 * M_PI * 75000.0)));
-            deemph_.configure(50e-6, chFs_);   // 50 us EU (config exposes 75 us later)
-            deemph_.reset(); deemphR_.configure(50e-6, chFs_); deemphR_.reset();
-            useDeemph_ = true;
+            const double tau = deempTau_.load();   // 0=off / 50us EU/UK / 75us US
+            useDeemph_ = (tau > 0.0);
+            if (useDeemph_) { deemph_.configure(tau, chFs_); deemph_.reset();
+                              deemphR_.configure(tau, chFs_); deemphR_.reset(); }
             const double cut = 15000.0 / chFs_;
             audioLpf_ = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4));
             lmrLpf_   = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4));
@@ -175,8 +179,10 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 lmrBuf_[i] = 0.5f * (lpr - lmr);                 // R
             }
             const bool lk = stereoBlend_ > 0.5f;   // indicator follows audible state
-            deemph_.process(lprBuf_.data(), nm);
-            deemphR_.process(lmrBuf_.data(), nm);
+            if (useDeemph_) {                  // off -> skip (tau=0)
+                deemph_.process(lprBuf_.data(), nm);
+                deemphR_.process(lmrBuf_.data(), nm);
+            }
             audioBuf_.resize(resamp_->maxOut(nm));
             rOutBuf_.resize(resampR_->maxOut(nm));
             const int na = resamp_->process(lprBuf_.data(), nm, audioBuf_.data());

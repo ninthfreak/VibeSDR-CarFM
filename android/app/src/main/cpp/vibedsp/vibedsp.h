@@ -224,14 +224,21 @@ public:
     // ref38 (L-R detection), ref57 (RDS carrier), bitClk (RDS 1187.5 Hz data
     // clock = pilot/16, phase in [0,2*pi)).
     void step(float mpx, float* ref38, float* ref57, float* bitClk = nullptr);
-    bool locked() const { return lockAmp_ > 0.05f; }
+    // Hysteretic lock: engages only on a sustained pilot, releases on loss — so
+    // static noise (whose smoothed correlation occasionally spikes) can't toggle
+    // stereo on/off. lockAmp() is the raw smoothed metric (for blend/diagnostics).
+    bool locked() const { return lockState_; }
     float lockAmp() const { return lockAmp_; }
-    void reset() { phase_ = 0.0; dphase_ = w0_; lockAmp_ = 0.0f; cycle_ = 0; }
+    void reset() { phase_ = 0.0; dphase_ = w0_; lockAmp_ = 0.0f; cycle_ = 0; lockState_ = false; }
 private:
     double w0_ = 0.0, phase_ = 0.0, dphase_ = 0.0;
     double alpha_ = 0.0, beta_ = 0.0;
     int cycle_ = 0;            // pilot-cycle counter within a bit (0..15)
     float lockAmp_ = 0.0f;
+    float lockSmooth_ = 0.0005f;     // lock-metric 1-pole coeff (set by rate ~50ms)
+    bool  lockState_ = false;        // hysteretic lock state
+    static constexpr float kLockEngage = 0.060f;   // pilot present (real ~0.08)
+    static constexpr float kLockRelease = 0.035f;  // pilot lost
 };
 
 // ── SSB / CW demodulator ──────────────────────────────────────────────────--
@@ -344,6 +351,9 @@ public:
     // blended in by pilot-lock confidence so weak/edge signals fade smoothly
     // instead of screeching as lock flickers. Thread-safe to call any time.
     void setStereoEnabled(bool on) { stereoEnabled_ = on; }
+    // FM de-emphasis time constant (seconds): 0 = off, 50e-6 (EU/UK), 75e-6 (US).
+    // Applies to WFM and NFM. Takes effect on the next tune/rebuild.
+    void setDeemphasis(double tauSec) { deempTau_ = tauSec; dirty_ = true; }
     // Diagnostics: smoothed 19 kHz pilot lock amplitude + current blend (0..1).
     float pilotLockAmp() const { return pll_.lockAmp(); }
     float stereoBlend()  const { return stereoBlend_; }
@@ -384,6 +394,7 @@ private:
     bool lastStereo_ = false;
     std::atomic<bool> stereoEnabled_{true};  // user force-mono toggle (off = mono)
     float stereoBlend_ = 0.0f;               // smoothed L-R blend 0..1 (anti-screech)
+    std::atomic<double> deempTau_{50e-6};    // FM de-emphasis tau (0=off / 50us / 75us)
     // WFM RDS
     RdsDemod rdsDemod_;
     std::vector<float> ref57Buf_, bitClkBuf_;

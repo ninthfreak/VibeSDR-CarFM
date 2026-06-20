@@ -725,13 +725,21 @@ struct LocalSdrShim::Impl {
         // trim trailing spaces RDS pads with
         auto trim = [](std::string s){ size_t e = s.find_last_not_of(" \t\r\n"); return e==std::string::npos?std::string():s.substr(0,e+1); };
         ps = trim(ps); rt = trim(rt);
+        const bool st = wfm && stereoDetected.load();
+        // Only send when something actually CHANGED — re-sending identical RDS each
+        // second re-triggers the client's notification marquee (text "repopulates"
+        // and flickers). Change-detect ps/rt/pi/stereo and skip otherwise.
+        if (ps == lastSentPs_ && rt == lastSentRt_ && pi == lastSentPi_ && st == lastSentStereo_) return;
+        lastSentPs_ = ps; lastSentRt_ = rt; lastSentPi_ = pi; lastSentStereo_ = st;
         char buf[512];
         snprintf(buf, sizeof buf,
             "{\"type\":\"rds\",\"stereo\":%s,\"ps\":\"%s\",\"radiotext\":\"%s\",\"pi\":%d}",
-            (wfm && stereoDetected.load()) ? "true" : "false",
+            st ? "true" : "false",
             jsonEscape(ps).c_str(), jsonEscape(rt).c_str(), pi);
         sendText(sock, buf);
     }
+    // Last RDS values pushed to the client (change-detect to avoid marquee re-trigger).
+    std::string lastSentPs_, lastSentRt_; int lastSentPi_ = -2; bool lastSentStereo_ = false;
 
     // retune the demod (and RTL centre if the offset would fall outside span)
     void retune(double freq) {
@@ -1452,6 +1460,11 @@ void LocalSdrShim::setNotch(bool on) {
     if (!on) { std::lock_guard<std::mutex> lk(p->notchMtx); if (p->notchEng) p->notchEng->reset(); }
     LOGI("auto notch: %d", on);
 }
+void LocalSdrShim::setStereoEnabled(bool on) {
+    if (!p) return;
+    p->rx.setStereoEnabled(on);           // engine blends L-R out when off (-> mono)
+    LOGI("stereo: %s", on ? "on" : "forced mono");
+}
 void LocalSdrShim::setSampleRate(double rate) {
     if (!p || rate <= 0) return;
     Impl* impl = p;
@@ -1495,7 +1508,7 @@ void LocalSdrShim::setDeemphasis(double tau) {
     if (!p) return;
     if (p->deempTau == tau) return;
     p->deempTau = tau;
-    p->buildAudio();   // chain insert/remove → rebuild
+    p->rx.setDeemphasis(tau);   // engine applies 0/50us/75us on the next rebuild
     LOGI("deemphasis: %.0f us", tau * 1e6);
 }
 std::vector<int> LocalSdrShim::getTunerGains() {

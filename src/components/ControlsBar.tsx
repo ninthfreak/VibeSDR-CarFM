@@ -346,7 +346,9 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
           }]}>
             {modeLabel}
           </Text>
-          {/* stereo icon removed — pilot detection too eager to be reliable */}
+          {/* WFM stereo: V5's pilot-PLL lock (+ blend) is reliable, so the icon
+              is back — shows the interlocking-rings symbol when stereo is active. */}
+          {fmStereo && <StereoIcon size={Math.round(modeFontSize * 0.95)} color={t.modeColor} />}
         </View>
         <Text style={[pm.snr, {
           color: t.snrColor, fontFamily: t.font, width: snrWidth,

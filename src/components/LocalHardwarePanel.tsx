@@ -48,6 +48,8 @@ export interface LocalHardwarePanelProps {
   onDirectSampling: (mode: number) => void;
   deemph: number;            // FM de-emphasis tau (0=off, 50e-6, 75e-6)
   onDeemph: (tau: number) => void;
+  stereo: boolean;           // WFM stereo on (true) vs forced mono
+  onStereo: (on: boolean) => void;
 }
 
 const DEEMPH_OPTS: { label: string; value: number }[] = [
@@ -96,6 +98,12 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           <Seg options={DEEMPH_OPTS.map(d => d.value)} value={p.deemph} onChange={p.onDeemph}
                fmt={(v) => DEEMPH_OPTS.find(d => d.value === v)?.label ?? String(v)} />
           <Text style={styles.note}>50µs Europe/UK, 75µs Americas/Korea.</Text>
+
+          <View style={styles.toggleRow}>
+            <Text style={styles.toggleLabel}>FM Stereo</Text>
+            <Switch value={p.stereo} onValueChange={p.onStereo} trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.stereo ? C.gold : '#ccc'} />
+          </View>
+          <Text style={styles.note}>Off forces mono — cleaner on weak/noisy signals.</Text>
 
           <Text style={styles.section}>FREQUENCY CORRECTION (PPM)</Text>
           <View style={styles.stepperRow}>

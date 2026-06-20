@@ -324,6 +324,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwAgc,         setHwAgc]         = useState(false);
   const [hwDirectSamp,  setHwDirectSamp]  = useState(0);
   const [hwDeemph,      setHwDeemph]      = useState(50e-6);  // FM de-emphasis tau (0/50µs/75µs)
+  const [hwStereo,      setHwStereo]      = useState(true);   // WFM stereo on / forced mono (local)
   const [hwSquelch,     setHwSquelch]     = useState(-100);   // audio squelch dBFS (-100 = off)
   const [hwNrLevel,     setHwNrLevel]     = useState(0);      // audio NR strength 0=off..20 (÷15 → native 0..1.33)
   const [hwNotch,       setHwNotch]       = useState(false);  // auto notch — LOCAL (shim)
@@ -346,12 +347,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       const agc  = !!prefs.agc;
       const ds   = typeof prefs.directSampling === 'number' ? prefs.directSampling : 0;
       const deemph = typeof prefs.deemph === 'number' ? prefs.deemph : 50e-6;
+      const stereo = prefs.stereo !== false;   // default on
       // Squelch / NR / Notch are session-scoped DSP — NEVER restored, so a new
       // connection always starts clean (no surprise muted/“funny” audio carried
       // over from a previous session). Device config (gain/ppm/etc.) still persists.
       const sql = -100, nrLvl = 0, notch = false;
       setHwAutoGain(auto); setHwPpm(ppm); setHwSampleRate(rate);
-      setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwSquelch(sql); setHwNrLevel(nrLvl); setHwNotch(notch);
+      setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwStereo(stereo); setHwSquelch(sql); setHwNrLevel(nrLvl); setHwNotch(notch);
       if (typeof prefs.gain === 'number') setHwGain(prefs.gain);
       // Re-apply to the native session (already running from startSpectrum).
       LocalHw?.setPpm?.(ppm);
@@ -359,6 +361,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       LocalHw?.setAgc?.(agc);
       LocalHw?.setDirectSampling?.(ds);
       LocalHw?.setDeemphasis?.(deemph);
+      LocalHw?.setStereoEnabled?.(stereo);
       LocalHw?.setSquelch?.(sql > -100, sql);
       LocalHw?.setNrStrength?.(nrLvl / 15);
       LocalHw?.setNR?.(nrLvl > 0);
@@ -382,10 +385,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!isLocal || !hwLoaded.current) return;
     AsyncStorage.setItem('lsv_local_hw', JSON.stringify({
       autoGain: hwAutoGain, gain: hwGain, ppm: hwPpm, sampleRate: hwSampleRate,
-      biasTee: hwBiasTee, agc: hwAgc, directSampling: hwDirectSamp, deemph: hwDeemph,
+      biasTee: hwBiasTee, agc: hwAgc, directSampling: hwDirectSamp, deemph: hwDeemph, stereo: hwStereo,
     })).catch(() => {});
     // NB: squelch / nrLevel / notch are intentionally NOT saved (session-scoped).
-  }, [isLocal, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph]);
+  }, [isLocal, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo]);
 
   const onHwAuto = useCallback((auto: boolean) => {
     setHwAutoGain(auto);
@@ -404,6 +407,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onHwAgc = useCallback((on: boolean) => { setHwAgc(on); LocalHw?.setAgc?.(on); }, [LocalHw]);
   const onHwDirectSamp = useCallback((mode: number) => { setHwDirectSamp(mode); LocalHw?.setDirectSampling?.(mode); }, [LocalHw]);
   const onHwDeemph = useCallback((tau: number) => { setHwDeemph(tau); LocalHw?.setDeemphasis?.(tau); }, [LocalHw]);
+  const onHwStereo = useCallback((on: boolean) => { setHwStereo(on); LocalHw?.setStereoEnabled?.(on); }, [LocalHw]);
   const onLocalSquelch = useCallback((db: number) => {
     setHwSquelch(db); LocalHw?.setSquelch?.(db > -100, db);
   }, [LocalHw]);
@@ -3393,6 +3397,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           onDirectSampling={onHwDirectSamp}
           deemph={hwDeemph}
           onDeemph={onHwDeemph}
+          stereo={hwStereo}
+          onStereo={onHwStereo}
         />
       ) : null}
 

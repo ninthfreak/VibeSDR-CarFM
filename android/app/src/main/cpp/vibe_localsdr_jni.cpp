@@ -157,6 +157,10 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetNotch(JNIEnv*, jobject, jboolean on) {
     vibe::LocalSdrShim::instance().setNotch(on);
 }
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetStereoEnabled(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::instance().setStereoEnabled(on);
+}
 extern "C" JNIEXPORT jfloat JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeGetNrCpu(JNIEnv*, jobject) {
     return vibe::LocalSdrShim::instance().getNrCpu();

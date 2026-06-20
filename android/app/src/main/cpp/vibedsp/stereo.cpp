@@ -15,6 +15,10 @@ void StereoPLL::configure(double pilotHz, double rate) {
     alpha_ = 2.0 * zeta * bw;
     beta_  = bw * bw;
     lockAmp_ = 0.0f;
+    lockState_ = false;
+    // Lock-metric averaging: ~50 ms time constant (rate-independent). Slow enough
+    // that brief noise-correlation spikes on static don't reach the engage level.
+    lockSmooth_ = (float)(1.0 / (0.05 * rate));
 }
 
 void StereoPLL::step(float mpx, float* ref38, float* ref57, float* bitClk) {
@@ -28,8 +32,11 @@ void StereoPLL::step(float mpx, float* ref38, float* ref57, float* bitClk) {
     if (phase_ >= 2.0 * M_PI) { phase_ -= 2.0 * M_PI; cycle_ = (cycle_ + 1) & 15; }
     else if (phase_ < 0.0)    { phase_ += 2.0 * M_PI; cycle_ = (cycle_ + 15) & 15; }
 
-    // Lock metric: smoothed in-phase pilot energy (mpx correlated with cos).
-    lockAmp_ += 0.0005f * ((float)(mpx * c) * 2.0f - lockAmp_);
+    // Lock metric: slowly-smoothed in-phase pilot energy (mpx correlated with
+    // cos), then a hysteretic state so static can't toggle stereo.
+    lockAmp_ += lockSmooth_ * ((float)(mpx * c) * 2.0f - lockAmp_);
+    if (!lockState_ && lockAmp_ > kLockEngage)       lockState_ = true;
+    else if (lockState_ && lockAmp_ < kLockRelease)  lockState_ = false;
 
     // Phase-coherent references from the base sin/cos via exact angle identities
     // (no extra trig). The PLL locks cos(phase) onto the SINE pilot, so the L-R
