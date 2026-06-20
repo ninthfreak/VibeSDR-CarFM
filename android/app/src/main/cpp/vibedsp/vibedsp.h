@@ -146,10 +146,13 @@ public:
     int M() const { return M_; }
     void reset();
 private:
-    int L_, M_, phaseLen_, cap_, head_ = 0;
+    int L_, M_, phaseLen_;
     long long inCount_ = 0, outCount_ = 0;
-    std::vector<float> h_;       // prototype low-pass, length phaseLen_*L_
-    std::vector<float> hist_;    // ring of last cap_ inputs
+    // Polyphase branches stored CONTIGUOUSLY and reversed (rBranch_[b*phaseLen+m]),
+    // so each output is a forward NEON dot over a contiguous window of buf_ =
+    // [phaseLen history][block]. (Was a strided prototype + circular history.)
+    std::vector<float> rBranch_; // L_ branches x phaseLen_ taps, reversed
+    std::vector<float> buf_;     // [phaseLen_ history][block]
 };
 
 // ── AM demodulator ───────────────────────────────────────────────────────--

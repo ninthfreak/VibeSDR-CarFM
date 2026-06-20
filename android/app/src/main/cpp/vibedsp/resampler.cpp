@@ -1,6 +1,8 @@
 // VibeSDR V5 — polyphase rational resampler (real/mono). Original VibeSDR code.
 #include "vibedsp.h"
+#include "simd_internal.h"   // dotReal (NEON)
 #include <cmath>
+#include <algorithm>
 
 namespace vibedsp {
 
@@ -19,43 +21,47 @@ RationalResampler::RationalResampler(int inRate, int outRate) {
 
     // Pad to a whole number of polyphase branches (length multiple of L_).
     phaseLen_ = (int)std::ceil((double)proto.size() / L_);
-    h_.assign((size_t)phaseLen_ * L_, 0.0f);
-    for (size_t i = 0; i < proto.size(); ++i) h_[i] = proto[i] * (float)L_; // gain comp
+    std::vector<float> h((size_t)phaseLen_ * L_, 0.0f);
+    for (size_t i = 0; i < proto.size(); ++i) h[i] = proto[i] * (float)L_;  // gain comp
 
-    cap_ = phaseLen_;
-    hist_.assign(cap_, 0.0f);
+    // Reorganise the strided polyphase taps into L_ CONTIGUOUS, REVERSED branches:
+    // rBranch_[b*phaseLen + m] = h[b + (phaseLen-1-m)*L]. Then output(base,branch)
+    // = dot(rBranch_[branch], &buf_[windowStart], phaseLen) over contiguous samples.
+    rBranch_.assign((size_t)L_ * phaseLen_, 0.0f);
+    for (int b = 0; b < L_; ++b)
+        for (int m = 0; m < phaseLen_; ++m)
+            rBranch_[(size_t)b * phaseLen_ + m] = h[b + (phaseLen_ - 1 - m) * L_];
+
+    buf_.assign(phaseLen_, 0.0f);   // phaseLen samples of history
 }
 
 void RationalResampler::reset() {
-    std::fill(hist_.begin(), hist_.end(), 0.0f);
-    head_ = 0; inCount_ = 0; outCount_ = 0;
+    std::fill(buf_.begin(), buf_.end(), 0.0f);
+    buf_.resize(phaseLen_);
+    inCount_ = 0; outCount_ = 0;
 }
 
 int RationalResampler::process(const float* in, int n, float* out) {
+    // buf_ = [phaseLen_ history][block]; buf_[p] is global input index
+    // (inCount_ - phaseLen_) + p. Emit every output whose support is now available.
+    buf_.resize((size_t)phaseLen_ + n);
+    std::copy(in, in + n, buf_.begin() + phaseLen_);
+    const long long avail = inCount_ + n - 1;   // newest global input index
     int outn = 0;
-    for (int i = 0; i < n; ++i) {
-        hist_[head_] = in[i];
-        head_ = (head_ + 1) % cap_;
-        ++inCount_;
-        // Emit every output whose base input index is now available.
-        while ((outCount_ * (long long)M_) / L_ <= inCount_ - 1) {
-            const long long u = outCount_ * (long long)M_;
-            const long long base = u / L_;          // newest input index used
-            const int branch = (int)(u % L_);
-            float acc = 0.0f;
-            for (int j = 0; j < phaseLen_; ++j) {
-                const long long inIdx = base - j;
-                if (inIdx < 0) break;
-                const long long back = (inCount_ - 1) - inIdx;
-                if (back >= cap_) break;            // older than history (startup)
-                int pos = (head_ - 1 - (int)back) % cap_;
-                if (pos < 0) pos += cap_;
-                acc += h_[branch + j * L_] * hist_[pos];
-            }
-            out[outn++] = acc;
-            ++outCount_;
-        }
+    while (true) {
+        const long long u = outCount_ * (long long)M_;
+        const long long base = u / L_;          // newest input index this output uses
+        if (base > avail) break;
+        const int branch = (int)(u % L_);
+        const int windowStart = (int)(base - inCount_ + 1);   // >=0 once warmed up
+        if (windowStart < 0) { ++outCount_; out[outn++] = 0.0f; continue; }  // startup guard
+        out[outn++] = dotReal(&rBranch_[(size_t)branch * phaseLen_], &buf_[windowStart], phaseLen_);
+        ++outCount_;
     }
+    // Carry the last phaseLen_ samples as history.
+    std::copy(buf_.end() - phaseLen_, buf_.end(), buf_.begin());
+    buf_.resize(phaseLen_);
+    inCount_ += n;
     return outn;
 }
 
