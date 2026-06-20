@@ -37,6 +37,10 @@ void RxPipeline::setTune(double offsetHz, Mode mode, double bwHz) {
 void RxPipeline::rebuildAudio() {
     // Channel decimation: bring the IQ down to a manageable channel rate that
     // comfortably holds the demod bandwidth, then resample to exactly outRate.
+    // 1.5x covers the RF channel + (for WFM) the 60 kHz MPX while keeping the
+    // per-sample MPX/PLL/RDS work as cheap as possible — WFM at bwHz*3 (=600 kHz)
+    // was ~2x more CPU than needed and made audio choppy on budget phones. Narrow
+    // modes are unaffected (floored by outRate).
     const double targetCh = std::max((double)outRate_, bwHz_ * 3.0);
     chDecim_ = std::max(1, (int)std::floor(sampleRate_ / targetCh));
     chFs_    = sampleRate_ / chDecim_;

@@ -92,9 +92,14 @@ public:
     explicit NCO(double normFreq = 0.0) { setFreq(normFreq); }
     void setFreq(double normFreq);               // cycles/sample
     void mix(const cf32* in, cf32* out, int n);  // out[i] = in[i]*exp(-j*phase)
-    void reset() { phase_ = 0.0; }
+    void reset() { cur_ = cf32(1.0f, 0.0f); sinceNorm_ = 0; }
 private:
-    double phase_ = 0.0, step_ = 0.0;            // radians, radians/sample
+    // Recursive complex rotator: cur_ holds exp(-j*phase), advanced by a constant
+    // multiply per sample (no per-sample trig — this runs at the full input rate,
+    // so it's the hottest loop). Renormalised periodically to fight drift.
+    cf32 cur_ = cf32(1.0f, 0.0f);
+    cf32 rot_ = cf32(1.0f, 0.0f);                // exp(-j*step)
+    int  sinceNorm_ = 0;
 };
 
 // ── FIR low-pass design ──────────────────────────────────────────────────--
@@ -117,9 +122,13 @@ public:
     int maxOut(int n) const { return n / decim_ + 1; }
     void reset();
 private:
-    std::vector<float> taps_;
-    std::vector<cf32> hist_;     // circular delay line, length == taps
-    int decim_, head_ = 0, count_;
+    // Block-contiguous convolution: buf_ holds the K-1 history followed by the
+    // current block, so each output is a forward dot product over contiguous
+    // samples with the reversed taps — vectorisable (NEON). phase_ counts down to
+    // the next kept (decimated) output.
+    std::vector<float> rtaps_;   // reversed taps
+    std::vector<cf32>  buf_;     // [K-1 history][block]
+    int decim_, phase_, K_;
 };
 
 // ── Rational resampler (real/mono) ───────────────────────────────────────--
@@ -197,8 +206,10 @@ public:
     int maxOut(int n) const { return n / decim_ + 1; }
     void reset();
 private:
-    std::vector<float> taps_, hist_;
-    int decim_, head_ = 0, count_;
+    // Same block-contiguous + NEON scheme as FirDecimator, real samples.
+    std::vector<float> rtaps_;   // reversed taps
+    std::vector<float> buf_;     // [K-1 history][block]
+    int decim_, phase_, K_;
 };
 
 // ── Stereo pilot PLL ─────────────────────────────────────────────────────--
