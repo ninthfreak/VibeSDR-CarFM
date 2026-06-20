@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# VibeSDR V5 — build the GPL-FREE iOS static lib (libvibelocalsdr_ios.a).
+#
+# Compiles the clean-room engine (vibedsp + net_shim + the native-only shim +
+# decoders + ft8_lib) for iOS arm64 into a single static lib. NO SDR++ / FFTW /
+# VOLK / zstd — that is the whole point of V5 (App-Store-clean, RTL-TCP retained).
+#
+# iOS has no USB host SDR, so the shim's librtlsdr path uses the no-op
+# rtl_sdr_stub.h (see ../../android/app/src/main/cpp). Compiling a plain C++ static
+# lib with the Xcode 27 beta clang is fine — the beta's RN/Hermes runtime issue is
+# about launching the app, not building our own code.
+#
+# Usage:  ./build_ios.sh           (device arm64; output -> libs/libvibelocalsdr_ios.a)
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+CPP="$HERE/../../android/app/src/main/cpp"          # shared native sources
+OUT="$HERE/libs/libvibelocalsdr_ios.a"
+WORK="$(mktemp -d)"
+MIN_IOS=16.4
+
+# Toolchain: prefer an Xcode with the iphoneos SDK (CLT alone has only macosx).
+if ! xcrun --sdk iphoneos --show-sdk-path >/dev/null 2>&1; then
+  for X in /Applications/Xcode.app /Applications/Xcode-beta.app; do
+    [ -d "$X" ] && export DEVELOPER_DIR="$X/Contents/Developer" && break
+  done
+fi
+SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+CLANG="$(xcrun --sdk iphoneos --find clang)"
+CLANGXX="$(xcrun --sdk iphoneos --find clang++)"
+LIBTOOL="$(xcrun --sdk iphoneos --find libtool)"
+echo "iphoneos SDK: $SDK"
+
+ARCH="-arch arm64 -isysroot $SDK -mios-version-min=$MIN_IOS"
+INC="-I$CPP -I$CPP/vibedsp -I$CPP/ft8_lib"
+CXXFLAGS="-std=c++17 -O3 -ffp-contract=fast -fvisibility=hidden"
+CFLAGS="-O3 -ffp-contract=fast"
+# vibedsp's vendored KissFFT is prefixed vibe_* to avoid clashing with ft8_lib's.
+KISSPFX="-Dkiss_fft_alloc=vibe_kiss_fft_alloc -Dkiss_fft=vibe_kiss_fft \
+  -Dkiss_fft_stride=vibe_kiss_fft_stride -Dkiss_fft_cleanup=vibe_kiss_fft_cleanup \
+  -Dkiss_fft_next_fast_size=vibe_kiss_fft_next_fast_size \
+  -Dkiss_fftr_alloc=vibe_kiss_fftr_alloc -Dkiss_fftr=vibe_kiss_fftr -Dkiss_fftri=vibe_kiss_fftri"
+
+cd "$WORK"
+n=0; objs=()
+cxx() { echo "  CXX $(basename "$1")"; "$CLANGXX" $ARCH $CXXFLAGS $INC ${2:-} -c "$1" -o "o$n.o"; objs+=("o$n.o"); n=$((n+1)); }
+cc()  { echo "  CC  $(basename "$1")"; "$CLANG"   $ARCH $CFLAGS   $INC ${2:-} -c "$1" -o "o$n.o"; objs+=("o$n.o"); n=$((n+1)); }
+
+echo "== vibedsp (vibe_* KissFFT) =="
+for f in fft ddc resampler stereo rds pipeline; do cxx "$CPP/vibedsp/$f.cpp" "$KISSPFX"; done
+cc "$CPP/vibedsp/third_party/kissfft/kiss_fft.c"  "$KISSPFX"
+cc "$CPP/vibedsp/third_party/kissfft/kiss_fftr.c" "$KISSPFX"
+
+echo "== shim + net + decoders =="
+cxx "$CPP/local_sdr_shim.cpp"
+cxx "$CPP/net_shim.cpp"
+for d in fsk_decoder wefax_decoder ft8_decoder sstv_decoder audio_nr auto_notch; do cxx "$CPP/decoders/$d.cpp"; done
+
+echo "== ft8_lib (plain KissFFT) =="
+for f in "$CPP"/ft8_lib/ft8/*.c "$CPP/ft8_lib/fft/kiss_fft.c" "$CPP/ft8_lib/fft/kiss_fftr.c" "$CPP/ft8_lib/common/monitor.c"; do cc "$f"; done
+
+echo "== archive -> $OUT =="
+mkdir -p "$HERE/libs"
+"$LIBTOOL" -static -o "$OUT" "${objs[@]}"
+echo "done: $(ls -la "$OUT" | awk '{print $5}') bytes"
+rm -rf "$WORK"

@@ -1,7 +1,7 @@
 Pod::Spec.new do |s|
   s.name         = 'VibeLocalSDR'
   s.version      = '1.0.0'
-  s.summary      = 'VibeSDR local-SDR shim (RTL-TCP) for iOS — SDR++ Brown core + shim.'
+  s.summary      = 'VibeSDR local-SDR shim (RTL-TCP) for iOS — clean-room VibeDSP engine.'
   s.homepage     = 'https://github.com/Stuey3D/VibeSDR'
   s.license      = { :type => 'GPLv3' }
   s.author       = 'VibeSDR'
@@ -11,11 +11,13 @@ Pod::Spec.new do |s|
   s.source_files = '*.{mm,h}'
   s.public_header_files = 'include/*.h'
 
-  # Prebuilt static libs: the shim+core (libvibelocalsdr_ios) + its deps.
-  s.vendored_libraries = 'libs/libvibelocalsdr_ios.a', 'libs/libvolk.a',
-                         'libs/libfftw3f.a', 'libs/libzstd.a'
+  # V5: a single GPL-FREE static lib (the clean-room VibeDSP engine + shim,
+  # KissFFT BSD-3). SDR++ Brown / FFTW / VOLK / zstd are GONE — that's the whole
+  # point of V5 (App-Store-clean while keeping RTL-TCP on iOS).
+  # Rebuild with ./build_ios.sh after changing any native source.
+  s.vendored_libraries = 'libs/libvibelocalsdr_ios.a'
 
-  s.frameworks = 'Accelerate', 'CoreFoundation', 'Security', 'CFNetwork', 'AudioToolbox'
+  s.frameworks = 'CoreFoundation', 'Security', 'CFNetwork', 'AudioToolbox'
   s.libraries  = 'c++'
 
   s.dependency 'React-Core'

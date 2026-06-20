@@ -53,6 +53,7 @@ public:
     void setNR(bool on);                  // audio noise reduction on/off
     void setNrStrength(float s);          // NR aggressiveness 0..1
     void setNotch(bool on);               // automatic notch (adaptive line enhancer)
+    void setStereoEnabled(bool on);       // WFM: allow stereo (true) vs force mono
     float getNrCpu();                     // NR CPU% (rolling) for the UI readout
     // Returns supported tuner gains (tenths of dB); empty if not running.
     std::vector<int> getTunerGains();

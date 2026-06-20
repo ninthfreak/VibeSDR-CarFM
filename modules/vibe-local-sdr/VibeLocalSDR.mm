@@ -86,6 +86,7 @@ RCT_EXPORT_METHOD(setDeemphasis:(double)tau)    { vibe::LocalSdrShim::instance()
 RCT_EXPORT_METHOD(setSquelch:(BOOL)on db:(double)db) { vibe::LocalSdrShim::instance().setSquelch(on, (float)db); }
 RCT_EXPORT_METHOD(setNR:(BOOL)on)               { vibe::LocalSdrShim::instance().setNR(on); }
 RCT_EXPORT_METHOD(setNotch:(BOOL)on)            { vibe::LocalSdrShim::instance().setNotch(on); }
+RCT_EXPORT_METHOD(setStereoEnabled:(BOOL)on)    { vibe::LocalSdrShim::instance().setStereoEnabled(on); }
 RCT_EXPORT_METHOD(setNrStrength:(double)s)      { vibe::LocalSdrShim::instance().setNrStrength((float)s); }
 RCT_EXPORT_METHOD(getNrCpu:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
   resolve(@(vibe::LocalSdrShim::instance().getNrCpu()));
