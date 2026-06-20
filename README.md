@@ -1,11 +1,16 @@
 # VibeSDR
 
-A mobile-first SDR receiver app for iOS and Android. VibeSDR is a fully native client for [UberSDR](https://ubersdr.org) receivers, with its own GPU-rendered waterfall, native background audio, and on-device decoders — so you get a genuinely great SDR experience on any phone, no matter which UberSDR instance you connect to and whether or not its owner has installed any mobile UI.
+A mobile-first SDR receiver app for iOS and Android — and far more than a single-server client. VibeSDR speaks multiple SDR server protocols, runs **local SDR hardware on-device**, and does its own demodulation with a clean-room, GPL-free DSP engine. It pairs all of that with a GPU-rendered waterfall, native background audio, on-device decoders and maps, voice and in-car control — a genuinely great SDR experience on any phone, regardless of the receiver behind it.
+
+**What VibeSDR connects to:**
+- **Remote SDR servers** — native adapters for [UberSDR](https://ubersdr.org), **OpenWebRX / OpenWebRX+**, and **KiwiSDR**, all behind one interface, with a directory chooser in the instance picker.
+- **Local hardware** — plug an **RTL-SDR into an Android phone over USB** ("Local Hardware"), or connect to a networked **rtl_tcp** server from either platform. VibeSDR demodulates the raw IQ itself.
+- **VibeDSP** — its own from-scratch, ARM-NEON-optimised DSP engine for the on-device paths (no SDR++ / FFTW / VOLK), so the local radio is fast, light on battery, and free of bundled third-party GPL DSP.
 
 > Built by Stuart Carr (Stuey3D) with AI assistance from Claude (Anthropic).
 > Free software under the GNU GPL-3.0.
 
-**Latest release: [v2.0.1](https://github.com/Stuey3D/VibeSDR/releases/latest)** — iOS `.ipa` and Android `.apk`.
+**Latest release: [v5.0.1](https://github.com/Stuey3D/VibeSDR/releases/latest)** — iOS `.ipa` and Android `.apk`.
 
 ---
 
@@ -40,7 +45,7 @@ A mobile-first SDR receiver app for iOS and Android. VibeSDR is a fully native c
 ### Tuning & SDR controls
 - **VFO drum** with inertia scrolling and friction decay; precise / normal resolution toggle
 - **Dual-drum waterfall zoom**
-- **Full mode set** — USB, LSB, AM, SAM, FM, NFM, CW (upper/lower)
+- **Full mode set** — USB, LSB, AM, SAM, FM, NFM, CW
 - **Bandwidth / passband sliders** mirrored around the carrier, matched to the server's limits
 - **Noise reduction** — on-device NR, NR2 and noise blanker, plus server-side NR with a dynamic filter list and live parameter control
 - **Squelch** (SNR and FM), AGC, volume and mute
@@ -51,13 +56,22 @@ A mobile-first SDR receiver app for iOS and Android. VibeSDR is a fully native c
 - **Lock-screen / Now Playing / car / watch controls** — media-session metadata (frequency + station) with next/previous mapped to station or bookmark skip
 - **AAC recorder** with share sheet
 
+### Local SDR hardware & on-device DSP
+- **USB RTL-SDR on Android** — plug an RTL-SDR (incl. RTL-SDR Blog V4) into the phone and VibeSDR runs the whole radio on-device: full waterfall, drum, audio, decoders and a hardware-control submenu (gain, PPM, bias-T, AGC, sample rate, direct sampling)
+- **rtl_tcp** — connect to a networked rtl_tcp server from **both** iOS and Android
+- **VibeDSP engine** — a clean-room C++ DSP core written from scratch, hand-optimised with **ARM NEON SIMD** across every hot path; no SDR++ / FFTW / VOLK / GPL third-party DSP bundled. Runs cooler and lighter on the battery, especially on low-end phones and tablets
+- **Real demodulation quality** — true single-sideband SSB with proper image rejection (Weaver), genuine FM stereo with a 19 kHz pilot PLL + RDS, audio AGC for AM/SSB/CW, working 50/75 µs de-emphasis, MMSE noise reduction and an adaptive auto-notch
+
+### Voice control
+- **Siri (iOS)** — "Hey Siri, tune VibeSDR" then a frequency, a station name, or a band; it tunes with the right demodulator and step, and reads a pick-list when a name matches several bookmarks. Also "change VibeSDR mode" and "set VibeSDR step rate". Works in the background over headphones / CarPlay / the lock screen
+
 ### Decoders & maps
 - **On-device decoders** — RTTY, NAVTEX, WEFAX, SSTV, Morse, and speech-to-text
 - **Server maps** — HFDL aircraft, digital, and CW activity maps (Leaflet, fully embedded — no external CDN)
 - **Spots tables** for digital and CW activity
 
 ### Stations, bookmarks & social
-- **Instance picker** — browse public UberSDR receivers, location-aware sorting, country flags, favourites, and an auto-connect default
+- **Instance picker** — a directory chooser across UberSDR, OpenWebRX/OpenWebRX+ and KiwiSDR receivers (plus Receiverbook), with location-aware sorting, country flags, favourites, and an auto-connect default. **Local Hardware** is pinned to the top on Android.
 - **Bookmark & band-plan search** with live (session-dynamic) EiBi schedules, in a scrollable result list
 - **User bookmarks** — per-instance or global, UberSDR-compatible import/export
 - **Visual Tuning System (VTS)** — on-screen nearby-station bar, band-crossing and on-tune popups, and station/bookmark skipping
@@ -112,10 +126,17 @@ xcrun devicectl device install app --device <DEVICE_UUID> \
   /tmp/VibeSDR-export/VibeSDR.ipa
 ```
 
-### Android (release APK)
+### Android (release APK / AAB)
 ```bash
-cd android && ./gradlew assembleRelease
+cd android && ./gradlew assembleRelease     # APK; use bundleRelease for a Play Store .aab
 adb install -r app/build/outputs/apk/release/app-release.apk
+```
+The Android native DSP (C++/NDK) is rebuilt automatically by Gradle.
+
+### iOS native DSP
+iOS links the VibeDSP engine as a **prebuilt static library** (`modules/vibe-local-sdr/libs/libvibelocalsdr_ios.a`). If you change any shared C++ under `android/app/src/main/cpp/`, rebuild it before archiving iOS, or the IPA will ship the old engine:
+```bash
+cd modules/vibe-local-sdr && ./build_ios.sh
 ```
 
 ---
@@ -128,6 +149,10 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 | **madpsy (M9PSY)** | Creator of UberSDR — protocol, DSP algorithms (NR2 / noise blanker / WebSDR-NR), colour palettes, band plans and bookmark format |
 | **Phil Karn (KA9Q)** | ka9q-radio (radiod), the SDR engine underneath UberSDR |
 | **John Seamons (ZL/KF6VO)** | Creator of KiwiSDR |
+| **Jakob Ketterl (DD5JFK) & the OpenWebRX+ project** | OpenWebRX / OpenWebRX+ servers |
+| **Osmocom / librtlsdr** | RTL-SDR USB driver (Android local hardware + rtl_tcp) |
+| **Mark Borgerding (KissFFT)** | BSD-licensed FFT vendored in the VibeDSP engine |
+| **Karlis Goba (ft8_lib)** | FT8 / FT4 decoding |
 | **Xiph.Org Foundation** | Opus audio codec |
 | **EiBi** | Shortwave broadcast schedules for live station bookmarks |
 | **Leaflet, OpenStreetMap & CARTO** | Map rendering and tiles |
@@ -147,7 +172,7 @@ Full licence: <https://www.gnu.org/licenses/gpl-3.0.html>
 
 The official App Store / Google Play / TestFlight builds are covered by an additional permission under GPLv3 §7 — see [`APPSTORE-EXCEPTION.md`](APPSTORE-EXCEPTION.md). The complete source for every released build remains available here under the GPLv3.
 
-UberSDR and KiwiSDR are the property of their respective creators and subject to their own licence terms.
+UberSDR, OpenWebRX/OpenWebRX+ and KiwiSDR are the property of their respective creators and subject to their own licence terms.
 
 ## Privacy
 
