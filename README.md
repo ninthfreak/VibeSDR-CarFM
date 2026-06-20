@@ -33,22 +33,22 @@ A mobile-first SDR receiver app for iOS and Android — and far more than a sing
 
 ### Local SDR hardware (USB RTL-SDR on the phone — no server)
 
-| | | |
-|---|---|---|
-| ![USB RTL-SDR on a phone](screenshots/08-local-rtlsdr-usb.jpeg) | ![RTL-SDR controls](screenshots/09-rtl-sdr-controls.jpeg) | ![On-device DAB+](screenshots/10-dab-iphone.png) |
-| *RTL-SDR Blog V4 plugged straight into the phone — 6.139 MHz AM* | *Hardware controls — sample rate, PPM, bias-T, AGC, direct sampling* | *On-device DAB+ — Radio X, SDL National Multiplex* |
-
-### Decoders & in-car
-
-| | | |
-|---|---|---|
-| ![On-device RTTY](screenshots/11-rtty-decode.jpeg) | ![Apple CarPlay](screenshots/12-carplay.jpeg) | ![Android Auto Now Playing](screenshots/13-android-auto-nowplaying.jpeg) |
-| *On-device RTTY decode (RYRY · CQ DE DDK2)* | *Apple CarPlay — Now Playing with VTS station art* | *Android Auto — Now Playing, 648 kHz AM* |
-
 | | |
 |---|---|
-| ![Android Auto Band Plan](screenshots/14-android-auto-bandplan.jpeg) | ![Android Auto Bookmarks](screenshots/15-android-auto-bookmarks.jpeg) |
-| *Android Auto — browsable Band Plan (tap to tune)* | *Android Auto — browsable Bookmarks* |
+| ![USB RTL-SDR on a phone](screenshots/08-local-rtlsdr-usb.jpeg) | ![RTL-SDR controls](screenshots/09-rtl-sdr-controls.jpeg) |
+| *RTL-SDR Blog V4 plugged straight into the phone — 6.139 MHz AM* | *Hardware controls — sample rate, PPM, bias-T, AGC, direct sampling* |
+
+### Decoders, DAB & in-car
+
+| | | |
+|---|---|---|
+| ![RTTY decode](screenshots/11-rtty-decode.jpeg) | ![DAB+ via OpenWebRX](screenshots/10-dab-iphone.png) | ![Apple CarPlay](screenshots/12-carplay.jpeg) |
+| *On-device RTTY decode (RYRY · CQ DE DDK2)* | *DAB+ via an OpenWebRX server — Radio X, SDL National Multiplex* | *Apple CarPlay — Now Playing with VTS station art* |
+
+| | | |
+|---|---|---|
+| ![Android Auto Now Playing](screenshots/13-android-auto-nowplaying.jpeg) | ![Android Auto Band Plan](screenshots/14-android-auto-bandplan.jpeg) | ![Android Auto Bookmarks](screenshots/15-android-auto-bookmarks.jpeg) |
+| *Android Auto — Now Playing, 648 kHz AM* | *Android Auto — browsable Band Plan (tap to tune)* | *Android Auto — browsable Bookmarks* |
 
 ---
 
