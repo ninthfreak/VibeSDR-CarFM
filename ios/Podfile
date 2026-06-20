@@ -63,6 +63,15 @@ target 'VibeSDR' do
       :mac_catalyst_enabled => false,
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
+    # Xcode 26+ rejects IPHONEOS_DEPLOYMENT_TARGET < 15.0; a couple of pods
+    # (RNSVG filters 12.4, AsyncStorage resources 13.0) ship lower. Floor them.
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |bc|
+        if bc.build_settings['IPHONEOS_DEPLOYMENT_TARGET'].to_f < 15.0
+          bc.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+        end
+      end
+    end
     # Link pre-built libopus.a and expose its headers to the app target
     ['release', 'debug'].each do |cfg|
       xcconfig_path = "#{installer.sandbox.root}/Target Support Files/Pods-VibeSDR/Pods-VibeSDR.#{cfg}.xcconfig"
