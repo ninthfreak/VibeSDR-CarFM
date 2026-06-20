@@ -36,7 +36,7 @@ A mobile-first SDR receiver app for iOS and Android — and far more than a sing
 | | |
 |---|---|
 | ![USB RTL-SDR on a phone](screenshots/08-local-rtlsdr-usb.jpeg) | ![RTL-SDR controls](screenshots/09-rtl-sdr-controls.jpeg) |
-| *RTL-SDR Blog V4 plugged straight into the phone — 6.139 MHz AM* | *Hardware controls — sample rate, PPM, bias-T, AGC, direct sampling* |
+| *RTL-SDR Blog V4 plugged straight into the phone — Radio Europe, 6130 kHz AM* | *Hardware controls — sample rate, PPM, bias-T, AGC, direct sampling* |
 
 ### Decoders, DAB & in-car
 
