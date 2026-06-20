@@ -112,8 +112,8 @@ const V2_CHANGES: string[] = [
 ];
 
 const CREDITS: { name: string; detail: string }[] = [
-  { name: 'UberSDR — madpsy',
-    detail: 'The server this client is built for: protocol, web UI design reference, NR2 / noise-blanker / WebSDR-NR DSP algorithms, colour palettes, band plans and bookmark format.' },
+  { name: 'M9PSY (madpsy) — UberSDR',
+    detail: 'The biggest thank-you of all. M9PSY got me into AI-assisted coding and encouraged this whole project into existence — without him there is no VibeSDR. UberSDR is the server this client is built for, and the on-device decoders (RTTY / NAVTEX, WEFAX, SSTV and more) for Local Hardware and KiwiSDR are based on his UberSDR decoders. Also: the protocol, web-UI design reference, NR2 / noise-blanker / WebSDR-NR DSP algorithms, colour palettes, band plans, bookmark format and the waterfall smoothing pipeline. Cheers, mate.' },
   { name: 'ka9q-radio — Phil Karn, KA9Q',
     detail: 'The SDR engine (radiod) underneath UberSDR.' },
   { name: 'SDR++ & SDR++ Brown — Alexandre Rouma & contributors',
