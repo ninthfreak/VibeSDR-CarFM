@@ -57,11 +57,13 @@ void RxPipeline::rebuildAudio() {
     // Construct the demod for the active mode. FM gain maps radians/sample to a
     // unit-ish audio level at the channel rate.
     am_.reset(); fm_.reset(); ssb_.reset(); audioLpf_.reset(); lmrLpf_.reset();
-    useDeemph_ = false; stereo_ = false;
+    useDeemph_ = false; stereo_ = false; useAgc_ = false;
     switch (mode_) {
-        case Mode::AM:                          am_ = std::make_unique<AmDemod>(); break;
+        case Mode::AM:                          am_ = std::make_unique<AmDemod>();
+                                                useAgc_ = true; agc_.configure(chFs_); agc_.reset(); break;
         case Mode::SSB_USB: case Mode::SSB_LSB:
-        case Mode::CW:                          ssb_ = std::make_unique<SsbDemod>(); break;
+        case Mode::CW:                          ssb_ = std::make_unique<SsbDemod>();
+                                                useAgc_ = true; agc_.configure(chFs_); agc_.reset(); break;
         case Mode::NFM:
             fm_ = std::make_unique<FmDemod>((float)(chFs_ / (2.0 * M_PI * std::max(1.0, bwHz_ * 0.5))));
             if (deempTau_.load() > 0.0) { deemph_.configure(deempTau_.load(), chFs_); deemph_.reset(); useDeemph_ = true; }
@@ -204,6 +206,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 nd = audioLpf_->process(demodBuf_.data(), nc, lpfBuf_.data());
                 audioIn = lpfBuf_.data();
             }
+            if (useAgc_) agc_.process(audioIn, nd);   // AM/SSB/CW level + anti-clip
             audioBuf_.resize(resamp_->maxOut(nd));
             const int na = resamp_->process(audioIn, nd, audioBuf_.data());
             if (na > 0) cb_.audio(cb_.ctx, audioBuf_.data(), na, 1, outRate_);

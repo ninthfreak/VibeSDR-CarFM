@@ -33,6 +33,10 @@ export type RootStackParamList = {
     isTcp?:          boolean;
     tcpHost?:        string;
     tcpPort?:        number;
+    // Local-session generation (see services/localSession): the unmount cleanup
+    // only stops the shim if this is still the latest session, so a stale screen
+    // can't tear down a newer one when switching instances.
+    localGen?:       number;
   };
 };
 

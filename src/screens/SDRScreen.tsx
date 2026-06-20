@@ -41,6 +41,7 @@ import type { RootStackParamList }     from '../../App';
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { createBackend } from '../services/UberSDRAdapter';
 import { KiwiAdapter } from '../services/KiwiAdapter';
+import { localSessionGen } from '../services/localSession';
 import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
@@ -304,10 +305,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   useKeepAwake();
 
   // V4 local hardware: tear down the on-device shim (closes the RTL-SDR + the
-  // localhost server) when leaving the screen.
+  // localhost server) when leaving the screen — BUT only if this is still the
+  // latest local session. The shim is a singleton; when switching instances a new
+  // session may already be running by the time this stale screen unmounts, and an
+  // unguarded stopSpectrum() would kill it (V5's fast native start re-exposed this).
+  const myLocalGen = useRef(route.params.localGen ?? 0).current;
   useEffect(() => {
     if (!route.params.isLocal) return;
-    return () => { (NativeModules as any).VibeLocalSDR?.stopSpectrum?.(); };
+    return () => {
+      if (localSessionGen() === myLocalGen) (NativeModules as any).VibeLocalSDR?.stopSpectrum?.();
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

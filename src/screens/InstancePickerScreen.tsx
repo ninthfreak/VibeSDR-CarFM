@@ -22,6 +22,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { splashBridge } from '../../App';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
+import { newLocalSession } from '../services/localSession';
 import UsbSdrIcon from '../components/UsbSdrIcon';
 import { themeFor } from '../constants/theme';
 import {
@@ -230,6 +231,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
       navigation.navigate('SDR', {
         baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware', viewMode,
         serverType: 'ubersdr', isLocal: true, localPort: res.port,
+        localGen: newLocalSession(),
       });
     } catch (e: any) {
       setConnecting(false);
@@ -255,7 +257,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
       navigation.navigate('SDR', {
         baseUrl: res.wsBaseUrl, instanceName: name || `${host}:${port}`, viewMode,
         serverType: 'ubersdr', isLocal: true, isTcp: true, localPort: res.port,
-        tcpHost: host, tcpPort: port,
+        tcpHost: host, tcpPort: port, localGen: newLocalSession(),
       });
     } catch (e: any) {
       setConnecting(false);

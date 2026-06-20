@@ -13,6 +13,7 @@
 //   Phase 5  RDS (redsea)
 #pragma once
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstddef>
 #include <complex>
@@ -254,6 +255,34 @@ private:
     float gain_;
 };
 
+// ── Audio AGC (AM/SSB/CW) ──────────────────────────────────────────────────--
+// Feed-forward envelope AGC on the demodulated audio. FAST attack catches peaks
+// (no clipping/crackle) while SLOW release avoids pumping, and a max-gain cap
+// stops it blowing up noise in the gaps. Without it SSB/CW fade up and down with
+// the signal and crackle on peaks (FM modes don't need it — they're amplitude
+// limited). Operates in place on real mono audio at the channel rate.
+class Agc {
+public:
+    void configure(double rate) {
+        atk_ = (float)(1.0 - std::exp(-1.0 / (rate * 0.002)));   // ~2 ms attack
+        rel_ = (float)(1.0 - std::exp(-1.0 / (rate * 0.400)));   // ~400 ms release
+    }
+    void process(float* x, int n) {
+        for (int i = 0; i < n; ++i) {
+            const float a = std::fabs(x[i]);
+            env_ += (a > env_ ? atk_ : rel_) * (a - env_);
+            float g = kTarget / (env_ + 1e-6f);
+            if (g > kMaxGain) g = kMaxGain;
+            x[i] *= g;
+        }
+    }
+    void reset() { env_ = kTarget; }
+private:
+    float env_ = kTarget, atk_ = 0.05f, rel_ = 1e-4f;
+    static constexpr float kTarget  = 0.25f;   // output setpoint
+    static constexpr float kMaxGain = 256.0f;  // ceiling (don't amplify silence)
+};
+
 // ── RDS data-link decoder ────────────────────────────────────────────────--
 // Recovered RDS data bits -> block sync (syndrome + offset words) -> group
 // parsing (PI, PS name, RadioText). Clean-room implementation of EN 50067 /
@@ -380,6 +409,8 @@ private:
     std::unique_ptr<AmDemod> am_;
     std::unique_ptr<FmDemod> fm_;
     std::unique_ptr<SsbDemod> ssb_;
+    Agc  agc_;                              // audio AGC (AM/SSB/CW)
+    bool useAgc_ = false;
     std::unique_ptr<RealFir> audioLpf_;     // WFM: 15 kHz (L+R / mono) LPF
     Deemphasis deemph_;                     // mono / L+R de-emphasis
     bool useDeemph_ = false;
