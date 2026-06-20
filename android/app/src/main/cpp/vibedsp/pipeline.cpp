@@ -75,6 +75,7 @@ void RxPipeline::rebuildAudio() {
             audioLpf_ = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4));
             lmrLpf_   = std::make_unique<RealFir>(designLowpass(cut, cut * 0.4));
             pll_.configure(19000.0, chFs_); pll_.reset();
+            stereoBlend_ = 0.0f;               // new tune starts mono, blends up
             const int rch = (int)std::llround(chFs_);
             resampR_ = std::make_unique<RationalResampler>(rch, outRate_);
             stereo_ = true; lastStereo_ = false;
@@ -156,13 +157,24 @@ void RxPipeline::feed(const cf32* iq, int n) {
             const int n1 = audioLpf_->process(lprBuf_.data(), nc, leftBuf_.data()); // L+R
             const int n2 = lmrLpf_->process(lmrBuf_.data(),  nc, rightBuf_.data()); // L-R
             const int nm = std::min(n1, n2);
-            const bool lk = pll_.locked();
+            // Stereo BLEND (anti-screech): fade the L-R in/out by a smoothed
+            // pilot-lock confidence rather than hard-switching. forceMono or no
+            // lock -> target 0 (clean mono); solid lock -> 1. The per-sample ramp
+            // (~ a few ms) stops the harsh on/off when an edge signal flickers.
+            const bool wantStereo = stereoEnabled_.load();
+            // Target full stereo when the pilot is locked (locked() has hysteresis
+            // so it won't chatter on an edge signal), else mono. The ramp does the
+            // smoothing so the transition fades instead of screeching.
+            const float target = (wantStereo && pll_.locked()) ? 1.0f : 0.0f;
+            const float ramp = (float)(1.0 / (chFs_ * 0.04));   // ~40 ms blend time constant
             for (int i = 0; i < nm; ++i) {
+                stereoBlend_ += ramp * (target - stereoBlend_);
                 const float lpr = leftBuf_[i];
-                const float lmr = lk ? rightBuf_[i] : 0.0f;   // unlocked -> mono
-                lprBuf_[i] = 0.5f * (lpr + lmr);              // L
-                lmrBuf_[i] = 0.5f * (lpr - lmr);              // R
+                const float lmr = rightBuf_[i] * stereoBlend_;   // blended L-R
+                lprBuf_[i] = 0.5f * (lpr + lmr);                 // L
+                lmrBuf_[i] = 0.5f * (lpr - lmr);                 // R
             }
+            const bool lk = stereoBlend_ > 0.5f;   // indicator follows audible state
             deemph_.process(lprBuf_.data(), nm);
             deemphR_.process(lmrBuf_.data(), nm);
             audioBuf_.resize(resamp_->maxOut(nm));

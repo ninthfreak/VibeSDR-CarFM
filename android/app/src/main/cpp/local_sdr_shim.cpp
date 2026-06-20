@@ -743,6 +743,10 @@ struct LocalSdrShim::Impl {
         }
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        // New frequency -> drop the cached RDS so a different station doesn't keep
+        // showing the previous one's PS/RadioText until its own RDS re-syncs.
+        { std::lock_guard<std::mutex> rl(rdsMtx); rdsPsName.clear(); rdsText.clear(); rdsPi = -1; }
+        stereoDetected.store(false);
     }
 
     // ── WebSocket framing ──────────────────────────────────────────────────

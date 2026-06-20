@@ -214,9 +214,10 @@ static void testWFMStereo() {
         const double t = i / fs;
         const double L = 0.3 * std::cos(2.0 * M_PI * Lf * t);
         const double R = 0.3 * std::cos(2.0 * M_PI * Rf * t);
+        // FM stereo standard: 19 kHz pilot and 38 kHz L-R subcarrier are SINES.
         const double mpx = (L + R)
-                         + 0.1 * std::cos(2.0 * M_PI * 19000.0 * t)
-                         + (L - R) * std::cos(2.0 * M_PI * 38000.0 * t);
+                         + 0.1 * std::sin(2.0 * M_PI * 19000.0 * t)
+                         + (L - R) * std::sin(2.0 * M_PI * 38000.0 * t);
         ph += 2.0 * M_PI * (fc + 50000.0 * mpx) / fs;
         iq[i] = cf32((float)std::cos(ph), (float)std::sin(ph));
     }

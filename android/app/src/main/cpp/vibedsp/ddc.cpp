@@ -150,9 +150,12 @@ void AmDemod::process(const cf32* in, float* out, int n) {
 
 // ── FM demod (quadrature discriminator) ──────────────────────────────────--
 void FmDemod::process(const cf32* in, float* out, int n) {
+    // Accurate atan2: the discriminator runs at the channel rate (cheap), and any
+    // approximation error spreads into the 23-53 kHz MPX -> straight into the L-R
+    // stereo difference. Quality here matters more than the few % CPU it costs.
     for (int i = 0; i < n; ++i) {
         const cf32 d = in[i] * std::conj(prev_);
-        out[i] = gain_ * fastAtan2(d.imag(), d.real());
+        out[i] = gain_ * std::atan2(d.imag(), d.real());
         prev_ = in[i];
     }
 }

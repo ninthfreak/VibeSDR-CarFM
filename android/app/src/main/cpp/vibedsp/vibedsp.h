@@ -12,6 +12,7 @@
 //   Phase 4  WFM stereo (MPX)
 //   Phase 5  RDS (redsea)
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <cstddef>
 #include <complex>
@@ -339,6 +340,13 @@ public:
     void feed(const cf32* iq, int n);   // raw IQ from the source
     void stop();
     int outRate() const { return outRate_; }
+    // WFM: force mono (off) vs allow stereo (on, default). When on, the L-R is
+    // blended in by pilot-lock confidence so weak/edge signals fade smoothly
+    // instead of screeching as lock flickers. Thread-safe to call any time.
+    void setStereoEnabled(bool on) { stereoEnabled_ = on; }
+    // Diagnostics: smoothed 19 kHz pilot lock amplitude + current blend (0..1).
+    float pilotLockAmp() const { return pll_.lockAmp(); }
+    float stereoBlend()  const { return stereoBlend_; }
 
 private:
     void rebuildAudio();
@@ -374,6 +382,8 @@ private:
     std::unique_ptr<RationalResampler> resampR_;    // right channel
     std::vector<float> lprBuf_, lmrBuf_, leftBuf_, rightBuf_, rOutBuf_, ilvBuf_;
     bool lastStereo_ = false;
+    std::atomic<bool> stereoEnabled_{true};  // user force-mono toggle (off = mono)
+    float stereoBlend_ = 0.0f;               // smoothed L-R blend 0..1 (anti-screech)
     // WFM RDS
     RdsDemod rdsDemod_;
     std::vector<float> ref57Buf_, bitClkBuf_;
