@@ -167,9 +167,14 @@ void SsbDemod::configure(Side side, double bwHz, double rate) {
     omega_ = 2.0 * M_PI * fc / rate;
     phase_ = 0.0;
     // Low-pass at bw/2 (normalised): keeps the centred wanted sideband, rejects
-    // the image (which the down-mix pushed past +/- bw/2).
+    // the image (which the down-mix pushed just past +/- bw/2). The wanted and
+    // unwanted sidebands MEET at the carrier (= +/- bw/2 after centring), so the
+    // filter's transition band straddles them — a wide transition lets the wrong
+    // sideband's low-audio content bleed through. Use a SHARP transition (~80 Hz)
+    // so only sub-~80 Hz of the wrong sideband leaks (inaudible); the FIRs are
+    // NEON-accelerated so the longer filter is cheap.
     const double cutoff = fc / rate;
-    const double trans  = std::max(cutoff * 0.25, 0.0015);
+    const double trans  = std::max(cutoff * 0.06, 80.0 / rate);
     std::vector<float> taps = designLowpass(cutoff, trans);
     lpfI_ = std::make_unique<RealFir>(taps);
     lpfQ_ = std::make_unique<RealFir>(taps);
