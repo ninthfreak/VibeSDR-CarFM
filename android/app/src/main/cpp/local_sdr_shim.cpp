@@ -31,8 +31,10 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -252,10 +254,23 @@ struct LocalSdrShim::Impl {
     // under modeMtx — feed() runs rebuildAudio() inline, so setTune from the WS/HW
     // threads must be serialised against the IQ worker.
     vibedsp::RxPipeline rx;
-    std::vector<cf32> feedBuf;      // u8 IQ -> cf32 staging for rx.feed()
     std::vector<float> fftAccum;    // running sum for FFT averaging (fftshifted)
     int accumCount = 0;
     std::thread rtlThread;
+
+    // IQ producer/consumer. CRITICAL: rtlsdr_read_async's callback runs on
+    // libusb's event-handling thread, so it must return fast — running the heavy
+    // DSP (rx.feed: FFT + WFM/RDS demod) inline there starves libusb and corrupts
+    // its locks (HW control transfers then stall for seconds and SIGABRT on a
+    // "destroyed mutex"). So the USB/TCP reader only CONVERTS + ENQUEUES IQ here;
+    // a dedicated dspThread drains the queue and runs rx.feed off the libusb path
+    // (mirrors how SDR++ ran the DSP on its own threads).
+    std::deque<std::vector<cf32>> iqQueue;
+    std::mutex iqMtx;
+    std::condition_variable iqCv;
+    std::atomic<bool> dspRunning{false};
+    std::thread dspThread;
+    static constexpr size_t IQ_QUEUE_MAX = 8;   // drop oldest beyond this (overrun)
 
     // Offset tuning: the RTL is physically tuned HW_OFFSET_HZ ABOVE the logical
     // centre (rtlCenter) so the zero-IF DC spike never lands on the channel —
@@ -1063,29 +1078,63 @@ struct LocalSdrShim::Impl {
         LOGI("dxcluster WS disconnected");
     }
 
-    // ── RTL IQ worker ──────────────────────────────────────────────────────
-    // Convert `sampCount` interleaved u8 I/Q samples to cf32 and feed the V5
-    // engine. Serialised against setTune (WS/HW threads) via modeMtx — feed()
-    // runs rebuildAudio() inline, so it must not race a mode/tune change.
-    void feedIq(const uint8_t* buf, int sampCount) {
+    // ── IQ producer (runs on the libusb/socket reader thread) ───────────────
+    // Convert `sampCount` interleaved u8 I/Q samples to cf32 and ENQUEUE for the
+    // dspThread. Must stay cheap (no DSP, no modeMtx) so the libusb callback
+    // returns promptly. Drops the oldest buffer on overrun to bound latency.
+    void enqueueIq(const uint8_t* buf, int sampCount) {
         if (sampCount <= 0) return;
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
-        feedBuf.resize((size_t)sampCount);
+        std::vector<cf32> v((size_t)sampCount);
         for (int i = 0; i < sampCount; i++) {
-            feedBuf[i] = cf32(((float)buf[i*2]     - 127.4f) / 128.0f,
-                              ((float)buf[i*2 + 1] - 127.4f) / 128.0f);
+            v[i] = cf32(((float)buf[i*2]     - 127.4f) / 128.0f,
+                        ((float)buf[i*2 + 1] - 127.4f) / 128.0f);
         }
-        std::lock_guard<std::recursive_mutex> lk(modeMtx);
-        rx.feed(feedBuf.data(), sampCount);
+        {
+            std::lock_guard<std::mutex> lk(iqMtx);
+            if (iqQueue.size() >= IQ_QUEUE_MAX) iqQueue.pop_front();   // overrun: drop oldest
+            iqQueue.push_back(std::move(v));
+        }
+        iqCv.notify_one();
+    }
+
+    // ── DSP consumer (dedicated thread, OFF the libusb path) ────────────────
+    // Drains the IQ queue and runs the engine. modeMtx serialises rx.feed against
+    // setTune / buildAudio / setSampleRate (feed runs rebuildAudio inline).
+    void dspLoop() {
+        while (dspRunning.load()) {
+            std::vector<cf32> buf;
+            {
+                std::unique_lock<std::mutex> lk(iqMtx);
+                iqCv.wait(lk, [this]{ return !iqQueue.empty() || !dspRunning.load(); });
+                if (!dspRunning.load()) break;
+                buf = std::move(iqQueue.front());
+                iqQueue.pop_front();
+            }
+            std::lock_guard<std::recursive_mutex> mlk(modeMtx);
+            rx.feed(buf.data(), (int)buf.size());
+        }
+    }
+
+    void startDspThread() {
+        dspRunning.store(true);
+        dspThread = std::thread([this]{ dspLoop(); });
+    }
+    void stopDspThread() {
+        dspRunning.store(false);
+        iqCv.notify_all();
+        if (dspThread.joinable()) dspThread.join();
+        std::lock_guard<std::mutex> lk(iqMtx);
+        iqQueue.clear();
     }
 
     static void asyncHandler(unsigned char* buf, uint32_t len, void* ctx) {
-        ((Impl*)ctx)->feedIq(buf, (int)(len / 2));
+        ((Impl*)ctx)->enqueueIq(buf, (int)(len / 2));
     }
 
-    // RTL-TCP read loop: pull u8 I/Q from the socket in ~32 KB chunks and feed the
-    // engine. Reads what's available (low latency) and carries a stray odd byte so
-    // I/Q pairs never misalign across reads.
+    // RTL-TCP read loop: pull u8 I/Q from the socket in ~32 KB chunks and enqueue.
+    // Reads what's available (low latency) and carries a stray odd byte so I/Q
+    // pairs never misalign across reads.
     void tcpReadLoop() {
         const int CHUNK = 32768;                 // bytes (16384 IQ samples)
         std::vector<uint8_t> buf(CHUNK + 1);
@@ -1095,7 +1144,7 @@ struct LocalSdrShim::Impl {
             int got = s->recv(buf.data() + carry, CHUNK, false, 5000);
             if (got <= 0) { if (!tcpRunning.load()) break; continue; }
             int total = carry + got;
-            feedIq(buf.data(), total / 2);
+            enqueueIq(buf.data(), total / 2);
             carry = total & 1;                    // keep the trailing half-sample byte
             if (carry) buf[0] = buf[total - 1];
         }
@@ -1156,6 +1205,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     impl->serverRunning.store(true);
     impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
 
+    impl->startDspThread();
     impl->rtlThread = std::thread([impl]{ rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); });
 
     p = impl;
@@ -1220,6 +1270,7 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
     impl->serverRunning.store(true);
     impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
 
+    impl->startDspThread();
     impl->tcpRunning.store(true);
     impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); });
 
@@ -1259,6 +1310,9 @@ void LocalSdrShim::stopLocked() {
     if (impl->dev) rtlsdr_cancel_async(impl->dev);
     if (impl->useTcp()) { impl->tcpRunning.store(false); if (impl->tcpSock) impl->tcpSock->close(); }
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
+    // IQ source stopped -> stop the DSP consumer (drains/clears the queue) before
+    // tearing the engine down, so no rx.feed runs against a destroyed engine.
+    impl->stopDspThread();
     impl->teardownAudio();
     impl->rx.stop();
 
@@ -1399,14 +1453,14 @@ void LocalSdrShim::setSampleRate(double rate) {
     Impl* impl = p;
     const bool tcp = impl->useTcp();
     if (!tcp && !impl->dev) return;
-    // Stop the IQ source FIRST and join its thread — BEFORE taking modeMtx. The IQ
-    // worker (feedIq) locks modeMtx per buffer, so holding modeMtx across the join
-    // would deadlock against a worker blocked on that same lock.
+    // Stop the IQ source + drain the DSP consumer BEFORE taking modeMtx (the
+    // dspThread locks modeMtx per buffer, so holding it across the join would
+    // deadlock). With both quiesced, the rtlsdr control transfer below runs on an
+    // idle libusb and the engine rebuild has no concurrent rx.feed.
     if (tcp) { impl->tcpRunning.store(false); }
     else     { rtlsdr_cancel_async(impl->dev); }
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
-    // Now serialise the engine teardown+restart against WS handleControl's
-    // buildAudio() and the other HW setters (recursive: buildAudio below re-locks).
+    impl->stopDspThread();
     std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
     uint32_t actual;
     if (tcp) {
@@ -1427,6 +1481,7 @@ void LocalSdrShim::setSampleRate(double rate) {
     impl->startEngine();
     impl->buildAudio();
     { std::lock_guard<std::mutex> lk(impl->clientMtx); if (impl->specClient) impl->sendConfig(impl->specClient); }
+    impl->startDspThread();
     if (tcp) { impl->tcpRunning.store(true); impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); }); }
     else     { impl->rtlThread = std::thread([impl]{ rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); }); }
     LOGI("sample rate: %.0f (actual %u) fft=%d tcp=%d", rate, actual, impl->fftSize, tcp);
