@@ -40,6 +40,7 @@ export interface LocalHardwarePanelProps {
   onPpm: (ppm: number) => void;
   sampleRate: number;
   onSampleRate: (rate: number) => void;
+  isTcp?: boolean;           // RTL-TCP allows low rates (UberSDR sends ~192k); USB doesn't
   biasTee: boolean;
   onBiasTee: (on: boolean) => void;
   agc: boolean;
@@ -91,7 +92,11 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                       onAuto={p.onAuto} onGain={p.onGain} />
 
           <Text style={styles.section}>SAMPLE RATE</Text>
-          <Seg options={SAMPLE_RATES} value={p.sampleRate} onChange={p.onSampleRate}
+          {/* A real USB dongle runs sluggish/underfiltered below ~1 MHz, so only
+              offer >=1 MHz for local hardware; RTL-TCP keeps the low rates (a
+              networked rtl_tcp source like UberSDR only sends ~192 kHz). */}
+          <Seg options={p.isTcp ? SAMPLE_RATES : SAMPLE_RATES.filter(r => r >= 1_000_000)}
+               value={p.sampleRate} onChange={p.onSampleRate}
                fmt={(r) => `${(r / 1e6).toFixed(r % 1e6 === 0 ? 1 : 3).replace(/0+$/, '').replace(/\.$/, '.0')}M`} />
 
           <Text style={styles.section}>FM DE-EMPHASIS</Text>

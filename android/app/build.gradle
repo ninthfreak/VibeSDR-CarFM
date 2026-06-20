@@ -92,8 +92,8 @@ android {
         applicationId 'com.vibesdr.app'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 28
-        versionName "4.1.0"
+        versionCode 29
+        versionName "5.0.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -124,16 +124,9 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
-            // V5 installs BESIDE the v4.1 "VibeSDR" (com.vibesdr.app) for on-device
-            // A/B of the native GPL-free DSP vs the SDR++ build. Reverted when V5
-            // is promoted to the shipping app.
-            applicationIdSuffix ".v5"
-            manifestPlaceholders = [appLabel: "VibeSDRV5"]
         }
         release {
             signingConfig hasUploadKey ? signingConfigs.release : signingConfigs.debug
-            applicationIdSuffix ".v5"
-            manifestPlaceholders = [appLabel: "VibeSDRV5"]
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds

@@ -58,10 +58,19 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   { v: 'V2.2.2', detail: 'Store-readiness pass: clearer location prompt (it’s only for sorting/filtering instances by distance, and denying it changes nothing else); removed two unused Android permissions (microphone and draw-over-other-apps); added a privacy policy and an App Store distribution exception to the GPL licence. No functional changes.' },
   { v: 'V3', detail: 'Multi-backend release — VibeSDR now speaks three SDR server protocols (UberSDR, OpenWebRX/OpenWebRX+ and KiwiSDR) behind the same interface, with a new directory chooser in the instance picker. (KiwiSDRs have very few slots, so owners choose who connects — some refuse apps or block broadcast bands. A refusal or sudden drop is the owner\'s restriction, not a fault in VibeSDR.)' },
   { v: 'V4', detail: 'Local SDR hardware — VibeSDR now runs a radio on-device. Plug an RTL-SDR into an Android phone over USB (“Local Hardware”), or connect to a networked rtl_tcp server from either platform, and the app demodulates AM/SSB/CW/NFM/WFM itself using the bundled SDR++ Brown DSP core — full waterfall, drum, audio and decoders, with a hardware-control submenu. Adds an MMSE noise-reduction engine and an adaptive Auto Notch (on every backend), plus a client-side dBFS squelch for KiwiSDR. See What\'s New above.' },
+  { v: 'V5', detail: 'New on-device DSP engine — SDR++ Brown (and FFTW and VOLK) have been REMOVED and replaced with VibeDSP, VibeSDR\'s own clean-room, GPL-free signal-processing engine for Local Hardware and RTL-TCP. It is hand-optimised with ARM NEON SIMD throughout, so it runs noticeably cooler and lighter on the battery — especially on low-end phones and tablets — while matching the old engine. It also brings real improvements: true single-sideband SSB (proper image rejection, not double-sideband), genuine FM stereo with a 19 kHz pilot PLL + RDS, a per-channel audio AGC for SSB/CW, working de-emphasis (50/75 µs), a reliable stereo indicator and a force-mono switch. See What\'s New above.' },
 ];
 
 const FUTURE_PLANS: string[] = [
-  'There’s no fixed roadmap from here — V4 delivers the big one (local SDR hardware). Ongoing work is polish, more decoders and more backends as they come. If general USB SDR access ever lands on iOS, the on-device engine is already cross-platform (it powers RTL-TCP on iPhone today), so Local Hardware would follow.',
+  'There’s no fixed roadmap from here — V4 delivered the big one (local SDR hardware) and V5 replaced its engine with VibeSDR’s own GPL-free DSP. Ongoing work is polish, more decoders and more backends as they come. If general USB SDR access ever lands on iOS, the on-device engine is already cross-platform (it powers RTL-TCP on iPhone today), so Local Hardware would follow.',
+];
+
+const V5_CHANGES: string[] = [
+  'SDR++ Brown, FFTW and VOLK are gone — the on-device radio (Local Hardware + RTL-TCP) now runs on VibeDSP, VibeSDR’s own clean-room DSP engine, written from scratch and free of any GPL third-party DSP',
+  'Hand-optimised with ARM NEON SIMD across every hot path (FFT, filters, demodulators, resampler, IQ conversion) — runs cooler and uses less battery, especially on low-end phones/tablets',
+  'True single-sideband SSB with proper image rejection (the Weaver method) — the wrong sideband is now silent, not bleeding through',
+  'Genuine FM stereo: a 19 kHz pilot PLL with smooth stereo blend, a reliable stereo indicator, RDS station name/RadioText, and a force-mono switch for weak signals',
+  'Audio AGC for AM/SSB/CW (steady level, no fading or crackle) and working FM de-emphasis (50 µs / 75 µs / off)',
 ];
 
 const V4_CHANGES: string[] = [
@@ -108,13 +117,11 @@ const CREDITS: { name: string; detail: string }[] = [
   { name: 'ka9q-radio — Phil Karn, KA9Q',
     detail: 'The SDR engine (radiod) underneath UberSDR.' },
   { name: 'SDR++ & SDR++ Brown — Alexandre Rouma & contributors',
-    detail: 'The on-device SDR engine for Local Hardware and RTL-TCP. VibeSDR bundles the headless DSP core from SDR++ and its “Brown” fork — the IQ front-end, channelizer, demodulators (AM/SSB/CW/NFM/WFM), FM stereo + RDS and detectors — bridged to the app over the same protocol every backend uses. Licensed under the GNU GPL v3, and the reason VibeSDR itself is GPL-3.0. Thank you — this is the project that made on-device SDR possible.' },
+    detail: 'Powered VibeSDR’s on-device radio through V4. As of V5 it has been replaced by VibeDSP, VibeSDR’s own clean-room GPL-free engine, so SDR++ Brown (and FFTW and VOLK) are no longer bundled — but it’s the project that made on-device SDR possible here, and the original Local Hardware support was built on it. Thank you. Licensed under the GNU GPL v3.' },
   { name: 'librtlsdr & rtl_tcp — Osmocom / Steve Markgraf, and the RTL-SDR Blog fork',
     detail: 'The RTL-SDR USB driver and the rtl_tcp protocol behind the Local Hardware and RTL-TCP backends.' },
-  { name: 'VOLK — GNU Radio',
-    detail: 'Vector-optimised DSP kernels used by the on-device SDR engine.' },
-  { name: 'FFTW — Matteo Frigo & Steven G. Johnson (MIT)',
-    detail: 'Fast Fourier transforms for the on-device IQ front-end and spectrum.' },
+  { name: 'KissFFT — Mark Borgerding (BSD-3)',
+    detail: 'The small, permissively-licensed FFT kernel inside VibeDSP, used for the on-device waterfall/spectrum.' },
   { name: 'Zstandard — Yann Collet / Meta',
     detail: 'Compression used inside the bundled DSP core.' },
   { name: 'KISS FFT — Mark Borgerding',
@@ -175,7 +182,15 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
             <Text style={styles.link}>Visit my UberSDR instance: stuey3d.tunnel.ubersdr.org</Text>
           </TouchableOpacity>
 
-          <Text style={styles.section}>WHAT'S NEW IN V4</Text>
+          <Text style={styles.section}>WHAT'S NEW IN V5</Text>
+          {V5_CHANGES.map((c) => (
+            <View key={c} style={styles.bulletRow}>
+              <Text style={styles.bulletDot}>•</Text>
+              <Text style={styles.bulletText}>{c}</Text>
+            </View>
+          ))}
+
+          <Text style={styles.section}>V4 HIGHLIGHTS</Text>
           {V4_CHANGES.map((c) => (
             <View key={c} style={styles.bulletRow}>
               <Text style={styles.bulletDot}>•</Text>

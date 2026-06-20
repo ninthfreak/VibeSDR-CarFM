@@ -1665,7 +1665,7 @@ export default function MenuSheet({
                   <Text style={styles.footerServerName}>{isTcp ? 'RTL-TCP' : isLocal ? 'Local Hardware'
                     : serverLabel ?? (serverType === 'kiwi' ? 'KiwiSDR' : isOwrx ? 'OpenWebRX' : 'UberSDR')}</Text>
                   {isLocal ? (
-                    <Text style={styles.footerServerVer}>via SDR++ Brown 1.2.1</Text>
+                    <Text style={styles.footerServerVer}>via VibeDSP (native)</Text>
                   ) : serverVersion ? (
                     <Text style={styles.footerServerVer}>v{serverVersion}</Text>
                   ) : null}

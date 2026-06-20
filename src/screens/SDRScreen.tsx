@@ -349,7 +349,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (cancelled) return;
       const auto = prefs.autoGain ?? true;
       const ppm  = typeof prefs.ppm === 'number' ? prefs.ppm : 0;
-      const rate = typeof prefs.sampleRate === 'number' ? prefs.sampleRate : 2_400_000;
+      let rate = typeof prefs.sampleRate === 'number' ? prefs.sampleRate : 2_400_000;
+      // Local USB needs >=1 MHz (a dongle is sluggish/underfiltered lower); only
+      // RTL-TCP may sit low. Clamp a stale/low saved rate for USB.
+      if (!route.params.isTcp && rate < 1_000_000) rate = 2_400_000;
       const bias = !!prefs.biasTee;
       const agc  = !!prefs.agc;
       const ds   = typeof prefs.directSampling === 'number' ? prefs.directSampling : 0;
@@ -3396,6 +3399,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onPpm={onHwPpm}
           sampleRate={hwSampleRate}
           onSampleRate={onHwSampleRate}
+          isTcp={!!route.params.isTcp}
           biasTee={hwBiasTee}
           onBiasTee={onHwBiasTee}
           agc={hwAgc}
