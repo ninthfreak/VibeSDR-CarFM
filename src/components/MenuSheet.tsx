@@ -190,6 +190,8 @@ export interface MenuSheetProps {
   serverVersion?:   string | null;
   /** Opens the About VibeSDR overlay (footer left side). */
   onAbout?:         () => void;
+  /** Opens the saved-recordings browser. */
+  onRecordings?:    () => void;
 
   // Display settings panel props
   vfoNeedle?:         string;
@@ -469,7 +471,7 @@ export default function MenuSheet({
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
   onClose, onBack, onLocalHardware, isTcp, onAdminLink, onResetSettings, onReplayTour, onDisplaySettings,
-  serverVersion = null, onAbout,
+  serverVersion = null, onAbout, onRecordings,
   onZoomIn, onZoomOut, onSetDefault, isDefaultInstance = false,
   decMode = null, decOn = false, onDecToggle,
   spotsKind = null, onSpotsToggle, onServerMap, onSpotsMap,
@@ -1652,6 +1654,12 @@ export default function MenuSheet({
             <BtnRow col>
               <Btn label="↺ RESET INTERFACE SETTINGS" full danger onPress={onResetSettings} />
             </BtnRow>
+            {onRecordings && (
+              <BtnRow col>
+                <Btn label="⏺ RECORDINGS" full onPress={onRecordings} />
+              </BtnRow>
+            )}
+
             {onReplayTour && (
               <BtnRow col>
                 <Btn label="❔ REPLAY TUTORIAL" full onPress={onReplayTour} />

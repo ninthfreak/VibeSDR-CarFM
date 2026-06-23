@@ -75,6 +75,7 @@ import MapOverlay, { type MapKind } from '../components/MapOverlay';
 import CityPickerModal from '../components/CityPickerModal';
 import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
+import RecordingsOverlay from '../components/RecordingsOverlay';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import CenterVfoButton from '../components/CenterVfoButton';
 import PasswordModal from '../components/PasswordModal';
@@ -550,6 +551,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Muted via media controls (AirPods squeeze → pause = mute) — native emits
   // VibeMuted so the UI can show a tap-to-unmute banner.
   const [isMuted, setIsMuted] = useState(false);
+  const isMutedRef = useRef(false);
+  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
   // True when the data saver has dropped the SDR stream after a muted spell.
   const [dataSaverOff, setDataSaverOff] = useState(false);
   const dataSaverOffRef = useRef(false);
@@ -615,8 +618,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   const walls = useMemo(() => {
     if (vfoLocked) return null;
     if (isLocal) {
-      if (!(status.centerHz > 0) || !(hwSampleRate > 0)) return null;
-      const half = hwSampleRate / 2;
+      // Use the REAL captured bandwidth the shim reports (tracks the actual
+      // sample-rate / bandwidth mode), not the JS hw config which can lag.
+      const fs = (client.current as { captureBandwidth?: () => number } | null)
+        ?.captureBandwidth?.() || hwSampleRate;
+      if (!(status.centerHz > 0) || !(fs > 0)) return null;
+      const half = fs / 2;
       return { loHz: status.centerHz - half, hiHz: status.centerHz + half };
     }
     const s = client.current?.panSpan();
@@ -687,6 +694,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [serverLabel,   setServerLabel]   = useState<string | null>(null);  // OWRX: OpenWebRX/+
   const [aboutOpen,     setAboutOpen]     = useState(false);
+  const [recordingsOpen, setRecordingsOpen] = useState(false);
+  // Mute the live SDR while a recording plays so they don't fight over the audio
+  // session; restore the prior mute state when the browser closes.
+  const preRecMuteRef = useRef(false);
+  const onRecordingsActive = useCallback((active: boolean) => {
+    const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
+    if (active) { preRecMuteRef.current = isMutedRef.current; VM?.setMuted?.(true); }
+    else        { VM?.setMuted?.(preRecMuteRef.current); }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -940,10 +956,20 @@ export default function SDRScreen({ route, navigation }: Props) {
       setRecSeconds(0);
       setIsRecording(false);
       VibePowerModule?.stopRecording()
-        .then((path: string | null) => {
-          // Half-height native share sheet; recording also stays in Documents
-          // (visible in the Files app via UIFileSharingEnabled).
-          if (path) VibePowerModule?.shareRecording(path);
+        .then(async (path: string | null) => {
+          // Half-height native share sheet; the file also stays in app storage
+          // (iOS Documents / Android filesDir) and is reachable via the
+          // Recordings browser. Android needs an Expo content URI to share.
+          if (!path) return;
+          if (Platform.OS === 'android') {
+            try {
+              const cu = await FileSystem.getContentUriAsync(
+                path.startsWith('file://') ? path : 'file://' + path);
+              VibePowerModule?.shareRecording(cu);
+            } catch {}
+          } else {
+            VibePowerModule?.shareRecording(path);
+          }
         })
         .catch(() => {});
     }
@@ -3448,10 +3474,16 @@ export default function SDRScreen({ route, navigation }: Props) {
         onOwrxSquelch={(db) => client.current?.setSquelch?.(db)}
         onOwrxNr={(th) => client.current?.setNr?.(th)}
         onAbout={() => { setMenuOpen(false); setAboutOpen(true); }}
+        onRecordings={() => { setMenuOpen(false); setRecordingsOpen(true); }}
       />
 
       {/* About VibeSDR — V2 changes, credits, GPL-3.0 */}
       <AboutOverlay visible={aboutOpen} onClose={() => setAboutOpen(false)} />
+      <RecordingsOverlay
+        visible={recordingsOpen}
+        onClose={() => setRecordingsOpen(false)}
+        onActiveChange={onRecordingsActive}
+      />
 
       {/* First-run guided tour (dismissable) — renders nothing until active */}
       {sdrTour.overlay}

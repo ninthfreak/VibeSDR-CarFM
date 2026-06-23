@@ -1146,7 +1146,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 val rm = if (recReqMode.isNotEmpty()) recReqMode else currentMode
                 val mhz = String.format(java.util.Locale.US, "%.4fMHz", rf / 1e6)
                 recDisplayName = "VibeSDR_${ts}_${mhz}_${rm.uppercase()}.m4a"
-                val f = java.io.File(cacheDir, recDisplayName)
+                // filesDir == Expo's FileSystem.documentDirectory, so the JS
+                // RecordingsOverlay can list/play/delete it. (Was cacheDir +
+                // MediaStore publish; now the in-app browser is the home for
+                // recordings on both platforms — share exports elsewhere.)
+                val f = java.io.File(filesDir, recDisplayName)
                 // External audio (local/Kiwi/OWRX) has its own rate/channels;
                 // the UberSDR path is always 48k. Match the encoder to the source
                 // so recordings play at the right speed.
@@ -1193,7 +1197,9 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 }
                 val src = recFile
                 releaseRecorder()
-                promise.resolve(if (src != null) publishRecording(src) else null)
+                // Keep the file in filesDir (in-app browser is its home); return
+                // the bare path. Sharing wraps it in Expo's content provider JS-side.
+                promise.resolve(src?.absolutePath)
             } catch (e: Exception) {
                 Log.e(TAG, "rec stop failed: ${e.message}")
                 releaseRecorder()

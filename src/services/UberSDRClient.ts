@@ -195,6 +195,14 @@ export class UberSDRClient {
   /** Locked (true) = view follows the VFO. See SDRBackend.setFollowMode. */
   setFollowMode(follow: boolean) { this.followVfo = follow; }
 
+  /** Real captured bandwidth (Hz) of the local device. The shim reports it as
+   *  config.maxBandwidth → maxSpanHz, which tracks the ACTUAL sample rate /
+   *  bandwidth mode. localSampleRate (from JS hw config) is only a fallback —
+   *  it can lag the device, which made the pan wall land in the wrong place. */
+  captureBandwidth(): number {
+    return this.maxSpanHz > 0 ? this.maxSpanHz : this.localSampleRate;
+  }
+
   panSpan(): { loHz: number; hiHz: number; movable: boolean } {
     if (this.isLocal) {
       // Movable Fs window: the shim demodulates the VFO as an offset channel
@@ -204,9 +212,13 @@ export class UberSDRClient {
       // (guard > the shim's 50 kHz retune margin, so the native auto-recenter
       // never fires under us.) These are centre-bounds, clamped directly (no
       // half-view subtraction) — see SDRScreen.onWfPanDelta movable branch.
-      const fs = this.localSampleRate;
+      const fs = this.captureBandwidth();
       const vfo = this.status.frequency;
-      const guard = fs * 0.06;
+      // Guard each side: enough to (a) clear the RTL anti-alias rolloff (~10% —
+      // e.g. a 250 kHz mode is only ~192 kHz usable) and (b) stay above the
+      // shim's 50 kHz auto-retune margin (else narrow modes snap-recenter at the
+      // limit). Floor 60 kHz dominates for narrow bandwidths.
+      const guard = Math.max(fs * 0.10, 60_000);
       return { loHz: vfo - fs / 2 + guard, hiHz: vfo + fs / 2 - guard, movable: true };
     }
     return { loHz: this.minHz, hiHz: this.maxHz, movable: false }; // full HF range
