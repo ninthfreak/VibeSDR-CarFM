@@ -75,6 +75,7 @@ export class UberSDRAdapter implements SDRBackend {
   setFollowMode(follow: boolean) { this.client.setFollowMode(follow); }
   panSpan() { return this.client.panSpan(); }
   captureBandwidth() { return this.client.captureBandwidth(); }
+  rfCenterHz() { return this.client.rfCenterHz(); }
   setMode(mode: SDRMode)                           { this.client.setMode(mode); }
   setBandwidth(low: number, high: number)          { this.client.setBandwidth(low, high); }
 

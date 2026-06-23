@@ -60,10 +60,18 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   { v: 'V4', detail: 'Local SDR hardware — VibeSDR now runs a radio on-device. Plug an RTL-SDR into an Android phone over USB (“Local Hardware”), or connect to a networked rtl_tcp server from either platform, and the app demodulates AM/SSB/CW/NFM/WFM itself with a bundled on-device DSP core — full waterfall, drum, audio and decoders, with a hardware-control submenu. Adds an MMSE noise-reduction engine and an adaptive Auto Notch (on every backend), plus a client-side dBFS squelch for KiwiSDR. (V5 later replaced that DSP core with VibeSDR’s own clean-room engine.) See What\'s New above.' },
   { v: 'V5', detail: 'New on-device DSP engine — SDR++ Brown (and FFTW and VOLK) have been REMOVED and replaced with VibeDSP, VibeSDR\'s own clean-room, GPL-free signal-processing engine for Local Hardware and RTL-TCP. It is hand-optimised with ARM NEON SIMD throughout, so it runs noticeably cooler and lighter on the battery — especially on low-end phones and tablets — while matching the old engine. It also brings real improvements: true single-sideband SSB (proper image rejection, not double-sideband), genuine FM stereo with a 19 kHz pilot PLL + RDS, a per-channel audio AGC for SSB/CW, working de-emphasis (50/75 µs), a reliable stereo indicator and a force-mono switch. See What\'s New above.' },
   { v: 'V5.0.1', detail: 'CW fix for Local Hardware (USB RTL-SDR): tuning straight onto a CW signal used to go silent — the beat-note offset and the actual filter width had drifted apart, so the morse was only audible when tuned well off the signal. They\'re now kept in sync, so a signal tuned dead-on gives a clear, audible ~600 Hz tone with readable morse. The mode pill also reads “CW” to match the button.' },
+  { v: 'V5.1', detail: 'Unlocked VFO + waterfall panning, and a saved-recordings player. A new VFO Lock toggle (menu) lets you free the waterfall: locked (default) is exactly as before, unlocked lets you drag to pan the band while staying tuned, with a floating “Centre on VFO” button. Gestures are now tap-to-tune, drag-to-pan, pinch-to-zoom, with panning moved onto the UI thread for smoothness on poor connections. On Local Hardware / RTL-TCP the dongle (RF) centre becomes a true second VFO — with the VFO unlocked you can pan the view across the full captured bandwidth at native resolution while a station stays tuned, the dongle locking at the capture edge with an RF-CENTRE marker and hard walls. New Recordings screen lists, plays (with scrub), shares and deletes your recordings in-app — no more recordings stranded in storage. See What\'s New above.' },
 ];
 
 const FUTURE_PLANS: string[] = [
   'There’s no fixed roadmap from here — V4 delivered the big one (local SDR hardware) and V5 replaced its engine with VibeSDR’s own GPL-free DSP. Ongoing work is polish, more decoders and more backends as they come. If general USB SDR access ever lands on iOS, the on-device engine is already cross-platform (it powers RTL-TCP on iPhone today), so Local Hardware would follow.',
+];
+
+const V5_1_CHANGES: string[] = [
+  'Waterfall panning is back, opt-in: a new VFO Lock toggle in the menu. Locked (the default) keeps the VFO centred exactly as before; unlock it and you can drag the waterfall to look around the band while staying tuned, with a floating “Centre on VFO” button to snap back',
+  'Full waterfall gestures: tap to tune, drag left/right to pan, pinch to zoom — panning now runs on the UI thread so it stays smooth even on a busy/laggy connection',
+  'Local Hardware / RTL-TCP get a true second VFO for the dongle (RF) centre: with the VFO unlocked you can pan the view right across the captured bandwidth at full resolution while a station stays tuned — the dongle centre locks at the edge and the RF-CENTRE marker slides off as you scroll, with solid walls at the capture limits',
+  'Saved Recordings player: a new Recordings screen (from the menu) lists every recording you’ve made — play them back in-app with a scrub bar, share them, or delete them. No more recordings stranded in storage with no way to reach them. (Recordings are now kept in the app on both platforms.)',
 ];
 
 const V5_CHANGES: string[] = [
@@ -169,7 +177,7 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
           <View style={styles.heroRow}>
             <Image source={require('../../assets/icon.png')} style={styles.icon} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.appName}>VibeSDR V4</Text>
+              <Text style={styles.appName}>VibeSDR V5</Text>
               <Text style={styles.appVer}>Version {APP_VERSION}</Text>
               <Text style={styles.appSub}>A native mobile client for UberSDR, OpenWebRX & KiwiSDR receivers — and your own RTL-SDR hardware</Text>
             </View>
@@ -183,7 +191,15 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
             <Text style={styles.link}>Visit my UberSDR instance: stuey3d.tunnel.ubersdr.org</Text>
           </TouchableOpacity>
 
-          <Text style={styles.section}>WHAT'S NEW IN V5</Text>
+          <Text style={styles.section}>WHAT'S NEW IN V5.1</Text>
+          {V5_1_CHANGES.map((c) => (
+            <View key={c} style={styles.bulletRow}>
+              <Text style={styles.bulletDot}>•</Text>
+              <Text style={styles.bulletText}>{c}</Text>
+            </View>
+          ))}
+
+          <Text style={styles.section}>V5 HIGHLIGHTS</Text>
           {V5_CHANGES.map((c) => (
             <View key={c} style={styles.bulletRow}>
               <Text style={styles.bulletDot}>•</Text>

@@ -203,23 +203,40 @@ export class UberSDRClient {
     return this.maxSpanHz > 0 ? this.maxSpanHz : this.localSampleRate;
   }
 
+  /** Margin keeping the VFO inside the usable capture — MUST match the shim's
+   *  viewDongleMargin(): above the 50 kHz auto-retune threshold AND clear of the
+   *  RTL anti-alias rolloff (~10%, e.g. a 250 kHz mode is only ~192 kHz usable). */
+  private localMargin(fs: number): number { return Math.max(fs * 0.10, 60_000); }
+
+  /** Current display half-span (Hz). */
+  private viewHalfSpan(): number {
+    const bw = (this.view.binBandwidth || this.status.binBandwidth) * (this.status.binCount || 1);
+    return (bw > 0 ? bw : this.status.bwHz) / 2;
+  }
+
+  /** The dongle / RF-centre frequency the shim is parked at, derived the same
+   *  way the shim does (dongleForView): the dongle follows the view but is
+   *  clamped so the VFO stays captured, then locks. Drives the RF-centre marker
+   *  and the capture-window walls. (No protocol field — pure mirror.) */
+  rfCenterHz(): number {
+    if (!this.isLocal) return this.status.centerHz;
+    const fs = this.captureBandwidth();
+    const lim = fs / 2 - this.localMargin(fs);
+    const vfo = this.status.frequency;
+    return Math.max(vfo - lim, Math.min(vfo + lim, this.status.centerHz));
+  }
+
   panSpan(): { loHz: number; hiHz: number; movable: boolean } {
     if (this.isLocal) {
-      // Movable Fs window: the shim demodulates the VFO as an offset channel
-      // within the captured Fs band, so panning moves the dongle centre while
-      // the audio stays locked to the VFO. The hard limit is the VFO leaving
-      // the capture window — so bound the view CENTRE to VFO ± (Fs/2 − guard).
-      // (guard > the shim's 50 kHz retune margin, so the native auto-recenter
-      // never fires under us.) These are centre-bounds, clamped directly (no
-      // half-view subtraction) — see SDRScreen.onWfPanDelta movable branch.
+      // The DISPLAY centre can roam across the whole captured band: the dongle
+      // follows the view to VFO ± (Fs/2 − M), then locks, and the shim's crop
+      // offset carries the view on to the capture edge (a further Fs/2 − cropHalf
+      // beyond the dongle). So the reachable view centre = VFO ± (Fs − M − cropHalf).
+      // Clamped directly (centre-bounds) — see SDRScreen.onWfPanDelta movable branch.
       const fs = this.captureBandwidth();
+      const reach = Math.max(0, fs - this.localMargin(fs) - this.viewHalfSpan());
       const vfo = this.status.frequency;
-      // Guard each side: enough to (a) clear the RTL anti-alias rolloff (~10% —
-      // e.g. a 250 kHz mode is only ~192 kHz usable) and (b) stay above the
-      // shim's 50 kHz auto-retune margin (else narrow modes snap-recenter at the
-      // limit). Floor 60 kHz dominates for narrow bandwidths.
-      const guard = Math.max(fs * 0.10, 60_000);
-      return { loHz: vfo - fs / 2 + guard, hiHz: vfo + fs / 2 - guard, movable: true };
+      return { loHz: vfo - reach, hiHz: vfo + reach, movable: true };
     }
     return { loHz: this.minHz, hiHz: this.maxHz, movable: false }; // full HF range
   }

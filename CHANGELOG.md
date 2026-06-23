@@ -4,6 +4,48 @@ VibeSDR is free software under the **GNU GPL v3**. Source: https://github.com/St
 
 ---
 
+## v5.1.0 — Unlocked VFO + waterfall panning, recordings player (2026-06-23)
+
+### Waterfall panning & the VFO Lock
+- **Waterfall panning is back, as an opt-in.** A new **VFO Lock** toggle in the
+  menu (replacing the old centre button) controls it. **Locked is the default and
+  is byte-for-byte the previous behaviour** — the VFO stays pinned to the centre.
+  Unlock it and you can **drag the waterfall to pan around the band while staying
+  tuned**; the VFO needle can sit off-centre or off-screen.
+- A floating **CENTRE ON VFO** button appears (above the controls) whenever the
+  VFO is unlocked and off-screen — one tap snaps the view back to the VFO without
+  re-locking.
+- **Gestures are now: tap = tune, drag = pan, pinch = zoom.** The old vertical
+  drag-to-zoom is gone (it fought panning). Panning runs **on the UI thread**, so
+  the grab/drag stays responsive even when the connection is laggy or busy with
+  incoming data.
+- Discrete jumps (frequency entry, bookmarks, VTS, Siri, lock-screen skip) always
+  re-centre on the target, regardless of the lock.
+
+### Second VFO for the RF (dongle) centre — Local Hardware / RTL-TCP
+- On the on-device backends the **dongle centre is now a true second VFO**, drawn
+  as a dashed **RF-CENTRE** marker with its own frequency readout.
+- With the VFO unlocked you can **pan the view across the entire captured
+  bandwidth at full resolution** while a station stays tuned. The dongle follows
+  your pan until the tuned station nears the capture edge, then **locks** — and the
+  view keeps scrolling, the RF-CENTRE marker sliding off to the side, up to the
+  hard **walls** at the capture-band edges.
+- The pan limits track the **actual sample-rate / bandwidth mode** the device
+  reports (so 250 kHz, 1 MHz, 2.4 MHz etc. each get the right walls), keeping the
+  tuned station clear of the anti-alias rolloff.
+
+### Saved Recordings player
+- New **Recordings** screen (from the menu) lists every audio recording you've
+  made — **play them back in-app** with a scrub bar, **share**, or **delete**.
+  Previously a recording you didn't immediately save from the share sheet was
+  stranded in app storage with no way to reach it.
+- Recordings are now kept in the app on **both platforms** (Android no longer
+  pushes them straight to the Music library), so the browser is identical on iOS
+  and Android. The live SDR is paused while a recording plays so the two don't
+  fight over the audio session.
+
+---
+
 ## v5.0.1 — CW fix on local hardware (2026-06-20)
 
 ### Fixed

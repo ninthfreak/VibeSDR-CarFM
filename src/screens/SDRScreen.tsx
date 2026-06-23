@@ -615,21 +615,33 @@ export default function SDRScreen({ route, navigation }: Props) {
   //  • Local/RTL-TCP: the dongle's captured Fs window edges (centre ± Fs/2) —
   //    these are the real "you can pan/tune this far" boundaries; the spectrum
   //    ends there. They move as the dongle re-tunes.
+  // Local RF-centre (dongle) — derived to mirror the shim. Drives the RF-centre
+  // marker (which can sit off-screen once the dongle locks and the view pans on)
+  // and the capture-window walls (rfCenter ± Fs/2).
+  const localRf = useMemo(() => {
+    if (!isLocal) return null;
+    const c = client.current as
+      { rfCenterHz?: () => number; captureBandwidth?: () => number } | null;
+    const fs = c?.captureBandwidth?.() || hwSampleRate;
+    const rf = c?.rfCenterHz?.();
+    if (rf == null || !(fs > 0)) return null;
+    return { rf, fs };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLocal, status.centerHz, status.frequency, status.bwHz, hwSampleRate, connEpoch]);
+
   const walls = useMemo(() => {
     if (vfoLocked) return null;
     if (isLocal) {
-      // Use the REAL captured bandwidth the shim reports (tracks the actual
-      // sample-rate / bandwidth mode), not the JS hw config which can lag.
-      const fs = (client.current as { captureBandwidth?: () => number } | null)
-        ?.captureBandwidth?.() || hwSampleRate;
-      if (!(status.centerHz > 0) || !(fs > 0)) return null;
-      const half = fs / 2;
-      return { loHz: status.centerHz - half, hiHz: status.centerHz + half };
+      // Hard walls at the captured-band edges (dongle ± Fs/2) — these become
+      // visible as you scroll the view across the band.
+      if (!localRf) return null;
+      const half = localRf.fs / 2;
+      return { loHz: localRf.rf - half, hiHz: localRf.rf + half };
     }
     const s = client.current?.panSpan();
     return s ? { loHz: s.loHz, hiHz: s.hiHz } : null;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vfoLocked, isLocal, status.centerHz, status.bwHz, hwSampleRate, connEpoch]);
+  }, [vfoLocked, isLocal, localRf, status.bwHz, connEpoch]);
 
   // VFO has panned outside the visible span → show the floating recentre button.
   // (No toast hint — the floating button itself is the affordance; VTS pop-ups
@@ -3080,9 +3092,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         panLoHz={walls?.loHz}
         panHiHz={walls?.hiHz}
         showWalls={!!walls}
-        // RF-centre marker = the dongle/RF centre frequency (local/RTL-TCP only).
-        // Distinct from the VFO needle once you tune off-centre while unlocked.
-        centerMarkerHz={status.centerHz}
+        // RF-centre marker = the dongle/RF centre (derived to mirror the shim).
+        // Sits at the display centre until the dongle locks; then the view pans
+        // on across the captured band and the marker slides off to the side.
+        centerMarkerHz={localRf?.rf ?? status.centerHz}
         showCenterMarker={isLocal && !vfoLocked}
       />
       </View>

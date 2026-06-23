@@ -243,8 +243,11 @@ struct LocalSdrShim::Impl {
     double sampleRate = 2400000.0;
     int    fftSize    = 1024;
     double fftRate    = 20.0;
-    std::atomic<double> rtlCenter{100000000.0}; // RTL tuned centre = spectrum centre
-    std::atomic<double> audioFreq{100000000.0}; // demod dial frequency
+    std::atomic<double> rtlCenter{100000000.0}; // RTL tuned (dongle) centre — the DC of the capture
+    std::atomic<double> viewCenter{100000000.0};// DISPLAY centre — may sit off the dongle centre so
+                                                // the user can pan the view across the captured band
+                                                // while a station stays tuned (RF-centre marker = dongle).
+    std::atomic<double> audioFreq{100000000.0}; // demod dial frequency (VFO)
     std::atomic<int>    rateDivisor{1};
     std::atomic<double> zoomFactor{1.0}; // spectrum zoom: FFT-crop factor (>=1)
     std::string mode = "nfm";
@@ -310,6 +313,20 @@ struct LocalSdrShim::Impl {
     // Physical DC of the FFT = rtlCenter + HW_OFFSET_HZ, so the VFO (at audioFreq)
     // sits HW_OFFSET_HZ below DC.
     double vfoOffsetNow() { return audioFreq.load() - rtlCenter.load() - HW_OFFSET_HZ + demodOffset; }
+
+    // Margin keeping the VFO inside the usable capture: above the 50 kHz auto-
+    // retune threshold AND clear of the RTL anti-alias rolloff (~10%). MUST
+    // match the JS client (UberSDRClient panSpan / rfCenter derivation).
+    double viewDongleMargin() { return std::max(sampleRate * 0.10, 60000.0); }
+
+    // Dongle (RTL) centre for a requested DISPLAY centre: the dongle follows the
+    // view, but is clamped so the VFO never leaves the usable capture — at which
+    // point it "locks" and the view keeps panning across the captured band.
+    double dongleForView(double view) {
+        double lim = sampleRate / 2.0 - viewDongleMargin();
+        double v = audioFreq.load();
+        return std::min(v + lim, std::max(v - lim, view));
+    }
 
     // Tune the radio to (logical centre + HW_OFFSET_HZ).
     void tuneHw(double logicalCenter) {
@@ -413,11 +430,16 @@ struct LocalSdrShim::Impl {
             // centred on the logical centre (rtlCenter) — the DC spike then draws
             // HW_OFFSET_HZ off-centre, harmlessly outside the channel.
             const double hwOffsetBin = HW_OFFSET_HZ * (double)bins / sampleRate;
-            uint64_t f = (uint64_t)llround(rtlCenter.load());
+            // The display centre is viewCenter, which may sit off the dongle
+            // centre (rtlCenter) — shift the crop by their difference so the user
+            // can pan the view across the captured band while the dongle (and the
+            // tuned VFO) stay put. dbAt clamps past the capture edge → floor.
+            const double viewOffsetBin = (viewCenter.load() - rtlCenter.load()) * (double)bins / sampleRate;
+            uint64_t f = (uint64_t)llround(viewCenter.load());   // display centre = view centre
             std::memcpy(&frame[14], &f, 8);
             for (int i = 0; i < outBins; i++) {
                 int signedOut = (i <= outBins / 2) ? i : i - outBins;
-                double center = signedOut * step - hwOffsetBin;  // signed src offset from DC
+                double center = signedOut * step - hwOffsetBin + viewOffsetBin;  // signed src offset from DC
                 int lo = (int)std::floor(center - step / 2.0);
                 int hi = (int)std::ceil(center + step / 2.0);
                 if (hi <= lo) hi = lo + 1;
@@ -782,7 +804,11 @@ struct LocalSdrShim::Impl {
         audioFreq.store(freq);
         double limit = sampleRate / 2.0 - 50000.0;
         if (std::fabs(freq - rtlCenter.load()) > limit) {
+            // The VFO has tuned outside the captured window — recentre the dongle
+            // (and the display) on it so we don't end up showing dead air. (For a
+            // locked tune the client immediately re-asserts the view via zoom.)
             rtlCenter.store(freq);
+            viewCenter.store(freq);
             tuneHw(freq);
         }
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
@@ -818,7 +844,7 @@ struct LocalSdrShim::Impl {
         snprintf(buf, sizeof buf,
             "{\"type\":\"config\",\"centerFreq\":%lld,\"binCount\":%d,"
             "\"binBandwidth\":%.6f,\"totalBandwidth\":%.1f,\"maxBandwidth\":%.1f}",
-            (long long)llround(rtlCenter.load()), OUT_BINS, binBw, effective, sampleRate);
+            (long long)llround(viewCenter.load()), OUT_BINS, binBw, effective, sampleRate);
         sendText(sock, buf);
     }
 
@@ -861,13 +887,18 @@ struct LocalSdrShim::Impl {
         if (type == "ping") { sendText(sock, "{\"type\":\"pong\"}"); return; }
         if (type == "set_rate") { if (jsonNum(msg,"divisor",v)) rateDivisor.store(std::max(1,(int)llround(v))); return; }
         if (type == "reset") { zoomFactor.store(1.0); sendConfig(sock); return; }
-        if (type == "zoom") { // spectrum centre move (+ span via binBandwidth)
+        if (type == "zoom") { // spectrum view-centre move (+ span via binBandwidth)
             if (jsonNum(msg,"frequency",v) && v > 0) {
-                // Only retune the RTL when the centre actually moves (a pinch
-                // keeps the centre, so this avoids per-gesture retune clicks).
-                if (std::fabs(v - rtlCenter.load()) > 1.0) {
-                    rtlCenter.store(v);
-                    tuneHw(v);
+                // The requested frequency is the DISPLAY centre. Park the dongle
+                // so the VFO stays captured (follow the view, then lock), and let
+                // the crop offset (viewCenter − rtlCenter, applied in onSpectrum)
+                // carry the view on past the dongle once it's locked. Retune the
+                // RTL only when the dongle actually has to move (no per-pan clicks).
+                viewCenter.store(v);
+                double dongle = dongleForView(v);
+                if (std::fabs(dongle - rtlCenter.load()) > 1.0) {
+                    rtlCenter.store(dongle);
+                    tuneHw(dongle);
                     std::lock_guard<std::recursive_mutex> lk(modeMtx);
                     rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
                 }
@@ -1228,6 +1259,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     impl->fftSize = fftSize;
     impl->fftRate = fftRate;
     impl->rtlCenter.store(centerFreq);
+    impl->viewCenter.store(centerFreq);
     impl->audioFreq.store(centerFreq);
     impl->mode = mode.empty() ? "nfm" : mode;
 
@@ -1289,6 +1321,7 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
     impl->fftSize = fftSize;
     impl->fftRate = fftRate;
     impl->rtlCenter.store(centerFreq);
+    impl->viewCenter.store(centerFreq);
     impl->audioFreq.store(centerFreq);
     impl->mode = mode.empty() ? "nfm" : mode;
 
