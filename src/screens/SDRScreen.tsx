@@ -76,6 +76,7 @@ import CityPickerModal from '../components/CityPickerModal';
 import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
+import CenterVfoButton from '../components/CenterVfoButton';
 import PasswordModal from '../components/PasswordModal';
 import {
   fetchBookmarks, findNearest, findNextBookmark,
@@ -569,6 +570,66 @@ export default function SDRScreen({ route, navigation }: Props) {
     const v = c.getView();
     if (v.binBandwidth > 0) c.zoom(c.getStatus().frequency, v.binBandwidth);
   }, []);
+
+  // ── VFO lock / waterfall panning (BRIEF-vfo-lock-and-panning) ───────────────
+  // Default locked = today's behaviour (view follows the VFO). Unlocked lets the
+  // waterfall pan freely. Persisted in lsv_vfo_lock; mirrored to the client as
+  // followVfo. Disabled (but shown) on local hardware until Phase 2.
+  const [vfoLocked, setVfoLocked] = useState(true);
+  const vfoLockedRef = useRef(true);
+  useEffect(() => { vfoLockedRef.current = vfoLocked; }, [vfoLocked]);
+
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_vfo_lock')
+      .then(v => {
+        const locked = v == null ? true : v === '1';
+        setVfoLocked(locked);
+        client.current?.setFollowMode(locked);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Local hardware: keep the client's Fs window in sync with the live sample
+  // rate so panSpan()'s movable wall matches the real capture bandwidth.
+  useEffect(() => {
+    if (!isLocal) return;
+    (client.current as { setLocalSampleRate?: (hz: number) => void } | null)
+      ?.setLocalSampleRate?.(hwSampleRate);
+  }, [isLocal, hwSampleRate]);
+
+  const onToggleVfoLock = useCallback(() => {
+    setVfoLocked(prev => {
+      const next = !prev;
+      client.current?.setFollowMode(next);
+      if (next) onCentreVfo();                  // re-locking snaps back to the VFO
+      AsyncStorage.setItem('lsv_vfo_lock', next ? '1' : '0').catch(() => {});
+      return next;
+    });
+  }, [onCentreVfo]);
+
+  // Boundary walls for the waterfall (unlocked only).
+  //  • Remote (UberSDR/Kiwi/OWRX): hard walls at the band/profile/rx edges.
+  //  • Local/RTL-TCP: the dongle's captured Fs window edges (centre ± Fs/2) —
+  //    these are the real "you can pan/tune this far" boundaries; the spectrum
+  //    ends there. They move as the dongle re-tunes.
+  const walls = useMemo(() => {
+    if (vfoLocked) return null;
+    if (isLocal) {
+      if (!(status.centerHz > 0) || !(hwSampleRate > 0)) return null;
+      const half = hwSampleRate / 2;
+      return { loHz: status.centerHz - half, hiHz: status.centerHz + half };
+    }
+    const s = client.current?.panSpan();
+    return s ? { loHz: s.loHz, hiHz: s.hiHz } : null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vfoLocked, isLocal, status.centerHz, status.bwHz, hwSampleRate, connEpoch]);
+
+  // VFO has panned outside the visible span → show the floating recentre button.
+  // (No toast hint — the floating button itself is the affordance; VTS pop-ups
+  // caused more trouble than they solved on the original skin.)
+  const vfoOffscreen = !vfoLocked && status.bwHz > 0 &&
+    (status.frequency < status.centerHz - status.bwHz / 2 ||
+     status.frequency > status.centerHz + status.bwHz / 2);
 
   // ── Step ──────────────────────────────────────────────────────────────────
 
@@ -1073,7 +1134,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const [loHz, hiHz] = c.caps.freqRange;
     const newHz = Math.max(loHz, Math.min(hiHz, snapped));
     if (newHz === cur) return;
-    c.tune(newHz);
+    c.tune(newHz, undefined, { recenter: true });   // media-control skip = discrete jump
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: newHz }));
   };
   useEffect(() => {
@@ -1812,6 +1873,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
     }, password, !!route.params.isLocal);
     client.current = c;
+    // Apply the persisted VFO-lock follow mode to the fresh connection.
+    c.setFollowMode(vfoLockedRef.current);
+    // Local hardware: thread the live device sample rate for panSpan()'s window.
+    if (route.params.isLocal) (c as { setLocalSampleRate?: (hz: number) => void }).setLocalSampleRate?.(hwSampleRate);
     // QoL: restore the last frequency/mode used on THIS instance before
     // connecting (the hardcoded default landed on the 20m FT8 squeal every
     // launch). Falls back to the default tune on first visit / bad data.
@@ -2130,12 +2195,29 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onWfPanDelta = useCallback((dxPx: number) => {
     const c = client.current; if (!c) return;
+    if (vfoLockedRef.current) return;                 // no free pan while locked
     markInteract();
     // Predicted view: pan() updates it synchronously, so successive deltas
     // compound correctly. Re-basing on getStatus() made every delta in an RTT
     // window re-apply from the same stale centre (rubber-banding).
     const s = c.getView(); if (!s.bwHz || !s.centerHz) return;
-    c.pan(s.centerHz + Math.round((dxPx / screenW) * s.bwHz));
+    const span = c.panSpan();
+    const target = s.centerHz + Math.round((dxPx / screenW) * s.bwHz);
+    // Silently clamp at the boundary walls (the visible walls show the limit;
+    // no toast — per Stuart, VTS pop-ups caused more trouble than they solved).
+    let clamped: number;
+    if (span.movable) {
+      // Local Fs window: span bounds the CENTRE directly (keeps the VFO inside
+      // the capture window; the VFO itself may leave the visible view).
+      clamped = Math.max(span.loHz, Math.min(span.hiHz, target));
+    } else {
+      // Hard walls (band edge / profile / rx range): keep the whole VIEW inside.
+      const half = s.bwHz / 2;
+      const loC = span.loHz + half, hiC = span.hiHz - half;
+      clamped = loC <= hiC ? Math.max(loC, Math.min(hiC, target))
+                           : Math.round((span.loHz + span.hiHz) / 2);
+    }
+    c.pan(clamped);
   }, [screenW]);
 
   // Same gesture-accumulator pattern as the BW drum (ladder snap-back).
@@ -2334,7 +2416,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     markInteract();
     const [loHz, hiHz] = c.caps.freqRange;
     const clamped = Math.max(loHz, Math.min(hiHz, hz));
-    c.tune(clamped);
+    // Discrete jump (freq modal, bookmark/VTS, Siri, search) → always land
+    // centred, regardless of the VFO lock.
+    c.tune(clamped, undefined, { recenter: true });
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
   }, []);
 
@@ -2967,6 +3051,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         bgOpacity={bgOpacity / 10}
         stationId={stationId}
         specFrac={specFrac}
+        panLoHz={walls?.loHz}
+        panHiHz={walls?.hiHz}
+        showWalls={!!walls}
+        // RF-centre marker = the dongle/RF centre frequency (local/RTL-TCP only).
+        // Distinct from the VFO needle once you tune off-centre while unlocked.
+        centerMarkerHz={status.centerHz}
+        showCenterMarker={isLocal && !vfoLocked}
       />
       </View>
 
@@ -3197,6 +3288,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* VTS popup — station / band-crossing notifications above the pill */}
       {!controlsHidden && <VTSBar notif={vtsNotif} bottom={pillBottom + 8} serverType={isLocal ? 'local' : route.params.serverType} />}
 
+      {/* Floating CENTRE ON VFO — unlocked + VFO off-screen (BRIEF §5.8) */}
+      <CenterVfoButton visible={vfoOffscreen && !controlsHidden} bottom={pillBottom + 56} onPress={onCentreVfo} />
+
       {/* Menu sheet */}
       <MenuSheet
         visible={menuOpen}
@@ -3330,6 +3424,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         mediaSkip={mediaSkip}           onMediaSkip={onMediaSkip}
         hapticsEnabled={hapticsEnabled} onHaptics={onHaptics}
         onCentreVfo={onCentreVfo}       onHideControls={onHideControls}
+        vfoLocked={vfoLocked}           onToggleVfoLock={onToggleVfoLock}
         onDispReset={onDispReset}       onDispSaveServer={onDispSaveServer}
         onDispSaveGlobal={onDispSaveGlobal}
         snrSquelch={snrSquelch}         onSnrSquelch={onSnrSquelch}

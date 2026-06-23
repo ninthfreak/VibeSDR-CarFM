@@ -75,7 +75,7 @@ const U8_DBFS_OFFSET = -256;
 // 60–120Hz; every request triggers a config echo, so unthrottled gestures flood
 // the link), and treat the view as "in flight" until VIEW_SETTLE_MS of send
 // quiet, after which the server's acked state is adopted in one step.
-const VIEW_SEND_MS   = 50;
+const VIEW_SEND_MS   = 33;
 const VIEW_SETTLE_MS = 300;
 
 // ── Client class ──────────────────────────────────────────────────────────────
@@ -119,6 +119,14 @@ export class UberSDRClient {
   // Max zoom-OUT span (Hz). 0 = use maxHz. Local hardware reports its full
   // device bandwidth via config.maxBandwidth so you can't zoom out past it.
   private maxSpanHz = 0;
+
+  // VFO lock / waterfall panning (see SDRBackend.setFollowMode/panSpan).
+  // followVfo=true reproduces today's behaviour: tune() recentres the view.
+  private followVfo = true;
+  // Local hardware only — set by the adapter from the device config. Drives the
+  // movable Fs pan window in panSpan(). Default = the 2.4 MS/s RTL-SDR rate.
+  isLocal = false;
+  localSampleRate = 2_400_000;
 
   private view = { centerHz: 0, binBandwidth: 0 };
   private pendingView: { frequency: number; binBandwidth: number } | null = null;
@@ -167,17 +175,41 @@ export class UberSDRClient {
   }
 
   /** Tune to a new frequency (and optionally mode). Sends to native audio WS + spectrum WS. */
-  tune(frequency: number, mode?: SDRMode) {
+  tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) {
     if (frequency) this.status.frequency = frequency;
     if (mode)      this.status.mode = mode;
     VibePowerModule?.sendTuneCommand(frequency, mode ?? this.status.mode);
-    // Re-centre spectrum on new frequency so waterfall follows the VFO.
+    // Re-centre spectrum on new frequency so waterfall follows the VFO — only
+    // when locked (followVfo) or a discrete jump forces it (opts.recenter).
+    // Unlocked continuous tuning leaves the view put so the user can pan freely.
     // Goes through the coalesced view sender — a fast VFO drum spin fires per
     // step, and per-step recentres flood the link with config echoes. (Audio
     // tune above stays per-event via native, so tuning feel is unaffected.)
-    const bb = this.view.binBandwidth || this.status.binBandwidth;
-    if (bb) this.zoom(frequency, bb);
-    else    this.pan(frequency); // no geometry known yet — let server keep its bin_bw
+    if (this.followVfo || opts?.recenter) {
+      const bb = this.view.binBandwidth || this.status.binBandwidth;
+      if (bb) this.zoom(frequency, bb);
+      else    this.pan(frequency); // no geometry known yet — let server keep its bin_bw
+    }
+  }
+
+  /** Locked (true) = view follows the VFO. See SDRBackend.setFollowMode. */
+  setFollowMode(follow: boolean) { this.followVfo = follow; }
+
+  panSpan(): { loHz: number; hiHz: number; movable: boolean } {
+    if (this.isLocal) {
+      // Movable Fs window: the shim demodulates the VFO as an offset channel
+      // within the captured Fs band, so panning moves the dongle centre while
+      // the audio stays locked to the VFO. The hard limit is the VFO leaving
+      // the capture window — so bound the view CENTRE to VFO ± (Fs/2 − guard).
+      // (guard > the shim's 50 kHz retune margin, so the native auto-recenter
+      // never fires under us.) These are centre-bounds, clamped directly (no
+      // half-view subtraction) — see SDRScreen.onWfPanDelta movable branch.
+      const fs = this.localSampleRate;
+      const vfo = this.status.frequency;
+      const guard = fs * 0.06;
+      return { loHz: vfo - fs / 2 + guard, hiHz: vfo + fs / 2 - guard, movable: true };
+    }
+    return { loHz: this.minHz, hiHz: this.maxHz, movable: false }; // full HF range
   }
 
   /** Update internal state only — used when native already sent the tune (e.g. lock screen skip). */

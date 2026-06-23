@@ -43,10 +43,17 @@ export class UberSDRAdapter implements SDRBackend {
     this.cb = callbacks;
     // Local hardware tunes far beyond UberSDR's HF 30 MHz cap.
     this.caps = local ? LOCAL_CAPS : UBERSDR_CAPS;
-    if (local) { this.client.minHz = LOCAL_CAPS.freqRange[0]; this.client.maxHz = LOCAL_CAPS.freqRange[1]; }
+    if (local) {
+      this.client.minHz = LOCAL_CAPS.freqRange[0];
+      this.client.maxHz = LOCAL_CAPS.freqRange[1];
+      this.client.isLocal = true;
+    }
   }
 
   get uuid(): string { return this.client.uuid; }
+
+  /** Local hardware: thread the live device sample rate for panSpan()'s Fs window. */
+  setLocalSampleRate(hz: number) { this.client.localSampleRate = hz; }
 
   /** Receiver location from /status.json (same shape as OWRX: receiver.gps.lon)
    *  → ITU region, for custom/default UberSDR hosts not carrying a directory lon. */
@@ -63,8 +70,10 @@ export class UberSDRAdapter implements SDRBackend {
   connect(frequency?: number, mode?: SDRMode) { this.fetchReceiverLon(); return this.client.connect(frequency, mode); }
   destroy()                                   { this.client.destroy(); }
 
-  tune(frequency: number, mode?: SDRMode)          { this.client.tune(frequency, mode); }
+  tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) { this.client.tune(frequency, mode, opts); }
   syncFrequency(frequency: number, mode?: SDRMode) { this.client.syncFrequency(frequency, mode); }
+  setFollowMode(follow: boolean) { this.client.setFollowMode(follow); }
+  panSpan() { return this.client.panSpan(); }
   setMode(mode: SDRMode)                           { this.client.setMode(mode); }
   setBandwidth(low: number, high: number)          { this.client.setBandwidth(low, high); }
 

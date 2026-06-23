@@ -65,6 +65,7 @@ import {
   useDerivedValue,
   withTiming,
   Easing,
+  runOnJS,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { getColorLUT } from '../assets/colormapUtils';
@@ -185,6 +186,17 @@ export interface WaterfallViewProps {
   // ~30fps, so ProMotion can drop the panel rate and save battery.
   smoothTune?:     boolean;
   lastInteractAt?: React.MutableRefObject<number>;
+
+  // VFO-lock panning (BRIEF-vfo-lock-and-panning §5.6). All default off so
+  // existing callers are byte-for-byte unchanged.
+  /** Boundary walls — the inclusive Hz edges the view may pan across. */
+  panLoHz?:   number;
+  panHiHz?:   number;
+  showWalls?: boolean;            // true only when unlocked
+  /** Secondary RF-centre marker (local IQ only; fed in Phase 2). */
+  centerMarkerHz?:    number;
+  showCenterMarker?:  boolean;
+  centerMarkerColor?: string;     // default desaturated cyan
 }
 
 // ── GPU waterfall shader (the v1 WebGL design, ported to SkSL) ───────────────
@@ -260,6 +272,8 @@ function WaterfallView({
   frameRate = '20fps', needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
   bgImageUrl = null, bgOpacity = 0, stationId = null,
   smoothTune = true, lastInteractAt,
+  panLoHz, panHiHz, showWalls = false,
+  centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0',
 }: WaterfallViewProps) {
 
   // ── Vertical layout ─────────────────────────────────────────────────────────
@@ -286,6 +300,10 @@ function WaterfallView({
   // touch; inside it the slide is boosted to native rate, outside it drops to
   // the selected fps and the spectrum tween smooths the trace at ~30fps.
   const SMOOTH_TUNE_TAIL_MS = 1000;
+
+  // Pan sensitivity: how far the view travels per finger-pixel. 1.0 = 1:1.
+  // Bumped slightly so the drag feels lighter (the 1:1 version felt heavy/treacly).
+  const PAN_GAIN = 1.5;
   const SPEC_TWEEN_MS       = 33;
 
   // ── Signal processor (owns all dB→index maths) ──────────────────────────────
@@ -757,6 +775,28 @@ function WaterfallView({
     return { nX, loXc: Math.max(0, loX), hiXc: Math.min(width, hiX), loX, hiX, scale, scaleQ };
   }, [bwHz, tuneHz, filterLow, filterHigh, hzToX, pxPerHz, width]);
 
+  // ── VFO-lock boundary walls + RF-centre marker (BRIEF §5.6) ─────────────────
+  // Geometry only; rendered on the spectrum/needle canvas via hzToX so it tracks
+  // the live view. Default off → existing callers see nothing.
+  const wallOverlay = useMemo(() => {
+    if (!showWalls || !(bwHz > 0)) return null;
+    const out: { loX: number | null; hiX: number | null } = { loX: null, hiX: null };
+    if (typeof panLoHz === 'number') { const x = hzToX(panLoHz); if (x >= 0 && x <= width) out.loX = x; }
+    if (typeof panHiHz === 'number') { const x = hzToX(panHiHz); if (x >= 0 && x <= width) out.hiX = x; }
+    return (out.loX === null && out.hiX === null) ? null : out;
+  }, [showWalls, panLoHz, panHiHz, hzToX, width, bwHz]);
+
+  // RF-centre marker — thin dashed line drawn as short segments (no new Skia
+  // imports); only meaningful on local IQ once Phase 2 feeds centerMarkerHz.
+  const centerMarker = useMemo(() => {
+    if (!showCenterMarker || typeof centerMarkerHz !== 'number' || !(bwHz > 0)) return null;
+    const x = hzToX(centerMarkerHz);
+    if (x < 0 || x > width) return null;
+    const dashes: number[] = [];
+    for (let y = BAND_H; y < height; y += 10) dashes.push(y);  // 6px on / 4px gap
+    return { x, dashes };
+  }, [showCenterMarker, centerMarkerHz, hzToX, width, height, bwHz]);
+
   // ── Skia paints ─────────────────────────────────────────────────────────────
   const peakPaint = useMemo(() => {
     const p = Skia.Paint();
@@ -848,6 +888,10 @@ function WaterfallView({
   const lastPanX = useRef(0);
   const lastPanY = useRef(0);
   const pinchRef = useRef(1);
+  // UI-thread pan state (worklet-accessible) — the pan gesture runs on the UI
+  // thread so a busy/laggy JS thread (heavy incoming data) can't stall it.
+  const panLastXSv   = useSharedValue(0);
+  const panBlockedSv = useSharedValue(false);
 
   // Bottom-edge guard: the gap below the control pill overlaps the home
   // indicator; tuning/panning/zooming that started there fought the system
@@ -864,21 +908,25 @@ function WaterfallView({
       onTapTune?.(Math.round(visStart + (e.x / width) * bwHz));
     }), [bwHz, centerHz, visStart, width, onTapTune, bottomGuard, guardTop]);
 
+  // Pan runs as a WORKLET (UI thread): event delivery + accumulation never wait
+  // on the JS thread, so a laggy connection / heavy data can't make the drag
+  // feel slow. Only the actual pan command hops to JS (runOnJS), where the
+  // client coalesces sends. Drag = pan, always (zoom is pinch-only).
   const panGesture = useMemo(() =>
-    Gesture.Pan().runOnJS(true).minDistance(4)
+    Gesture.Pan().minDistance(4)
       .onStart((e: any) => {
-        lastPanX.current = 0; lastPanY.current = 0;
-        panBlocked.current = bottomGuard > 0 && e.y >= guardTop;
+        'worklet';
+        panLastXSv.value = 0;
+        panBlockedSv.value = bottomGuard > 0 && e.y >= guardTop;
       })
       .onUpdate((e: any) => {
-        if (panBlocked.current) return;
-        const dx = e.translationX - lastPanX.current;
-        const dy = e.translationY - lastPanY.current;
-        lastPanX.current = e.translationX;
-        lastPanY.current = e.translationY;
-        if (Math.abs(dx) >= Math.abs(dy)) onPanDelta?.(-dx);
-        else onZoomDelta?.(dy);
-      }), [onPanDelta, onZoomDelta, bottomGuard, guardTop]);
+        'worklet';
+        if (panBlockedSv.value) return;
+        // PAN_GAIN > 1 makes the waterfall travel further per finger-px (lighter).
+        const dx = (e.translationX - panLastXSv.value) * PAN_GAIN;
+        panLastXSv.value = e.translationX;
+        if (onPanDelta) runOnJS(onPanDelta)(-dx);
+      }), [onPanDelta, bottomGuard, guardTop, PAN_GAIN, panLastXSv, panBlockedSv]);
 
   const pinchGesture = useMemo(() =>
     Gesture.Pinch().runOnJS(true)
@@ -941,6 +989,27 @@ function WaterfallView({
                    width={edgeStrip.w} height={edgeStrip.h} fit="fill" />
       )}
 
+      {/* ── Boundary walls (unlocked pan limits) — solid edge line + a
+             low-alpha frosted fill over the dead zone beyond it ── */}
+      {wallOverlay?.loX != null && (<>
+        <Rect x={0} y={BAND_H} width={wallOverlay.loX} height={height - BAND_H}
+              color="rgba(0,0,0,0.45)" />
+        <Rect x={wallOverlay.loX - 0.75} y={BAND_H} width={1.5} height={height - BAND_H}
+              color="rgba(255,200,80,0.85)" />
+      </>)}
+      {wallOverlay?.hiX != null && (<>
+        <Rect x={wallOverlay.hiX} y={BAND_H} width={width - wallOverlay.hiX} height={height - BAND_H}
+              color="rgba(0,0,0,0.45)" />
+        <Rect x={wallOverlay.hiX - 0.75} y={BAND_H} width={1.5} height={height - BAND_H}
+              color="rgba(255,200,80,0.85)" />
+      </>)}
+
+      {/* ── Secondary RF-centre marker (dashed, subordinate to the needle) ── */}
+      {centerMarker && centerMarker.dashes.map((y, i) => (
+        <Rect key={'cm' + i} x={centerMarker.x - 0.5} y={y} width={1} height={6}
+              color={centerMarkerColor} />
+      ))}
+
       {/* ── LED needle: halo → glow → filament (cached strip) ── */}
       {needle && needleStrip && (
         <SkiaImage image={needleStrip.img} x={needle.nX - needleStrip.halfW} y={0}
@@ -948,7 +1017,8 @@ function WaterfallView({
       )}
 
     </Canvas>
-  ), [width, height, needle, needleStrip, edgeStrip, needleColor, needleFrost]);
+  ), [width, height, needle, needleStrip, edgeStrip, needleColor, needleFrost,
+      wallOverlay, centerMarker, centerMarkerColor]);
 
   // Static overlay (band plan/ticks/dB lines) memoised as ELEMENTS — when the
   // component re-renders for unrelated reasons React reuses the subtree and
@@ -1065,6 +1135,18 @@ function WaterfallView({
             {t.label}
           </Text>
         ))}
+
+        {/* RF-centre marker label — subordinate to the ticks, beside its line */}
+        {centerMarker && (
+          <Text pointerEvents="none"
+                style={[styles.tickLabel, {
+                  fontFamily, color: centerMarkerColor,
+                  left: Math.min(width - 96, centerMarker.x + 3), top: specTop + 3,
+                  width: 96, textAlign: 'left', fontSize: 9,
+                }]}>
+            {'RF CENTRE: ' + fmtHz(centerMarkerHz as number)}
+          </Text>
+        )}
 
         {/* dB axis — amber, left edge of spectrum */}
         {dbLabels.map((d, i) => (

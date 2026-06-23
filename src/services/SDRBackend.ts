@@ -71,9 +71,21 @@ export interface SDRBackend {
    *  (lock-screen card) intact. OWRX/Kiwi only; UberSDR uses pauseSpectrum. */
   disconnectSocket?(): void;
 
-  tune(frequency: number, mode?: SDRMode): void;
+  /** recenter:true forces a one-shot view recentre even when unlocked (discrete
+   *  jumps: freq modal, skip, Siri). Omitted/false = respect the follow flag. */
+  tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }): void;
   /** Adopt an externally-confirmed tune (native audio WS echo) without re-sending. */
   syncFrequency(frequency: number, mode?: SDRMode): void;
+
+  /** Locked (true) = view follows the VFO (today's behaviour). Unlocked = the
+   *  waterfall pans independently and tune() leaves the view where it is. */
+  setFollowMode(follow: boolean): void;
+
+  /** Inclusive Hz range the visible window may pan across with no retune /
+   *  profile change. movable=false → hard wall (band edge, OWRX profile span,
+   *  Kiwi rx range). movable=true → wall can be pushed by retuning (local
+   *  RTL-SDR Fs window). */
+  panSpan(): { loHz: number; hiHz: number; movable: boolean };
   setMode(mode: SDRMode): void;
   setBandwidth(low: number, high: number): void;
 

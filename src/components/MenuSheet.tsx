@@ -34,6 +34,7 @@ import {
 import { type UserBookmark } from '../services/userBookmarks';
 import { APP_VERSION } from '../constants/version';
 import UsbSdrIcon from './UsbSdrIcon';
+import VfoLockIcon from './VfoLockIcon';
 import { tourRef } from './Coachmark';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -135,6 +136,9 @@ export interface MenuSheetProps {
   onMediaSkip?:    (m: 'step' | 'bookmark') => void;
   /** Recentre the spectrum view on the tuned frequency (skin parity). */
   onCentreVfo?:    () => void;
+  /** VFO lock: true = view follows VFO (default). Unlocked = waterfall pans. */
+  vfoLocked?:      boolean;
+  onToggleVfoLock?: () => void;
   /** Hide the controls bar for a full-screen waterfall (chevron restores). */
   onHideControls?: () => void;
   onDispReset?:      () => void;
@@ -364,6 +368,22 @@ function Btn({ label, active, danger, onPress, full, style }: {
   );
 }
 
+// VFO Lock toggle — padlock-over-spectrum glyph + state label. Disabled (dimmed)
+// on local hardware until native panning lands (Phase 2).
+function VfoLockBtn({ locked, disabled, onPress }: {
+  locked: boolean; disabled?: boolean; onPress?: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.btn, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }, disabled && { opacity: 0.4 }]}
+      onPress={disabled ? undefined : onPress} disabled={disabled} hitSlop={4} activeOpacity={0.7}
+    >
+      <VfoLockIcon size={20} locked={locked} />
+      <Text style={[styles.btnText, !locked && { color: '#3ddc84' }]}>{locked ? 'LOCKED' : 'FREE'}</Text>
+    </TouchableOpacity>
+  );
+}
+
 function SubLabel({ label, small }: { label: string; small?: boolean }) {
   return <Text style={[styles.subLabel, small && styles.subLabelSmall]}>{label}</Text>;
 }
@@ -437,7 +457,7 @@ export default function MenuSheet({
   dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam,
   signalMode = 'snr', onSignalMode,
   displayStyle = 'amber', onDisplayStyle,
-  drumMode = 'normal', onDrumMode, onCentreVfo, onHideControls,
+  drumMode = 'normal', onDrumMode, onCentreVfo, vfoLocked = true, onToggleVfoLock, onHideControls,
   mediaSkip = 'step', onMediaSkip,
   onDispReset, onDispSaveServer, onDispSaveGlobal,
   hapticsEnabled = false, onHaptics,
@@ -881,7 +901,7 @@ export default function MenuSheet({
             <BtnRow>
               <Btn label="− ZOOM" onPress={onZoomOut} />
               <Btn label="+ ZOOM" onPress={onZoomIn} />
-              <Btn label="⌖ VFO"  onPress={onCentreVfo} />
+              <VfoLockBtn locked={vfoLocked} onPress={onToggleVfoLock} />
               <Btn label="MIN"    onPress={() => { onDbMin(-130); onDbMax(-40); }} />
               <Btn label="MAX"    onPress={() => { onDbMin(-120); onDbMax(-20); }} />
             </BtnRow>

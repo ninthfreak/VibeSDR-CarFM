@@ -196,6 +196,7 @@ export class OwrxAdapter implements SDRBackend {
   private viewCenter = 0;
   private viewBw = 0;
   private viewInit = false;
+  private followVfo = true;               // VFO lock (true = view follows VFO)
 
   // last full FFT row (full profile span) — re-sliced on local view changes
   private lastRow: Float32Array | null = null;
@@ -949,8 +950,9 @@ export class OwrxAdapter implements SDRBackend {
     if (selName) this.cb.onMetadata?.({ stationName: selName, programmes: this.dabProgrammes, badge: 'RDS' });
   }
 
-  tune(frequency: number, mode?: SDRMode): void {
+  tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }): void {
     if (mode) this.mode = mode;
+    const recenter = this.followVfo || !!opts?.recenter;
     // Retune to a different frequency = a different station/signal → drop the held
     // RDS name / digital-voice caller so the VTS falls back to bookmarks for the
     // new spot (was sticking on the old station's RDS/callsign).
@@ -961,7 +963,7 @@ export class OwrxAdapter implements SDRBackend {
     this.dbg(`tune in=${frequency} off=${Math.round(offset)} half=${half} ${Math.abs(offset) <= half ? 'IN' : 'OUT'}`);
     if (Math.abs(offset) <= half) {
       this.freq = frequency;
-      this.viewCenter = frequency;        // VFO stays centred (UberSDR-like), view follows
+      if (recenter) this.viewCenter = frequency;   // locked: view follows VFO; unlocked: leave the pan
       this.sendDemod();
       if (this.lastRow) this.emitSlice(this.lastRow);
       this.cb.onStatus(this.getStatus());
@@ -986,6 +988,13 @@ export class OwrxAdapter implements SDRBackend {
 
   syncFrequency(frequency: number, mode?: SDRMode): void {
     this.freq = frequency; if (mode) this.mode = mode;
+  }
+
+  setFollowMode(follow: boolean): void { this.followVfo = follow; }
+
+  /** Active profile span — hard walls; pan never auto-switches profile. */
+  panSpan(): { loHz: number; hiHz: number; movable: boolean } {
+    return { loHz: this.caps.freqRange[0], hiHz: this.caps.freqRange[1], movable: false };
   }
 
   /** Per-mode bandwidth-slider caps (per-edge half-width) so the slider is

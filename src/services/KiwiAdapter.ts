@@ -115,6 +115,7 @@ export class KiwiAdapter implements SDRBackend {
   private viewCenter = KIWI_FULL_BW / 2;
   private viewBw = KIWI_FULL_BW;
   private viewInit = false;
+  private followVfo = true;               // VFO lock (true = view follows VFO)
 
   private audioStarted = false;
   private lastDecoderFreq = -1;          // last dial Hz pushed to the FT8 sidecar
@@ -510,14 +511,21 @@ export class KiwiAdapter implements SDRBackend {
   }
 
   // ── SDRBackend surface ───────────────────────────────────────────────────
-  tune(frequency: number, mode?: SDRMode): void {
+  tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }): void {
     this.freq = Math.min(Math.max(frequency, 0), this.rxBw);
     if (mode && mode !== this.mode) { this.setMode(mode); return; }
     this.sendDemod();                     // FULL demod line — bare SET freq is ignored
     // Re-centre the waterfall on the VFO so it stays centred (like UberSDR's
     // server-side zoom). sendZoom() is throttled, so a drum spin won't flood.
-    if (this.viewInit) { this.viewCenter = this.freq; this.sendZoom(); }
+    // Only when locked (followVfo) or a discrete jump forces it (opts.recenter).
+    if (this.viewInit && (this.followVfo || opts?.recenter)) { this.viewCenter = this.freq; this.sendZoom(); }
     else this.cb.onStatus(this.getStatus());
+  }
+
+  setFollowMode(follow: boolean): void { this.followVfo = follow; }
+
+  panSpan(): { loHz: number; hiHz: number; movable: boolean } {
+    return { loHz: 0, hiHz: this.rxBw, movable: false };
   }
 
   syncFrequency(frequency: number, mode?: SDRMode): void {
