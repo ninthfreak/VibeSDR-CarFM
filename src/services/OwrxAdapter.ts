@@ -461,6 +461,30 @@ export class OwrxAdapter implements SDRBackend {
       }
     }
     if ('start_offset_freq' in c && this.cfg.centerFreq) this.freq = this.cfg.centerFreq + c.start_offset_freq;
+
+    // Server/profile preset DSP defaults (mirrors the OWRX web client: a profile
+    // can ship a default squelch and an initial NR level that auto-apply on load —
+    // e.g. a 2 m NFM profile with a −65 dB squelch). We honour them on connect and
+    // every profile switch so the user lands on the owner's intended settings
+    // instead of a stale/off value. The squelch rides out on the sendDemod() below;
+    // NR goes via its own connectionproperties message. The UI sliders are synced
+    // via onServerDspDefaults so they reflect the preset.
+    const dspDefaults: { squelchDb?: number; nrEnabled?: boolean; nrThreshold?: number } = {};
+    if ('initial_squelch_level' in c) {
+      // Integer = preset level (dB); anything else (e.g. null) = squelch off.
+      this.squelchLevel = Number.isInteger(c.initial_squelch_level) ? c.initial_squelch_level : -150;
+      dspDefaults.squelchDb = this.squelchLevel;
+    }
+    if ('initial_nr_level' in c) {
+      const on = Number.isInteger(c.initial_nr_level);
+      const threshold = on ? Math.max(0, Math.round(c.initial_nr_level)) : 0;
+      this.setNr(threshold);
+      dspDefaults.nrEnabled = on;
+      dspDefaults.nrThreshold = threshold;
+    }
+    if (dspDefaults.squelchDb !== undefined || dspDefaults.nrEnabled !== undefined) {
+      this.cb.onServerDspDefaults?.(dspDefaults);
+    }
     // Ensure we have a tuned frequency inside the profile before centring the view.
     if ((this.freq === 0 || Math.abs(this.freq - this.cfg.centerFreq) > this.cfg.sampRate / 2) && this.cfg.centerFreq) {
       this.freq = this.cfg.centerFreq;

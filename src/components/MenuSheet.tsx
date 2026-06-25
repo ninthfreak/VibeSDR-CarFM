@@ -115,6 +115,9 @@ export interface MenuSheetProps {
   serverLabel?:   string | null;
   onOwrxSquelch?: (db: number) => void;
   onOwrxNr?:      (threshold: number) => void;
+  // OWRX server/profile preset DSP defaults — seeds the squelch/NR sliders on
+  // connect + each profile switch (seq forces a re-sync even on an identical value).
+  owrxDspDefaults?: { squelchDb?: number; nrEnabled?: boolean; nrThreshold?: number; seq: number };
 
   // Server DSP
   serverDspEnabled?:   boolean;
@@ -454,7 +457,7 @@ export default function MenuSheet({
   localSquelch = -100, onLocalSquelch,
   localNR = 0, onLocalNR, notchOn = false, onNotch, eibiEnabled = true, onEibiToggle, kiwiSquelch = 0, onKiwiSquelch,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
-  serverLabel = null, onOwrxSquelch, onOwrxNr,
+  serverLabel = null, onOwrxSquelch, onOwrxNr, owrxDspDefaults,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
   dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam,
   signalMode = 'snr', onSignalMode,
@@ -524,6 +527,16 @@ export default function MenuSheet({
   const [dabOpen, setDabOpen] = useState(false);           // OWRX DAB programme dropdown
   const [owrxSql, setOwrxSql] = useState(-150);            // OWRX squelch dB (-150 = off)
   const [owrxNr,  setOwrxNr]  = useState(0);               // OWRX NR threshold dB (0 = off)
+  // Seed the sliders from the server/profile preset (the adapter has already pushed
+  // these to the demod). Keyed on seq so a profile switch re-syncs even when the new
+  // preset equals the old. Fields are independent — a profile may preset only one.
+  useEffect(() => {
+    if (!owrxDspDefaults) return;
+    if (owrxDspDefaults.squelchDb !== undefined) setOwrxSql(owrxDspDefaults.squelchDb);
+    if (owrxDspDefaults.nrThreshold !== undefined) {
+      setOwrxNr(owrxDspDefaults.nrEnabled ? owrxDspDefaults.nrThreshold : 0);
+    }
+  }, [owrxDspDefaults?.seq]);   // eslint-disable-line react-hooks/exhaustive-deps
   const isOwrx = serverType === 'owrx';
   const isKiwi = serverType === 'kiwi';
   // Local hardware: no server-side maps/admin/CW-skimmer/STT (those are network

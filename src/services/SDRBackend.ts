@@ -201,6 +201,13 @@ export interface BackendCallbacks extends SDRCallbacks {
    *  ACARS/ADSB/WSJT…), one formatted line per record. `replace` true = a live
    *  snapshot (ADS-B list) that supersedes the previous block rather than appends. */
   onDecoderText?: (line: string, replace?: boolean) => void;
+  /** OWRX: the server/profile's own preset DSP defaults (config `initial_squelch_level`
+   *  / `initial_nr_level`), pushed on connect and every profile switch. The adapter
+   *  has already applied them to the demod; this just lets the UI sliders reflect the
+   *  server's preset (e.g. an NFM 2 m profile that ships with a −65 dB squelch). A
+   *  field is omitted when the server doesn't preset it. squelchDb −150 = off;
+   *  nrThreshold 0 (with nrEnabled false) = NR off. */
+  onServerDspDefaults?: (d: { squelchDb?: number; nrEnabled?: boolean; nrThreshold?: number }) => void;
 }
 
 export type { SDRStatus, SDRMode, SDRCallbacks };

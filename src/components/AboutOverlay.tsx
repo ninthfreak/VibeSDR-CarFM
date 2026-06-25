@@ -61,6 +61,7 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   { v: 'V5', detail: 'New on-device DSP engine — SDR++ Brown (and FFTW and VOLK) have been REMOVED and replaced with VibeDSP, VibeSDR\'s own clean-room, GPL-free signal-processing engine for Local Hardware and RTL-TCP. It is hand-optimised with ARM NEON SIMD throughout, so it runs noticeably cooler and lighter on the battery — especially on low-end phones and tablets — while matching the old engine. It also brings real improvements: true single-sideband SSB (proper image rejection, not double-sideband), genuine FM stereo with a 19 kHz pilot PLL + RDS, a per-channel audio AGC for SSB/CW, working de-emphasis (50/75 µs), a reliable stereo indicator and a force-mono switch. See What\'s New above.' },
   { v: 'V5.0.1', detail: 'CW fix for Local Hardware (USB RTL-SDR): tuning straight onto a CW signal used to go silent — the beat-note offset and the actual filter width had drifted apart, so the morse was only audible when tuned well off the signal. They\'re now kept in sync, so a signal tuned dead-on gives a clear, audible ~600 Hz tone with readable morse. The mode pill also reads “CW” to match the button.' },
   { v: 'V5.1', detail: 'Unlocked VFO + waterfall panning, and a saved-recordings player. A new VFO Lock toggle (menu) lets you free the waterfall: locked (default) is exactly as before, unlocked lets you drag to pan the band while staying tuned, with a floating “Centre on VFO” button. Gestures are now tap-to-tune, drag-to-pan, pinch-to-zoom, with panning moved onto the UI thread for smoothness on poor connections. On Local Hardware / RTL-TCP the dongle (RF) centre becomes a true second VFO — with the VFO unlocked you can pan the view across the full captured bandwidth at native resolution while a station stays tuned, the dongle locking at the capture edge with an RF-CENTRE marker and hard walls. New Recordings screen lists, plays (with scrub), shares and deletes your recordings in-app — no more recordings stranded in storage. See What\'s New above.' },
+  { v: 'V5.1.1', detail: 'OpenWebRX squelch & noise reduction now follow the server’s presets. If a server owner has set a default squelch level on a profile (e.g. a 2 m NFM profile at −65 dB) — or an initial noise-reduction level — selecting that profile now applies it automatically, with the menu sliders updated to match, instead of staying off or stuck on your previous setting. Matches the OpenWebRX web client’s behaviour.' },
 ];
 
 const FUTURE_PLANS: string[] = [
@@ -68,6 +69,7 @@ const FUTURE_PLANS: string[] = [
 ];
 
 const V5_1_CHANGES: string[] = [
+  'OpenWebRX squelch & noise reduction now honour the server owner’s per-profile presets: pick a profile that ships with a default squelch (e.g. a 2 m NFM profile at −65 dB) or an initial NR level and it’s applied automatically, with the menu sliders updated to match — instead of staying off or stuck on your last setting (new in 5.1.1)',
   'Waterfall panning is back, opt-in: a new VFO Lock toggle in the menu. Locked (the default) keeps the VFO centred exactly as before; unlock it and you can drag the waterfall to look around the band while staying tuned, with a floating “Centre on VFO” button to snap back',
   'Full waterfall gestures: tap to tune, drag left/right to pan, pinch to zoom — panning now runs on the UI thread so it stays smooth even on a busy/laggy connection',
   'Local Hardware / RTL-TCP get a true second VFO for the dongle (RF) centre: with the VFO unlocked you can pan the view right across the captured bandwidth at full resolution while a station stays tuned — the dongle centre locks at the edge and the RF-CENTRE marker slides off as you scroll, with solid walls at the capture limits',
@@ -191,7 +193,7 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
             <Text style={styles.link}>Visit my UberSDR instance: stuey3d.tunnel.ubersdr.org</Text>
           </TouchableOpacity>
 
-          <Text style={styles.section}>WHAT'S NEW IN V5.1</Text>
+          <Text style={styles.section}>WHAT'S NEW IN V5.1.1</Text>
           {V5_1_CHANGES.map((c) => (
             <View key={c} style={styles.bulletRow}>
               <Text style={styles.bulletDot}>•</Text>

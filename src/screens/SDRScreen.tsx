@@ -491,6 +491,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [sdrUsage, setSdrUsage] = useState<Record<string, { name: string; inUse: boolean; activeProfileId?: string }>>({});  // OWRX: per-SDR usage
   const [clientCount, setClientCount] = useState(0);  // OWRX: live user count
   const [serverModes, setServerModes] = useState<BackendMode[]>([]);  // OWRX gated demod list
+  // OWRX: server/profile preset DSP defaults (initial_squelch_level / initial_nr_level)
+  // pushed on connect + every profile switch; seeds the menu's squelch/NR sliders so
+  // they reflect the owner's preset (e.g. an NFM 2 m profile with a fixed squelch).
+  const [owrxDspDefaults, setOwrxDspDefaults] =
+    useState<{ squelchDb?: number; nrEnabled?: boolean; nrThreshold?: number; seq: number }>({ seq: 0 });
   // Live RDS (FM) / DAB station metadata (OWRX). liveStationRef mirrors the name
   // for the VTS resolver (reads in a debounced callback, avoids stale closures).
   const [dabProgrammes, setDabProgrammes] = useState<DabProgramme[]>([]);  // OWRX DAB ensemble
@@ -1761,6 +1766,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (!own && !chatMutedRef.current && !chatOpenRef.current) setChatUnread(true);
       },
       onModes:      (list) => { if (!destroyed.current) setServerModes(list); },
+      onServerDspDefaults: (d) => {
+        // Adapter already applied these to the demod; bump seq so the menu re-syncs
+        // its sliders even when the new profile presets the same value as before.
+        if (!destroyed.current) setOwrxDspDefaults((p) => ({ ...d, seq: p.seq + 1 }));
+      },
       onBookmarks:  (list) => {
         // OWRX server bookmarks/dial markers (over the WS) → same path as
         // UberSDR's fetched bookmarks: VTS station readout + search bar.
@@ -3486,6 +3496,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         serverLabel={serverLabel}
         onOwrxSquelch={(db) => client.current?.setSquelch?.(db)}
         onOwrxNr={(th) => client.current?.setNr?.(th)}
+        owrxDspDefaults={owrxDspDefaults}
         onAbout={() => { setMenuOpen(false); setAboutOpen(true); }}
         onRecordings={() => { setMenuOpen(false); setRecordingsOpen(true); }}
       />
