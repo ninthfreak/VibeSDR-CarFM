@@ -4,6 +4,7 @@ import CoreLocation
 import MediaPlayer
 import UIKit
 import AppIntents
+import Network
 
 // Classic RCT bridge module — accessible via NativeModules.VibePowerModule.
 // Owns the audio WebSocket natively so audio survives JS suspension (background).
@@ -107,6 +108,21 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   private var wsTask:       URLSessionWebSocketTask?
   private var wsSession:    URLSession?
+  // ── Native audio WebSocket transport ────────────────────────────────────
+  // iOS 27 beta regressed Foundation's URLSessionWebSocketTask for this stream:
+  // the task reports `.running` but stops delivering frames (server keeps
+  // streaming at the right bitrate — confirmed) → audio dies, media card sticks
+  // paused. Only UberSDR hit it (the one path on URLSession; Kiwi/OWRX use the RN
+  // socket). Fix = run the native audio WS on Network.framework (NWConnection +
+  // NWProtocolWebSocket), a lower-level Apple transport that doesn't share the
+  // regression, while staying off the JS thread so background audio survives.
+  // Toggle kept so the proven iOS-26 URLSession path can be restored in one line
+  // until NWConnection is device-confirmed on both 26 and 27.
+  private static let useNWConnectionAudioWs = true
+  private var wsConn:  NWConnection?
+  private var wsReady = false
+  private var wsGen   = 0   // generation — ignore callbacks from a superseded socket
+  private let wsQueue = DispatchQueue(label: "com.vibesdr.ws", qos: .userInteractive)
   // Set on every WS (re)open; the first received packet triggers a tune
   // re-assert so the server session always matches app state — sends during
   // the handshake window can be lost, which left the session on the URL's
@@ -310,13 +326,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // stream. Only the native Opus engine (startAudioEngine) is the watchdog's.
     guard isRunning, !externalAudio, !dataSaverDisconnected else { return }  // data saver owns the closed WS
     let stale  = Date().timeIntervalSince(lastPacketAt)
-    let wsDead = (wsTask?.state != .running)
+    // Packet staleness stays the PRIMARY zombie detector — the regression is
+    // "state says alive, frames stop", so wsReady/.running is only a secondary cue.
+    let wsDead = Self.useNWConnectionAudioWs ? !wsReady : (wsTask?.state != .running)
     guard stale > staleAfter || wsDead else { return }
     NSLog("[VibePowerModule] watchdog: stale=%.1fs wsDead=%d — reviving audio WS",
           stale, wsDead ? 1 : 0)
     lastPacketAt = Date() // debounce — one revive attempt per window
-    wsTask?.cancel(with: .goingAway, reason: nil)
-    wsTask = nil
+    closeAudioWs()
     if let engine = audioEngine, !engine.isRunning {
       try? AVAudioSession.sharedInstance().setActive(true)
       try? engine.start()
@@ -419,10 +436,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
    *  set_dsp_params, get_dsp_filters, set_audio_gate, set_squelch — these
    *  are AUDIO-WS message types; the spectrum WS doesn't know them). */
   @objc func sendAudioCommand(_ json: String) {
-    guard let task = wsTask, task.state == .running else { return }
-    task.send(.string(json)) { err in
-      if let err { NSLog("[VibePowerModule] audio cmd send error: %@", err.localizedDescription) }
-    }
+    sendWsText(json)
   }
 
   /** audioQ-only. Applies NB → NR/NR2 to the mono packet-rate feed. */
@@ -557,7 +571,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     guard !dataSaverDisconnected else { return }
     dataSaverDisconnected = true
     healthTimer?.invalidate(); healthTimer = nil
-    wsTask?.cancel(with: .goingAway, reason: nil); wsTask = nil; wsSession = nil
+    closeAudioWs()
     isRunning = false
     playerNode?.stop(); audioEngine?.stop()   // releases the audio route (AirPods)
     // KEEP the media session + remote commands so ▶ reconnects; show it as a
@@ -594,7 +608,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   @objc func getDebugInfoSync() -> String {
     let eng = audioEngine != nil ? "yes" : "no"
     let dec = opusDecoder != nil ? "yes" : "no"
-    let ws  = wsTask?.state == .running ? "open" : "closed"
+    let ws  = (Self.useNWConnectionAudioWs ? wsReady : (wsTask?.state == .running)) ? "open" : "closed"
     return "run=\(isRunning) pkts=\(packetCount) eng=\(eng) dec=\(dec) sr=\(decoderSampleRate) ws=\(ws) rec=\(recArmed)"
   }
 
@@ -725,11 +739,157 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   // MARK: - Native WebSocket
 
+  /// Open the native audio WS via whichever transport the toggle selects.
   private func openAudioWs(baseUrl: String, frequency: Int, mode: String, uuid: String) {
+    if Self.useNWConnectionAudioWs {
+      openAudioWsNW(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid)
+    } else {
+      openAudioWsURLSession(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid)
+    }
+  }
+
+  /// Tear down whichever transport is live (both calls are no-ops if nil).
+  private func closeAudioWs() {
+    wsTask?.cancel(with: .goingAway, reason: nil); wsTask = nil; wsSession = nil
+    wsConn?.cancel(); wsConn = nil; wsReady = false
+  }
+
+  // ── Shared per-packet handling (identical semantics for both transports) ──
+  // Returns true if the socket was cycled (sr-flip) so the caller stops re-arming
+  // the now-superseded receive loop.
+  private func onAudioData(_ data: Data) -> Bool {
+    packetCount += 1
+    lastPacketAt = Date()
+    if wsNeedsTuneAssert {
+      wsNeedsTuneAssert = false
+      sendWsJson(["type": "tune", "frequency": currentFreq, "mode": currentMode])
+    }
+    // Header sample-rate flip → server's per-WS opus encoder is now mismatched
+    // (see wsBaseSr note) — cycle the socket for a fresh encoder. 3-packet
+    // confirmation + 4s cooldown so stragglers around the flip can't storm.
+    if data.count > 21 {
+      let b = [UInt8](data.prefix(12))
+      let sr = Int32(b[8]) | Int32(b[9]) << 8 | Int32(b[10]) << 16 | Int32(b[11]) << 24
+      if sr >= 8000 && sr <= 96000 {
+        if wsBaseSr == 0 {
+          wsBaseSr = sr
+        } else if sr != wsBaseSr {
+          srFlipCount += 1
+          if srFlipCount >= 3, Date().timeIntervalSince(lastSrCycleAt) > 4 {
+            NSLog("[VibePowerModule] sample rate %d→%d — cycling WS for a fresh server encoder", wsBaseSr, sr)
+            lastSrCycleAt = Date()
+            closeAudioWs()                  // bumps to no live socket
+            openAudioWs(baseUrl: currentBase, frequency: currentFreq,
+                        mode: currentMode, uuid: currentUuid)  // NW: bumps wsGen
+            return true                     // new receive loop owns the socket now
+          }
+        } else {
+          srFlipCount = 0
+        }
+      }
+    }
+    if packetCount <= 3 {
+      NSLog("[VibePowerModule] ws pkt#%d len=%d", packetCount, data.count)
+    }
+    // Recording must keep decoding through mutes (file taps the converter feed);
+    // playback gating happens after conversion.
+    if !isMuted || recArmed {
+      audioQ.async { self.handlePacket(data) }
+    }
+    return false
+  }
+
+  // ── Transport A: Network.framework (iOS 27-safe, default) ────────────────
+  private func openAudioWsNW(baseUrl: String, frequency: Int, mode: String, uuid: String) {
     guard let url = audioWsURL(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid) else {
       NSLog("[VibePowerModule] bad WS URL from base: %@", baseUrl); return
     }
-    NSLog("[VibePowerModule] opening audio WS: %@", url.absoluteString)
+    NSLog("[VibePowerModule] opening audio WS (NWConnection): %@", url.absoluteString)
+    wsNeedsTuneAssert = true
+    wsBaseSr = 0
+    srFlipCount = 0
+    wsReady = false
+    wsGen &+= 1
+    let gen = wsGen
+
+    let secure = (url.scheme == "wss")
+    let params: NWParameters = secure ? .tls : .tcp   // tunnel cert valid → default trust
+    let wsOpts = NWProtocolWebSocket.Options()
+    wsOpts.autoReplyPing = true                        // answer server pings natively
+    params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)
+
+    let conn = NWConnection(to: .url(url), using: params)
+    wsConn = conn
+    conn.stateUpdateHandler = { [weak self] state in
+      guard let self, self.isRunning, self.wsGen == gen else { return }
+      switch state {
+      case .ready:
+        self.wsReady = true
+        NSLog("[VibePowerModule] audio WS ready")
+        self.wsReceive(conn, gen: gen)
+      case .waiting(let err):
+        // Path not satisfiable yet (e.g. just after airplane-mode off). NWConnection
+        // auto-retries toward .ready; don't reconnect here — the watchdog covers a
+        // stuck wait via packet staleness.
+        NSLog("[VibePowerModule] audio WS waiting: %@", "\(err)")
+      case .failed(let err):
+        self.wsReady = false
+        NSLog("[VibePowerModule] audio WS failed: %@ — reconnecting in 2s", "\(err)")
+        self.scheduleAudioWsReconnect(gen: gen)
+      case .cancelled:
+        self.wsReady = false
+      default:
+        break
+      }
+    }
+    conn.start(queue: wsQueue)
+  }
+
+  private func wsReceive(_ conn: NWConnection, gen: Int) {
+    conn.receiveMessage { [weak self] (data, context, _, error) in
+      guard let self, self.isRunning, self.wsGen == gen, self.wsConn === conn else { return }
+      if let error {
+        NSLog("[VibePowerModule] audio WS receive error: %@ — reconnecting", "\(error)")
+        self.scheduleAudioWsReconnect(gen: gen); return
+      }
+      let op = (context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
+                as? NWProtocolWebSocket.Metadata)?.opcode
+      switch op {
+      case .binary:
+        if let data, self.onAudioData(data) { return }  // cycled → superseded loop
+        if self.wsGen != gen { return }
+      case .text:
+        if let data {
+          self.sendEvent(withName: "VibeWsText",
+                         body: ["text": String(decoding: data, as: UTF8.self)])
+        }
+      case .close:
+        NSLog("[VibePowerModule] audio WS closed by peer — reconnecting")
+        self.scheduleAudioWsReconnect(gen: gen); return
+      default:
+        break   // ping/pong auto-handled; continuation frames coalesced
+      }
+      self.wsReceive(conn, gen: gen)   // re-arm
+    }
+  }
+
+  /// Idempotent 2s reconnect (a receive error, .failed and a peer .close can all
+  /// route here; the wsGen guard makes it fire at most once per generation).
+  private func scheduleAudioWsReconnect(gen: Int) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+      guard let self, self.isRunning, self.wsGen == gen else { return }  // superseded → drop
+      // SAME uuid — decoders + spectrum WS are keyed to it server-side.
+      self.openAudioWs(baseUrl: self.currentBase, frequency: self.currentFreq,
+                       mode: self.currentMode, uuid: self.currentUuid)
+    }
+  }
+
+  // ── Transport B: URLSessionWebSocketTask (legacy, iOS 26 path) ───────────
+  private func openAudioWsURLSession(baseUrl: String, frequency: Int, mode: String, uuid: String) {
+    guard let url = audioWsURL(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid) else {
+      NSLog("[VibePowerModule] bad WS URL from base: %@", baseUrl); return
+    }
+    NSLog("[VibePowerModule] opening audio WS (URLSession): %@", url.absoluteString)
     let session = URLSession(configuration: .default)
     wsSession = session
     let task = session.webSocketTask(with: url)
@@ -738,7 +898,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     wsBaseSr = 0
     srFlipCount = 0
     task.resume()
-    receiveLoop(task: task)
+    receiveLoopURLSession(task: task)
   }
 
   private func audioWsURL(baseUrl: String, frequency: Int, mode: String, uuid: String) -> URL? {
@@ -754,68 +914,27 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     return URL(string: s + path)
   }
 
-  private func receiveLoop(task: URLSessionWebSocketTask) {
+  private func receiveLoopURLSession(task: URLSessionWebSocketTask) {
     task.receive { [weak self] result in
       guard let self, self.isRunning, self.wsTask === task else { return }
       switch result {
       case .success(let msg):
         switch msg {
         case .data(let data):
-          self.packetCount += 1
-          self.lastPacketAt = Date()
-          if self.wsNeedsTuneAssert {
-            self.wsNeedsTuneAssert = false
-            self.sendWsJson(["type": "tune",
-                             "frequency": self.currentFreq, "mode": self.currentMode])
-          }
-          // Header sample-rate flip → server's per-WS opus encoder is now
-          // mismatched (see wsBaseSr note) — cycle the socket for a fresh
-          // encoder. 3-packet confirmation + 4s cooldown so buffered
-          // stragglers around the flip can't cause a reconnect storm.
-          if data.count > 21 {
-            let b = [UInt8](data.prefix(12))
-            let sr = Int32(b[8]) | Int32(b[9]) << 8 | Int32(b[10]) << 16 | Int32(b[11]) << 24
-            if sr >= 8000 && sr <= 96000 {
-              if self.wsBaseSr == 0 {
-                self.wsBaseSr = sr
-              } else if sr != self.wsBaseSr {
-                self.srFlipCount += 1
-                if self.srFlipCount >= 3,
-                   Date().timeIntervalSince(self.lastSrCycleAt) > 4 {
-                  NSLog("[VibePowerModule] sample rate %d→%d — cycling WS for a fresh server encoder", self.wsBaseSr, sr)
-                  self.lastSrCycleAt = Date()
-                  task.cancel(with: .goingAway, reason: nil)
-                  self.wsTask = nil
-                  self.openAudioWs(baseUrl: self.currentBase, frequency: self.currentFreq,
-                                   mode: self.currentMode, uuid: self.currentUuid)
-                  return  // new receive loop owns the socket now
-                }
-              } else {
-                self.srFlipCount = 0
-              }
-            }
-          }
-          if self.packetCount <= 3 {
-            NSLog("[VibePowerModule] ws pkt#%d len=%d", self.packetCount, data.count)
-          }
-          // Recording must keep decoding through mutes (file taps the
-          // converter feed); playback gating happens after conversion.
-          if !self.isMuted || self.recArmed {
-            self.audioQ.async { self.handlePacket(data) }
-          }
+          if self.onAudioData(data) { return }   // cycled → new receive loop owns
         case .string(let text):
           // dsp_filters / dsp_status / dsp_error etc. — JS owns the server-NR
           // UI, so forward every text message up as an event.
           self.sendEvent(withName: "VibeWsText", body: ["text": text])
         @unknown default: break
         }
-        self.receiveLoop(task: task)
+        self.receiveLoopURLSession(task: task)
 
       case .failure(let err):
         NSLog("[VibePowerModule] ws error: %@ — reconnecting in 2s", err.localizedDescription)
         guard self.isRunning else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-          guard self.isRunning else { return }
+          guard self.isRunning, !Self.useNWConnectionAudioWs else { return }
           // MUST reconnect with the SAME session uuid — audio extensions
           // (decoders) and the spectrum WS are keyed to it server-side. A
           // fresh UUID here silently orphans them ("no active audio session").
@@ -830,13 +949,29 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
   }
 
+  /// Transport-agnostic text send (tune asserts, DSP commands). No-op unless the
+  /// active socket is connected.
+  private func sendWsText(_ text: String) {
+    if Self.useNWConnectionAudioWs {
+      guard let conn = wsConn, wsReady, let data = text.data(using: .utf8) else { return }
+      let md  = NWProtocolWebSocket.Metadata(opcode: .text)
+      let ctx = NWConnection.ContentContext(identifier: "send", metadata: [md])
+      conn.send(content: data, contentContext: ctx, isComplete: true,
+                completion: .contentProcessed { err in
+                  if let err { NSLog("[VibePowerModule] ws send error: %@", "\(err)") }
+                })
+    } else {
+      guard let task = wsTask, task.state == .running else { return }
+      task.send(.string(text)) { err in
+        if let err { NSLog("[VibePowerModule] ws send error: %@", err.localizedDescription) }
+      }
+    }
+  }
+
   private func sendWsJson(_ obj: [String: Any]) {
-    guard let task = wsTask, task.state == .running else { return }
     guard let data = try? JSONSerialization.data(withJSONObject: obj),
           let str  = String(data: data, encoding: .utf8) else { return }
-    task.send(.string(str)) { err in
-      if let err { NSLog("[VibePowerModule] ws send error: %@", err.localizedDescription) }
-    }
+    sendWsText(str)
   }
 
   // MARK: - Engine
@@ -850,9 +985,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     externalPauseMode = "release"
     healthTimer?.invalidate()
     healthTimer = nil
-    wsTask?.cancel(with: .goingAway, reason: nil)
-    wsTask    = nil
-    wsSession = nil
+    closeAudioWs()
     destroyDecoder()
     recArmed = false
     audioQ.async { [weak self] in
@@ -1078,8 +1211,44 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     return outBuf.frameLength > 0 ? outBuf : nil
   }
 
+  // Last time ensureRendering() forced a session/engine/player recovery — debounce
+  // so a burst of buffers can't thrash setActive.
+  private var lastRenderKick: TimeInterval = 0
+
+  /** Make sure the player is ACTUALLY rendering before we schedule real audio.
+   *  UberSDR opens its WS ~1s AFTER startEngine, so startEngine's play() runs on
+   *  an empty player; on iOS 27 a play()-before-any-buffer leaves the node idle
+   *  and it never re-engages when buffers finally arrive (UberSDR-only: OWRX/Kiwi
+   *  push PCM immediately so they never hit the gap). The system audio session can
+   *  also wedge (observed nominal sample rate 0) and survive an app force-quit —
+   *  only a full session rebuild (a phone call, or Kiwi warming it first) cured it.
+   *  This applies that rebuild proactively the moment we have a buffer to play. */
+  private func ensureRendering() {
+    guard isRunning else { return }
+    let engineDown = !(audioEngine?.isRunning ?? false)
+    let playerDown = !(playerNode?.isPlaying ?? false)
+    guard engineDown || playerDown else { return }
+    let now = ProcessInfo.processInfo.systemUptime
+    guard now - lastRenderKick > 2 else { return }   // one rebuild per 2s
+    lastRenderKick = now
+    NSLog("[VibePowerModule] ensureRendering: engineDown=%d playerDown=%d — rebuilding session",
+          engineDown, playerDown)
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.isRunning else { return }
+      let s = AVAudioSession.sharedInstance()
+      // Deactivate→reactivate clears a wedged session (sample-rate 0) that a bare
+      // setActive(true) won't — this is what the phone-call teardown did.
+      try? s.setActive(false, options: .notifyOthersOnDeactivation)
+      try? s.setCategory(.playback, mode: .default)
+      try? s.setActive(true)
+      if !(self.audioEngine?.isRunning ?? false) { try? self.audioEngine?.start() }
+      if !(self.playerNode?.isPlaying ?? false) { self.playerNode?.play() }
+    }
+  }
+
   private func scheduleOut(_ buf: AVAudioPCMBuffer) {
     guard let player = playerNode, let fmt = audioFormat else { return }
+    ensureRendering()
     // Auto notch (network backends): adaptive line enhancer per channel, applied
     // on the final 48 kHz feed. Runs on audioQ (single-threaded), so the filter
     // state is safe. Local/RTL-TCP never enable it here (shim already notched).
