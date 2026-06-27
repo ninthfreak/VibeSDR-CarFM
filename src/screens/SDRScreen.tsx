@@ -486,6 +486,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [connTimedOut, setConnTimedOut] = useState(false); // initial connect never completed
   const connLostTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const appActiveRef  = useRef(true);   // false while backgrounded — gates connLost
+  // Returning from the background: the spectrum was deliberately paused, so the
+  // link reads 0 for a moment while the waterfall re-subscribes. Show a calm
+  // "reinitialising" notice instead of the alarming "connection lost" one, and
+  // only fall back to the real disconnect popup if it doesn't recover in time.
+  const [reinit, setReinit] = useState(false);
+  const reinitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resumingRef = useRef(false);   // true during the post-background reinit window
+  // Audio came back fine but the spectrum/waterfall never re-subscribed — give
+  // the user a way out (reconnect / instance list) instead of a stuck notice.
+  const [specFailed, setSpecFailed] = useState(false);
   const [profiles, setProfiles]   = useState<ProfileInfo[]>([]);  // OWRX only
   const [activeProfileId, setActiveProfileId] = useState<string | undefined>(undefined);
   const [sdrUsage, setSdrUsage] = useState<Record<string, { name: string; inUse: boolean; activeProfileId?: string }>>({});  // OWRX: per-SDR usage
@@ -845,6 +855,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   // audio-stream floor offset (madpsy/ka9q_ubersdr#77) so it's honest 0–50 dB,
   // NOT the buggy 30–80 dB UberSDR shows. null until the first reading arrives.
   const audioSnrRef = useRef<number | null>(null);
+  // Last time an audio packet was heard (VibeSignal fires ~5×/s while audio
+  // flows). Used to tell a slow spectrum re-subscribe (audio still alive → keep
+  // the calm "reinitialising" notice) from a genuine drop (audio dead too).
+  const lastAudioAtRef = useRef(0);
   // OWRX reports a real channel S-meter (dBm) over the control WS — the
   // demodulator's own level reading, zoom-independent like UberSDR's SNR. We
   // store the latest value and let it drive the absolute (S-meter/dBFS) meter
@@ -1601,6 +1615,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // audio-stream floor offset so the meter reads honest dB.
     const subSig = emitter.addListener('VibeSignal', (e: { snr: number }) => {
       audioSnrRef.current = e.snr - 30;
+      lastAudioAtRef.current = Date.now();
     });
     // Native ⏮⏭ defer to JS. Bookmark mode jumps the station list; step mode
     // (used by OWRX/Kiwi, whose tuning lives in JS) snaps by the tune step.
@@ -1707,7 +1722,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     destroyed.current = false;
     const c = createBackend(route.params.serverType ?? 'ubersdr', baseUrl, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
-      onConnect:    () => { if (!destroyed.current) { setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } } },
+      onConnect:    () => { if (!destroyed.current) { setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
       onServerLost: () => {
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio
@@ -1735,15 +1750,26 @@ export default function SDRScreen({ route, navigation }: Props) {
         // drop, and cancel the instant the link recovers. OWRX/Kiwi use serverLost.
         if ((route.params.serverType ?? 'ubersdr') === 'ubersdr' && appActiveRef.current) {
           if (q === 0) {
-            if (!connLostTimer.current) {
+            // While reinitialising after a resume the "reinit" notice owns the
+            // screen — don't arm the connection-lost popup underneath it.
+            if (!connLostTimer.current && !resumingRef.current) {
               connLostTimer.current = setTimeout(() => {
                 connLostTimer.current = null;
                 if (!destroyed.current) setConnLost(true);
               }, 3000);
             }
           } else {
+            // Frames flowing again — recovery. Clear both notices.
             if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; }
             setConnLost(false);
+            if (resumingRef.current) {
+              resumingRef.current = false;
+              if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; }
+              setReinit(false);
+            }
+            // Spectrum recovered on its own (e.g. user hit reconnect) → drop the
+            // failure popup too.
+            setSpecFailed(false);
           }
         }
       },
@@ -2010,6 +2036,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         appActiveRef.current = false;
         if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; }
         setConnLost(false);
+        resumingRef.current = false;
+        if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; }
+        setReinit(false);
+        setSpecFailed(false);
         client.current?.pauseSpectrum();
       } else if (dataSaverOffRef.current) {
         appActiveRef.current = true;
@@ -2035,11 +2065,54 @@ export default function SDRScreen({ route, navigation }: Props) {
         // where you had to back out to instances and reconnect). connect() uses
         // the same audio-first-then-1s ordering; mirror it here.
         appActiveRef.current = true;
+        // Surface the calm "waterfall reinitialising" notice while the spectrum
+        // re-subscribes. If frames return (onLink q>0) it clears itself. After a
+        // long background the spectrum can take a while to come back even though
+        // audio never stopped — so the watchdog only escalates to the real
+        // "Connection lost" popup when AUDIO is also dead; while audio still
+        // flows it keeps the calm notice and re-checks.
+        if ((route.params.serverType ?? 'ubersdr') === 'ubersdr') {
+          resumingRef.current = true;
+          setReinit(true);
+          setSpecFailed(false);
+          const resumeStartedAt = Date.now();
+          const armReinitWatchdog = () => {
+            if (reinitTimer.current) clearTimeout(reinitTimer.current);
+            reinitTimer.current = setTimeout(() => {
+              reinitTimer.current = null;
+              if (destroyed.current || !resumingRef.current) return;
+              if (Date.now() - lastAudioAtRef.current < 2000) {
+                // Audio is still flowing → we're connected. If the spectrum has
+                // been silent for a long while it has genuinely failed to
+                // re-subscribe — surface an escape (reconnect / instance list)
+                // rather than spin the calm notice forever. Otherwise keep
+                // waiting; it's just slow to come back.
+                if (Date.now() - resumeStartedAt > 10000) {
+                  resumingRef.current = false;
+                  setReinit(false);
+                  setSpecFailed(true);
+                  return;
+                }
+                armReinitWatchdog();
+                return;
+              }
+              // Audio is dead too → genuine disconnect.
+              resumingRef.current = false;
+              setReinit(false);
+              setConnLost(true);
+            }, 3500);
+          };
+          armReinitWatchdog();
+        }
         if (resumeTimer) clearTimeout(resumeTimer);
         resumeTimer = setTimeout(() => { resumeTimer = null; client.current?.resumeSpectrum(); }, 1200);
       }
     });
-    return () => { if (resumeTimer) clearTimeout(resumeTimer); sub.remove(); };
+    return () => {
+      if (resumeTimer) clearTimeout(resumeTimer);
+      if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; }
+      sub.remove();
+    };
   }, []);
 
   // ── Smooth tune / idle saver ──────────────────────────────────────────────
@@ -2212,6 +2285,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [zoomAnchorHz]);
   const onZoomIn  = useCallback(() => zoomBy(0.5), [zoomBy]);
   const onZoomOut = useCallback(() => zoomBy(2),   [zoomBy]);
+  // Zoom extremes — each adapter clamps internally (UberSDR to its 6 kHz max-zoom
+  // floor / full-span cap, OWRX/Kiwi to their own limits), so a tiny bandwidth =
+  // full zoom in and a huge one = full span out.
+  const onZoomMax = useCallback(() => {       // MAX = zoom all the way in
+    const c = client.current; if (!c) return;
+    const v = c.getView(); if (!v.centerHz) return;
+    c.zoom(zoomAnchorHz(v), 1);
+  }, [zoomAnchorHz]);
+  const onZoomMin = useCallback(() => {       // MIN = full span out
+    const c = client.current; if (!c) return;
+    const v = c.getView(); if (!v.centerHz) return;
+    c.zoom(zoomAnchorHz(v), Number.MAX_SAFE_INTEGER);
+  }, [zoomAnchorHz]);
 
   // Toggle: SET DEFAULT when this instance isn't the default, CLEAR when it is
   const [isDefault, setIsDefault] = useState(false);
@@ -3221,7 +3307,45 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Connection to an UberSDR instance dropped (e.g. it rebooted). It auto-
           reconnects, but show a clear popup so the app doesn't just look frozen. */}
-      {connLost && !dataSaverOff && !serverLost && !serverBusy && (
+      {/* Returning from the background — the spectrum was paused, so show a calm
+          reinitialising notice while the waterfall re-subscribes (no buttons; it
+          clears itself on the first frame, or escalates to "Connection lost"). */}
+      {reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
+        <View style={styles.serverLostWrap} pointerEvents="box-none">
+          <View style={styles.serverLostCard}>
+            <Text style={styles.serverLostTitle}>Reinitialising</Text>
+            <Text style={styles.serverLostBody}>
+              Resuming the waterfall and spectrum — this takes a second or two…
+            </Text>
+            <ActivityIndicator color="#ffb84d" style={{ marginBottom: 4 }} />
+          </View>
+        </View>
+      )}
+
+      {/* Audio resumed fine but the waterfall/spectrum never re-subscribed after
+          a background — give the user an escape (the rest of the app is alive). */}
+      {specFailed && !reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
+        <View style={styles.serverLostWrap} pointerEvents="box-none">
+          <View style={styles.serverLostCard}>
+            <Text style={styles.serverLostTitle}>Waterfall didn’t resume</Text>
+            <Text style={styles.serverLostBody}>
+              Audio is still running, but the waterfall and spectrum didn’t restart. Reconnect to restore them, or pick another instance.
+            </Text>
+            <View style={styles.serverLostBtnRow}>
+              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
+                onPress={() => navigation.goBack()} activeOpacity={0.85}>
+                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.serverLostBtn}
+                onPress={() => { setSpecFailed(false); fullReconnect(); }} activeOpacity={0.85}>
+                <Text style={styles.serverLostBtnText}>RECONNECT</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {connLost && !reinit && !specFailed && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Connection lost</Text>
@@ -3395,6 +3519,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         onNr={onNrMode}
         onZoomIn={onZoomIn}
         onZoomOut={onZoomOut}
+        onZoomMin={onZoomMin}
+        onZoomMax={onZoomMax}
         onSetDefault={onSetDefault}
         isDefaultInstance={isDefault}
         decMode={selDecoder}

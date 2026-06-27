@@ -899,14 +899,23 @@ function WaterfallView({
   const guardTop = height - bottomGuard;          // y at/under which we ignore
   const panBlocked   = useRef(false);
   const pinchBlocked = useRef(false);
+  const tapStartGuarded = useRef(false);          // touch-down began in the home-bar gap
 
   const tapGesture = useMemo(() =>
-    Gesture.Tap().runOnJS(true).maxDuration(300).onEnd((e: any) => {
-      if (!bwHz || !centerHz) return;
-      if (e.y < BAND_H) return; // band strip taps reserved (future: band jump)
-      if (bottomGuard > 0 && e.y >= guardTop) return; // home-bar gap
-      onTapTune?.(Math.round(visStart + (e.x / width) * bwHz));
-    }), [bwHz, centerHz, visStart, width, onTapTune, bottomGuard, guardTop]);
+    Gesture.Tap().runOnJS(true).maxDuration(300)
+      .onBegin((e: any) => {
+        // A home-bar swipe-up STARTS in the guard strip but releases higher up,
+        // so an onEnd-only check let it slip through and retune. Latch the
+        // touch-down position and reject in onEnd.
+        tapStartGuarded.current = bottomGuard > 0 && e.y >= guardTop;
+      })
+      .onEnd((e: any) => {
+        if (!bwHz || !centerHz) return;
+        if (tapStartGuarded.current) return;            // began in home-bar gap
+        if (e.y < BAND_H) return; // band strip taps reserved (future: band jump)
+        if (bottomGuard > 0 && e.y >= guardTop) return; // home-bar gap
+        onTapTune?.(Math.round(visStart + (e.x / width) * bwHz));
+      }), [bwHz, centerHz, visStart, width, onTapTune, bottomGuard, guardTop]);
 
   // Pan runs as a WORKLET (UI thread): event delivery + accumulation never wait
   // on the JS thread, so a laggy connection / heavy data can't make the drag

@@ -64,6 +64,8 @@ export interface MenuSheetProps {
   onNr?:        (mode: 'off'|'nr'|'nr2') => void;
   onZoomIn?:    () => void;
   onZoomOut?:   () => void;
+  onZoomMin?:   () => void;   // full span out
+  onZoomMax?:   () => void;   // full zoom in
   onSetDefault?: () => void;
   isDefaultInstance?: boolean;
   /** Client decoders — skin semantics: toggle start/stop, menu stays open. */
@@ -375,12 +377,12 @@ function Btn({ label, active, danger, onPress, full, style }: {
 
 // VFO Lock toggle — padlock-over-spectrum glyph + state label. Disabled (dimmed)
 // on local hardware until native panning lands (Phase 2).
-function VfoLockBtn({ locked, disabled, onPress }: {
-  locked: boolean; disabled?: boolean; onPress?: () => void;
+function VfoLockBtn({ locked, disabled, onPress, full }: {
+  locked: boolean; disabled?: boolean; onPress?: () => void; full?: boolean;
 }) {
   return (
     <TouchableOpacity
-      style={[styles.btn, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }, disabled && { opacity: 0.4 }]}
+      style={[styles.btn, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }, full && styles.btnFull, disabled && { opacity: 0.4 }]}
       onPress={disabled ? undefined : onPress} disabled={disabled} hitSlop={4} activeOpacity={0.7}
     >
       <VfoLockIcon size={20} locked={locked} />
@@ -475,7 +477,7 @@ export default function MenuSheet({
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
   onClose, onBack, onLocalHardware, isTcp, onAdminLink, onResetSettings, onReplayTour, onDisplaySettings,
   serverVersion = null, onAbout, onRecordings,
-  onZoomIn, onZoomOut, onSetDefault, isDefaultInstance = false,
+  onZoomIn, onZoomOut, onZoomMin, onZoomMax, onSetDefault, isDefaultInstance = false,
   decMode = null, decOn = false, onDecToggle,
   spotsKind = null, onSpotsToggle, onServerMap, onSpotsMap,
   rttySettings, onRttySettings,
@@ -913,12 +915,17 @@ export default function MenuSheet({
 
             {/* ── SPECTRUM / WATERFALL ───────────────────────────── */}
             <SectionLabel label="SPECTRUM / WATERFALL" />
+            {/* Zoom row — flex:1 buttons so they share the width evenly and the
+                MAX button never wraps to its own row (the VFO-lock label width
+                used to push it over). MIN = full span out, MAX = full zoom in. */}
             <BtnRow>
-              <Btn label="− ZOOM" onPress={onZoomOut} />
-              <Btn label="+ ZOOM" onPress={onZoomIn} />
-              <VfoLockBtn locked={vfoLocked} onPress={onToggleVfoLock} />
-              <Btn label="MIN"    onPress={() => { onDbMin(-130); onDbMax(-40); }} />
-              <Btn label="MAX"    onPress={() => { onDbMin(-120); onDbMax(-20); }} />
+              <Btn label="MIN"    onPress={onZoomMin} style={{ flex: 1 }} />
+              <Btn label="− ZOOM" onPress={onZoomOut} style={{ flex: 1 }} />
+              <Btn label="+ ZOOM" onPress={onZoomIn}  style={{ flex: 1 }} />
+              <Btn label="MAX"    onPress={onZoomMax} style={{ flex: 1 }} />
+            </BtnRow>
+            <BtnRow>
+              <VfoLockBtn locked={vfoLocked} onPress={onToggleVfoLock} full />
             </BtnRow>
             <BtnRow>
               <Btn label="☀ DISPLAY SETTINGS" full active={dispSettingsOpen}
