@@ -64,6 +64,7 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   { v: 'V5.1.1', detail: 'OpenWebRX squelch & noise reduction now follow the server’s presets. If a server owner has set a default squelch level on a profile (e.g. a 2 m NFM profile at −65 dB) — or an initial noise-reduction level — selecting that profile now applies it automatically, with the menu sliders updated to match, instead of staying off or stuck on your previous setting. Matches the OpenWebRX web client’s behaviour.' },
   { v: 'V5.1.2', detail: 'iOS 26/27 audio fix. On iOS 27 the audio could go silent after a while even though the connection looked fine — the underlying audio socket was stalling (reporting alive while frames quietly stopped). The native audio path was moved onto Apple’s Network framework, with a session safety-net that keeps the stream rendering, fixing the dropouts. iOS-only.' },
   { v: 'V5.1.3', detail: 'Polish + reliability. New first-launch info screen explaining the power-saving behaviour (the waterfall fully freezes in the background by design and takes a moment to resume). Returning from the background now shows a calm “Reinitialising” notice while the waterfall comes back, instead of a misleading “Connection lost” — and if the spectrum genuinely fails to resume while audio keeps playing, you get a clear reconnect / instance-list prompt. Fixed a swipe-up-from-the-home-bar gesture that could nudge the tuning, and fixed the menu’s MIN / MAX zoom buttons (full-out / full-in) which previously did nothing.' },
+  { v: 'V5.1.4', detail: 'KiwiSDR servers don’t support chat, so the Chat button is now greyed out and disabled while you’re connected to a KiwiSDR — the Share button stays available. No other changes.' },
 ];
 
 const FUTURE_PLANS: string[] = [
@@ -71,6 +72,7 @@ const FUTURE_PLANS: string[] = [
 ];
 
 const V5_1_CHANGES: string[] = [
+  'KiwiSDR servers don’t support chat, so the Chat button is now greyed out and disabled while you’re connected to a KiwiSDR instance (the Share button stays available) (new in 5.1.4)',
   'First-launch info screen explaining the power-saving behaviour: switching away fully freezes the waterfall/spectrum to save battery (it resumes in a second or two), and after 30 s on screen they slow down — which you can turn off in the menu. The full background freeze is by design and can’t be disabled (new in 5.1.3)',
   'Returning from the background now shows a calm “Reinitialising” notice while the waterfall comes back, instead of a misleading “Connection lost”. If the spectrum genuinely fails to resume while audio keeps playing, you get a clear prompt to reconnect or pick another instance (new in 5.1.3)',
   'Fixed a swipe-up from the home bar that could nudge the tuning, and fixed the menu’s MIN / MAX zoom buttons (zoom fully out / fully in) which previously did nothing (new in 5.1.3)',
@@ -199,7 +201,7 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
             <Text style={styles.link}>Visit my UberSDR instance: stuey3d.tunnel.ubersdr.org</Text>
           </TouchableOpacity>
 
-          <Text style={styles.section}>WHAT'S NEW IN V5.1.3</Text>
+          <Text style={styles.section}>WHAT'S NEW IN V5.1.4</Text>
           {V5_1_CHANGES.map((c) => (
             <View key={c} style={styles.bulletRow}>
               <Text style={styles.bulletDot}>•</Text>

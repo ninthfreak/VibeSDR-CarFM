@@ -198,6 +198,8 @@ export interface ControlsBarProps {
   chatUnread?:   boolean;
   /** Grey out chat + share (local hardware has no server chat / shareable URL). */
   chatShareDisabled?: boolean;
+  /** Grey out chat only (e.g. KiwiSDR has no chat, but still has a shareable URL). */
+  chatDisabled?: boolean;
 }
 
 // ── Signal bar canvas ─────────────────────────────────────────────────────────
@@ -462,7 +464,7 @@ function useDrumSwipeGuard() {
 
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
-  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled }: any) {
+  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -590,10 +592,10 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
         </Animated.View>
 
         {/* CHAT */}
-        <Animated.View style={[por.btn, { minHeight: BTN_H, borderColor: chatBorderColor, borderWidth: 1, opacity: csDisabled ? 0.4 : 1 }]}>
+        <Animated.View style={[por.btn, { minHeight: BTN_H, borderColor: chatBorderColor, borderWidth: 1, opacity: chatOff ? 0.4 : 1 }]}>
           <TouchableOpacity
             style={{ flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' }}
-            onPress={csDisabled ? undefined : onChat} disabled={csDisabled} activeOpacity={0.75} hitSlop={10}
+            onPress={chatOff ? undefined : onChat} disabled={chatOff} activeOpacity={0.75} hitSlop={10}
           >
             {/* decorative — don't let the Skia view contest the touch */}
             <ChatIcon size={ICON_SZ} color={t.btnText} />
@@ -653,7 +655,7 @@ const por = StyleSheet.create({
 
 function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
-  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled }: any) {
+  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -739,8 +741,8 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
       {/* CHAT + SHARE column */}
       <View style={{ width: BTN_W, gap: GAP }}>
         <TouchableOpacity
-          style={[lnd.lsBtn, { borderColor: chatUnread ? 'rgba(40,140,255,0.85)' : t.btnBorder, opacity: csDisabled ? 0.4 : 1 }]}
-          onPress={csDisabled ? undefined : onChat} disabled={csDisabled} activeOpacity={0.75} hitSlop={10}
+          style={[lnd.lsBtn, { borderColor: chatUnread ? 'rgba(40,140,255,0.85)' : t.btnBorder, opacity: chatOff ? 0.4 : 1 }]}
+          onPress={chatOff ? undefined : onChat} disabled={chatOff} activeOpacity={0.75} hitSlop={10}
         >
           <ChatIcon size={ICON_SZ} color={t.btnText} />
         </TouchableOpacity>
@@ -782,6 +784,7 @@ function ControlsBar({
   freqUnit = 'khz',
   onShare: onShareProp,
   chatShareDisabled = false,
+  chatDisabled = false,
 }: ControlsBarProps) {
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -824,6 +827,7 @@ function ControlsBar({
     onVfoDelta, onBwDelta,
     clock, isRecording, recTime, chatUnread,
     csDisabled: chatShareDisabled,
+    chatOff: chatShareDisabled || chatDisabled,
   };
 
   return (
