@@ -65,6 +65,7 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   { v: 'V5.1.2', detail: 'iOS 26/27 audio fix. On iOS 27 the audio could go silent after a while even though the connection looked fine — the underlying audio socket was stalling (reporting alive while frames quietly stopped). The native audio path was moved onto Apple’s Network framework, with a session safety-net that keeps the stream rendering, fixing the dropouts. iOS-only.' },
   { v: 'V5.1.3', detail: 'Polish + reliability. New first-launch info screen explaining the power-saving behaviour (the waterfall fully freezes in the background by design and takes a moment to resume). Returning from the background now shows a calm “Reinitialising” notice while the waterfall comes back, instead of a misleading “Connection lost” — and if the spectrum genuinely fails to resume while audio keeps playing, you get a clear reconnect / instance-list prompt. Fixed a swipe-up-from-the-home-bar gesture that could nudge the tuning, and fixed the menu’s MIN / MAX zoom buttons (full-out / full-in) which previously did nothing.' },
   { v: 'V5.1.4', detail: 'KiwiSDR servers don’t support chat, so the Chat button is now greyed out and disabled while you’re connected to a KiwiSDR — the Share button stays available. No other changes.' },
+  { v: 'V5.1.5', detail: 'Android layout fix: on phones using the classic three-button navigation bar, the menu’s CLOSE button could sit underneath the system buttons and be hard to tap. The menu now respects the navigation-bar inset so CLOSE always clears it. No effect on gesture-navigation devices. Android-only.' },
 ];
 
 const FUTURE_PLANS: string[] = [
@@ -72,6 +73,7 @@ const FUTURE_PLANS: string[] = [
 ];
 
 const V5_1_CHANGES: string[] = [
+  'Android fix: on phones with the three-button navigation bar, the menu’s CLOSE button could hide behind the system buttons — the menu now clears the navigation-bar inset so CLOSE is always tappable (new in 5.1.5)',
   'KiwiSDR servers don’t support chat, so the Chat button is now greyed out and disabled while you’re connected to a KiwiSDR instance (the Share button stays available) (new in 5.1.4)',
   'First-launch info screen explaining the power-saving behaviour: switching away fully freezes the waterfall/spectrum to save battery (it resumes in a second or two), and after 30 s on screen they slow down — which you can turn off in the menu. The full background freeze is by design and can’t be disabled (new in 5.1.3)',
   'Returning from the background now shows a calm “Reinitialising” notice while the waterfall comes back, instead of a misleading “Connection lost”. If the spectrum genuinely fails to resume while audio keeps playing, you get a clear prompt to reconnect or pick another instance (new in 5.1.3)',

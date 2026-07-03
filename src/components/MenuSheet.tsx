@@ -1725,7 +1725,9 @@ export default function MenuSheet({
             </>)}
           </ScrollView>
 
-          <TouchableOpacity style={styles.closeBtn} onPress={onClose} hitSlop={8}>
+          <TouchableOpacity
+            style={[styles.closeBtn, { marginBottom: sheetInsets.bottom + 12 }]}
+            onPress={onClose} hitSlop={8}>
             <Text style={styles.closeBtnText}>CLOSE  ✕</Text>
           </TouchableOpacity>
         </Animated.View>
