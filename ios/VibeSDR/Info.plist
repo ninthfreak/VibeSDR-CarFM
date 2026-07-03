@@ -28,6 +28,7 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>com.vibesdr.app</string>
+				<string>vibesdr</string>
 			</array>
 		</dict>
 	</array>

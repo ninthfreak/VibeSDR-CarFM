@@ -62,6 +62,7 @@ function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number): nu
 }
 
 const blank = (over: Partial<SDRInstance>): SDRInstance => ({
+  uuid: null,
   name: '', url: '', location: '', callsign: '', users: 0, maxUsers: 0,
   online: true, version: null, latitude: null, longitude: null, countryCode: null,
   distance: null, bestSnr: null, ...over,

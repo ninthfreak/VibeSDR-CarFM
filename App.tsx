@@ -15,6 +15,8 @@ import CrashBoundary        from './src/components/CrashBoundary';
 import { installCrashGuard } from './src/services/crashGuard';
 import { ThemeProvider }    from './src/contexts/ThemeContext';
 import type { ViewMode }    from './src/services/viewMode';
+import type { SDRMode }     from './src/services/UberSDRClient';
+import { useDeepLinks }     from './src/linking/useDeepLinks';
 
 export type RootStackParamList = {
   InstancePicker: undefined;
@@ -39,6 +41,12 @@ export type RootStackParamList = {
     // only stops the shim if this is still the latest session, so a stale screen
     // can't tear down a newer one when switching instances.
     localGen?:       number;
+    // vibesdr:// deep link: connect and optionally apply an initial tune. These
+    // override the persisted last-tune for this instance on first connect only.
+    deepLink?:       boolean;
+    initialFreq?:    number;
+    initialMode?:    SDRMode;
+    initialZoom?:    number;
   };
 };
 
@@ -143,6 +151,10 @@ export default function App() {
     AsyncStorage.setItem(SPLASH_SEEN_KEY, '1').catch(() => {});
     fadeSplash();
   }, [fadeSplash]);
+
+  // vibesdr:// deep links — drain once fonts are loaded and the first-open flag
+  // has resolved (so we don't navigate before the nav container is mounted).
+  useDeepLinks(fontsLoaded && firstOpen !== undefined);
 
   // Hold splash until fonts are ready — prevents flash of Courier New fallback
   if (!fontsLoaded) return null;

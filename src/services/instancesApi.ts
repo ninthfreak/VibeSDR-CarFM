@@ -1,6 +1,7 @@
 import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
 
 export interface SDRInstance {
+  uuid:          string | null;  // collector `id` (UUIDv4) — used for vibesdr:// deep links
   name:          string;
   url:           string;
   location:      string;
@@ -112,6 +113,7 @@ export async function fetchInstances(
     }
 
     return {
+      uuid:      typeof item.id === 'string' && item.id ? item.id : null,
       name:      item.name     || item.callsign || item.host || 'Unknown',
       url:       publicUrl,
       location:  item.location  ?? '',

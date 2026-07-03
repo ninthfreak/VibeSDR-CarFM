@@ -28,6 +28,13 @@
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
+      <!-- vibesdr:// deep links (QR / "Open in VibeSDR" from UberSDR overlay) -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="vibesdr"/>
+      </intent-filter>
     </activity>
     <service android:name=".VibeStreamService" android:foregroundServiceType="mediaPlayback" android:exported="true">
       <intent-filter>

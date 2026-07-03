@@ -39,6 +39,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList }     from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
+import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { localSessionGen } from '../services/localSession';
@@ -1968,6 +1969,16 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (typeof p.mode === 'string' && p.mode in MODE_BANDWIDTHS) m = p.mode as SDRMode;
         } catch {}
       }
+      // A vibesdr:// deep link's freq/mode override the persisted last-tune, but
+      // only on the first connect of this screen (consumed via the ref) so a
+      // reconnect/rotation later doesn't yank the user back to the link's freq.
+      if (!deepLinkTuneApplied.current) {
+        deepLinkTuneApplied.current = true;
+        const df = route.params.initialFreq;
+        const dm = route.params.initialMode;
+        if (typeof df === 'number' && df >= MIN_HZ && df <= MAX_HZ) f = Math.round(df);
+        if (typeof dm === 'string' && dm in MODE_BANDWIDTHS) m = dm as SDRMode;
+      }
       const bw = MODE_BANDWIDTHS[m];
       setStatus((prev: SDRStatus) => ({
         ...prev, frequency: f, mode: m,
@@ -1991,6 +2002,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Persist the tune (debounced — the drum changes frequency rapidly) so the
   // next visit to this instance resumes where you left off.
   const lastTuneLoaded = useRef(false);
+  // One-shot: a deep-link initial tune is applied on the first connect only.
+  const deepLinkTuneApplied = useRef(false);
   // Bypass-password prompt — rate-limited/blocked connections show this
   // directly (the instance password gets around per-IP limits); submitting
   // replaces the screen with a fresh session carrying the password on every
@@ -2581,12 +2594,18 @@ export default function SDRScreen({ route, navigation }: Props) {
       }
     }
     const label = `VibeSDR — ${(status.frequency / 1e3).toFixed(3)} kHz ${status.mode.toUpperCase()}`;
+    // vibesdr:// app link — opens straight into VibeSDR (url-form, so it works
+    // for any remote backend). Skip for Local Hardware / RTL-TCP (localhost).
+    const st = route.params.serverType ?? 'ubersdr';
+    const appLink = route.params.isLocal
+      ? null
+      : buildShareLink({ baseUrl, serverType: st, freq: status.frequency, mode: status.mode });
     try {
       // iOS shares a real URL object (tappable everywhere); Android targets
       // ignore the url field, so embed it in the message text instead
       await Share.share(Platform.OS === 'ios'
-        ? { url, message: label }
-        : { message: `${label}\n${url}` });
+        ? { url, message: appLink ? `${label}\nOpen in VibeSDR: ${appLink}` : label }
+        : { message: appLink ? `${label}\n${url}\nOpen in VibeSDR: ${appLink}` : `${label}\n${url}` });
     } catch {}
   }, [baseUrl, status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh]);
 
