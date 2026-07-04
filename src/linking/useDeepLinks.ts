@@ -18,6 +18,7 @@ import { CommonActions } from '@react-navigation/native';
 import { navigationRef } from '../../App';
 import { getViewMode } from '../services/viewMode';
 import { parseVibeSdrUrl, resolveRequest, type ResolvedTarget } from './DeepLinkHandler';
+import { markDeepLinkActive } from './deepLinkState';
 
 function toast(msg: string) {
   if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.LONG);
@@ -86,6 +87,9 @@ export function useDeepLinks(ready: boolean) {
     if (url === lastUrl.current && now - lastAt.current < 2000) return; // dedup
     lastUrl.current = url;
     lastAt.current  = now;
+    // A deep link now owns this launch — stop the picker auto-connecting to the
+    // user's default instance (which would otherwise stomp the link's target).
+    markDeepLinkActive();
     if (!readyRef.current) { pending.current = url; return; } // queue until ready
     void process(url);
   };

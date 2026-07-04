@@ -39,6 +39,7 @@ import {
   getDefaultInstance,
   setDefaultInstance,
 } from '../services/defaultInstance';
+import { isDeepLinkActive } from '../linking/deepLinkState';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
          TcpFav, getTcpFavs, saveTcpFavs } from '../services/favourites';
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
@@ -157,8 +158,10 @@ export default function InstancePickerScreen({ navigation }: Props) {
       try { const loc = await getUserLocation(); if (!cancelled) userLocRef.current = loc; } catch {}
       if (!cancelled) { setLoading(false); splashBridge.dismiss(); }
 
-      // A default instance still auto-connects straight through.
-      if (!cancelled && dEarly) {
+      // A default instance still auto-connects straight through — unless a
+      // vibesdr:// deep link is driving this launch (it owns the session and
+      // resets us to its target; auto-connecting to the default would stomp it).
+      if (!cancelled && dEarly && !isDeepLinkActive()) {
         navigation.navigate('SDR', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: null });
       }
     }

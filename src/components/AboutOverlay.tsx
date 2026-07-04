@@ -66,7 +66,7 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   { v: 'V5.1.3', detail: 'Polish + reliability. New first-launch info screen explaining the power-saving behaviour (the waterfall fully freezes in the background by design and takes a moment to resume). Returning from the background now shows a calm “Reinitialising” notice while the waterfall comes back, instead of a misleading “Connection lost” — and if the spectrum genuinely fails to resume while audio keeps playing, you get a clear reconnect / instance-list prompt. Fixed a swipe-up-from-the-home-bar gesture that could nudge the tuning, and fixed the menu’s MIN / MAX zoom buttons (full-out / full-in) which previously did nothing.' },
   { v: 'V5.1.4', detail: 'KiwiSDR servers don’t support chat, so the Chat button is now greyed out and disabled while you’re connected to a KiwiSDR — the Share button stays available. No other changes.' },
   { v: 'V5.1.5', detail: 'Android layout fix: on phones using the classic three-button navigation bar, the menu’s CLOSE button could sit underneath the system buttons and be hard to tap. The menu now respects the navigation-bar inset so CLOSE always clears it. No effect on gesture-navigation devices. Android-only.' },
-  { v: 'V5.2.0-beta.1', detail: 'BETA: deep linking. A new vibesdr:// link (and QR code from an UberSDR instance) can open VibeSDR straight onto that instance, optionally at a set frequency and mode. The share button now also includes an “Open in VibeSDR” app link alongside the web link. This is a beta build for testing the link mechanism.' },
+  { v: 'V5.2.0', detail: 'Deep linking (early feature, still being rolled out). A vibesdr:// link — and a QR code from an UberSDR instance — can open VibeSDR straight onto that instance, optionally at a set frequency and mode. The link/QR side is still being built on the UberSDR end, so not every instance offers a link yet. The share button now also includes an “Open in VibeSDR” app link alongside the web link. Opening a link no longer bounces back to your default instance.' },
 ];
 
 const FUTURE_PLANS: string[] = [
@@ -74,6 +74,7 @@ const FUTURE_PLANS: string[] = [
 ];
 
 const V5_1_CHANGES: string[] = [
+  'Deep linking (early feature, still rolling out): a vibesdr:// link or QR code from an UberSDR instance opens VibeSDR straight onto that receiver, optionally at a set frequency and mode. The link/QR side is still being built on the UberSDR end, so not every instance offers a link yet. Sharing a tuned station now also includes an “Open in VibeSDR” app link (new in 5.2.0)',
   'Android fix: on phones with the three-button navigation bar, the menu’s CLOSE button could hide behind the system buttons — the menu now clears the navigation-bar inset so CLOSE is always tappable (new in 5.1.5)',
   'KiwiSDR servers don’t support chat, so the Chat button is now greyed out and disabled while you’re connected to a KiwiSDR instance (the Share button stays available) (new in 5.1.4)',
   'First-launch info screen explaining the power-saving behaviour: switching away fully freezes the waterfall/spectrum to save battery (it resumes in a second or two), and after 30 s on screen they slow down — which you can turn off in the menu. The full background freeze is by design and can’t be disabled (new in 5.1.3)',
@@ -204,7 +205,7 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
             <Text style={styles.link}>Visit my UberSDR instance: stuey3d.tunnel.ubersdr.org</Text>
           </TouchableOpacity>
 
-          <Text style={styles.section}>WHAT'S NEW IN V5.1.4</Text>
+          <Text style={styles.section}>WHAT'S NEW IN V5.2.0</Text>
           {V5_1_CHANGES.map((c) => (
             <View key={c} style={styles.bulletRow}>
               <Text style={styles.bulletDot}>•</Text>
