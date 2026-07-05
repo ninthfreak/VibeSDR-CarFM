@@ -65,8 +65,12 @@ export async function getUserLocation(): Promise<{ lat: number; lon: number } | 
       | { getLocation?: () => Promise<{ lat: number; lon: number } | null> }
       | undefined;
     const res = await mod?.getLocation?.();
+    // Coarsen to ~1 km (2 dp) before it leaves this function — the app only
+    // needs rough distance to sort servers, never a precise fix. This keeps
+    // what we use and transmit to the instance directory "coarse" (matches
+    // the App Store privacy declaration + Android's COARSE_LOCATION request).
     return res && typeof res.lat === 'number' && typeof res.lon === 'number'
-      ? { lat: res.lat, lon: res.lon } : null;
+      ? { lat: Math.round(res.lat * 100) / 100, lon: Math.round(res.lon * 100) / 100 } : null;
   } catch {
     return null;
   }
