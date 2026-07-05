@@ -68,6 +68,7 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   { v: 'V5.1.5', detail: 'Android layout fix: on phones using the classic three-button navigation bar, the menu’s CLOSE button could sit underneath the system buttons and be hard to tap. The menu now respects the navigation-bar inset so CLOSE always clears it. No effect on gesture-navigation devices. Android-only.' },
   { v: 'V5.2.0', detail: 'Deep linking (early feature, still being rolled out). A vibesdr:// link — and a QR code from an UberSDR instance — can open VibeSDR straight onto that instance, optionally at a set frequency and mode. The link/QR side is still being built on the UberSDR end, so not every instance offers a link yet. The share button now also includes an “Open in VibeSDR” app link alongside the web link. Opening a link no longer bounces back to your default instance.' },
   { v: 'V5.2.1', detail: 'Privacy: the optional location used to sort the instance list by distance is now taken and shared at approximate (coarse, ~1 km) accuracy only, instead of a precise fix. Location stays entirely optional and every other feature works without it.' },
+  { v: 'V5.2.2', detail: 'iPad and tablet polish. The signal meter now frames the frequency correctly on tablets (the coloured level showed above and below the readout on phones but not on larger screens), and the on-screen decoders (RTTY, NAVTEX, WEFAX, SSTV, Morse) now work in landscape on tablets, which have the room a phone doesn’t. The HAPTICS toggle is now hidden on devices with no haptic motor (all iPads, and any Android tablet without one) so it’s no longer a dead button.' },
 ];
 
 const FUTURE_PLANS: string[] = [
@@ -75,6 +76,7 @@ const FUTURE_PLANS: string[] = [
 ];
 
 const V5_1_CHANGES: string[] = [
+  'iPad/tablet polish: the signal meter now frames the frequency correctly on tablets, on-screen decoders work in landscape on tablets, and the HAPTICS toggle is hidden on devices with no haptic motor (all iPads) (new in 5.2.2)',
   'Privacy: the optional location used to sort the instance list by distance is now taken and shared at approximate (coarse, ~1 km) accuracy only, never a precise fix. It stays entirely optional (new in 5.2.1)',
   'Deep linking (early feature, still rolling out): a vibesdr:// link or QR code from an UberSDR instance opens VibeSDR straight onto that receiver, optionally at a set frequency and mode. The link/QR side is still being built on the UberSDR end, so not every instance offers a link yet. Sharing a tuned station now also includes an “Open in VibeSDR” app link (new in 5.2.0)',
   'Android fix: on phones with the three-button navigation bar, the menu’s CLOSE button could hide behind the system buttons — the menu now clears the navigation-bar inset so CLOSE is always tappable (new in 5.1.5)',
@@ -207,7 +209,7 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
             <Text style={styles.link}>Visit my UberSDR instance: stuey3d.tunnel.ubersdr.org</Text>
           </TouchableOpacity>
 
-          <Text style={styles.section}>WHAT'S NEW IN V5.2.1</Text>
+          <Text style={styles.section}>WHAT'S NEW IN V5.2.2</Text>
           {V5_1_CHANGES.map((c) => (
             <View key={c} style={styles.bulletRow}>
               <Text style={styles.bulletDot}>•</Text>

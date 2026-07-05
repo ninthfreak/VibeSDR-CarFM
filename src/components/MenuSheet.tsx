@@ -151,6 +151,7 @@ export interface MenuSheetProps {
   onDispSaveGlobal?: () => void;
   hapticsEnabled?: boolean;
   onHaptics?:      (on: boolean) => void;
+  hapticsHardware?: boolean;   // false → device has no haptic motor, hide toggle
 
   vtsName?:    string;
   vtsFreq?:    number;
@@ -467,7 +468,7 @@ export default function MenuSheet({
   drumMode = 'normal', onDrumMode, onCentreVfo, vfoLocked = true, onToggleVfoLock, onHideControls,
   mediaSkip = 'step', onMediaSkip,
   onDispReset, onDispSaveServer, onDispSaveGlobal,
-  hapticsEnabled = false, onHaptics,
+  hapticsEnabled = false, onHaptics, hapticsHardware = true,
   vtsName = '', vtsFreq,
   onVtsNext, onVtsPrev,
   profiles = [], activeProfileId, sdrUsage = {}, clientCount = 0, onSelectProfile, serverType = 'ubersdr',
@@ -1623,7 +1624,9 @@ export default function MenuSheet({
               <BtnRow>
                 <Btn label="NORMAL"    active={drumMode==='normal'}  onPress={() => onDrumMode?.('normal')} />
                 <Btn label="PRECISE"   active={drumMode==='precise'} onPress={() => onDrumMode?.('precise')} />
-                <Btn label="✦ HAPTICS" active={hapticsEnabled}       onPress={() => onHaptics?.(!hapticsEnabled)} />
+                {hapticsHardware && (
+                  <Btn label="✦ HAPTICS" active={hapticsEnabled}     onPress={() => onHaptics?.(!hapticsEnabled)} />
+                )}
               </BtnRow>
             </View>
             {/* Lock-screen / car-stereo skip buttons: tune by step, or jump

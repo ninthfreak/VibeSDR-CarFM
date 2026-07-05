@@ -215,6 +215,27 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    /** Whether this device actually has a vibrator/haptic motor. Some Android
+     *  tablets have none, so JS hides the HAPTICS toggle when this is false. */
+    @ReactMethod
+    fun hasVibrator(promise: Promise) {
+        try {
+            val has = if (android.os.Build.VERSION.SDK_INT >= 31) {
+                val vm = reactContext.getSystemService(android.content.Context.VIBRATOR_MANAGER_SERVICE)
+                    as android.os.VibratorManager
+                vm.defaultVibrator.hasVibrator()
+            } else {
+                @Suppress("DEPRECATION")
+                val v = reactContext.getSystemService(android.content.Context.VIBRATOR_SERVICE)
+                    as android.os.Vibrator
+                v.hasVibrator()
+            }
+            promise.resolve(has)
+        } catch (e: Exception) {
+            promise.resolve(true) // assume present on error — safer than hiding a working toggle
+        }
+    }
+
     // Client NR/NR2/NB — VibeDSP.kt engines in the service decode path
     @ReactMethod
     fun setNrMode(mode: String) {

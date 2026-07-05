@@ -2211,6 +2211,22 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_haptics', on ? '1' : '0').catch(() => {});
   }, []);
 
+  // Whether this device has a haptic motor at all — hide the HAPTICS toggle if
+  // not (it's a dead button otherwise). iPads have no Taptic Engine; on Android
+  // we ask the native Vibrator (some tablets genuinely have no motor).
+  const [hapticsHardware, setHapticsHardware] = useState(true);
+  useEffect(() => {
+    if (Platform.OS === 'ios') {
+      setHapticsHardware(!isTablet);   // no iPad has a Taptic Engine
+      return;
+    }
+    const mod = NativeModules.VibePowerModule as
+      | { hasVibrator?: () => Promise<boolean> } | undefined;
+    mod?.hasVibrator?.()
+      .then((has) => setHapticsHardware(has !== false))
+      .catch(() => setHapticsHardware(true));
+  }, [isTablet]);
+
   // ── VFO drum ──────────────────────────────────────────────────────────────
   // Skin-parity step tuning (vSendDelta + vDown from Scalable_Mobile_UI v6.3.1):
   //   - pending accumulates in Hz: px × step / pxPerStep (velocity-adaptive)
@@ -3620,7 +3636,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         idleSlow={idleSlow}             onIdleSlow={onIdleSlow}
         drumMode={drumMode}             onDrumMode={onDrumMode}
         mediaSkip={mediaSkip}           onMediaSkip={onMediaSkip}
-        hapticsEnabled={hapticsEnabled} onHaptics={onHaptics}
+        hapticsEnabled={hapticsEnabled} onHaptics={onHaptics} hapticsHardware={hapticsHardware}
         onCentreVfo={onCentreVfo}       onHideControls={onHideControls}
         vfoLocked={vfoLocked}           onToggleVfoLock={onToggleVfoLock}
         onDispReset={onDispReset}       onDispSaveServer={onDispSaveServer}
