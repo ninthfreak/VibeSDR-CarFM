@@ -216,7 +216,13 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private var audioFocusRequest: AudioFocusRequest? = null
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
         when (change) {
-            AudioManager.AUDIOFOCUS_LOSS,
+            // Permanent loss = another media app took over for good. Relinquish
+            // fully like iOS does — stop the engine and tear down the foreground
+            // service + Now Playing notification so VibeSDR doesn't linger in the
+            // notification shade looking "still running" (GitHub #6).
+            AudioManager.AUDIOFOCUS_LOSS ->
+                mainHandler.post { if (running) { stopEngine(); stopSelf() } }
+            // Transient loss (a call, a notification ping) = just mute; we resume.
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK ->
                 mainHandler.post { if (running && !muted && !dataSaverDisconnected) setMutedNative(true) }
