@@ -121,6 +121,26 @@ VibeSDR is sideloaded (not on the Play Store), and Android Auto only trusts Play
 If it doesn't show up, it's almost always step 3–4 (Unknown sources). If it appears but the lists are empty, open the app and connect to a server, then reconnect Android Auto.
 - Tested down to 4-inch screens (iPhone SE in Display Zoom mode)
 
+## Installing on iPhone (signing the `.ipa` with Xcode)
+
+VibeSDR isn't on the App Store, so the `.ipa` from the [latest release](https://github.com/Stuey3D/VibeSDR/releases/latest) has to be **re-signed with your own Apple ID** before an iPhone will run it. A free Apple ID works — no paid Developer Programme membership is required, but a free signing certificate **expires after 7 days**, so you'll need to re-sign roughly weekly (a paid account lasts a year).
+
+You'll need a **Mac with Xcode** installed.
+
+1. Download the **`.ipa`** from the [latest release](https://github.com/Stuey3D/VibeSDR/releases/latest) to your Mac.
+2. Open **Xcode → Settings → Accounts**, click **+**, and sign in with your Apple ID (this is your free signing account).
+3. Rename the file from `VibeSDR.ipa` to `VibeSDR.zip` and unzip it — you'll get a **`Payload`** folder containing **`VibeSDR.app`**.
+4. Open **Xcode → Window → Devices and Simulators**, plug in your iPhone via USB, and **Trust** the computer when prompted.
+
+Because the `.ipa` is signed with a different team, the simplest reliable route to re-sign it with your own Apple ID is one of the free tools built for exactly this:
+
+- **[Sideloadly](https://sideloadly.io)** (Mac or Windows) — drag the `.ipa` in, enter your Apple ID, plug in the phone, and click **Start**. It re-signs with your account and installs in one step. **Recommended.**
+- **[AltStore](https://altstore.io)** — installs a companion app on your phone that re-signs automatically over Wi-Fi, so you don't have to re-do it manually every 7 days.
+
+**Pure-Xcode route** (no extra tools): open your own copy of the project in Xcode, select your Apple ID under **Signing & Capabilities → Team**, then **Product → Archive → Distribute App → Development** and install to the connected device via **Devices and Simulators → Install App**. This requires the source project, not just the `.ipa`.
+
+After installing, go to **iPhone Settings → General → VPN & Device Management**, tap your Apple ID under *Developer App*, and **Trust** it — otherwise the app won't launch.
+
 ---
 
 ## Building
