@@ -1,0 +1,35 @@
+diff --git a/node_modules/expo-modules-jsi/apple/.generated/module.modulemap b/node_modules/expo-modules-jsi/apple/.generated/module.modulemap
+new file mode 100644
+index 0000000..39de301
+--- /dev/null
++++ b/node_modules/expo-modules-jsi/apple/.generated/module.modulemap
+@@ -0,0 +1,6 @@
++module jsi {
++  umbrella header "/Users/stuey3d/VibeSDR/ios/Pods/Headers/Public/React-jsi/jsi/jsi.h"
++
++  export *
++  module * { export * }
++}
+diff --git a/node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/JavaScriptRuntime.swift b/node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/JavaScriptRuntime.swift
+index 58aea85..ea85f7d 100644
+--- a/node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/JavaScriptRuntime.swift
++++ b/node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/JavaScriptRuntime.swift
+@@ -217,8 +217,16 @@ open class JavaScriptRuntime: Equatable, Identifiable, @unchecked Sendable {
+       (@convention(c) (UnsafeMutableRawPointer, UnsafePointer<CChar>, UnsafeMutableRawPointer) -> Void)? = setter
+     // Pass a null setter to C++ when the Swift setter is nil so that JS assignment
+     // raises a `jsi::JSError` directly, without crossing the Swift boundary.
+-    let callbacks = expo.HostObjectCallbacks(
+-      context, getter, set == nil ? nil : setterPointer, propertyNamesGetter, deallocate)
++    // NOTE: Xcode 27's Swift compiler rejects forming a C function pointer from a
++    // conditional expression, so branch instead of using a ternary for `setter`.
++    let callbacks: expo.HostObjectCallbacks
++    if set == nil {
++      callbacks = expo.HostObjectCallbacks(
++        context, getter, nil, propertyNamesGetter, deallocate)
++    } else {
++      callbacks = expo.HostObjectCallbacks(
++        context, getter, setterPointer, propertyNamesGetter, deallocate)
++    }
+     let hostObject = expo.HostObject.makeObject(pointee, consume callbacks)
+ 
+     return JavaScriptObject(self, hostObject)

@@ -52,6 +52,15 @@ A mobile-first SDR receiver app for iOS and Android — and far more than a sing
 | ![Android Auto Now Playing](screenshots/13-android-auto-nowplaying.jpeg) | ![Android Auto Band Plan](screenshots/14-android-auto-bandplan.jpeg) | ![Android Auto Bookmarks](screenshots/15-android-auto-bookmarks.jpeg) |
 | *Android Auto — Now Playing, 648 kHz AM* | *Android Auto — browsable Band Plan (tap to tune)* | *Android Auto — browsable Bookmarks* |
 
+### On iPad
+
+VibeSDR runs full-screen on iPad, with the on-screen decoders available in landscape (which a phone doesn't have the room for).
+
+| | | |
+|---|---|---|
+| ![iPad decoder in landscape](screenshots/16-ipad-decoder-landscape.jpeg) | ![iPad waterfall landscape](screenshots/17-ipad-waterfall-landscape.jpeg) | ![iPad portrait](screenshots/18-ipad-portrait.jpeg) |
+| *iPad — RTTY decoder in landscape* | *iPad — full-screen waterfall (landscape)* | *iPad — portrait* |
+
 ---
 
 ## Features

@@ -2,6 +2,7 @@ internal import Expo
 import React
 import ReactAppDependencyProvider
 import AVFoundation
+import UIKit
 
 @main
 class AppDelegate: ExpoAppDelegate {
@@ -26,34 +27,53 @@ class AppDelegate: ExpoAppDelegate {
     reactNativeDelegate = delegate
     reactNativeFactory = factory
 
-#if os(iOS) || os(tvOS)
-    window = UIWindow(frame: UIScreen.main.bounds)
-    factory.startReactNative(
-      withModuleName: "main",
-      in: window,
-      launchOptions: launchOptions)
-#endif
-
+    // NOTE: iOS 26+ requires the UIScene lifecycle. The React Native root view is
+    // now created in SceneDelegate.scene(_:willConnectTo:) instead of here — the
+    // window is owned by the scene. See UIApplicationSceneManifest in Info.plist.
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
+}
 
-  // Linking API
-  public override func application(
-    _ app: UIApplication,
-    open url: URL,
-    options: [UIApplication.OpenURLOptionsKey: Any] = [:]
-  ) -> Bool {
-    return super.application(app, open: url, options: options) || RCTLinkingManager.application(app, open: url, options: options)
+// MARK: - Scene lifecycle (iOS 26+ mandatory)
+
+class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+  var window: UIWindow?
+
+  func scene(
+    _ scene: UIScene,
+    willConnectTo session: UISceneSession,
+    options connectionOptions: UIScene.ConnectionOptions
+  ) {
+    guard let windowScene = scene as? UIWindowScene else { return }
+    guard let appDelegate = UIApplication.shared.delegate as? AppDelegate,
+          let factory = appDelegate.reactNativeFactory else { return }
+
+    let window = UIWindow(windowScene: windowScene)
+    // Reuses RN's high-level start path, but hosts the root view in the scene's
+    // window (sets rootViewController + makeKeyAndVisible internally).
+    factory.startReactNative(withModuleName: "main", in: window, launchOptions: nil)
+    self.window = window
+    appDelegate.window = window
+
+    // Cold-start deep link / universal link (vibesdr:// and https). With the
+    // scene lifecycle these arrive here, not in AppDelegate.
+    if let url = connectionOptions.urlContexts.first?.url {
+      RCTLinkingManager.application(UIApplication.shared, open: url, options: [:])
+    }
+    for activity in connectionOptions.userActivities {
+      _ = RCTLinkingManager.application(UIApplication.shared, continue: activity, restorationHandler: { _ in })
+    }
   }
 
-  // Universal Links
-  public override func application(
-    _ application: UIApplication,
-    continue userActivity: NSUserActivity,
-    restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void
-  ) -> Bool {
-    let result = RCTLinkingManager.application(application, continue: userActivity, restorationHandler: restorationHandler)
-    return super.application(application, continue: userActivity, restorationHandler: restorationHandler) || result
+  // Warm deep link (app already running).
+  func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+    guard let url = URLContexts.first?.url else { return }
+    RCTLinkingManager.application(UIApplication.shared, open: url, options: [:])
+  }
+
+  // Warm universal link.
+  func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+    _ = RCTLinkingManager.application(UIApplication.shared, continue: userActivity, restorationHandler: { _ in })
   }
 }
 
