@@ -12,6 +12,8 @@ A mobile-first SDR receiver app for iOS and Android — and far more than a sing
 
 **Latest release: [v5.0.1](https://github.com/Stuey3D/VibeSDR/releases/latest)** — iOS `.ipa` and Android `.apk`.
 
+> **📱 iOS App Store approval is in progress.** Apple review is taking a while at the moment, but a **TestFlight link is coming soon** so you'll be able to install on iPhone without re-signing anything. In the meantime, iPhone users can sign and sideload the `.ipa` — see [Installing on iPhone](#installing-on-iphone-signing-the-ipa-with-xcode) below.
+
 ---
 
 ## Screenshots
