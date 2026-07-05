@@ -310,7 +310,7 @@ function StereoIcon({ size, color }: { size: number; color: string }) {
 function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActive,
   onFreqTap, onModeTap, freqFontSize, freqWidth, unitFontSize, modeFontSize,
   modeLs, snrWidth, pillPadH, pillPadV, modePadH, modePadV, gap, bus, meterMode,
-  tight = false, fmStereo = false,
+  tight = false, fmStereo = false, wide = false,
 }: any) {
   const { theme: t } = useTheme();
   // Skin parity (lsvSnrDisp): plain "NNdb", not a synthetic S-meter reading.
@@ -512,7 +512,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
   });
 
   // All dp values go through s.r() — port of applyUiScale()'s r() function
-  const SIG_H      = s.r(40); // match the landscape bar height (skin look)
+  const SIG_H      = s.r(s.isTablet ? 62 : 40); // taller on tablet so the meter shows above/below the tall two-line pill
   const DRUM_H     = s.r(60);
   const ROW_GAP    = s.r(7);
   const COL_GAP    = s.r(8);
@@ -662,7 +662,10 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
   const [sigW, setSigW] = useState(0);
 
   const DRUM_H    = s.r(44);   // landscape drum height from skin BASE_LSV_DH=44
-  const SIG_H     = s.r(40);  // was 48 — frame dwarfed the small pill
+  // Tablet: the two-line pill (mode + SNR) is tall enough to fill a 40dp frame,
+  // hiding the meter fill above/below the freq box — give it more height so the
+  // meter shows top and bottom like it does on phones.
+  const SIG_H     = s.r(s.isTablet ? 62 : 40);  // was 48 — frame dwarfed the small pill
   const GAP       = s.r(6);
   const BTN_W     = s.r(56);
   const { ref: drumRowRef, onLayout: guardDrums } = useDrumSwipeGuard();

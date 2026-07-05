@@ -512,6 +512,9 @@ export default function MenuSheet({
   const { width: winW, height: winH } = useWindowDimensions();
   const sheetInsets = useSafeAreaInsets();
   const isLandscape = winW > winH;
+  // Tablets (iPad) have the vertical room for the decoder panel + menu section
+  // in landscape; phones don't, so client decoders stay portrait-only there.
+  const isTablet = Math.min(winW, winH) >= 768;
   const sheetH = Math.min(winH * 0.88, 700);
   // Inner dropdown scroll lists (search results, profile/DAB/colormap) carry a
   // fixed maxHeight that fits portrait but overflows the much shorter landscape
@@ -1541,7 +1544,7 @@ export default function MenuSheet({
                    OWRX decodes server-side (results stream back), so the
                    client-side decoders + UberSDR spot feeds are hidden for it —
                    replaced by the OPENWEBRX map/files/admin below (Phase 1). ── */}
-            {!isLandscape && serverType !== 'owrx' && (<>
+            {(!isLandscape || isTablet) && serverType !== 'owrx' && (<>
             <SectionLabel label="CLIENT DECODERS" />
             <BtnRow>
               {(['rtty','navtex','wefax','sstv','morse'] as const).filter(k => !(isLocal && k === 'morse')).map(k => (

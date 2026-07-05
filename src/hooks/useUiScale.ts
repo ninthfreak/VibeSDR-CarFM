@@ -38,6 +38,7 @@ export interface UiScale {
   isLandscape: boolean;
   isSmall:     boolean;   // W <= 415
   isTiny:      boolean;   // W <= 330
+  isTablet:    boolean;   // shortest side >= 768 (iPad)
   W:           number;
   H:           number;
   drumW:       number;    // scaled BASE_LSV_DW (140)
@@ -62,11 +63,12 @@ export function useUiScale(): UiScale {
 
     const isSmall = isPortrait && W <= 415;
     const isTiny  = W <= 330;
+    const isTablet = Math.min(W, H) >= 768;
 
     const drumW  = r(140);
     const drumH  = isPortrait ? r(60) : r(44);
     const pxStep = r(22);
 
-    return { scale, r, f, isPortrait, isLandscape, isSmall, isTiny, W, H, drumW, drumH, pxStep };
+    return { scale, r, f, isPortrait, isLandscape, isSmall, isTiny, isTablet, W, H, drumW, drumH, pxStep };
   }, [W, H]);
 }

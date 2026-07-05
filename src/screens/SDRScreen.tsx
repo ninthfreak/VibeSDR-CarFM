@@ -445,6 +445,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { width: screenW, height: screenH } = Dimensions.get('window');
   const isLandscape = screenW > screenH;
+  // Tablets (iPad) have room for the decoder panel in landscape; phones don't.
+  const isTablet = Math.min(screenW, screenH) >= 768;
 
   // ── Spec ratio (portrait + landscape stored separately) ───────────────────
   const [specRatioPortrait,  setSpecRatioPortrait]  = useState(0.28);
@@ -3225,10 +3227,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         onChange={(p, l) => { setSpecRatioPortrait(p); setSpecRatioLandscape(l); }}
         onClose={() => setRatioOverlayOpen(false)}
       />
-      {/* Decoder panel needs vertical space landscape doesn't have (skin
+      {/* Decoder panel needs vertical space phone landscape doesn't have (skin
           parity: panel is portrait-only) — decoder keeps running, banner
-          tells the user where it went. */}
-      {isLandscape && (activeDecoder !== null || spotsKind !== null) ? (
+          tells the user where it went. Tablets (iPad) have the room, so the
+          panel is allowed in landscape there. */}
+      {isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null) ? (
         <View style={[styles.rotateBanner, { bottom: pillBottom + 8 }]}
               pointerEvents="none">
           <Text style={styles.rotateBannerText}>
@@ -3258,7 +3261,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {chatRotateHint && (
         <View style={[styles.rotateBanner, {
                 bottom: pillBottom + 8 +
-                  (isLandscape && (activeDecoder !== null || spotsKind !== null) ? 42 : 0),
+                  (isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null) ? 42 : 0),
               }]}
               pointerEvents="none">
           <Text style={styles.rotateBannerText}>
