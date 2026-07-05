@@ -35,6 +35,13 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="vibesdr"/>
       </intent-filter>
+      <!-- Offer "Open with VibeSDR" when an RTL-SDR dongle is plugged in. The
+           device_filter lists the RTL2832U VID/PIDs VibeSDR supports. -->
+      <intent-filter>
+        <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"/>
+      </intent-filter>
+      <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                 android:resource="@xml/device_filter"/>
     </activity>
     <service android:name=".VibeStreamService" android:foregroundServiceType="mediaPlayback" android:exported="true">
       <intent-filter>

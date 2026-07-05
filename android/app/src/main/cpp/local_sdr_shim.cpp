@@ -803,6 +803,9 @@ struct LocalSdrShim::Impl {
     void retune(double freq) {
         audioFreq.store(freq);
         double limit = sampleRate / 2.0 - 50000.0;
+        bool willRecenter = std::fabs(freq - rtlCenter.load()) > limit;
+        LOGI("DIAG retune freq=%.0f rtlCenter=%.0f dist=%.0f limit=%.0f recenter=%d",
+             freq, rtlCenter.load(), std::fabs(freq - rtlCenter.load()), limit, willRecenter ? 1 : 0);
         if (std::fabs(freq - rtlCenter.load()) > limit) {
             // The VFO has tuned outside the captured window — recentre the dongle
             // (and the display) on it so we don't end up showing dead air. (For a
@@ -896,11 +899,15 @@ struct LocalSdrShim::Impl {
                 // RTL only when the dongle actually has to move (no per-pan clicks).
                 viewCenter.store(v);
                 double dongle = dongleForView(v);
-                if (std::fabs(dongle - rtlCenter.load()) > 1.0) {
+                bool moved = std::fabs(dongle - rtlCenter.load()) > 1.0;
+                LOGI("DIAG zoom view=%.0f dongleForView=%.0f rtlCenter=%.0f moved=%d audioFreq=%.0f vfoOffset=%.0f",
+                     v, dongle, rtlCenter.load(), moved ? 1 : 0, audioFreq.load(), vfoOffsetNow());
+                if (moved) {
                     rtlCenter.store(dongle);
                     tuneHw(dongle);
                     std::lock_guard<std::recursive_mutex> lk(modeMtx);
                     rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+                    LOGI("DIAG zoom after-move rtlCenter=%.0f vfoOffset=%.0f", rtlCenter.load(), vfoOffsetNow());
                 }
             }
             double bb;
