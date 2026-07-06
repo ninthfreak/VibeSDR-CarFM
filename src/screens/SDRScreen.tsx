@@ -440,7 +440,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           "This device restricts VibeSDR when it isn't on screen, which breaks up audio in the background.\n\n" +
           "To fix it:\n" +
           "1. Tap “Open Settings” below.\n" +
-          "2. Open “App battery usage” (or “Battery”) and choose “Unrestricted” — the exact wording varies by phone (may be “Allow background usage” / “Don't optimise”).\n" +
+          "2. Open “App battery usage” (or “Battery”) and turn ON “Allow background usage” (some phones instead call it “Unrestricted” / “Don't optimise”).\n" +
           "3. Then fully close VibeSDR (swipe it away from the recent-apps list) and open it again so the change takes effect.",
           [
             { text: 'Not now', style: 'cancel' },
