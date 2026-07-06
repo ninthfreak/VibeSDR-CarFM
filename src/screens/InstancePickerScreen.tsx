@@ -109,8 +109,15 @@ export default function InstancePickerScreen({ navigation }: Props) {
       target: tourRef('customUrl') },
   ], { storageKey: 'lsv_tour_picker_v1' });
   useEffect(() => {
-    const t = setTimeout(() => { pickerTour.maybeAutoStart(); }, 1100);
-    return () => clearTimeout(t);
+    // Wait for the launch splash to fully dismiss before auto-starting the tour —
+    // on first launch the splash holds open on the CONTINUE / power-saving notice,
+    // and the tutorial must not draw on top of it. whenDismissed fires immediately
+    // on later launches (splash already gone), preserving the original ~1.1s settle.
+    let t: ReturnType<typeof setTimeout>;
+    const unsub = splashBridge.whenDismissed(() => {
+      t = setTimeout(() => { pickerTour.maybeAutoStart(); }, 1100);
+    });
+    return () => { unsub(); clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const userLocRef = useRef<{ lat: number; lon: number } | null>(null);
@@ -123,6 +130,11 @@ export default function InstancePickerScreen({ navigation }: Props) {
       .catch((e: any) => setError(e?.message || 'Failed to load this directory'))
       .finally(() => setLoading(false));
   }, []);
+
+  // Assigned once connectLocal/tryUsbLaunch are defined below; the mount + focus
+  // effects (declared above those callbacks) call it through this ref to avoid a
+  // use-before-declaration cycle.
+  const tryUsbLaunchRef = useRef<null | ((m?: typeof viewMode) => Promise<boolean>)>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -156,7 +168,13 @@ export default function InstancePickerScreen({ navigation }: Props) {
       // opened), but DON'T fetch any directory here — the landing view is the
       // chooser (favourites + directory cards). Directories load on tap.
       try { const loc = await getUserLocation(); if (!cancelled) userLocRef.current = loc; } catch {}
-      if (!cancelled) { setLoading(false); splashBridge.dismiss(); }
+      if (!cancelled) { setLoading(false); }
+
+      // Launched by plugging in an RTL-SDR? Go straight to Local Hardware and skip
+      // the default-instance auto-connect below (which would otherwise win the
+      // race and open the default server / leave us on the picker).
+      if (!cancelled && await tryUsbLaunchRef.current?.(mode)) return;
+      if (!cancelled) splashBridge.dismiss();
 
       // A default instance still auto-connects straight through — unless a
       // vibesdr:// deep link is driving this launch (it owns the session and
@@ -170,11 +188,17 @@ export default function InstancePickerScreen({ navigation }: Props) {
     return () => { cancelled = true; };
   }, []);
 
+  const firstFocusRef = useRef(true);
   useFocusEffect(useCallback(() => {
     getViewMode().then(mode => { if (mode) setViewModeState(mode); });
     // Re-read the default on every focus — the SDR menu can set/clear it,
     // and returning here doesn't remount (stale star otherwise).
     getDefaultInstance().then(d => setDefaultInst(d)).catch(() => {});
+    // Skip the initial focus (loadAndInit owns the launch-time USB check — running
+    // it here too would race the read-and-clear flag). On LATER focuses (returning
+    // from an SDR session), pick up an RTL-SDR that was plugged in while away.
+    if (firstFocusRef.current) { firstFocusRef.current = false; return; }
+    tryUsbLaunchRef.current?.();
   }, []));
 
   const { colors: C, font: F, scale } = themeFor(viewMode);
@@ -220,7 +244,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
   // V4 local hardware (Android only): start the on-device shim (RTL-SDR over
   // USB OTG) and connect to it on localhost. Audio rides /ws/audio (external
   // PCM); spectrum/control reuse the UberSDR path against ws://127.0.0.1.
-  const connectLocal = useCallback(async () => {
+  const connectLocal = useCallback(async (modeOverride?: typeof viewMode) => {
     const Local = (NativeModules as any).VibeLocalSDR;
     if (!Local?.startSpectrum) { Alert.alert('Local Hardware', 'Not available on this build.'); return; }
     setConnecting(true);
@@ -232,7 +256,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
       }) as { port: number; wsBaseUrl: string };
       setConnecting(false);
       navigation.navigate('SDR', {
-        baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware', viewMode,
+        baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware', viewMode: modeOverride ?? viewMode,
         serverType: 'ubersdr', isLocal: true, localPort: res.port,
         localGen: newLocalSession(),
       });
@@ -241,6 +265,22 @@ export default function InstancePickerScreen({ navigation }: Props) {
       Alert.alert('Local Hardware', e?.message ?? 'Could not start local SDR. Is an RTL-SDR plugged in via USB OTG?');
     }
   }, [navigation, viewMode]);
+
+  // Route straight into Local Hardware when the app was launched/resumed by
+  // plugging in an RTL-SDR (USB_DEVICE_ATTACHED). Returns true if it claimed the
+  // launch, so the caller skips the default-instance auto-connect. Native flag is
+  // read-and-cleared, so it fires once per attach.
+  const tryUsbLaunch = useCallback(async (modeArg?: typeof viewMode): Promise<boolean> => {
+    const Local = (NativeModules as any).VibeLocalSDR;
+    if (!Local?.consumeUsbLaunch) return false;
+    let pending = false;
+    try { pending = await Local.consumeUsbLaunch(); } catch { pending = false; }
+    if (!pending) return false;
+    splashBridge.dismiss();
+    await connectLocal(modeArg);
+    return true;
+  }, [connectLocal]);
+  tryUsbLaunchRef.current = tryUsbLaunch;
 
   // RTL-TCP: connect to an rtl_tcp server (host:port) over the network and run the
   // same on-device shim against it — no USB, so this also works on iOS. Reuses the
@@ -762,7 +802,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
                   <SectionHeader label="LOCAL HARDWARE" fs={fs} F={F} C={C} />
                   <TouchableOpacity
                     style={[styles.row, { borderColor: C.amber }]}
-                    onPress={connectLocal}
+                    onPress={() => connectLocal()}
                   >
                     <View style={styles.rowMain}>
                       <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>Local Hardware</Text>

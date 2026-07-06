@@ -37,6 +37,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useKeepAwake }       from 'expo-keep-awake';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList }     from '../../App';
+import { splashBridge }                 from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { buildShareLink } from '../linking/DeepLinkHandler';
@@ -323,6 +324,16 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // ── V4 local hardware controls (RTL-SDR) ──────────────────────────────────
   const isLocal = !!route.params.isLocal;
+  // Per-device persistence suffix so each local source keeps its OWN remembered
+  // setup (frequency/mode/step + hardware config). RTL-TCP is keyed by host:port,
+  // so UberSDR-over-RTL-TCP and a real-hardware RTL-TCP server never share state;
+  // a USB dongle uses ':usb'. The old single 'lsv_local_hw' / ':local' keys let
+  // every local device clobber each other — and could restore an out-of-band
+  // frequency (e.g. 96.6 MHz WFM onto an HF-only UberSDR RTL-TCP).
+  const localDeviceKey = route.params.isTcp
+    ? `tcp:${route.params.tcpHost ?? ''}:${route.params.tcpPort ?? ''}`
+    : 'usb';
+  const localHwKey = `lsv_local_hw:${localDeviceKey}`;
   const LocalHw = (NativeModules as any).VibeLocalSDR;
   const [hwOpen,        setHwOpen]        = useState(false);
   const [hwGains,       setHwGains]       = useState<number[]>([]);
@@ -348,7 +359,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     let cancelled = false;
     (async () => {
       let prefs: any = {};
-      try { const j = await AsyncStorage.getItem('lsv_local_hw'); if (j) prefs = JSON.parse(j); } catch {}
+      try {
+        // Per-device key first; migrate the old global blob on first connect so a
+        // single existing dongle keeps its gain/rate/etc.
+        let j = await AsyncStorage.getItem(localHwKey);
+        if (j == null) j = await AsyncStorage.getItem('lsv_local_hw');
+        if (j) prefs = JSON.parse(j);
+      } catch {}
       if (cancelled) return;
       const auto = prefs.autoGain ?? true;
       const ppm  = typeof prefs.ppm === 'number' ? prefs.ppm : 0;
@@ -391,17 +408,61 @@ export default function SDRScreen({ route, navigation }: Props) {
       hwLoaded.current = true;
     })();
     return () => { cancelled = true; };
+  }, [isLocal, LocalHw, localHwKey]);
+
+  // Background-restriction nudge (local hardware only). Aggressive OEMs
+  // (Motorola/Lenovo, some others) ship apps "Restricted" by default, which makes
+  // Android strip our mediaPlayback foreground service in the background → the
+  // process is demoted to a cached/little-core state → the local-SDR DSP thread
+  // starves the audio writer → background audio breaks up. We can't clear the
+  // restriction programmatically (user-only), so detect it once per session and
+  // point the user at the Settings toggle. Shown at most once (until they act or
+  // permanently dismiss). Network backends don't need this — only local hardware
+  // runs a heavy in-process DSP thread that the demotion starves.
+  useEffect(() => {
+    if (!isLocal || !LocalHw?.isBackgroundRestricted) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const restricted = await LocalHw.isBackgroundRestricted();
+        if (cancelled) return;
+        if (!restricted) {
+          // Not restricted → re-arm the prompt. If the OS later re-restricts the
+          // app (an OEM battery-manager clamp, a system update, etc.), we want to
+          // warn again even if the user previously tapped "Don't ask again" — that
+          // dismissal only suppresses the CURRENT restricted episode, not forever.
+          AsyncStorage.removeItem('lsv_bg_restrict_dismissed_v1').catch(() => {});
+          return;
+        }
+        if ((await AsyncStorage.getItem('lsv_bg_restrict_dismissed_v1')) === '1') return;
+        Alert.alert(
+          'Allow background audio',
+          "This device restricts VibeSDR when it isn't on screen, which breaks up audio in the background.\n\n" +
+          "To fix it, open Settings and let VibeSDR run freely in the background — the exact wording varies by phone:\n" +
+          "• “Allow background usage” / “Allow background activity”\n" +
+          "• Battery → “Unrestricted”\n\n" +
+          "Tapping “Open Settings” will CLOSE VibeSDR so the change can take effect — just reopen the app once you've set it, and background audio will work.",
+          [
+            { text: 'Not now', style: 'cancel' },
+            { text: "Don't ask again", style: 'destructive',
+              onPress: () => { AsyncStorage.setItem('lsv_bg_restrict_dismissed_v1', '1').catch(() => {}); } },
+            { text: 'Open Settings & Close', onPress: () => { LocalHw?.openAppSettings?.(); } },
+          ],
+        );
+      } catch {}
+    })();
+    return () => { cancelled = true; };
   }, [isLocal, LocalHw]);
 
   // Persist hardware settings whenever they change (after the initial load).
   useEffect(() => {
     if (!isLocal || !hwLoaded.current) return;
-    AsyncStorage.setItem('lsv_local_hw', JSON.stringify({
+    AsyncStorage.setItem(localHwKey, JSON.stringify({
       autoGain: hwAutoGain, gain: hwGain, ppm: hwPpm, sampleRate: hwSampleRate,
       biasTee: hwBiasTee, agc: hwAgc, directSampling: hwDirectSamp, deemph: hwDeemph, stereo: hwStereo,
     })).catch(() => {});
     // NB: squelch / nrLevel / notch are intentionally NOT saved (session-scoped).
-  }, [isLocal, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo]);
+  }, [isLocal, localHwKey, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo]);
 
   const onHwAuto = useCallback((auto: boolean) => {
     setHwAutoGain(auto);
@@ -1958,7 +2019,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     // connecting (the hardcoded default landed on the 20m FT8 squeal every
     // launch). Falls back to the default tune on first visit / bad data.
     let cancelled = false;
-    AsyncStorage.getItem(route.params.isLocal ? 'lsv_last_tune:local' : 'lsv_last_tune:' + baseUrl).then((j: string | null) => {
+    const tuneKey = isLocal ? `lsv_last_tune:${localDeviceKey}` : 'lsv_last_tune:' + baseUrl;
+    (async () => {
+      let j = await AsyncStorage.getItem(tuneKey).catch(() => null);
+      // Migrate the pre-per-device global local key on first per-device connect.
+      if (j == null && isLocal) j = await AsyncStorage.getItem('lsv_last_tune:local').catch(() => null);
+      LocalHw?.logDiag?.(`RESTORE key=${tuneKey} read=${j}`);
+      return j;
+    })().then((j: string | null) => {
       if (cancelled || destroyed.current) return;
       let f = status.frequency;
       let m: SDRMode = status.mode;
@@ -1971,6 +2039,11 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (typeof p.mode === 'string' && p.mode in MODE_BANDWIDTHS) m = p.mode as SDRMode;
         } catch {}
       }
+      // NB: no device-range clamp here — the per-device key already means each
+      // source only ever restores ITS OWN last frequency (valid when saved), so
+      // there's nothing to guard against, and c.caps.freqRange isn't reliable yet
+      // at restore time (the local device's real caps land after connect), which
+      // made it wrongly reset an in-range frequency to the default.
       // A vibesdr:// deep link's freq/mode override the persisted last-tune, but
       // only on the first connect of this screen (consumed via the ref) so a
       // reconnect/rotation later doesn't yank the user back to the link's freq.
@@ -2030,11 +2103,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [connected]);
 
   useEffect(() => {
+    LocalHw?.logDiag?.(`SAVE-EFFECT loaded=${lastTuneLoaded.current} freq=${status.frequency} isLocal=${isLocal} key=${localDeviceKey}`);
     if (!lastTuneLoaded.current || !status.frequency) return;
     const t = setTimeout(() => {
-      // Local hardware's baseUrl has a per-session port → use a stable key so
-      // the last tune restores (otherwise it reverts to the 14 MHz default).
-      AsyncStorage.setItem(route.params.isLocal ? 'lsv_last_tune:local' : 'lsv_last_tune:' + baseUrl,
+      // Local hardware's baseUrl has a per-session port → use a stable PER-DEVICE
+      // key (usb / tcp:host:port) so the last tune restores and devices don't
+      // clobber each other (otherwise it reverts to the 14 MHz default).
+      const k = isLocal ? `lsv_last_tune:${localDeviceKey}` : 'lsv_last_tune:' + baseUrl;
+      LocalHw?.logDiag?.(`SAVE-WRITE ${k} freq=${status.frequency} mode=${status.mode}`);
+      AsyncStorage.setItem(k,
         JSON.stringify({ frequency: status.frequency, mode: status.mode })).catch(() => {});
     }, 1000);
     return () => clearTimeout(t);
@@ -3152,8 +3229,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   // laid out (so the drum/step/menu can be measured).
   useEffect(() => {
     if (!connected) return;
-    const t = setTimeout(() => { sdrTour.maybeAutoStart(); }, 1500);
-    return () => clearTimeout(t);
+    // Also wait for the launch splash to clear — a first-launch deep-link or
+    // default-instance auto-connect can reach the SDR screen while the splash is
+    // still holding on the CONTINUE notice; the tour must not draw over it.
+    let t: ReturnType<typeof setTimeout>;
+    const unsub = splashBridge.whenDismissed(() => {
+      t = setTimeout(() => { sdrTour.maybeAutoStart(); }, 1500);
+    });
+    return () => { unsub(); clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 

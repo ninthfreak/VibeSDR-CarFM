@@ -26,6 +26,24 @@
   #include "rtl_sdr_stub.h"   // iOS: no-op rtlsdr_* decls so the USB path compiles
 #endif
 #include <unistd.h>
+// Thread naming + audio priority are Android/Linux-only (Darwin/iOS has no
+// <sys/prctl.h> / PR_SET_NAME). Guard so the shared shim still compiles for the
+// iOS prebuilt lib, where these are no-ops. `vibeAudioThread` = name + real
+// URGENT_AUDIO priority (nice -19) for the DSP/audio thread; `vibeThreadName` =
+// name only, so a spinning thread is identifiable in `top -H` / systrace instead
+// of showing as the inherited RN "mqt_v_native".
+#if defined(__ANDROID__)
+  #include <sys/resource.h>   // setpriority
+  #include <sys/prctl.h>      // PR_SET_NAME
+  static inline void vibeAudioThread(const char* name) {
+      prctl(PR_SET_NAME, name);
+      setpriority(PRIO_PROCESS, 0, -19); // = Process.THREAD_PRIORITY_URGENT_AUDIO
+  }
+  static inline void vibeThreadName(const char* name) { prctl(PR_SET_NAME, name); }
+#else
+  static inline void vibeAudioThread(const char*) {}
+  static inline void vibeThreadName(const char*) {}
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -191,7 +209,7 @@ ModeParams paramsFor(const std::string& mode) {
     if (mode == "lsb")            return {ModeParams::SSB_LSB, 24000, 2700, 1};
     if (mode == "am" || mode == "sam") return {ModeParams::AM, 15000, 10000, 1};
     if (mode == "cwu" || mode == "cwl" || mode == "cw") return {ModeParams::CW, 8000, 1200, 1};
-    if (mode == "wfm")            return {ModeParams::WFM, 250000, 200000, 2};
+    if (mode == "wfm")            return {ModeParams::WFM, 250000, 200000, 2};  // NB: ifRate field is unused/dead
     /* nfm / fm */                return {ModeParams::NFM, 50000, 12500, 1};
 }
 
@@ -801,20 +819,28 @@ struct LocalSdrShim::Impl {
 
     // retune the demod (and RTL centre if the offset would fall outside span)
     void retune(double freq) {
+        // Hold modeMtx across the WHOLE placement (rtlCenter/viewCenter store +
+        // tuneHw + rx.setTune), not just rx.setTune. retune() runs on the audio-WS
+        // thread while the "zoom" handler runs on the spectrum-WS thread, and BOTH
+        // call tuneHw() (an rtl-sdr USB control transfer that is NOT thread-safe).
+        // With the placement outside the lock the two threads raced: the tuner PLL
+        // landed at a corrupted centre → the station came up a few hundred kHz off
+        // and one VFO nudge (a fresh single tune) fixed it. Serialising here means
+        // whichever handler runs second re-reads the other's committed audioFreq/
+        // rtlCenter and there is never a concurrent hardware tune.
+        std::lock_guard<std::recursive_mutex> lk(modeMtx);
         audioFreq.store(freq);
         double limit = sampleRate / 2.0 - 50000.0;
         bool willRecenter = std::fabs(freq - rtlCenter.load()) > limit;
         LOGI("DIAG retune freq=%.0f rtlCenter=%.0f dist=%.0f limit=%.0f recenter=%d",
              freq, rtlCenter.load(), std::fabs(freq - rtlCenter.load()), limit, willRecenter ? 1 : 0);
-        if (std::fabs(freq - rtlCenter.load()) > limit) {
+        if (willRecenter) {
             // The VFO has tuned outside the captured window — recentre the dongle
-            // (and the display) on it so we don't end up showing dead air. (For a
-            // locked tune the client immediately re-asserts the view via zoom.)
+            // (and the display) on it so we don't end up showing dead air.
             rtlCenter.store(freq);
             viewCenter.store(freq);
             tuneHw(freq);
         }
-        std::lock_guard<std::recursive_mutex> lk(modeMtx);
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
         // New frequency -> drop the cached RDS so a different station doesn't keep
         // showing the previous one's PS/RadioText until its own RDS re-syncs.
@@ -897,6 +923,11 @@ struct LocalSdrShim::Impl {
                 // the crop offset (viewCenter − rtlCenter, applied in onSpectrum)
                 // carry the view on past the dongle once it's locked. Retune the
                 // RTL only when the dongle actually has to move (no per-pan clicks).
+                // modeMtx serialises this against retune() on the audio-WS thread —
+                // both call the non-thread-safe tuneHw(); racing them corrupted the
+                // tuner PLL (off-tune-until-nudged bug). Under the lock, dongleForView
+                // reads a consistent audioFreq and there is one hardware tune at a time.
+                std::lock_guard<std::recursive_mutex> lk(modeMtx);
                 viewCenter.store(v);
                 double dongle = dongleForView(v);
                 bool moved = std::fabs(dongle - rtlCenter.load()) > 1.0;
@@ -905,7 +936,6 @@ struct LocalSdrShim::Impl {
                 if (moved) {
                     rtlCenter.store(dongle);
                     tuneHw(dongle);
-                    std::lock_guard<std::recursive_mutex> lk(modeMtx);
                     rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
                     LOGI("DIAG zoom after-move rtlCenter=%.0f vfoOffset=%.0f", rtlCenter.load(), vfoOffsetNow());
                 }
@@ -960,6 +990,7 @@ struct LocalSdrShim::Impl {
 
     // ── HTTP/WS server ─────────────────────────────────────────────────────
     void acceptLoop() {
+        vibeThreadName("vibe-accept");
         while (serverRunning.load()) {
             std::shared_ptr<net::Socket> sock;
             try { sock = listener->accept(nullptr, 500); } catch (...) { sock = nullptr; }
@@ -970,6 +1001,7 @@ struct LocalSdrShim::Impl {
     }
 
     void handleConnection(std::shared_ptr<net::Socket> sock) {
+        vibeThreadName("vibe-conn");
         std::string reqLine, line, wsKey;
         if (sock->recvline(reqLine, 8192, 5000) <= 0) { sock->close(); return; }
         while (sock->recvline(line, 8192, 5000) > 0) {
@@ -1188,7 +1220,16 @@ struct LocalSdrShim::Impl {
         convU8ToF32(buf, reinterpret_cast<float*>(v.data()), sampCount * 2);  // NEON
         {
             std::lock_guard<std::mutex> lk(iqMtx);
-            if (iqQueue.size() >= IQ_QUEUE_MAX) iqQueue.pop_front();   // overrun: drop oldest
+            if (iqQueue.size() >= IQ_QUEUE_MAX) {
+                iqQueue.pop_front();   // overrun: drop oldest
+                // DIAG (v6 Moto audio): count dropped IQ buffers — a drop = FM phase
+                // discontinuity = HF hash/sibilance. Log rate ~1/s to compare devices.
+                static int drops = 0; static long lastLog = 0;
+                drops++;
+                struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+                long now = ts.tv_sec;
+                if (now != lastLog) { lastLog = now; LOGI("DIAG IQ-DROP total=%d qmax=%zu", drops, (size_t)IQ_QUEUE_MAX); }
+            }
             iqQueue.push_back(std::move(v));
         }
         iqCv.notify_one();
@@ -1198,6 +1239,15 @@ struct LocalSdrShim::Impl {
     // Drains the IQ queue and runs the engine. modeMtx serialises rx.feed against
     // setTune / buildAudio / setSampleRate (feed runs rebuildAudio inline).
     void dspLoop() {
+        // This thread runs the whole demod chain (WFM stereo MPX + RDS + FIR
+        // filters) and must keep up in real time or the audio it produces
+        // underruns → thin/sibilant/"low-bandwidth" sound. It is spawned from the
+        // React native-modules (v_native) JNI thread, so WITHOUT this it inherits
+        // that thread's name + default scheduling — under the New Architecture
+        // that leaves it losing CPU to the Fabric/worklets/JS threads on weak
+        // (e.g. Moto G35 / Unisoc) cores. Pin it to real audio priority so the
+        // scheduler treats it like the AudioTrack callback (v5/old-arch behaviour).
+        vibeAudioThread("vibe-dsp");
         while (dspRunning.load()) {
             std::vector<cf32> buf;
             {
@@ -1232,6 +1282,7 @@ struct LocalSdrShim::Impl {
     // Reads what's available (low latency) and carries a stray odd byte so I/Q
     // pairs never misalign across reads.
     void tcpReadLoop() {
+        vibeThreadName("vibe-tcp");
         const int CHUNK = 32768;                 // bytes (16384 IQ samples)
         std::vector<uint8_t> buf(CHUNK + 1);
         int carry = 0;                            // 0/1 leftover byte from last read
@@ -1303,7 +1354,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
 
     impl->startDspThread();
-    impl->rtlThread = std::thread([impl]{ rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); });
+    impl->rtlThread = std::thread([impl]{ vibeThreadName("vibe-rtl"); rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); });
 
     p = impl;
     LOGI("local SDR started: center=%.0f rate=%.0f fft=%d mode=%s port=%d",
@@ -1586,7 +1637,7 @@ void LocalSdrShim::setSampleRate(double rate) {
     { std::lock_guard<std::mutex> lk(impl->clientMtx); if (impl->specClient) impl->sendConfig(impl->specClient); }
     impl->startDspThread();
     if (tcp) { impl->tcpRunning.store(true); impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); }); }
-    else     { impl->rtlThread = std::thread([impl]{ rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); }); }
+    else     { impl->rtlThread = std::thread([impl]{ vibeThreadName("vibe-rtl"); rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); }); }
     LOGI("sample rate: %.0f (actual %u) fft=%d tcp=%d", rate, actual, impl->fftSize, tcp);
 }
 void LocalSdrShim::setDeemphasis(double tau) {

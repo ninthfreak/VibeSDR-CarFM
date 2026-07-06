@@ -233,6 +233,66 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(arr)
     }
 
+    /** True (once) if this launch/resume was triggered by plugging in a matching
+     *  RTL-SDR dongle (USB_DEVICE_ATTACHED). Reading it CLEARS it, so it fires the
+     *  Local-Hardware auto-connect exactly once per attach. JS calls this on the
+     *  instance picker to route straight to Local Hardware instead of the default
+     *  instance / picker (bug: USB attach used to land on the default). */
+    /** TEMP DIAG: surface a JS string to logcat at ERROR level (the Moto filters
+     *  app INFO). Used to trace the local last-tune save/restore. Remove after. */
+    @ReactMethod
+    fun logDiag(msg: String) { Log.e(TAG, "JSDIAG $msg") }
+
+    @ReactMethod
+    fun consumeUsbLaunch(promise: Promise) {
+        val pending = MainActivity.usbLaunchPending
+        MainActivity.usbLaunchPending = false
+        promise.resolve(pending)
+    }
+
+    /** True if the OS has this app "background restricted" (the user — or an
+     *  aggressive OEM like Motorola/Lenovo by default — set it to "Restricted").
+     *  When restricted, Android strips our mediaPlayback foreground service in the
+     *  background (isForeground=false → cached process → /background cpuset →
+     *  little cores only), which starves the local-SDR DSP/audio threads and
+     *  breaks up background audio. Samsung etc. default to unrestricted and are
+     *  fine. JS uses this to prompt the user toward the Unrestricted setting. */
+    @ReactMethod
+    fun isBackgroundRestricted(promise: Promise) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val am = reactContext.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                promise.resolve(am.isBackgroundRestricted)
+            } else {
+                promise.resolve(false)
+            }
+        } catch (_: Throwable) { promise.resolve(false) }
+    }
+
+    /** Open this app's system settings page (App info), where the user can allow
+     *  background usage (a.k.a. Battery → Unrestricted). Most reliable cross-OEM
+     *  target for the toggle. Then FULLY QUIT VibeSDR: the background restriction
+     *  only clears for a fresh process, so an already-running (and already-demoted)
+     *  session keeps breaking up even after the user flips the switch — only a cold
+     *  start comes up with the foreground service honoured. Stop the audio service
+     *  first (stopSelf) so START_STICKY doesn't revive it with the stale state,
+     *  then kill the process once Settings is on screen. */
+    @ReactMethod
+    fun openAppSettings() {
+        try {
+            val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(android.net.Uri.fromParts("package", reactContext.packageName, null))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            reactContext.startActivity(intent)
+        } catch (_: Throwable) { return }
+        // Give Settings a moment to come to the foreground, then quit.
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            try { VibeStreamService.instance?.let { it.stopEngine(); it.stopSelf() } } catch (_: Throwable) {}
+            try { reactContext.currentActivity?.finishAndRemoveTask() } catch (_: Throwable) {}
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }, 700)
+    }
+
     private fun stopSpectrumInternal() {
         try { VibeLocalSDR.stopSpectrum() } catch (_: Throwable) {}
         sessionConn?.let { try { it.close() } catch (_: Exception) {} }

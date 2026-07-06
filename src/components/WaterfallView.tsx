@@ -41,7 +41,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Image as RNImage, PixelRatio, StyleSheet, Text, View } from 'react-native';
+import { AppState, Image as RNImage, PixelRatio, StyleSheet, Text, View } from 'react-native';
 import {
   Canvas,
   Fill,
@@ -64,6 +64,7 @@ import {
   useSharedValue,
   useDerivedValue,
   withTiming,
+  cancelAnimation,
   Easing,
   runOnJS,
 } from 'react-native-reanimated';
@@ -581,6 +582,34 @@ function WaterfallView({
 
   useEffect(() => stopRevealStepper, [stopRevealStepper]); // clear on unmount
 
+  // ── Background gate ────────────────────────────────────────────────────────
+  // On background/inactive: cancel any in-flight scroll glide and kill the
+  // reveal/tween steppers so the worklets + Skia redraw runtime goes fully idle
+  // (see handleFrame). handleFrame early-returns while bgRef is set, so no new
+  // frame can restart them. Resume is automatic — the next frame drives them.
+  // `active` gates the Skia canvases OUT of the tree while backgrounded (see the
+  // conditional render below). Under New Arch, a mounted <Canvas> keeps the Skia
+  // render/present loop and per-frame Fabric commits alive even with static
+  // uniforms — with no GL context in the background that spins the native_modules
+  // queue ("EGLConsumer is not attached to an OpenGL ES context" spam) and starves
+  // the audio DSP. Unmounting is the only reliable stop; it rebuilds on resume.
+  const bgRef = useRef(false);
+  const [active, setActive] = useState(true);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => {
+      const bg = s !== 'active';
+      bgRef.current = bg;
+      setActive(!bg);
+      if (bg) {
+        cancelAnimation(scrollFrac);
+        stopRevealStepper();
+        stopSpecTween();
+      }
+    });
+    return () => sub.remove();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stopRevealStepper, stopSpecTween]);
+
   // ── Frame processing (imperative hot path — NO React state per frame) ──────
   // Frames arrive through frameSink, a ref the parent fills from onSpectrum.
   // Routing 10–20Hz frames through setState re-rendered the entire screen tree
@@ -592,6 +621,13 @@ function WaterfallView({
                        smoothTune, rowsPerFrame: ROWS_PER_FRAME };
 
   const handleFrame = useCallback((fbins: Float32Array, fstatus: SDRStatus) => {
+    // Backgrounded: audio keeps playing on its own native path, but the whole
+    // visual frame path (Reanimated withTiming glide + reveal/tween setIntervals
+    // driving Skia) must NOT run. Under New Arch + worklets these are no longer
+    // implicitly frozen by vsync pausing, so a left-running driver busy-loops the
+    // native/worklets queue on the little cores and starves the audio DSP (the v6
+    // WFM background-breakup regression). Skip every visual update while inactive.
+    if (bgRef.current) return;
     const cfg = frameCfg.current;
     if (!fbins || fbins.length === 0 || cfg.width < 4) return;
 
@@ -1081,6 +1117,9 @@ function WaterfallView({
           />
         )}
 
+        {/* Skia canvases render ONLY while foreground — unmounted in the
+            background so the render/present loop fully stops (see `active`). */}
+        {active && (
         <Canvas style={{ position: 'absolute', left: 0, top: wfTop, width, height: wfH }}>
           {/* GPU waterfall: intensity ring + LUT sampled by the runtime
               shader; scroll/slide/sharpness/contrast are uniforms (UI-thread,
@@ -1094,8 +1133,9 @@ function WaterfallView({
             </Fill>
           )}
         </Canvas>
+        )}
 
-        {staticOverlayCanvas}
+        {active && staticOverlayCanvas}
 
         {/* Init splash — the spectrum WS takes 1-2s to deliver its first
             frame; show intent instead of a black void. texReady flips on the
@@ -1111,6 +1151,7 @@ function WaterfallView({
         {/* Canvas: LIVE spectrum trace — isolated so the ~30Hz tween repaints
             ONLY these two paths, not the band plan/ticks/needle/acrylics
             (sharing one canvas redrew the whole overlay per tween tick). */}
+        {active && (
         <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height: wfTop + 1 }}>
           {specShow && (
             <Path path={specPath} style="fill">
@@ -1122,8 +1163,9 @@ function WaterfallView({
             <Path path={peakPath} paint={peakPaint} />
           )}
         </Canvas>
+        )}
 
-        {needleCanvas}
+        {active && needleCanvas}
 
         {/* ── Text overlays (RN Text — crisp, uses expo-font faces) ── */}
 

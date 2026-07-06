@@ -53,6 +53,24 @@ export type RootStackParamList = {
 export const splashBridge = {
   dismiss:     (_target?: string) => {},
   updateLabel: (_label: string)   => {},
+  // True once the splash overlay has fully faded away. On FIRST launch the splash
+  // is held open until the user taps CONTINUE on the power-saving notice, so any
+  // first-run coachmark tour must wait for this — otherwise the tutorial draws
+  // ON TOP of the splash (bug present since the info splash was added). Screens
+  // subscribe via whenDismissed().
+  dismissed: false,
+  _waiters: [] as Array<() => void>,
+  whenDismissed(cb: () => void): () => void {
+    if (this.dismissed) { cb(); return () => {}; }
+    this._waiters.push(cb);
+    return () => { this._waiters = this._waiters.filter((w) => w !== cb); };
+  },
+  _notifyDismissed() {
+    if (this.dismissed) return;
+    this.dismissed = true;
+    const w = this._waiters; this._waiters = [];
+    w.forEach((fn) => { try { fn(); } catch { /* ignore */ } });
+  },
 };
 
 // Decorative spectrum + waterfall graphic for the splash heading. Purely
@@ -134,7 +152,7 @@ export default function App() {
 
   const fadeSplash = useCallback(() => {
     Animated.timing(splashOpacity, { toValue: 0, duration: 450, useNativeDriver: true })
-      .start(() => setSplashDone(true));
+      .start(() => { setSplashDone(true); splashBridge._notifyDismissed(); });
   }, [splashOpacity]);
 
   splashBridge.dismiss = useCallback((target?: string) => {

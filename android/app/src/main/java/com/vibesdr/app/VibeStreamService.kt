@@ -301,6 +301,25 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         super.onDestroy()
     }
 
+    /** Start the foreground service with an EXPLICIT mediaPlayback type. The
+     *  2-arg startForeground(id, notification) lets the framework INFER the type
+     *  from the manifest — which the Unisoc/Moto ActivityManager fumbles to
+     *  types=0x0 (service ends up isForeground=false → demoted to a cached
+     *  process → /background cpuset → little cores → the DSP thread starves the
+     *  audio writer → background breakup). Samsung infers 0x2 fine, so this is a
+     *  device-specific framework quirk. Passing the type explicitly (the form
+     *  Android recommends for targetSdk 34+) makes the Moto keep the foreground
+     *  state. Guarded for API<30 where the type param doesn't exist. */
+    private fun startForegroundMedia() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            androidx.core.app.ServiceCompat.startForeground(
+                this, NOTIF_ID, buildNotification(),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        } else {
+            startForeground(NOTIF_ID, buildNotification())
+        }
+    }
+
     // ── Engine control (called from VibeStreamModule / media controls) ───────
 
     fun startAudioEngine(baseUrl: String, frequency: Long, mode: String, uuid: String, password: String) {
@@ -327,7 +346,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         mediaSession?.isActive = true
         updateMetadataSession()
         updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
-        startForeground(NOTIF_ID, buildNotification())
+        startForegroundMedia()
     }
 
     fun stopEngine() {
@@ -557,7 +576,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         mediaSession?.isActive = true
         updateMetadataSession()
         updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
-        startForeground(NOTIF_ID, buildNotification())
+        startForegroundMedia()
     }
 
     // channels: 1=mono (OWRX/Kiwi, local narrow modes), 2=interleaved stereo
@@ -663,6 +682,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     private fun startExtWriter() {
         val t = Thread({
+            // Real audio-thread priority (not just JVM MAX_PRIORITY ≈ nice -8):
+            // this thread feeds the AudioTrack, and under the New Architecture the
+            // Fabric/worklets/JS threads can preempt it on weak cores (Moto/Unisoc)
+            // → bursty writes → AudioTrack underruns → thin/sibilant/breaking audio.
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
             try {
                 while (running && externalAudio) {
                     val item = extQueue.poll(250, TimeUnit.MILLISECONDS)
@@ -713,7 +737,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     .setChannelMask(mask)
                     .build()
             )
-            .setBufferSizeInBytes(maxOf(minBuf * 2, rate / 5 * 2 * channels))  // ≥200ms
+            .setBufferSizeInBytes(maxOf(minBuf * 4, rate / 2 * 2 * channels))  // ≥500ms — absorb New-Arch scheduling jitter
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
         t.setVolume(volume)
