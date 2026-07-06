@@ -82,6 +82,7 @@ const V6_CHANGES: string[] = [
   'Per-source memory: Local Hardware and each RTL-TCP server now remember their own last frequency, mode and hardware settings (gain, sample rate, bias-T, etc.) independently — including VHF/UHF stations like FM, which used to reset to a default on reconnect.',
   'Plug-and-go on Android: plugging an RTL-SDR into the phone and choosing “Open in VibeSDR” now takes you straight to Local Hardware instead of your default instance.',
   'Background audio on aggressive phones (Android): some phones (e.g. certain Motorola models) restrict apps in the background by default, which broke up local audio when the screen was off. VibeSDR now detects this and shows you exactly how to allow background usage so playback holds up.',
+  'Swiping VibeSDR out of the recent-apps list now fully shuts it down on Android — it no longer lingers as a media notification in the shade (GitHub #6). The Stop button in the media notification also closes it.',
   'The first-launch tutorial no longer appears on top of the welcome / power-saving screen.',
 ];
 

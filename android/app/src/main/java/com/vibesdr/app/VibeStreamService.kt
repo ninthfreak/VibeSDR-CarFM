@@ -301,6 +301,19 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         super.onDestroy()
     }
 
+    /** User swiped VibeSDR out of the recent-apps list → fully shut down: close
+     *  the audio/spectrum WS + USB, release audio focus, and remove the foreground
+     *  notification (stopEngine does all of that incl. stopForeground(REMOVE)),
+     *  then stop the service. Without this the foreground service (and its media
+     *  notification) can survive the task swipe on many devices — the app looks
+     *  "still running" in the shade (GitHub #6). stopForeground alone isn't enough
+     *  on a mediaPlayback FGS; we stop the whole service. */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        stopEngine()
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
+    }
+
     /** Start the foreground service with an EXPLICIT mediaPlayback type. The
      *  2-arg startForeground(id, notification) lets the framework INFER the type
      *  from the manifest — which the Unisoc/Moto ActivityManager fumbles to
