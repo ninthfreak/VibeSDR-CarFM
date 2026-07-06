@@ -238,11 +238,6 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      *  Local-Hardware auto-connect exactly once per attach. JS calls this on the
      *  instance picker to route straight to Local Hardware instead of the default
      *  instance / picker (bug: USB attach used to land on the default). */
-    /** TEMP DIAG: surface a JS string to logcat at ERROR level (the Moto filters
-     *  app INFO). Used to trace the local last-tune save/restore. Remove after. */
-    @ReactMethod
-    fun logDiag(msg: String) { Log.e(TAG, "JSDIAG $msg") }
-
     @ReactMethod
     fun consumeUsbLaunch(promise: Promise) {
         val pending = MainActivity.usbLaunchPending
@@ -269,14 +264,14 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         } catch (_: Throwable) { promise.resolve(false) }
     }
 
-    /** Open this app's system settings page (App info), where the user can allow
-     *  background usage (a.k.a. Battery → Unrestricted). Most reliable cross-OEM
-     *  target for the toggle. Then FULLY QUIT VibeSDR: the background restriction
-     *  only clears for a fresh process, so an already-running (and already-demoted)
-     *  session keeps breaking up even after the user flips the switch — only a cold
-     *  start comes up with the foreground service honoured. Stop the audio service
-     *  first (stopSelf) so START_STICKY doesn't revive it with the stale state,
-     *  then kill the process once Settings is on screen. */
+    /** Open this app's system settings page (App info), where the user can set
+     *  battery usage to Unrestricted / allow background. We do NOT force-quit the
+     *  app afterwards: an abnormal self-termination can feed an OEM's "this app
+     *  misbehaves, restrict it" heuristic (the very thing we're trying to undo),
+     *  and the mediaPlayback FGS re-grants itself once the app is unrestricted and
+     *  returns to the foreground anyway. The prompt tells the user to swipe the app
+     *  away from recents and reopen it, which is the clean way to pick up the new
+     *  setting. */
     @ReactMethod
     fun openAppSettings() {
         try {
@@ -284,13 +279,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                 .setData(android.net.Uri.fromParts("package", reactContext.packageName, null))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             reactContext.startActivity(intent)
-        } catch (_: Throwable) { return }
-        // Give Settings a moment to come to the foreground, then quit.
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            try { VibeStreamService.instance?.let { it.stopEngine(); it.stopSelf() } } catch (_: Throwable) {}
-            try { reactContext.currentActivity?.finishAndRemoveTask() } catch (_: Throwable) {}
-            android.os.Process.killProcess(android.os.Process.myPid())
-        }, 700)
+        } catch (_: Throwable) {}
     }
 
     private fun stopSpectrumInternal() {

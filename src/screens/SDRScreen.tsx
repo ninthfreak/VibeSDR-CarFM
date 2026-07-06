@@ -438,15 +438,15 @@ export default function SDRScreen({ route, navigation }: Props) {
         Alert.alert(
           'Allow background audio',
           "This device restricts VibeSDR when it isn't on screen, which breaks up audio in the background.\n\n" +
-          "To fix it, open Settings and let VibeSDR run freely in the background — the exact wording varies by phone:\n" +
-          "• “Allow background usage” / “Allow background activity”\n" +
-          "• Battery → “Unrestricted”\n\n" +
-          "Tapping “Open Settings” will CLOSE VibeSDR so the change can take effect — just reopen the app once you've set it, and background audio will work.",
+          "To fix it:\n" +
+          "1. Tap “Open Settings” below.\n" +
+          "2. Open “App battery usage” (or “Battery”) and choose “Unrestricted” — the exact wording varies by phone (may be “Allow background usage” / “Don't optimise”).\n" +
+          "3. Then fully close VibeSDR (swipe it away from the recent-apps list) and open it again so the change takes effect.",
           [
             { text: 'Not now', style: 'cancel' },
             { text: "Don't ask again", style: 'destructive',
               onPress: () => { AsyncStorage.setItem('lsv_bg_restrict_dismissed_v1', '1').catch(() => {}); } },
-            { text: 'Open Settings & Close', onPress: () => { LocalHw?.openAppSettings?.(); } },
+            { text: 'Open Settings', onPress: () => { LocalHw?.openAppSettings?.(); } },
           ],
         );
       } catch {}
@@ -2024,7 +2024,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       let j = await AsyncStorage.getItem(tuneKey).catch(() => null);
       // Migrate the pre-per-device global local key on first per-device connect.
       if (j == null && isLocal) j = await AsyncStorage.getItem('lsv_last_tune:local').catch(() => null);
-      LocalHw?.logDiag?.(`RESTORE key=${tuneKey} read=${j}`);
       return j;
     })().then((j: string | null) => {
       if (cancelled || destroyed.current) return;
@@ -2033,7 +2032,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (j) {
         try {
           const p = JSON.parse(j) as { frequency?: unknown; mode?: unknown };
-          if (typeof p.frequency === 'number' && p.frequency >= MIN_HZ && p.frequency <= MAX_HZ) {
+          // MAX_HZ (30 MHz) is the HF ceiling for network SDRs, but local RTL-SDR
+          // hardware tunes VHF/UHF — so an FM/airband/etc. last-tune would fail
+          // the guard and silently reset to the default. Use a wide hardware bound
+          // for local (the per-device key only ever stores a freq that was
+          // tunable on THIS device, so it's inherently valid).
+          const hiHz = isLocal ? 2_000_000_000 : MAX_HZ;
+          if (typeof p.frequency === 'number' && p.frequency >= MIN_HZ && p.frequency <= hiHz) {
             f = Math.round(p.frequency);
           }
           if (typeof p.mode === 'string' && p.mode in MODE_BANDWIDTHS) m = p.mode as SDRMode;
@@ -2103,15 +2108,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [connected]);
 
   useEffect(() => {
-    LocalHw?.logDiag?.(`SAVE-EFFECT loaded=${lastTuneLoaded.current} freq=${status.frequency} isLocal=${isLocal} key=${localDeviceKey}`);
     if (!lastTuneLoaded.current || !status.frequency) return;
     const t = setTimeout(() => {
       // Local hardware's baseUrl has a per-session port → use a stable PER-DEVICE
       // key (usb / tcp:host:port) so the last tune restores and devices don't
       // clobber each other (otherwise it reverts to the 14 MHz default).
-      const k = isLocal ? `lsv_last_tune:${localDeviceKey}` : 'lsv_last_tune:' + baseUrl;
-      LocalHw?.logDiag?.(`SAVE-WRITE ${k} freq=${status.frequency} mode=${status.mode}`);
-      AsyncStorage.setItem(k,
+      AsyncStorage.setItem(isLocal ? `lsv_last_tune:${localDeviceKey}` : 'lsv_last_tune:' + baseUrl,
         JSON.stringify({ frequency: status.frequency, mode: status.mode })).catch(() => {});
     }, 1000);
     return () => clearTimeout(t);
