@@ -54,7 +54,7 @@ file(GLOB FT8_LIB_SRC
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/common/monitor.c")
 
 add_library(vibelocalsdr SHARED
-    vibe_localsdr_jni.cpp local_sdr_shim.cpp net_shim.cpp
+    vibe_localsdr_jni.cpp local_sdr_shim.cpp net_shim.cpp rtl_tcp_server.cpp
     decoders/fsk_decoder.cpp
     decoders/wefax_decoder.cpp
     decoders/ft8_decoder.cpp

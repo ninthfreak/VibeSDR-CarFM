@@ -30,6 +30,9 @@ public:
     void close();
     bool isOpen() { return open_; }
 
+    // Peer IP address ("a.b.c.d"), or "" if unavailable. For UI/logging.
+    std::string peerAddress();
+
     // Send all `len` bytes; returns len on success, -1 on error.
     int send(const uint8_t* data, size_t len, const Address* dest = nullptr);
     int sendstr(const std::string& str, const Address* dest = nullptr);

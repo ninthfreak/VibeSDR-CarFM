@@ -13,6 +13,7 @@
 #include <vector>
 #include <rtl-sdr.h>
 #include "local_sdr_shim.h"
+#include "rtl_tcp_server.h"
 
 #define LOG_TAG "VibeLocalSDR"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -206,6 +207,46 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeFeedDecoderPcm(JNIEnv* env, jobject, jst
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetDecoderFreq(JNIEnv*, jobject, jdouble hz) {
     vibe::LocalSdrShim::instance().setDecoderFreq((double)hz);
+}
+
+// ── RTL-TCP SERVER (share this device's USB dongle over the network) ─────────
+extern "C" JNIEXPORT jint JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeStartServer(
+        JNIEnv* /*env*/, jobject, jint fd, jint vid, jint pid,
+        jdouble sampleRate, jdouble centerFreq, jint gainTenthDb,
+        jint port, jdouble overrideRate) {
+    std::string err;
+    int bound = vibe::RtlTcpServer::instance().start(
+        fd, vid, pid, (uint32_t)sampleRate, (uint32_t)centerFreq, gainTenthDb,
+        port, (uint32_t)overrideRate, err);
+    if (bound < 0) LOGE("startServer failed: %s", err.c_str());
+    return bound;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeStopServer(JNIEnv*, jobject) {
+    // Detached like nativeStopSpectrum so the JS/bridge caller never blocks on the
+    // teardown (socket closes + thread joins).
+    std::thread([]{ vibe::RtlTcpServer::instance().stop(); }).detach();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetServerSampleRate(JNIEnv*, jobject, jdouble rate) {
+    vibe::RtlTcpServer::instance().setSampleRateOverride((uint32_t)rate);
+}
+
+// Returns a small JSON status string for the UI + notification.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
+    auto s = vibe::RtlTcpServer::instance().getStatus();
+    std::string j = "{";
+    j += "\"running\":"       + std::string(s.running ? "true" : "false");
+    j += ",\"client\":"       + std::string(s.clientConnected ? "true" : "false");
+    j += ",\"clientAddr\":\"" + s.clientAddr + "\"";
+    j += ",\"sampleRate\":"   + std::to_string(s.sampleRate);
+    j += ",\"overrideRate\":" + std::to_string(s.overrideRate);
+    j += "}";
+    return env->NewStringUTF(j.c_str());
 }
 
 extern "C" JNIEXPORT jintArray JNICALL

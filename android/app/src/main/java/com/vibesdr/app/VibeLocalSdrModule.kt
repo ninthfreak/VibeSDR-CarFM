@@ -205,6 +205,118 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(null)
     }
 
+    // ── RTL-TCP SERVER (share this device's USB dongle over the network) ──────
+    // Kept separate from the spectrum session's UsbDeviceConnection: the two
+    // modes are mutually exclusive, but a distinct handle keeps teardown clean.
+    private var serverConn: android.hardware.usb.UsbDeviceConnection? = null
+
+    /**
+     * Open the attached RTL-SDR and start the RTL-TCP server. Resolves with
+     * { ip, port, name } so JS can advertise it via mDNS and show the address.
+     * opts: name, port?(1234), sampleRate?(2.4M), gainTenthDb?(-1 auto),
+     *       centerFreq?(100M), overrideRate?(0 = client-controlled).
+     */
+    @ReactMethod
+    fun startRtlTcpServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
+        val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
+        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) }
+            ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
+        if (!mgr.hasPermission(dev)) {
+            openAndProbeThen(mgr, dev, promise) { startRtlTcpServerNow(mgr, dev, opts, promise) }
+            return
+        }
+        startRtlTcpServerNow(mgr, dev, opts, promise)
+    }
+
+    private fun startRtlTcpServerNow(
+        mgr: UsbManager, dev: UsbDevice,
+        opts: com.facebook.react.bridge.ReadableMap, promise: Promise
+    ) {
+        // Free any on-device session + prior server first.
+        stopSpectrumInternal()
+        stopServerInternal()
+        val conn = mgr.openDevice(dev)
+            ?: run { promise.reject("open_failed", "openDevice returned null"); return }
+        val fd = conn.fileDescriptor
+        if (fd < 0) { conn.close(); promise.reject("bad_fd", "Invalid file descriptor"); return }
+        serverConn = conn
+
+        val name       = if (opts.hasKey("name")) opts.getString("name") ?: "VibeSDR RTL-SDR" else "VibeSDR RTL-SDR"
+        val port       = if (opts.hasKey("port")) opts.getInt("port") else 1234
+        val sampleRate = if (opts.hasKey("sampleRate")) opts.getDouble("sampleRate") else 2_400_000.0
+        val gain       = if (opts.hasKey("gainTenthDb")) opts.getInt("gainTenthDb") else -1
+        val centerFreq = if (opts.hasKey("centerFreq")) opts.getDouble("centerFreq") else 100_000_000.0
+        val override   = if (opts.hasKey("overrideRate")) opts.getDouble("overrideRate") else 0.0
+
+        val bound = VibeLocalSDR.startServer(
+            fd, dev.vendorId, dev.productId, sampleRate, centerFreq, gain, port, override)
+        if (bound <= 0) {
+            conn.close(); serverConn = null
+            promise.reject("start_failed", "native startServer failed (see logcat)")
+            return
+        }
+        val ip = getLocalIp() ?: "0.0.0.0"
+        RtlTcpServerService.start(reactContext, name, ip, bound)
+        Log.i(TAG, "RTL-TCP server started $ip:$bound as \"$name\"")
+        val res = Arguments.createMap()
+        res.putString("ip", ip)
+        res.putInt("port", bound)
+        res.putString("name", name)
+        promise.resolve(res)
+    }
+
+    @ReactMethod
+    fun stopRtlTcpServer(promise: Promise) {
+        stopServerInternal()
+        promise.resolve(null)
+    }
+
+    @ReactMethod
+    fun setServerSampleRate(rate: Double) { VibeLocalSDR.setServerSampleRate(rate) }
+
+    @ReactMethod
+    fun getServerStatus(promise: Promise) {
+        try {
+            val json = VibeLocalSDR.getServerStatus()
+            val o = org.json.JSONObject(json)
+            val m = Arguments.createMap()
+            m.putBoolean("running", o.optBoolean("running", false))
+            m.putBoolean("client", o.optBoolean("client", false))
+            m.putString("clientAddr", o.optString("clientAddr", ""))
+            m.putDouble("sampleRate", o.optLong("sampleRate", 0).toDouble())
+            m.putDouble("overrideRate", o.optLong("overrideRate", 0).toDouble())
+            promise.resolve(m)
+        } catch (e: Throwable) {
+            promise.reject("status_failed", e.message)
+        }
+    }
+
+    private fun stopServerInternal() {
+        try { VibeLocalSDR.stopServer() } catch (_: Throwable) {}
+        try { RtlTcpServerService.stop(reactContext) } catch (_: Throwable) {}
+        serverConn?.let { try { it.close() } catch (_: Exception) {} }
+        serverConn = null
+    }
+
+    /** Best-effort non-loopback IPv4 for the LAN (prefer wlan/AP interfaces). */
+    private fun getLocalIp(): String? {
+        return try {
+            val ifaces = java.net.NetworkInterface.getNetworkInterfaces()
+            var fallback: String? = null
+            for (nif in ifaces) {
+                if (!nif.isUp || nif.isLoopback) continue
+                for (addr in nif.inetAddresses) {
+                    if (addr.isLoopbackAddress || addr !is java.net.Inet4Address) continue
+                    val ip = addr.hostAddress ?: continue
+                    val n = nif.name.lowercase()
+                    if (n.startsWith("wlan") || n.startsWith("ap") || n.startsWith("swlan")) return ip
+                    if (fallback == null) fallback = ip
+                }
+            }
+            fallback
+        } catch (_: Throwable) { null }
+    }
+
     // ── Hardware controls ──────────────────────────────────────────────────
     @ReactMethod fun setGain(gainTenthDb: Double) { VibeLocalSDR.setGain(gainTenthDb.toInt()) }
     @ReactMethod fun setPpm(ppm: Double) { VibeLocalSDR.setPpm(ppm.toInt()) }
@@ -342,6 +454,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         unregisterUsbReceiver()
         pendingPromise = null
         stopSpectrumInternal()
+        stopServerInternal()
         super.invalidate()
     }
 

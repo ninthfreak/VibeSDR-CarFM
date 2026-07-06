@@ -50,7 +50,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   override func supportedEvents() -> [String]! {
     return ["VibeTuned", "VibeMuted", "VibeWsText", "VibeSkip", "VibeCarConnected", "VibeCarTune",
             "VibeDataSaverDisconnect", "VibeDataSaverResume", "VibeSignal",
-            "VibeVoiceQuery", "VibeVoiceTune"]
+            "VibeVoiceQuery", "VibeVoiceTune", "VibeMdnsFound", "VibeMdnsLost"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
@@ -61,6 +61,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   // MARK: - State
+
+  // mDNS/Bonjour RTL-TCP discovery
+  private var mdnsBrowser:   NWBrowser?
+  private var mdnsResolvers: [NWConnection] = []
+  private let mdnsQueue      = DispatchQueue(label: "com.vibesdr.mdns", qos: .utility)
 
   private let audioQ       = DispatchQueue(label: "com.vibesdr.audio", qos: .userInteractive)
   private var opusDecoder:       OpaquePointer?
@@ -1467,6 +1472,88 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let snapped = direction > 0 ? (currentFreq / s + 1) * s
                                 : ((currentFreq + s - 1) / s - 1) * s
     return max(100_000, snapped)
+  }
+
+  // MARK: - mDNS / Bonjour discovery of networked RTL-TCP servers
+  //
+  // Browses for `_rtl_tcp._tcp` services on the local network via NWBrowser (the
+  // Apple-blessed, App-Store-clean path — no subnet scanning). Each discovered
+  // service is resolved to host:port with a short-lived NWConnection, and the
+  // friendly name is taken from the service's `name` TXT record when present.
+  // Results are pushed to JS as VibeMdnsFound / VibeMdnsLost. Lives here (rather
+  // than a separate module) so it compiles in the app target with no pbxproj
+  // change — JS reaches it via NativeModules.VibePowerModule.
+  private static let rtlTcpServiceType = "_rtl_tcp._tcp"
+
+  @objc(startDiscovery)
+  func startDiscovery() {
+    stopDiscovery()
+    let params = NWParameters()
+    params.includePeerToPeer = true
+    let browser = NWBrowser(
+      for: .bonjourWithTXTRecord(type: VibePowerModule.rtlTcpServiceType, domain: nil),
+      using: params)
+    mdnsBrowser = browser
+    browser.browseResultsChangedHandler = { [weak self] _, changes in
+      guard let self = self else { return }
+      for change in changes {
+        switch change {
+        case .added(let result):
+          self.resolveMdns(result)
+        case .removed(let result):
+          if case let .service(name, _, _, _) = result.endpoint {
+            self.sendEvent(withName: "VibeMdnsLost", body: ["name": name])
+          }
+        default:
+          break
+        }
+      }
+    }
+    browser.start(queue: mdnsQueue)
+  }
+
+  @objc(stopDiscovery)
+  func stopDiscovery() {
+    mdnsBrowser?.cancel()
+    mdnsBrowser = nil
+    for conn in mdnsResolvers { conn.cancel() }
+    mdnsResolvers.removeAll()
+  }
+
+  private func resolveMdns(_ result: NWBrowser.Result) {
+    guard case let .service(serviceName, _, _, _) = result.endpoint else { return }
+    // Friendly name from the `name` TXT record, falling back to the service name.
+    var friendly = serviceName
+    if case let .bonjour(txt) = result.metadata, let n = txt["name"], !n.isEmpty {
+      friendly = n
+    }
+    let conn = NWConnection(to: result.endpoint, using: .tcp)
+    mdnsResolvers.append(conn)
+    conn.stateUpdateHandler = { [weak self, weak conn] state in
+      guard let self = self, let conn = conn else { return }
+      switch state {
+      case .ready:
+        if let path = conn.currentPath,
+           case let .hostPort(host, port) = path.remoteEndpoint {
+          var h = "\(host)"
+          if let pct = h.firstIndex(of: "%") { h = String(h[..<pct]) }  // strip IPv6 zone id
+          h = h.replacingOccurrences(of: "[", with: "").replacingOccurrences(of: "]", with: "")
+          self.sendEvent(withName: "VibeMdnsFound",
+                         body: ["name": friendly, "host": h, "port": Int(port.rawValue)])
+        }
+        self.dropResolver(conn)
+      case .failed, .cancelled:
+        self.dropResolver(conn)
+      default:
+        break
+      }
+    }
+    conn.start(queue: mdnsQueue)
+  }
+
+  private func dropResolver(_ conn: NWConnection) {
+    conn.cancel()
+    mdnsResolvers.removeAll { $0 === conn }
   }
 }
 

@@ -49,13 +49,14 @@
 	<array>
 		<string>_http._tcp</string>
 		<string>_https._tcp</string>
+		<string>_rtl_tcp._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>VibeSDR needs local network access to connect to SDR hardware.</string>
+	<string>VibeSDR uses local network access to scan for and connect to SDR servers on your network, such as RTL-TCP servers and local KiwiSDR, UberSDR or OpenWebRX receivers.</string>
 	<key>NSLocationDefaultAccuracyReduced</key>
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>VibeSDR uses your approximate location only to sort and filter the SDR instance list by distance (nearest first). Location is optional — if you deny it, every other feature still works and you can browse and use all instances normally.</string>
+	<string>VibeSDR uses your approximate location to sort the SDR instance list by distance and to align the map for local SDR decodes. Location is optional — if you deny it, every other feature still works. Your location is coarsened and only used on-device for sorting.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

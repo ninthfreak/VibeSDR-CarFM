@@ -32,4 +32,6 @@ RCT_EXTERN_METHOD(getPendingVoiceQuery:(RCTPromiseResolveBlock)resolve rejecter:
 RCT_EXTERN_METHOD(getLocation:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(setArtwork:(NSString *)serverType)
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(getDebugInfoSync)
+RCT_EXTERN_METHOD(startDiscovery)
+RCT_EXTERN_METHOD(stopDiscovery)
 @end

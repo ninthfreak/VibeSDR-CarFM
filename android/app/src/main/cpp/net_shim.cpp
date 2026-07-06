@@ -24,6 +24,16 @@ void Socket::close() {
     if (fd_ >= 0) { ::shutdown(fd_, SHUT_RDWR); ::close(fd_); fd_ = -1; }
 }
 
+std::string Socket::peerAddress() {
+    if (fd_ < 0) return "";
+    struct sockaddr_in addr {};
+    socklen_t len = sizeof(addr);
+    if (::getpeername(fd_, (struct sockaddr*)&addr, &len) != 0) return "";
+    char buf[INET_ADDRSTRLEN] = {0};
+    if (!::inet_ntop(AF_INET, &addr.sin_addr, buf, sizeof(buf))) return "";
+    return std::string(buf);
+}
+
 int Socket::send(const uint8_t* data, size_t len, const Address*) {
     if (!open_ || fd_ < 0) return -1;
     size_t off = 0;

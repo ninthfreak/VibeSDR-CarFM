@@ -49,6 +49,8 @@ import { VibePowerModule } from '../components/AudioPlayer';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import { APP_VERSION } from '../constants/version';
 import { DIRECTORIES, fetchDirectory, type DirectoryId } from '../services/directories';
+import { startMdnsDiscovery, type DiscoveredServer } from '../services/mdns';
+import { rtlTcpServerSupported } from '../services/rtlTcpServer';
 
 // Per-backend logo for the directory cards + per-instance type icon (receiverbook
 // mixes OWRX + Kiwi, so the row icon tells them apart at a glance).
@@ -93,6 +95,8 @@ export default function InstancePickerScreen({ navigation }: Props) {
   // RTL-TCP named favourites (host:port + friendly name), persisted locally.
   const [tcpFavs,     setTcpFavs]       = useState<TcpFav[]>([]);
   const [tcpModal,    setTcpModal]      = useState(false);
+  // Auto-discovered RTL-TCP servers (mDNS/Bonjour) — live while the picker is focused.
+  const [discovered,  setDiscovered]    = useState<DiscoveredServer[]>([]);
   const [tcpName,     setTcpName]       = useState('');
   const [tcpHost,     setTcpHost]       = useState('');
   const [tcpPort,     setTcpPort]       = useState('1234');
@@ -201,6 +205,14 @@ export default function InstancePickerScreen({ navigation }: Props) {
     tryUsbLaunchRef.current?.();
   }, []));
 
+  // mDNS/Bonjour: browse for RTL-TCP servers while the picker is on screen; stop
+  // on blur so we don't hold the network browser open during an SDR session.
+  useFocusEffect(useCallback(() => {
+    setDiscovered([]);
+    const stop = startMdnsDiscovery(setDiscovered);
+    return () => { stop(); setDiscovered([]); };
+  }, []));
+
   const { colors: C, font: F, scale } = themeFor(viewMode);
 
   const normalisedCustomUrl = useMemo(() => {
@@ -277,9 +289,25 @@ export default function InstancePickerScreen({ navigation }: Props) {
     try { pending = await Local.consumeUsbLaunch(); } catch { pending = false; }
     if (!pending) return false;
     splashBridge.dismiss();
-    await connectLocal(modeArg);
+    // Let the user pick how to use the just-plugged-in dongle: listen on this
+    // device, or share it over the network as an RTL-TCP server. (Falls straight
+    // through to listen if the server path isn't available on this build.)
+    if (rtlTcpServerSupported) {
+      Alert.alert(
+        'RTL-SDR connected',
+        'How would you like to use this dongle?',
+        [
+          { text: 'Listen on this device', onPress: () => { connectLocal(modeArg); } },
+          { text: 'Share over network', onPress: () => navigation.navigate('RtlTcpServer', {}) },
+          { text: 'Cancel', style: 'cancel' },
+        ],
+        { cancelable: true },
+      );
+    } else {
+      await connectLocal(modeArg);
+    }
     return true;
-  }, [connectLocal]);
+  }, [connectLocal, navigation]);
   tryUsbLaunchRef.current = tryUsbLaunch;
 
   // RTL-TCP: connect to an rtl_tcp server (host:port) over the network and run the
@@ -335,6 +363,19 @@ export default function InstancePickerScreen({ navigation }: Props) {
     const next = tcpFavs.filter(f => !(f.host === fav.host && f.port === fav.port));
     setTcpFavs(next); saveTcpFavs(next).catch(() => {});
   }, [tcpFavs]);
+
+  // Pin a discovered (mDNS) server into the RTL-TCP favourites so it survives
+  // even when it's not currently advertising.
+  const saveDiscovered = useCallback((s: DiscoveredServer) => {
+    const next = [...tcpFavs.filter(f => !(f.host === s.host && f.port === s.port)),
+                  { name: s.name, host: s.host, port: s.port }];
+    setTcpFavs(next); saveTcpFavs(next).catch(() => {});
+  }, [tcpFavs]);
+
+  // Discovered servers not already saved as a favourite (dedupe by host:port).
+  const discoveredNew = useMemo(
+    () => discovered.filter(s => !tcpFavs.some(f => f.host === s.host && f.port === s.port)),
+    [discovered, tcpFavs]);
 
   // Connect a saved favourite: use its stored backend type, or detect it once
   // (and remember it) so an OpenWebRX/Kiwi favourite doesn't reconnect as UberSDR.
@@ -813,6 +854,20 @@ export default function InstancePickerScreen({ navigation }: Props) {
                     <View style={{ marginLeft: 4 }}><UsbSdrIcon size={26} color={C.amber} strokeWidth={2.4} /></View>
                     <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>
                   </TouchableOpacity>
+                  {/* Share the plugged-in dongle over the network (RTL-TCP server). */}
+                  {rtlTcpServerSupported && (
+                    <TouchableOpacity
+                      style={[styles.row, { borderColor: C.goldDim, borderStyle: 'dashed' }]}
+                      onPress={() => navigation.navigate('RtlTcpServer', {})}
+                    >
+                      <View style={styles.rowMain}>
+                        <Text style={{ fontFamily: F, fontSize: fs(15), color: C.gold }} numberOfLines={1}>⇆ Share over network (RTL-TCP server)</Text>
+                        <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
+                          serve this dongle to other devices on your Wi-Fi
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  )}
                 </>)}
 
                 {/* RTL-TCP — networked rtl_tcp server; works on both platforms. */}
@@ -856,6 +911,33 @@ export default function InstancePickerScreen({ navigation }: Props) {
                     </View>
                   </TouchableOpacity>
                 </View>
+
+                {/* DISCOVERED — RTL-TCP servers found automatically on the local
+                    network via mDNS/Bonjour. Only shown when something advertises. */}
+                {discoveredNew.length > 0 && (
+                  <View style={{ marginTop: 10 }}>
+                    <SectionHeader label="DISCOVERED" fs={fs} F={F} C={C} />
+                    {discoveredNew.map((s) => (
+                      <TouchableOpacity key={`disc-${s.host}:${s.port}`}
+                        style={[styles.row, { borderColor: C.amber }]}
+                        onPress={() => connectTcp(s.host, s.port, s.name)}
+                      >
+                        <Image source={require('../../assets/rtltcp.png')}
+                          style={{ width: 26, height: 26, tintColor: C.amber, marginRight: 8 }} resizeMode="contain" />
+                        <View style={styles.rowMain}>
+                          <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>{s.name}</Text>
+                          <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
+                            rtl_tcp · {s.host}:{s.port} · on your network
+                          </Text>
+                        </View>
+                        <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          onPress={() => saveDiscovered(s)}>
+                          <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, paddingHorizontal: 8 }}>☆</Text>
+                        </TouchableOpacity>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
               </View>
             }
             ListFooterComponent={

@@ -11,6 +11,7 @@ LogBox.ignoreAllLogs();
 
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import SDRScreen            from './src/screens/SDRScreen';
+import RtlTcpServerScreen   from './src/screens/RtlTcpServerScreen';
 import CrashBoundary        from './src/components/CrashBoundary';
 import { installCrashGuard } from './src/services/crashGuard';
 import { ThemeProvider }    from './src/contexts/ThemeContext';
@@ -48,6 +49,8 @@ export type RootStackParamList = {
     initialMode?:    SDRMode;
     initialZoom?:    number;
   };
+  // RTL-TCP server (Android): share this device's USB dongle over the network.
+  RtlTcpServer: { name?: string } | undefined;
 };
 
 export const splashBridge = {
@@ -196,6 +199,7 @@ export default function App() {
           >
             <Stack.Screen name="InstancePicker" component={InstancePickerScreen} options={{ headerShown: false }} />
             <Stack.Screen name="SDR"            component={SDRScreen}            options={{ headerShown: false, gestureEnabled: false }} />
+            <Stack.Screen name="RtlTcpServer"   component={RtlTcpServerScreen}   options={{ headerShown: false }} />
           </Stack.Navigator>
         </NavigationContainer>
         </CrashBoundary>
