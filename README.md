@@ -3,14 +3,14 @@
 A mobile-first SDR receiver app for iOS and Android — and far more than a single-server client. VibeSDR speaks multiple SDR server protocols, runs **local SDR hardware on-device**, and does its own demodulation with a clean-room, GPL-free DSP engine. It pairs all of that with a GPU-rendered waterfall, native background audio, on-device decoders and maps, voice and in-car control — a genuinely great SDR experience on any phone, regardless of the receiver behind it.
 
 **What VibeSDR connects to:**
-- **Remote SDR servers** — native adapters for [UberSDR](https://ubersdr.org), **OpenWebRX / OpenWebRX+**, and **KiwiSDR**, all behind one interface, with a directory chooser in the instance picker.
+- **Remote SDR servers** — native adapters for [UberSDR](https://ubersdr.org), **OpenWebRX / OpenWebRX+**, **KiwiSDR**, and **FM-DX Webserver** (the worldwide network of shared FM broadcast tuners), all behind one interface, with a directory chooser in the instance picker.
 - **Local hardware** — plug an **RTL-SDR into an Android phone over USB** ("Local Hardware"), or connect to a networked **rtl_tcp** server from either platform. VibeSDR demodulates the raw IQ itself.
 - **VibeDSP** — its own from-scratch, ARM-NEON-optimised DSP engine for the on-device paths (no SDR++ / FFTW / VOLK), so the local radio is fast, light on battery, and free of bundled third-party GPL DSP.
 
 > Built by Stuart Carr (Stuey3D) with AI assistance from Claude (Anthropic).
 > Free software under the GNU GPL-3.0.
 
-**Latest release: [v5.0.1](https://github.com/Stuey3D/VibeSDR/releases/latest)** — iOS `.ipa` and Android `.apk`.
+**Latest release: [v7.0.0](https://github.com/Stuey3D/VibeSDR/releases/latest)** — iOS `.ipa` and Android `.apk`. Adds **FM-DX Webserver** support: a vintage tuning dial, full RDS, station logos and country flags, shared-tuner chat, and recording.
 
 > **📱 iOS App Store approval is in progress.** Apple review is taking a while at the moment, but a **TestFlight link is coming soon** so you'll be able to install on iPhone without re-signing anything. In the meantime, iPhone users can sign and sideload the `.ipa` — see [Installing on iPhone](#installing-on-iphone-signing-the-ipa-with-xcode) below.
 
@@ -101,7 +101,8 @@ VibeSDR runs full-screen on iPad, with the on-screen decoders available in lands
 - **Spots tables** for digital and CW activity
 
 ### Stations, bookmarks & social
-- **Instance picker** — a directory chooser across UberSDR, OpenWebRX/OpenWebRX+ and KiwiSDR receivers (plus Receiverbook), with location-aware sorting, country flags, favourites, and an auto-connect default. **Local Hardware** is pinned to the top on Android.
+- **Instance picker** — a directory chooser across UberSDR, OpenWebRX/OpenWebRX+, KiwiSDR and FM-DX Webserver receivers (plus Receiverbook), with location-aware sorting, country flags, favourites, and an auto-connect default. **Local Hardware** is pinned to the top on Android.
+- **FM-DX Webserver tuner** — connect to the worldwide network of shared FM broadcast tuners (`servers.fmdx.org`). A vintage analogue tuning dial that learns station names as you tune, full RDS (PS, RadioText, PI, PTY, TP/TA, stereo), a dBf signal meter, transmitter details (site, power, distance, bearing), tap-to-tune alternative frequencies, station logos and country flags. Because the tuner is shared, there's built-in chat, a listener counter, and the lock-screen skip controls are disabled. Station logos and country flags also carry over to local RTL-SDR and networked WFM via the RDS PI code, cached on-device for offline use.
 - **Bookmark & band-plan search** with live (session-dynamic) EiBi schedules, in a scrollable result list
 - **User bookmarks** — per-instance or global, UberSDR-compatible import/export
 - **Visual Tuning System (VTS)** — on-screen nearby-station bar, band-crossing and on-tune popups, and station/bookmark skipping
