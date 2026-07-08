@@ -70,6 +70,7 @@ export default function TunerScreen({ route, navigation }: Props) {
 
   const [st, setSt] = useState<FmdxState | null>(null);
   const [connected, setConnected] = useState(false);
+  const [paused, setPaused] = useState(false);   // power-saving pause (media controls) → disconnected
   const [error, setError] = useState<string | null>(null);
   const [logo, setLogo] = useState<string | null>(null);
   const lastLogoName = useRef<string>('');
@@ -258,6 +259,7 @@ export default function TunerScreen({ route, navigation }: Props) {
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = emitter.addListener('VibeMuted', (e: { muted: boolean }) => {
       pausedRef.current = !!e.muted;
+      setPaused(!!e.muted);
       const b = backendRef.current as any;
       if (e.muted) {
         b?.pauseForPower?.();
@@ -363,7 +365,8 @@ export default function TunerScreen({ route, navigation }: Props) {
   }, []);
   const openChat = useCallback(() => { setChatOpen(true); setChatUnread(false); }, []);
 
-  const ps = st?.ps?.trim() || (connected ? '' : 'Connecting…');
+  const ps = st?.ps?.trim() || (paused ? 'Paused' : connected ? '' : 'Connecting…');
+  const resumeFromPause = useCallback(() => { (VibePowerModule as any)?.setMuted?.(false); }, []);
   const monogram = (st?.ps?.trim() || '?').slice(0, 3).toUpperCase();
   const sigNorm = Math.min(1, Math.max(0, (st?.sig ?? 0) / 70));
 
@@ -372,8 +375,17 @@ export default function TunerScreen({ route, navigation }: Props) {
       {/* Header (Back lives in the control island's menu slot) */}
       <View style={[styles.header, { paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right }]}>
         <Text style={styles.title} numberOfLines={1}>{instanceName ?? 'FM-DX'}</Text>
-        {!!st && <Text style={styles.users}>{st.users} 👤</Text>}
+        {!!st && !paused && <Text style={styles.users}>{st.users} 👤</Text>}
       </View>
+
+      {/* Power-saving pause: FM-DX disconnects (frees the shared tuner) — mirror the
+          other backends' "PAUSED — TAP TO RECONNECT" pill (▶ or a tap resumes). */}
+      {paused && (
+        <TouchableOpacity style={[styles.pausedBanner, { top: insets.top + 46 }]}
+          onPress={resumeFromPause} activeOpacity={0.85}>
+          <Text style={styles.pausedBannerText}>⏸ PAUSED — TAP TO RECONNECT</Text>
+        </TouchableOpacity>
+      )}
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingTop: 14, paddingBottom: 14 + bottomH, paddingLeft: 14 + insets.left, paddingRight: 14 + insets.right, gap: 12 }}>
         {error && <Text style={styles.err}>{error}</Text>}
@@ -426,7 +438,12 @@ export default function TunerScreen({ route, navigation }: Props) {
         )}
 
         {!connected && !error && (
-          <View style={{ alignItems: 'center', padding: 20 }}><ActivityIndicator color={theme.btnActiveText} /></View>
+          paused
+            ? <View style={{ alignItems: 'center', padding: 20, gap: 6 }}>
+                <Text style={{ fontSize: 30 }}>⏸</Text>
+                <Text style={{ color: theme.btnText, fontFamily: theme.font, fontSize: 15, opacity: 0.8 }}>Paused — press ▶ to resume</Text>
+              </View>
+            : <View style={{ alignItems: 'center', padding: 20 }}><ActivityIndicator color={theme.btnActiveText} /></View>
         )}
       </ScrollView>
 
@@ -595,6 +612,13 @@ function makeStyles(t: ThemeTokens) {
     title: { flex: 1, color: t.freqColor, fontFamily: F, fontSize: 18, fontWeight: 'bold', letterSpacing: 1 },
     users: { color: t.snrColor, fontFamily: F, fontSize: 13 },
     err: { color: '#ff8a8a', fontFamily: F, fontSize: 13, textAlign: 'center' },
+    pausedBanner: {
+      position: 'absolute', alignSelf: 'center', zIndex: 60,
+      backgroundColor: 'rgba(20,6,4,0.92)', borderWidth: 1,
+      borderColor: 'rgba(220,60,60,0.8)', borderRadius: 8,
+      paddingHorizontal: 14, paddingVertical: 8,
+    },
+    pausedBannerText: { color: '#ff7a7a', fontFamily: F, fontSize: 13, fontWeight: '700', letterSpacing: 0.5 },
     panel: { backgroundColor: t.barBg, borderRadius: 14, borderWidth: 1, borderColor: t.barBorder, padding: 14 },
     stationRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
     logoBox: { width: 72, height: 72, borderRadius: 10, backgroundColor: t.pillBg, borderWidth: 1, borderColor: t.barBorder, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
