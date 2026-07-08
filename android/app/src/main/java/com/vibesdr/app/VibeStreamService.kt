@@ -90,6 +90,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         // audio + the media card survive backgrounding (JS owns only the spectrum
         // WS, which is paused in the background to save power).
         const val ACTION_START_LOCAL = "com.vibesdr.app.START_LOCAL"
+        // FM-DX Webserver: the shared TEF6686 tuner's MP3-over-WS audio stream,
+        // consumed + decoded (MediaCodec "audio/mpeg") NATIVELY so audio + the
+        // media card survive backgrounding. Pause = stop the stream (power saving,
+        // like UberSDR), play = reopen it. The /text + /chat control WS stay in JS.
+        const val ACTION_START_FMDX = "com.vibesdr.app.START_FMDX"
         const val EXTRA_PORT = "port"
         const val EXTRA_TUNE = "tune"
         const val EXTRA_RATE = "rate"
@@ -278,6 +283,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             }
             ACTION_START_EXTERNAL -> startExternalAudio(intent.getIntExtra(EXTRA_RATE, 48000), intent.getStringExtra(EXTRA_PAUSE_MODE) ?: "release")
             ACTION_START_LOCAL -> startLocalAudio(intent.getIntExtra(EXTRA_PORT, 0), intent.getStringExtra(EXTRA_TUNE) ?: "")
+            ACTION_START_FMDX -> startFmdxAudio(intent.getStringExtra(EXTRA_BASE_URL) ?: return START_STICKY)
             ACTION_PLAY -> setMutedNative(false)
             ACTION_PAUSE -> setMutedNative(true)
             // stopSelf(startId) — NOT bare stopSelf() — so a reconnect (AudioPlayer
@@ -369,6 +375,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         // → media-control "pause springs back to play").
         externalAudio = false
         externalPauseMode = "release"
+        // FM-DX teardown (switching FM-DX → another backend)
+        fmdxAudio = false
+        closeFmdxWs()
+        mp3Thread?.interrupt(); mp3Thread = null
+        mp3Queue.clear()
         localAudioWs?.cancel(); localAudioWs = null; lastLocalTune = null
         extThread?.interrupt(); extThread = null
         extQueue.clear()
@@ -441,6 +452,19 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         muted = m
         if (m) packetQueue.clear()
         emitEvent("VibeMuted") { it.putBoolean("muted", m) }
+        // FM-DX power-saving pause: STOP the MP3 audio stream (close the /audio WS)
+        // so it isn't draining battery/network in the background (AirPods out /
+        // Bluetooth off) — the same intent as UberSDR's disconnect-on-pause. ▶
+        // reopens FM-DX's OWN audio WS. The media card stays (the /text control WS
+        // in JS is untouched — it self-throttles in the background).
+        if (fmdxAudio) {
+            mainHandler.post {
+                if (m) closeFmdxWs() else openFmdxWs()
+                updatePlaybackState(if (m) PlaybackStateCompat.STATE_PAUSED else PlaybackStateCompat.STATE_PLAYING)
+                updateNotification()
+            }
+            return
+        }
         // OWRX/Kiwi (external): an OWRX reconnect resets the server to its default
         // profile, so we don't offer play-to-reconnect. PAUSE fully releases the
         // media controls (stopExternalAudio clears the notification); JS closes its
@@ -691,6 +715,186 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         localAudioWs?.cancel(); localAudioWs = null
         lastLocalTune = null
         stopExternalAudio()
+    }
+
+    // ── FM-DX Webserver audio (v7) — native MP3-over-WS consumer ──────────────
+    // The FM-DX server streams headerless MP3 frames on <base>/audio (3LAS, after
+    // a {"type":"fallback","data":"mp3"} handshake). We read + MediaCodec-decode
+    // it HERE (native) so audio + the media card survive backgrounding, then push
+    // the PCM through the shared external-audio writer/track. The /text (tune,
+    // RDS, SNR) and /chat sockets stay in JS. Reuses externalAudio=true for the
+    // ext writer + watchdog-skip; fmdxAudio adds the WS + power-saving pause.
+    @Volatile private var fmdxAudio = false
+    private var fmdxBase = ""
+    @Volatile private var fmdxWs: WebSocket? = null
+    @Volatile private var fmdxGen = 0                 // supersede in-flight receives/reconnects
+    private var mp3Thread: Thread? = null
+    private val mp3Queue = LinkedBlockingDeque<ByteArray>(64)
+    private var mp3Codec: MediaCodec? = null
+    private var mp3PtsUs = 0L
+    private var mp3Rate = 44_100
+    private var mp3Ch = 2
+
+    fun startFmdxAudio(baseUrl: String) {
+        Log.i(TAG, "startFmdxAudio $baseUrl")
+        if (baseUrl.isEmpty()) return
+        startExternalAudio(48_000, "resume")   // sets up the ext writer + track + media card
+        fmdxAudio = true
+        fmdxBase = baseUrl
+        mp3Queue.clear()
+        startMp3DecodeThread()
+        openFmdxWs()
+    }
+
+    fun stopFmdxAudio() {
+        Log.i(TAG, "stopFmdxAudio")
+        fmdxAudio = false
+        closeFmdxWs()
+        mp3Thread?.interrupt(); mp3Thread = null
+        mp3Queue.clear()
+        stopExternalAudio()
+    }
+
+    private fun fmdxWsUrl(base: String): String {
+        var s = base.trim().trimEnd('/')
+        s = when {
+            s.startsWith("https://") -> "wss://" + s.removePrefix("https://")
+            s.startsWith("http://") -> "ws://" + s.removePrefix("http://")
+            s.startsWith("ws://") || s.startsWith("wss://") -> s
+            else -> "wss://$s"
+        }
+        return "$s/audio"
+    }
+
+    private fun closeFmdxWs() {
+        fmdxGen++                       // any pending receive/reconnect for the old gen no-ops
+        fmdxWs?.cancel(); fmdxWs = null
+    }
+
+    private fun openFmdxWs() {
+        val base = fmdxBase
+        if (base.isEmpty()) return
+        fmdxGen++
+        val gen = fmdxGen
+        val client = httpClient ?: OkHttpClient.Builder()
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .pingInterval(20, TimeUnit.SECONDS)
+            .build().also { httpClient = it }
+        val url = fmdxWsUrl(base)
+        Log.i(TAG, "opening fmdx audio WS: $url")
+        fmdxWs?.cancel()
+        fmdxWs = client.newWebSocket(Request.Builder().url(url).build(),
+            object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    // 3LAS fallback handshake — request MP3 (matches the iOS path).
+                    webSocket.send("{\"type\":\"fallback\",\"data\":\"mp3\"}")
+                }
+                override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                    if (gen != fmdxGen || !fmdxAudio || muted) return
+                    val b = bytes.toByteArray()
+                    if (b.isEmpty()) return
+                    lastPacketAt = SystemClock.elapsedRealtime()
+                    packetCount++
+                    if (!mp3Queue.offerLast(b)) { mp3Queue.pollFirst(); mp3Queue.offerLast(b) }
+                }
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    // Handshake acks / keepalive JSON — audio is binary only.
+                }
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    if (gen != fmdxGen) return
+                    Log.w(TAG, "fmdx audio WS failure: ${t.message} — reconnect in 2s")
+                    mainHandler.postDelayed({
+                        if (fmdxAudio && !muted && gen == fmdxGen) openFmdxWs()
+                    }, 2_000)
+                }
+            })
+    }
+
+    private fun startMp3DecodeThread() {
+        mp3Thread?.interrupt()
+        val t = Thread({
+            try { mp3DecodeLoop() }
+            catch (e: InterruptedException) { /* normal shutdown */ }
+            catch (e: Exception) { Log.e(TAG, "mp3 decode died: ${e.message}", e) }
+            finally { releaseMp3Codec() }
+        }, "vibesdr-mp3")
+        t.priority = Thread.MAX_PRIORITY
+        mp3Thread = t
+        t.start()
+    }
+
+    private fun ensureMp3Codec() {
+        if (mp3Codec != null) return
+        // Raw (containerless) MP3 stream — no csd needed (unlike opus). The rate/
+        // channels passed are only a hint; the decoder corrects them via
+        // INFO_OUTPUT_FORMAT_CHANGED (FM-DX serves 44.1k stereo).
+        val fmt = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_MPEG, 44_100, 2)
+        val c = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_AUDIO_MPEG)
+        c.configure(fmt, null, null, 0)
+        c.start()
+        mp3Codec = c
+        mp3PtsUs = 0
+        Log.i(TAG, "mp3 decoder created")
+    }
+
+    private fun releaseMp3Codec() {
+        try { mp3Codec?.stop() } catch (_: Exception) {}
+        try { mp3Codec?.release() } catch (_: Exception) {}
+        mp3Codec = null
+    }
+
+    private fun mp3DecodeLoop() {
+        val info = MediaCodec.BufferInfo()
+        ensureMp3Codec()
+        while (running && fmdxAudio) {
+            val pkt = mp3Queue.poll(250, TimeUnit.MILLISECONDS) ?: continue
+            if (pkt.isEmpty()) continue
+            val c = mp3Codec ?: run { ensureMp3Codec(); mp3Codec } ?: continue
+            var fed = false
+            var attempts = 0
+            while (!fed && attempts < 50 && running) {
+                val inIdx = c.dequeueInputBuffer(10_000)
+                if (inIdx >= 0) {
+                    val ib = c.getInputBuffer(inIdx) ?: break
+                    ib.clear()
+                    ib.put(pkt, 0, pkt.size)
+                    c.queueInputBuffer(inIdx, 0, pkt.size, mp3PtsUs, 0)
+                    mp3PtsUs += 26_000   // ~26ms/frame @44.1k — PTS only needs to be monotonic
+                    fed = true
+                }
+                drainMp3(c, info)
+                attempts++
+            }
+            drainMp3(c, info)
+        }
+    }
+
+    private fun drainMp3(c: MediaCodec, info: MediaCodec.BufferInfo) {
+        while (true) {
+            val outIdx = c.dequeueOutputBuffer(info, 0)
+            when {
+                outIdx >= 0 -> {
+                    val ob = c.getOutputBuffer(outIdx)
+                    if (ob != null && info.size > 0) {
+                        val pcm = ByteArray(info.size)
+                        ob.position(info.offset)
+                        ob.get(pcm, 0, info.size)
+                        val n = info.size / 2
+                        val shorts = ShortArray(n)
+                        ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts)
+                        extQueue.offer(Triple(mp3Rate, mp3Ch, shorts))   // drop when full (backpressure)
+                    }
+                    c.releaseOutputBuffer(outIdx, false)
+                }
+                outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    val f = c.outputFormat
+                    mp3Rate = f.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    mp3Ch = f.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                    Log.i(TAG, "mp3 out ${mp3Rate}Hz ${mp3Ch}ch")
+                }
+                else -> return
+            }
+        }
     }
 
     private fun startExtWriter() {
@@ -1756,17 +1960,21 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         // Use a concrete position (0) + current update time, not -1/UNKNOWN: some
         // system media panels treat "PLAYING with unknown position" as not really
         // playing and render a play button (→ taps send ACTION_PLAY, the spring).
+        // FM-DX is a SHARED tuner — one skip retunes it for everyone, so the skip
+        // transport controls are omitted entirely (iOS parity).
+        var actions = PlaybackStateCompat.ACTION_PLAY or
+            PlaybackStateCompat.ACTION_PAUSE or
+            PlaybackStateCompat.ACTION_PLAY_PAUSE or
+            PlaybackStateCompat.ACTION_STOP
+        if (!fmdxAudio) {
+            actions = actions or
+                PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+                PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+        }
         mediaSession?.setPlaybackState(
             PlaybackStateCompat.Builder()
                 .setState(state, 0L, 1f, SystemClock.elapsedRealtime())
-                .setActions(
-                    PlaybackStateCompat.ACTION_PLAY or
-                        PlaybackStateCompat.ACTION_PAUSE or
-                        PlaybackStateCompat.ACTION_PLAY_PAUSE or
-                        PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
-                        PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
-                        PlaybackStateCompat.ACTION_STOP
-                )
+                .setActions(actions)
                 .build()
         )
     }
@@ -1812,20 +2020,30 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         val playPauseLabel = if (!muted) "Mute" else "Unmute"
         val playPauseAction = if (!muted) ACTION_PAUSE else ACTION_PLAY
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val b = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setLargeIcon(npArtwork)
             .setContentTitle(nowPlayingTitle())
             .setContentText(nowPlayingArtist())
             .setContentIntent(contentPi)
-            .addAction(android.R.drawable.ic_media_previous, "Prev", pi(1, ACTION_PREV))
-            .addAction(playPauseIcon, playPauseLabel, pi(2, playPauseAction))
-            .addAction(android.R.drawable.ic_media_next, "Next", pi(3, ACTION_NEXT))
-            .addAction(android.R.drawable.ic_delete, "Stop", pi(4, ACTION_STOP))
+        // FM-DX (shared tuner): no prev/next — a skip would retune it for everyone.
+        val compact: IntArray
+        if (fmdxAudio) {
+            b.addAction(playPauseIcon, playPauseLabel, pi(2, playPauseAction))
+            b.addAction(android.R.drawable.ic_delete, "Stop", pi(4, ACTION_STOP))
+            compact = intArrayOf(0)
+        } else {
+            b.addAction(android.R.drawable.ic_media_previous, "Prev", pi(1, ACTION_PREV))
+            b.addAction(playPauseIcon, playPauseLabel, pi(2, playPauseAction))
+            b.addAction(android.R.drawable.ic_media_next, "Next", pi(3, ACTION_NEXT))
+            b.addAction(android.R.drawable.ic_delete, "Stop", pi(4, ACTION_STOP))
+            compact = intArrayOf(0, 1, 2)
+        }
+        return b
             .setStyle(
                 androidx.media.app.NotificationCompat.MediaStyle()
                     .setMediaSession(mediaSession?.sessionToken)
-                    .setShowActionsInCompactView(0, 1, 2)
+                    .setShowActionsInCompactView(*compact)
             )
             .setOngoing(true)
             .setSilent(true)

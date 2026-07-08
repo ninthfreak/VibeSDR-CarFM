@@ -125,6 +125,22 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun stopLocalAudio() { VibeStreamService.instance?.stopLocalAudio() }
 
+    // FM-DX Webserver (v7): the shared tuner's MP3-over-WS audio, consumed +
+    // decoded natively (background-safe). JS owns only the /text + /chat sockets.
+    @ReactMethod
+    fun startFmdxAudio(baseUrl: String) {
+        VibeStreamService.reactContext = reactContext
+        val intent = Intent(reactContext, VibeStreamService::class.java).apply {
+            action = VibeStreamService.ACTION_START_FMDX
+            putExtra(VibeStreamService.EXTRA_BASE_URL, baseUrl)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) reactContext.startForegroundService(intent)
+        else reactContext.startService(intent)
+    }
+
+    @ReactMethod
+    fun stopFmdxAudio() { VibeStreamService.instance?.stopFmdxAudio() }
+
     @ReactMethod
     fun revive() { VibeStreamService.instance?.revive() }
 

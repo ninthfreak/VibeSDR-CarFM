@@ -716,15 +716,22 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   @objc func setMuted(_ muted: Bool) {
     isMuted = muted
     sendEvent(withName: "VibeMuted", body: ["muted": muted])
-    // FM-DX: a continuous native MP3-over-WS stream (shared tuner — no per-user
-    // session to drop). Pause = mute in place (keep the /text + audio WS and the
-    // decoder alive); ▶ just restarts the engine/player. NEVER disconnect — an
-    // AirPods-removal interruption otherwise landed in the "Disconnected" card and
-    // ▶ couldn't recover (bug: the resume event is UberSDR-only).
+    // FM-DX power-saving pause: STOP the MP3 audio stream + release the audio
+    // route so it isn't draining battery/network in the background (AirPods out /
+    // Bluetooth off). ▶ reopens FM-DX's OWN audio WS + engine — the earlier bug
+    // was that pause routed through the UberSDR data-saver path whose resume event
+    // only the SDR screen handles, so FM-DX audio never came back. The lightweight
+    // /text control WS (JS) is left alone (it self-suspends in the background).
     if fmdxAudio {
       DispatchQueue.main.async {
-        if muted { self.playerNode?.pause() }
-        else     { try? self.audioEngine?.start(); self.playerNode?.play() }
+        if muted {
+          self.closeFmdxWs()
+          self.playerNode?.stop(); self.audioEngine?.stop()
+        } else {
+          try? AVAudioSession.sharedInstance().setActive(true)
+          self.startEngine()
+          self.openFmdxWs()
+        }
         self.updateNowPlaying()
       }
       return
