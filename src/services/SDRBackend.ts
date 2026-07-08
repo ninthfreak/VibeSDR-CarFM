@@ -44,6 +44,7 @@ export interface FmdxState {
   af:      number[];  // alternative frequencies, Hz
   users:   number;
   tx?:     FmdxTxInfo;
+  countryIso?: string;  // RDS ECC-derived ISO country (e.g. 'GB') — disambiguates logos
 }
 
 export interface ProfileInfo {

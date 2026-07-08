@@ -188,6 +188,7 @@ export class FmdxAdapter implements SDRBackend {
       af:     Array.isArray(j?.af) ? j.af.map((k: any) => Math.round(Number(k) * 1000)).filter((n: number) => Number.isFinite(n)) : [],
       users:  Number(j?.users) || 0,
       tx,
+      countryIso: j?.country_iso ? String(j.country_iso).trim() : undefined,
     };
     this.lastState = state;
 

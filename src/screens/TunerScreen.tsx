@@ -12,6 +12,7 @@ import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
 import ControlsBar from '../components/ControlsBar';
 import ChatDrawer, { type ChatMessage } from '../components/ChatDrawer';
 import FreqModal from '../components/FreqModal';
+import FmdxDial, { type DialStation } from '../components/FmdxDial';
 
 // FM-DX Webserver tuner screen (v7). Single shared hardware tuner: server-side
 // demod + RDS, native MP3 audio. No waterfall — station/RDS panels fill the top,
@@ -54,6 +55,27 @@ export default function TunerScreen({ route, navigation }: Props) {
   const [logo, setLogo] = useState<string | null>(null);
   const lastLogoName = useRef<string>('');
 
+  // Client-learned dial map: every RDS name we decode is pinned to its frequency
+  // on the vintage dial, persisted per server. Accumulate in a ref, flush to state
+  // + storage debounced.
+  const [dialStations, setDialStations] = useState<DialStation[]>([]);
+  const dialMapRef = useRef<Map<number, string>>(new Map());
+  const dialFlushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const DIAL_KEY = `lsv_fmdx_dial:${baseUrl}`;
+  const learnStation = useCallback((freqHz: number, name: string) => {
+    const n = name.trim();
+    if (n.length < 2) return;                          // wait for a real PS lock
+    if (dialMapRef.current.get(freqHz) === n) return;  // unchanged — no-op (no spam while parked)
+    dialMapRef.current.set(freqHz, n);
+    // Update the dial LIVE as you tune; persist to storage debounced.
+    const arr = Array.from(dialMapRef.current, ([f, nm]) => ({ freqHz: f, name: nm })).slice(-300);
+    setDialStations(arr);
+    if (dialFlushTimer.current) clearTimeout(dialFlushTimer.current);
+    dialFlushTimer.current = setTimeout(() => {
+      AsyncStorage.setItem(DIAL_KEY, JSON.stringify(arr)).catch(() => {});
+    }, 800);
+  }, [DIAL_KEY]);
+
   // Tuning: displayFreq is what the pill/drum show; while dragging we update it
   // locally and only COMMIT (tune the shared radio) on settle so a drum spin
   // doesn't spam retunes for everyone. When not dragging, the server frame drives it.
@@ -93,6 +115,14 @@ export default function TunerScreen({ route, navigation }: Props) {
   useEffect(() => {
     destroyed.current = false;
     AsyncStorage.getItem(CALLSIGN_KEY).then((cs) => { if (!destroyed.current && cs) setMyCallsign(cs); });
+    AsyncStorage.getItem(DIAL_KEY).then((raw) => {
+      if (destroyed.current || !raw) return;
+      try {
+        const arr: DialStation[] = JSON.parse(raw);
+        dialMapRef.current = new Map(arr.map((s) => [s.freqHz, s.name]));
+        setDialStations(arr);
+      } catch {}
+    });
 
     const uuid = uuidv4();
     const backend = createBackend('fmdx', baseUrl, uuid, {
@@ -105,6 +135,7 @@ export default function TunerScreen({ route, navigation }: Props) {
       onFmdxState: (s) => {
         if (destroyed.current) return;
         setSt(s);
+        if (s.rds && s.ps) learnStation(s.freqHz, s.ps);  // pin RDS name to the dial
         if (dragFreqRef.current != null) return;          // dragging — drum owns the display
         const target = targetFreqRef.current;
         if (target != null) {
@@ -134,6 +165,7 @@ export default function TunerScreen({ route, navigation }: Props) {
       destroyed.current = true;
       if (commitTimer.current) clearTimeout(commitTimer.current);
       if (convergeTimer.current) clearTimeout(convergeTimer.current);
+      if (dialFlushTimer.current) clearTimeout(dialFlushTimer.current);
       backendRef.current?.destroy();
       backendRef.current = null;
     };
@@ -143,14 +175,16 @@ export default function TunerScreen({ route, navigation }: Props) {
   //    wrong station's logo). Use the transmitter's full station name — far
   //    better than the truncated RDS PS. Monogram when there's no confident hit. ──
   const logoName = st?.tx?.tx?.trim() || st?.ps?.trim() || '';
+  const logoIso = st?.countryIso ?? '';
   useEffect(() => {
-    if (!logoName || logoName === lastLogoName.current) return;
-    lastLogoName.current = logoName;
+    const key = `${logoName}|${logoIso}`;
+    if (!logoName || key === lastLogoName.current) return;
+    lastLogoName.current = key;
     setLogo(null);
-    lookupStationLogo(logoName).then((url) => {
-      if (!destroyed.current && lastLogoName.current === logoName) setLogo(url);
+    lookupStationLogo(logoName, logoIso || undefined).then((url) => {
+      if (!destroyed.current && lastLogoName.current === key) setLogo(url);
     });
-  }, [logoName]);
+  }, [logoName, logoIso]);
 
   // ── Drum tuning: velocity-adaptive accumulator, snapped to the step grid,
   //    committed once on settle (shared tuner — don't spam retunes). ───────────
@@ -221,35 +255,21 @@ export default function TunerScreen({ route, navigation }: Props) {
       <ScrollView contentContainerStyle={{ padding: 14, gap: 12 }}>
         {error && <Text style={styles.err}>{error}</Text>}
 
-        {/* Logo + station name + pills */}
-        <View style={[styles.panel, styles.stationRow]}>
-          <View style={styles.logoBox}>
-            {logo
-              ? <Image source={{ uri: logo }} style={styles.logo} resizeMode="contain" />
-              : <Text style={styles.monogram}>{monogram}</Text>}
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.station} numberOfLines={1}>{ps}</Text>
-            <View style={styles.pills}>
-              {st?.stereo && <Pill label="STEREO" on styles={styles} />}
-              {st?.rds && <Pill label="RDS" on styles={styles} />}
-              {st?.tp && <Pill label="TP" on styles={styles} />}
-              {st?.ta && <Pill label="TA" on styles={styles} />}
-              {!!st && <Pill label={PTY[st.pty] ?? 'None'} styles={styles} />}
-            </View>
-          </View>
-        </View>
+        {/* Vintage tuning dial — every RDS name we decode is pinned to its freq */}
+        <FmdxDial
+          freqHz={displayFreq}
+          loHz={FM_LO}
+          hiHz={FM_HI}
+          stations={dialStations}
+          onTune={(hz) => onConfirmFreq(Math.round(hz / 100_000) * 100_000)}
+          theme={theme}
+        />
 
-        {/* PI (signal reading now lives under the mode label in the island) */}
+        {/* PI (signal reading lives under the mode label; station name + RDS
+            RadioText moved to the VTS strip above the island) */}
         <View style={styles.panel}>
           <Text style={styles.metaLabel}>PI CODE</Text>
           <Text style={styles.metaVal}>{st?.pi || '––––'}</Text>
-        </View>
-
-        {/* RadioText */}
-        <View style={styles.panel}>
-          <Text style={styles.metaLabel}>RADIOTEXT</Text>
-          <Text style={styles.rt}>{st?.rt?.replace(/\s{2,}/g, ' ').trim() || '—'}</Text>
         </View>
 
         {/* Transmitter (relative to the RECEIVER's location) */}
@@ -284,6 +304,27 @@ export default function TunerScreen({ route, navigation }: Props) {
           <View style={{ alignItems: 'center', padding: 20 }}><ActivityIndicator color={theme.btnActiveText} /></View>
         )}
       </ScrollView>
+
+      {/* VTS — current station identity + RadioText, above the island (like the
+          SDR screen's station readout) */}
+      <View style={styles.vts}>
+        <View style={styles.vtsLogo}>
+          {logo
+            ? <Image source={{ uri: logo }} style={styles.vtsLogoImg} resizeMode="contain" />
+            : <Text style={styles.vtsMono}>{monogram}</Text>}
+        </View>
+        <View style={{ flex: 1 }}>
+          <View style={styles.vtsTopRow}>
+            <Text style={styles.vtsName} numberOfLines={1}>{ps || '—'}</Text>
+            {st?.stereo && <Pill label="ST" on styles={styles} />}
+            {st?.tp && <Pill label="TP" on styles={styles} />}
+            {st?.ta && <Pill label="TA" on styles={styles} />}
+          </View>
+          {!!st?.rt?.trim() && (
+            <Text style={styles.vtsRt} numberOfLines={1}>{st.rt.replace(/\s{2,}/g, ' ').trim()}</Text>
+          )}
+        </View>
+      </View>
 
       {/* The app's real control island — single VFO drum (no bandwidth) */}
       <ControlsBar
@@ -379,6 +420,13 @@ function makeStyles(t: ThemeTokens) {
     txName: { color: t.freqColor, fontFamily: F, fontSize: 15, fontWeight: 'bold', marginTop: 2 },
     txMeta: { color: t.unitColor, fontFamily: F, fontSize: 12, marginTop: 3 },
     af: { color: t.freqColor, fontFamily: F, fontSize: 15, marginTop: 4, letterSpacing: 1 },
+    vts: { flexDirection: 'row', alignItems: 'center', gap: 10, marginHorizontal: 14, marginBottom: 6, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: t.barBg, borderRadius: 12, borderWidth: 1, borderColor: t.barBorder },
+    vtsLogo: { width: 40, height: 40, borderRadius: 8, backgroundColor: t.pillBg, borderWidth: 1, borderColor: t.barBorder, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+    vtsLogoImg: { width: 38, height: 38 },
+    vtsMono: { color: t.btnActiveText, fontFamily: F, fontSize: 14, fontWeight: 'bold' },
+    vtsTopRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    vtsName: { color: t.freqColor, fontFamily: F, fontSize: 17, fontWeight: 'bold', flexShrink: 1 },
+    vtsRt: { color: t.unitColor, fontFamily: F, fontSize: 12, marginTop: 1 },
     afRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
     afChip: { backgroundColor: t.btnBg, borderWidth: 1, borderColor: t.btnBorder, borderRadius: 6, paddingHorizontal: 12, paddingVertical: 7 },
     afChipTxt: { color: t.btnActiveText, fontFamily: F, fontSize: 15, fontWeight: 'bold' },
