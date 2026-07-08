@@ -59,6 +59,9 @@ export class FmdxAdapter implements SDRBackend {
   private lastState: FmdxState | null = null;
   private eqOn = false;
   private imsOn = false;
+  private textGen = 0;
+  private textReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private deepLinkFreq?: number;
 
   constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks) {
     this.base = baseUrl.replace(/\/+$/, '');
@@ -70,43 +73,64 @@ export class FmdxAdapter implements SDRBackend {
     // NB: we do NOT auto-tune on connect — the tuner is shared; we adopt the
     // server's current frequency and only retune on explicit user action.
     // `frequency` (e.g. from a deep link) is applied after the first state frame.
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      let ws: WebSocket;
-      try { ws = new WebSocket(wsUrl(this.base, '/text')); }
-      catch (e) { reject(e); return; }
-      this.ws = ws;
+    this.deepLinkFreq = frequency;
+    return new Promise((resolve, reject) => this.openTextWs(resolve, reject));
+  }
 
-      ws.onopen = () => {
-        this.cb.onConnect();
-        this.cb.onLink?.(3);
-        this.cb.onChatEnabled?.(true);
-        this.openChatWs();
-        this.fetchStaticData();
-        // Audio is a separate native WS opened from the http base.
-        if (!this.audioStarted) { Vibe?.startFmdxAudio?.(this.base); this.audioStarted = true; }
-        // Optional deep-link retune once we're live (shared-tuner: this DOES
-        // retune for everyone, so only when explicitly requested).
-        if (frequency != null) setTimeout(() => { if (!this.destroyed) this.tune(frequency); }, 400);
-        if (!settled) { settled = true; resolve(); }
-      };
-      ws.onmessage = (e) => {
-        if (typeof e.data !== 'string') return;   // server pushes JSON text
-        try { this.onFrame(JSON.parse(e.data)); }
-        catch { /* non-JSON keepalive — ignore */ }
-      };
-      ws.onerror = () => { if (!settled) { settled = true; reject(new Error('FM-DX WebSocket error')); } };
-      ws.onclose = (ev) => {
-        this.cb.onLink?.(0);
-        this.cb.onDisconnect();
-        this.cb.onServerLost?.();
-        if (!settled) { settled = true; reject(new Error('FM-DX closed (' + ev.code + ')')); }
-      };
-    });
+  /** Open (or reopen) the /text control socket. Transient drops — backgrounding,
+   *  audio route changes (AirPods removed), network blips — auto-reconnect
+   *  silently rather than surfacing a "server stopped responding" banner. */
+  private openTextWs(onOpen?: () => void, onErr?: (e: Error) => void): void {
+    this.textGen++;
+    const gen = this.textGen;
+    let ws: WebSocket;
+    try { ws = new WebSocket(wsUrl(this.base, '/text')); }
+    catch (e) { onErr?.(e as Error); return; }
+    this.ws = ws;
+
+    ws.onopen = () => {
+      if (this.textGen !== gen) return;
+      this.cb.onConnect();
+      this.cb.onLink?.(3);
+      this.cb.onChatEnabled?.(true);
+      this.openChatWs();
+      this.fetchStaticData();
+      // Audio is a separate native WS opened from the http base.
+      if (!this.audioStarted) { Vibe?.startFmdxAudio?.(this.base); this.audioStarted = true; }
+      // Optional deep-link retune, first connect only (shared-tuner: retunes all).
+      if (this.deepLinkFreq != null) {
+        const f = this.deepLinkFreq; this.deepLinkFreq = undefined;
+        setTimeout(() => { if (!this.destroyed) this.tune(f); }, 400);
+      }
+      onOpen?.();
+    };
+    ws.onmessage = (e) => {
+      if (typeof e.data !== 'string') return;   // server pushes JSON text
+      try { this.onFrame(JSON.parse(e.data)); }
+      catch { /* non-JSON keepalive — ignore */ }
+    };
+    ws.onerror = () => { onErr?.(new Error('FM-DX WebSocket error')); };
+    ws.onclose = (ev) => {
+      if (this.textGen !== gen || this.ws !== ws) return;   // superseded
+      this.cb.onLink?.(0);
+      this.cb.onDisconnect();
+      onErr?.(new Error('FM-DX closed (' + ev.code + ')'));
+      if (!this.destroyed) this.scheduleTextReconnect();     // silent auto-reconnect
+    };
+  }
+
+  private scheduleTextReconnect(): void {
+    if (this.textReconnectTimer || this.destroyed) return;
+    this.textReconnectTimer = setTimeout(() => {
+      this.textReconnectTimer = null;
+      if (!this.destroyed) this.openTextWs();
+    }, 2000);
   }
 
   destroy(): void {
     this.destroyed = true;
+    this.textGen++;                                          // supersede any in-flight socket
+    if (this.textReconnectTimer) { clearTimeout(this.textReconnectTimer); this.textReconnectTimer = null; }
     if (this.audioStarted) { Vibe?.stopFmdxAudio?.(); this.audioStarted = false; }
     const ws = this.ws; this.ws = null;
     if (ws) { try { ws.onclose = null; ws.close(); } catch {} }
