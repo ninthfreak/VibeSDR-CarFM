@@ -83,6 +83,7 @@ export default function TunerScreen({ route, navigation }: Props) {
   const [step, setStep] = useState(100_000);
   const [freqModalOpen, setFreqModalOpen] = useState(false);
   const [dialView, setDialView] = useState({ lo: FM_LO, hi: FM_HI });
+  const [bottomH, setBottomH] = useState(0);   // measured VTS+island height → ScrollView bottom padding
 
   // Meter bus — carries the signal fill AND the 3-bar server-connection link
   // quality (derived from /text frame arrival, since FM-DX has no FFT frames).
@@ -292,7 +293,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         {!!st && <Text style={styles.users}>{st.users} 👤</Text>}
       </View>
 
-      <ScrollView contentContainerStyle={{ paddingVertical: 14, paddingLeft: 14 + insets.left, paddingRight: 14 + insets.right, gap: 12 }}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingTop: 14, paddingBottom: 14 + bottomH, paddingLeft: 14 + insets.left, paddingRight: 14 + insets.right, gap: 12 }}>
         {error && <Text style={styles.err}>{error}</Text>}
 
         {/* Vintage tuning dial — every RDS name we decode is pinned to its freq */}
@@ -347,8 +348,14 @@ export default function TunerScreen({ route, navigation }: Props) {
         )}
       </ScrollView>
 
-      {/* VTS — current station identity + RadioText, above the island (like the
-          SDR screen's station readout) */}
+      {/* VTS + control island float absolutely over the scroll content — the SDR
+          controls were built to overlay a fixed-fill area, not sit in flex flow
+          (which was clipping the island to 59px). onLayout feeds the ScrollView's
+          bottom padding so nothing hides behind them. */}
+      <View
+        onLayout={(e) => setBottomH(e.nativeEvent.layout.height)}
+        style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}
+      >
       <View style={[styles.vts, { marginLeft: 14 + insets.left, marginRight: 14 + insets.right }]}>
         <View style={styles.vtsLogo}>
           {logo
@@ -397,6 +404,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         meterLabel={st ? `${Math.round(st.sig)} dBf` : ''}
         freqFormat={(hz) => (hz / 1e6).toFixed(3)}
       />
+      </View>
       </View>
 
       <FreqModal
