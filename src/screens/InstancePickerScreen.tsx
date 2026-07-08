@@ -387,6 +387,10 @@ export default function InstancePickerScreen({ navigation }: Props) {
   // Connect a saved favourite: use its stored backend type, or detect it once
   // (and remember it) so an OpenWebRX/Kiwi favourite doesn't reconnect as UberSDR.
   const connectFav = useCallback(async (fav: Favourite) => {
+    // FM-DX isn't sniffable by detectServerType (which only knows ubersdr/kiwi/
+    // owrx) and letting it "detect" would mis-open an FM-DX fav as UberSDR
+    // (waterfall) — trust the stored type and route straight to the tuner.
+    if (fav.serverType === 'fmdx') { connect(fav.url, fav.name, undefined, null, 'fmdx'); return; }
     // Re-detect on every connect. A SUCCESSFUL detection is authoritative and
     // self-heals a wrong stored type (e.g. an UberSDR-with-kiwi-emulation that a
     // previous build mis-saved as kiwi). Detection returns null only when the
@@ -517,6 +521,11 @@ export default function InstancePickerScreen({ navigation }: Props) {
           >
             <View style={styles.rowMain}>
               <View style={styles.nameRow}>
+                <View style={fav.serverType === 'owrx' ? styles.logoChip : undefined}>
+                  {TYPE_LOGOS[fav.serverType ?? 'ubersdr']
+                    ? <Image source={TYPE_LOGOS[fav.serverType ?? 'ubersdr']} style={styles.typeLogo} resizeMode="contain" />
+                    : <Text style={{ fontFamily: F, fontSize: fs(14), color: C.amber }}>📻</Text>}
+                </View>
                 <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, flex: 1 }} numberOfLines={1}>
                   {isDefault ? '★ ' : ''}{fav.name}
                 </Text>
@@ -617,7 +626,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
               <Text style={{ fontSize: fs(18), color: isDefault ? C.amber : C.goldDim }}>{isDefault ? '★' : '☆'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={{ padding: 4 }}
-              onPress={() => handleToggleFav({ name: inst.name, url: inst.url })}>
+              onPress={() => handleToggleFav({ name: inst.name, url: inst.url, serverType: inst.serverType })}>
               <Text style={{ fontSize: fs(18), color: favoured ? C.red : C.textDim }}>{favoured ? '♥' : '♡'}</Text>
             </TouchableOpacity>
           </View>

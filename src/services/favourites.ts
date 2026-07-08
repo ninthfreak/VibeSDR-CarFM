@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const KEY = 'vsdr_favourites';
 
-export type Favourite = { name: string; url: string; serverType?: 'ubersdr' | 'kiwi' | 'owrx' };
+export type Favourite = { name: string; url: string; serverType?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx' };
 
 export async function getFavourites(): Promise<Favourite[]> {
   try {
@@ -45,7 +45,7 @@ export async function saveTcpFavs(favs: TcpFav[]): Promise<void> {
 }
 
 /** Persist a learned serverType onto an existing favourite (after detection). */
-export async function setFavouriteServerType(url: string, serverType: 'ubersdr' | 'kiwi' | 'owrx'): Promise<void> {
+export async function setFavouriteServerType(url: string, serverType: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx'): Promise<void> {
   const favs = await getFavourites();
   let changed = false;
   const next = favs.map(f => {
