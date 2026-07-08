@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { v4 as uuidv4 } from 'uuid';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { createBackend } from '../services/UberSDRAdapter';
-import type { SDRBackend, FmdxState } from '../services/SDRBackend';
+import type { SDRBackend, FmdxState, FmdxServerInfo } from '../services/SDRBackend';
 import { lookupStationLogo } from '../services/stationLogo';
 import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
 import ControlsBar, { createMeterBus } from '../components/ControlsBar';
+import { VibePowerModule } from '../components/AudioPlayer';
 import ChatDrawer, { type ChatMessage } from '../components/ChatDrawer';
 import FreqModal from '../components/FreqModal';
 import FmdxDial, { type DialStation } from '../components/FmdxDial';
@@ -32,6 +33,12 @@ const PTY = [
 
 const FM_LO = 87_500_000, FM_HI = 108_000_000;
 const clampFm = (hz: number) => Math.min(FM_HI, Math.max(FM_LO, hz));
+/** ISO-3166 alpha-2 → flag emoji (regional indicator symbols). */
+function isoToFlag(iso?: string): string {
+  if (!iso || iso.length !== 2 || !/^[A-Za-z]{2}$/.test(iso)) return '';
+  const base = 0x1F1E6, up = iso.toUpperCase();
+  return String.fromCodePoint(base + up.charCodeAt(0) - 65, base + up.charCodeAt(1) - 65);
+}
 // FM step ladder (Hz) — server accepts any kHz via T<kHz>, so we lock the STEP
 // button to broadcast-FM-sensible values (1 kHz DX → 1 MHz coarse).
 const FM_STEPS = [1_000, 10_000, 100_000, 1_000_000];
@@ -84,6 +91,9 @@ export default function TunerScreen({ route, navigation }: Props) {
   const [freqModalOpen, setFreqModalOpen] = useState(false);
   const [dialView, setDialView] = useState({ lo: FM_LO, hi: FM_HI });
   const [bottomH, setBottomH] = useState(0);   // measured VTS+island height → ScrollView bottom padding
+  const [forcedMono, setForcedMono] = useState(false);
+  const [demodOpen, setDemodOpen] = useState(false);
+  const [serverInfo, setServerInfo] = useState<FmdxServerInfo | null>(null);
 
   // Meter bus — carries the signal fill AND the 3-bar server-connection link
   // quality (derived from /text frame arrival, since FM-DX has no FFT frames).
@@ -114,6 +124,7 @@ export default function TunerScreen({ route, navigation }: Props) {
   const myCallsignRef = useRef<string | null>(null);
   const chatOpenRef = useRef(false);
   const msgId = useRef(0);
+  const lastNpTitle = useRef('');   // dedupe lock-screen now-playing pushes
   useEffect(() => { myCallsignRef.current = myCallsign; }, [myCallsign]);
   useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
 
@@ -140,6 +151,7 @@ export default function TunerScreen({ route, navigation }: Props) {
       onConnect:  () => { if (!destroyed.current) { setConnected(true); setError(null); } },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
       onServerLost: () => { if (!destroyed.current) setError('Server stopped responding'); },
+      onFmdxInfo: (info) => { if (!destroyed.current) setServerInfo(info); },
       onFmdxState: (s) => {
         if (destroyed.current) return;
         setSt(s);
@@ -149,6 +161,12 @@ export default function TunerScreen({ route, navigation }: Props) {
         lastSigNorm.current = sn;
         meterBus.emit({ level: sn, peak: sn, snr: 0, dbfs: s.sig, active: true, link: 3 });
         if (s.rds && s.ps) learnStation(s.freqHz, s.ps);  // pin RDS name to the dial
+        // Lock-screen card: FM station name (or freq) as the title (dedupّd).
+        const npTitle = s.ps?.trim() || `${(s.freqHz / 1e6).toFixed(1)} FM`;
+        if (npTitle !== lastNpTitle.current) {
+          lastNpTitle.current = npTitle;
+          VibePowerModule?.setNowPlaying?.(npTitle, instanceName ?? 'FM-DX');
+        }
         if (dragFreqRef.current != null) return;          // dragging — drum owns the display
         const target = targetFreqRef.current;
         if (target != null) {
@@ -173,6 +191,10 @@ export default function TunerScreen({ route, navigation }: Props) {
     });
     backendRef.current = backend;
     backend.connect().catch((e) => { if (!destroyed.current) setError(String(e?.message ?? e)); });
+    // FM-DX lock-screen card: neutral FM artwork + server name (the native side
+    // also disables skip + owns reconnect for the shared tuner).
+    VibePowerModule?.setInstanceName?.(instanceName ?? 'FM-DX');
+    (VibePowerModule as any)?.setArtwork?.('fmdx');
 
     return () => {
       destroyed.current = true;
@@ -364,6 +386,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         </View>
         <View style={{ flex: 1 }}>
           <View style={styles.vtsTopRow}>
+            {!!isoToFlag(st?.countryIso) && <Text style={styles.vtsFlag}>{isoToFlag(st?.countryIso)}</Text>}
             <Text style={styles.vtsName} numberOfLines={1}>{ps || '—'}</Text>
             {st?.stereo && <Pill label="ST" on styles={styles} />}
             {st?.tp && <Pill label="TP" on styles={styles} />}
@@ -386,7 +409,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         connected={connected}
         meterBus={meterBus}
         signalActive={connected}
-        fmStereo={!!st?.stereo}
+        fmStereo={!!st?.stereo && !forcedMono}
         freqUnit="mhz"
         bottomInset={0}
         onVfoDelta={onVfoDelta}
@@ -396,6 +419,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         onMenu={() => navigation.goBack()}
         onChat={openChat}
         onFreqTap={() => setFreqModalOpen(true)}
+        onModeTap={() => setDemodOpen(true)}
         chatUnread={chatUnread}
         instanceHost={instanceName ?? 'FM-DX'}
         vfoNoInertia
@@ -406,6 +430,38 @@ export default function TunerScreen({ route, navigation }: Props) {
       />
       </View>
       </View>
+
+      {/* Demodulator options sheet (mode-pill tap) — mono/stereo, cEQ, iMS, antenna */}
+      <Modal visible={demodOpen} transparent animationType="fade" onRequestClose={() => setDemodOpen(false)}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => setDemodOpen(false)}>
+          <Pressable style={styles.sheet} onPress={() => {}}>
+            <Text style={styles.sheetTitle}>DEMODULATOR</Text>
+            <OptToggle label="Stereo" on={!forcedMono} styles={styles}
+              onPress={() => { const m = !forcedMono; setForcedMono(m); (backendRef.current as any)?.forceMono?.(m); }} />
+            <OptToggle label="cEQ" on={!!st?.eq} styles={styles}
+              onPress={() => (backendRef.current as any)?.setEq?.(!st?.eq)} />
+            <OptToggle label="iMS" on={!!st?.ims} styles={styles}
+              onPress={() => (backendRef.current as any)?.setIms?.(!st?.ims)} />
+            {(serverInfo?.antennas.length ?? 0) > 1 && (
+              <View style={{ marginTop: 6 }}>
+                <Text style={styles.sheetLabel}>ANTENNA</Text>
+                <View style={styles.antRow}>
+                  {serverInfo!.antennas.map((a) => (
+                    <TouchableOpacity key={a.id}
+                      style={[styles.antBtn, st?.ant === a.id && styles.antBtnOn]}
+                      onPress={() => (backendRef.current as any)?.setAntenna?.(a.id)}>
+                      <Text style={[styles.antBtnTxt, st?.ant === a.id && styles.antBtnTxtOn]} numberOfLines={1}>{a.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
+            <TouchableOpacity style={styles.sheetClose} onPress={() => setDemodOpen(false)}>
+              <Text style={styles.sheetCloseTxt}>CLOSE</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <FreqModal
         visible={freqModalOpen}
@@ -429,6 +485,17 @@ export default function TunerScreen({ route, navigation }: Props) {
         textOnly
       />
     </SafeAreaView>
+  );
+}
+
+function OptToggle({ label, on, onPress, styles }: { label: string; on: boolean; onPress: () => void; styles: any }) {
+  return (
+    <TouchableOpacity style={styles.optRow} onPress={onPress} activeOpacity={0.7}>
+      <Text style={styles.optLabel}>{label}</Text>
+      <View style={[styles.optSwitch, on && styles.optSwitchOn]}>
+        <Text style={[styles.optSwitchTxt, on && styles.optSwitchTxtOn]}>{on ? 'ON' : 'OFF'}</Text>
+      </View>
+    </TouchableOpacity>
   );
 }
 
@@ -477,6 +544,24 @@ function makeStyles(t: ThemeTokens) {
     vtsLogoImg: { width: 38, height: 38 },
     vtsMono: { color: t.btnActiveText, fontFamily: F, fontSize: 14, fontWeight: 'bold' },
     vtsTopRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+    sheet: { backgroundColor: '#101018', borderTopLeftRadius: 18, borderTopRightRadius: 18, borderWidth: 1, borderColor: t.barBorder, padding: 18, paddingBottom: 30, gap: 8 },
+    sheetTitle: { color: t.sectionColor, fontFamily: F, fontSize: 12, fontWeight: 'bold', letterSpacing: 2, marginBottom: 6 },
+    sheetLabel: { color: t.sectionColor, fontFamily: F, fontSize: 11, fontWeight: 'bold', letterSpacing: 1, marginBottom: 6 },
+    optRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.08)' },
+    optLabel: { color: t.freqColor, fontFamily: F, fontSize: 16 },
+    optSwitch: { minWidth: 52, alignItems: 'center', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, borderColor: t.btnBorder, backgroundColor: t.btnBg },
+    optSwitchOn: { backgroundColor: t.btnActiveBg, borderColor: t.btnActiveBdr },
+    optSwitchTxt: { color: t.unitColor, fontFamily: F, fontSize: 12, fontWeight: 'bold' },
+    optSwitchTxtOn: { color: t.btnActiveText },
+    antRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    antBtn: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, borderColor: t.btnBorder, backgroundColor: t.btnBg },
+    antBtnOn: { backgroundColor: t.btnActiveBg, borderColor: t.btnActiveBdr },
+    antBtnTxt: { color: t.unitColor, fontFamily: F, fontSize: 13 },
+    antBtnTxtOn: { color: t.btnActiveText, fontWeight: 'bold' },
+    sheetClose: { marginTop: 14, alignItems: 'center', paddingVertical: 12, borderRadius: 8, borderWidth: 1, borderColor: t.btnBorder },
+    sheetCloseTxt: { color: t.freqColor, fontFamily: F, fontSize: 14, fontWeight: 'bold', letterSpacing: 1 },
+    vtsFlag: { fontSize: 18 },
     vtsName: { color: t.freqColor, fontFamily: F, fontSize: 17, fontWeight: 'bold', flexShrink: 1 },
     vtsRt: { color: t.unitColor, fontFamily: F, fontSize: 12, marginTop: 1 },
     afRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },

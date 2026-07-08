@@ -242,6 +242,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // ── External PCM path (OWRX/Kiwi: the WS + decode live in JS; the native
   //    engine just plays the PCM JS pushes — foreground-first, no WS here) ──
   private var externalAudio = false
+  // FM-DX: a single shared hardware tuner served as native MP3-over-WS. Like
+  // externalAudio it owns its OWN reconnect (openFmdxWs/scheduleFmdxReconnect),
+  // so the UberSDR watchdog must not touch it; it also disables lock-screen skip
+  // (shared tuner — a skip would retune for everyone) and shows its own card.
+  private var fmdxAudio = false
   private var externalRate: Double = 12000
 
   @objc func startExternalAudio(_ sampleRate: NSNumber, pauseMode: String) {
@@ -321,10 +326,19 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     isRunning  = true
     isMuted    = false
     externalAudio = false            // native-WS path, not JS-push
+    fmdxAudio  = true                // own reconnect + no skip + own card
     dataSaverDisconnected = false
     reconnectFailed = false
     packetCount = 0
     lastPacketAt = Date()
+    // Clear any UberSDR state so it can't bleed into the FM-DX lock-screen card
+    // or let a stray watchdog revive reach a live UberSDR endpoint.
+    npTitleOverride  = nil
+    npArtistOverride = nil
+    npArtworkType    = "fmdx"
+    lastArtworkKey   = ""
+    currentBase      = ""
+    currentUuid      = ""
     configureAVSession()
     startEngine()
     openFmdxWs()
@@ -500,7 +514,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // live in JS, which drives its own resume. Reviving here would (re)open a
     // UberSDR audio WS to the stale currentBase = UberSDR audio under the OWRX
     // stream. Only the native Opus engine (startAudioEngine) is the watchdog's.
-    guard isRunning, !externalAudio, !dataSaverDisconnected else { return }  // data saver owns the closed WS
+    guard isRunning, !externalAudio, !fmdxAudio, !dataSaverDisconnected else { return }  // FM-DX / data saver own their own WS
     let stale  = Date().timeIntervalSince(lastPacketAt)
     // Packet staleness stays the PRIMARY zombie detector — the regression is
     // "state says alive, frames stop", so wsReady/.running is only a secondary cue.
@@ -1158,6 +1172,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // mode (which made UberSDR pause take the external release path).
     // startExternalAudio re-sets it true right after its stopEngine() call.
     externalAudio = false
+    fmdxAudio = false
     externalPauseMode = "release"
     healthTimer?.invalidate()
     healthTimer = nil
@@ -1558,6 +1573,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         // RTL-TCP icon is black line art → amber-tint it (matches the Android card
         // + the RTL-TCP menu icon) so it reads on the dark album base.
         icon.withTintColor(amber, renderingMode: .alwaysOriginal).draw(in: rect)
+      } else if npArtworkType == "fmdx", let icon = UIImage(named: "logo_fmdx") {
+        // FM-DX brand mark (green, already coloured) centred on the album base.
+        let side = min(rect.width, rect.height) * 0.9
+        let box = CGRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side)
+        icon.draw(in: box)
       } else if let overlay = UIImage(named: "logo_\(npArtworkType)") {
         overlay.draw(in: rect)
       }
@@ -1594,11 +1614,13 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       return .success
     }
 
-    // Skip forward = tune up by step
-    cc.nextTrackCommand.isEnabled = true
+    // Skip forward = tune up by step. DISABLED for FM-DX: it's a single shared
+    // tuner, so a lock-screen / headphone skip would retune for EVERY listener.
+    cc.nextTrackCommand.isEnabled = !fmdxAudio
     cc.nextTrackCommand.removeTarget(nil)
     cc.nextTrackCommand.addTarget { [weak self] _ in
       guard let self else { return .commandFailed }
+      if self.fmdxAudio { return .commandFailed }
       // External (OWRX/Kiwi): tuning lives in JS — delegate the skip so we don't
       // tune the native UberSDR WS (which resurrects a UberSDR session). JS
       // handles step vs bookmark from its own media-skip setting.
@@ -1616,11 +1638,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       return .success
     }
 
-    // Skip back = tune down by step
-    cc.previousTrackCommand.isEnabled = true
+    // Skip back = tune down by step. DISABLED for FM-DX (shared tuner — see above).
+    cc.previousTrackCommand.isEnabled = !fmdxAudio
     cc.previousTrackCommand.removeTarget(nil)
     cc.previousTrackCommand.addTarget { [weak self] _ in
       guard let self else { return .commandFailed }
+      if self.fmdxAudio { return .commandFailed }
       if self.externalAudio || self.skipMode == "bookmark" {
         self.sendEvent(withName: "VibeSkip", body: ["direction": "prev"])
         return .success

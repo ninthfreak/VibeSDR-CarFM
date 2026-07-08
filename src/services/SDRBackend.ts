@@ -45,6 +45,16 @@ export interface FmdxState {
   users:   number;
   tx?:     FmdxTxInfo;
   countryIso?: string;  // RDS ECC-derived ISO country (e.g. 'GB') — disambiguates logos
+  eq?:     boolean;   // cEQ filter on
+  ims?:    boolean;   // iMS filter on
+  ant?:    number;    // current antenna index
+}
+
+/** One-shot FM-DX server capabilities (from /static_data) — drives the
+ *  demodulator options sheet (antenna list, whether IF-bandwidth is switchable). */
+export interface FmdxServerInfo {
+  antennas: { id: number; name: string }[];
+  bwSwitch: boolean;
 }
 
 export interface ProfileInfo {
@@ -207,6 +217,8 @@ export interface BackendCallbacks extends SDRCallbacks {
   /** FM-DX: whole-state telemetry per `/text` frame (freq, sig, RDS, txInfo, AF,
    *  users). Drives the tuner screen; supersedes onMetadata for that backend. */
   onFmdxState?: (state: FmdxState) => void;
+  /** FM-DX: one-shot server capabilities (antennas, bw switch) from /static_data. */
+  onFmdxInfo?: (info: FmdxServerInfo) => void;
   /** OWRX: the WS closed UNEXPECTEDLY (server crash/restart — common on OWRX),
    *  as opposed to a user pause/navigation. The UI keeps the session alive and
    *  shows a "server stopped responding" prompt instead of silently dropping. */

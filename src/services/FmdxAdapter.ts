@@ -57,6 +57,8 @@ export class FmdxAdapter implements SDRBackend {
   // Latest known state (server is authoritative on a shared tuner).
   private freq = 95_000_000;         // Hz — adopted from the server's first frame
   private lastState: FmdxState | null = null;
+  private eqOn = false;
+  private imsOn = false;
 
   constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks) {
     this.base = baseUrl.replace(/\/+$/, '');
@@ -80,6 +82,7 @@ export class FmdxAdapter implements SDRBackend {
         this.cb.onLink?.(3);
         this.cb.onChatEnabled?.(true);
         this.openChatWs();
+        this.fetchStaticData();
         // Audio is a separate native WS opened from the http base.
         if (!this.audioStarted) { Vibe?.startFmdxAudio?.(this.base); this.audioStarted = true; }
         // Optional deep-link retune once we're live (shared-tuner: this DOES
@@ -189,7 +192,12 @@ export class FmdxAdapter implements SDRBackend {
       users:  Number(j?.users) || 0,
       tx,
       countryIso: j?.country_iso ? String(j.country_iso).trim() : undefined,
+      eq:  Number(j?.eq)  === 1,
+      ims: Number(j?.ims) === 1,
+      ant: Number.isFinite(Number(j?.ant)) ? Number(j.ant) : undefined,
     };
+    this.eqOn  = state.eq ?? this.eqOn;
+    this.imsOn = state.ims ?? this.imsOn;
     this.lastState = state;
 
     this.cb.onFmdxState?.(state);
@@ -214,6 +222,35 @@ export class FmdxAdapter implements SDRBackend {
   }
 
   syncFrequency(frequency: number, _mode?: SDRMode): void { this.freq = frequency; }
+
+  /** Force mono (B1) vs stereo/auto (B0) — the FM-DX "st" button. Helps pull
+   *  weak/DX stations out of stereo hiss. */
+  forceMono(mono: boolean): void { this.send(mono ? 'B1' : 'B0'); }
+
+  /** cEQ / iMS filters — `G<eq><ims>` two digits, sent together. */
+  setEq(on: boolean):  void { this.eqOn = on;  this.send(`G${on ? 1 : 0}${this.imsOn ? 1 : 0}`); }
+  setIms(on: boolean): void { this.imsOn = on; this.send(`G${this.eqOn ? 1 : 0}${on ? 1 : 0}`); }
+  /** Antenna select — `Z<n>` (only when the server advertises multiple). */
+  setAntenna(id: number): void { this.send('Z' + id); }
+
+  /** One-shot /static_data fetch → antenna list + bw-switch capability. */
+  private fetchStaticData(): void {
+    const base = this.base.replace(/\/+$/, '');
+    const url = /^https?:\/\//.test(base) ? base + '/static_data' : 'http://' + base + '/static_data';
+    fetch(url).then((r) => r.json()).then((j) => {
+      if (this.destroyed) return;
+      const antennas: { id: number; name: string }[] = [];
+      const ant = j?.ant;
+      if (ant && typeof ant === 'object') {
+        for (const k of Object.keys(ant)) {
+          const v = (ant as any)[k];
+          const name = typeof v === 'string' ? v : (v?.name ?? `Antenna ${k}`);
+          if (name) antennas.push({ id: Number(k), name: String(name) });
+        }
+      }
+      this.cb.onFmdxInfo?.({ antennas, bwSwitch: !!j?.bwSwitch });
+    }).catch(() => {});
+  }
 
   getStatus(): SDRStatus {
     return {

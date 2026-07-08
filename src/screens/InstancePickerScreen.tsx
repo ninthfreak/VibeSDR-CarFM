@@ -58,6 +58,7 @@ const TYPE_LOGOS: Record<string, any> = {
   ubersdr: require('../../assets/logo_ubersdr.png'),
   owrx:    require('../../assets/logo_owrx.png'),
   kiwi:    require('../../assets/logo_kiwi.png'),
+  fmdx:    require('../../assets/logo_fmdx.png'),
 };
 
 /** ISO 3166-1 alpha-2 → 🇬🇧-style emoji flag (regional indicators, no assets). */
