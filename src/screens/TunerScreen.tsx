@@ -47,6 +47,11 @@ const DRUM_VFO_SENS = 22, VFO_FINE_MULT = 4, VFO_VEL_FINE = 40, VFO_VEL_FAST = 3
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const zulu = () => { const d = new Date(); return `${pad2(d.getUTCHours())}${pad2(d.getUTCMinutes())}z`; };
 
+// Shared-tuner notice: remind ONCE PER APP RUN (listen session), not once per
+// install and not on every server (re)connect. A module-level flag resets on a
+// cold start, so each session the user is reminded a single time.
+let fmdxNoticeShownThisSession = false;
+
 export default function TunerScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName } = route.params;
   const { theme } = useTheme();
@@ -130,14 +135,13 @@ export default function TunerScreen({ route, navigation }: Props) {
   useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
 
   const CALLSIGN_KEY = `lsv_chat_callsign:${baseUrl}`;
-  const NOTICE_KEY = 'lsv_fmdx_shared_notice_v1';
-  const dismissNotice = useCallback(() => { setShowNotice(false); AsyncStorage.setItem(NOTICE_KEY, '1').catch(() => {}); }, []);
+  const dismissNotice = useCallback(() => { setShowNotice(false); fmdxNoticeShownThisSession = true; }, []);
 
   // ── Connect / teardown ──────────────────────────────────────────────────────
   useEffect(() => {
     destroyed.current = false;
     AsyncStorage.getItem(CALLSIGN_KEY).then((cs) => { if (!destroyed.current && cs) setMyCallsign(cs); });
-    AsyncStorage.getItem(NOTICE_KEY).then((v) => { if (!destroyed.current && !v) setShowNotice(true); });
+    if (!fmdxNoticeShownThisSession) { fmdxNoticeShownThisSession = true; setShowNotice(true); }
     AsyncStorage.getItem(DIAL_KEY).then((raw) => {
       if (destroyed.current || !raw) return;
       try {
