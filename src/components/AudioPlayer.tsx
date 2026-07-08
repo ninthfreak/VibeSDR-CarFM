@@ -9,6 +9,9 @@ export const VibePowerModule = NativeModules.VibePowerModule as
   | {
       startAudioEngine:  (baseUrl: string, frequency: number, mode: string, uuid: string, password: string) => void;
       stopAudioEngine:   () => void;
+      // v7 FM-DX Webserver spike: native MP3-over-WS audio. baseUrl = server root.
+      startFmdxAudio?:   (baseUrl: string) => void;
+      stopFmdxAudio?:    () => void;
       sendTuneCommand:   (frequency: number, mode: string) => void;
       sendBandwidth:     (low: number, high: number) => void;
       setStep:           (hz: number) => void;

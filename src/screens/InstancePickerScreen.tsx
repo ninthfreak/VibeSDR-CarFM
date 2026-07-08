@@ -229,9 +229,15 @@ export default function InstancePickerScreen({ navigation }: Props) {
     setFavourites(next);
   }, [favourites]);
 
-  const connect = useCallback(async (url: string, name: string, password?: string, serverLongitude?: number | null, serverType?: 'ubersdr' | 'kiwi' | 'owrx') => {
+  const connect = useCallback(async (url: string, name: string, password?: string, serverLongitude?: number | null, serverType?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx') => {
     if (!url) return;
     const cleaned = url.trim().replace(/\/$/, '');
+    // FM-DX Webserver: distinct tuner screen, and checkConnection (UberSDR-shaped)
+    // doesn't apply — the adapter opens the /text WS itself.
+    if (serverType === 'fmdx') {
+      navigation.navigate('Tuner', { baseUrl: cleaned, instanceName: name, viewMode });
+      return;
+    }
     setConnecting(true);
     try {
       const result = await checkConnection(cleaned, password);
@@ -560,7 +566,9 @@ export default function InstancePickerScreen({ navigation }: Props) {
           <View style={styles.rowMain}>
             <View style={styles.nameRow}>
               <View style={(inst.serverType ?? 'ubersdr') === 'owrx' ? styles.logoChip : undefined}>
-                <Image source={TYPE_LOGOS[inst.serverType ?? 'ubersdr']} style={styles.typeLogo} resizeMode="contain" />
+                {TYPE_LOGOS[inst.serverType ?? 'ubersdr']
+                  ? <Image source={TYPE_LOGOS[inst.serverType ?? 'ubersdr']} style={styles.typeLogo} resizeMode="contain" />
+                  : <Text style={{ fontFamily: F, fontSize: fs(14), color: C.amber }}>📻</Text>}
               </View>
               <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, flex: 1 }} numberOfLines={1}>
                 {isDefault ? '★ ' : ''}{flagEmoji(inst.countryCode) ? flagEmoji(inst.countryCode) + ' ' : ''}{inst.name}
@@ -956,7 +964,9 @@ export default function InstancePickerScreen({ navigation }: Props) {
                     <View style={styles.rowRight}>
                       {d.kinds.map(k => (
                         <View key={k} style={k === 'owrx' ? styles.logoChip : undefined}>
-                          <Image source={TYPE_LOGOS[k]} style={styles.typeLogo} resizeMode="contain" />
+                          {TYPE_LOGOS[k]
+                            ? <Image source={TYPE_LOGOS[k]} style={styles.typeLogo} resizeMode="contain" />
+                            : <Text style={{ fontFamily: F, fontSize: fs(18), color: C.amber }}>📻</Text>}
                         </View>
                       ))}
                       <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 4 }}>›</Text>

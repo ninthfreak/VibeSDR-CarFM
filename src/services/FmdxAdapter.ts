@@ -1,0 +1,207 @@
+/**
+ * FmdxAdapter — FM-DX Webserver (TEF668x / XDR-F1HD hardware tuners) behind the
+ * SDRBackend contract. v7. Protocol per BRIEF-fmdx-backend-adapter.md, verified
+ * against NoobishSVK/fm-dx-webserver.
+ *
+ * Model: a SINGLE SHARED hardware tuner — every user hears the same frequency,
+ * tuning is global (see plan §2g). Server does demod + RDS decode; there is NO
+ * waterfall/FFT and no client DSP. Control + whole-state JSON over `wss://…/text`;
+ * audio is MP3-over-WS decoded natively (VibePowerModule.startFmdxAudio → the
+ * FmdxMp3Decoder path). Because there's no spectrum, the waterfall side of the
+ * SDRBackend surface is stubbed; the tuner screen consumes onFmdxState.
+ */
+
+import type { SDRMode, SDRStatus } from './UberSDRClient';
+import type {
+  SDRBackend, BackendCallbacks, BackendCapabilities, BackendKind, FmdxState,
+} from './SDRBackend';
+import { NativeModules } from 'react-native';
+
+const Vibe = NativeModules.VibePowerModule as {
+  startFmdxAudio?: (baseUrl: string) => void;
+  stopFmdxAudio?: () => void;
+} | undefined;
+
+const FMDX_CAPS: BackendCapabilities = {
+  profiles:       false,
+  serverSideZoom: false,   // no waterfall at all
+  smeter:         'message',
+  freqRange:      [87_500_000, 108_000_000],   // FM broadcast band (refine from /static_data later)
+  chat:           false,
+  serverNR:       false,
+  maxBandwidth:   { default: 100_000, wfm: 100_000 },
+};
+
+/** ws(s) URL for a given path from an http(s) base. */
+function wsUrl(base: string, path: string): string {
+  let s = base.trim();
+  if (s.startsWith('https://'))      s = 'wss://' + s.slice(8);
+  else if (s.startsWith('http://'))  s = 'ws://'  + s.slice(7);
+  else                               s = 'ws://'  + s;
+  s = s.replace(/\/+$/, '');
+  return s + path;
+}
+
+export class FmdxAdapter implements SDRBackend {
+  readonly kind: BackendKind = 'fmdx';
+  readonly caps: BackendCapabilities = FMDX_CAPS;
+  readonly uuid: string;
+
+  private base: string;
+  private cb: BackendCallbacks;
+  private ws: WebSocket | null = null;
+  private audioStarted = false;
+  private destroyed = false;
+
+  // Latest known state (server is authoritative on a shared tuner).
+  private freq = 95_000_000;         // Hz — adopted from the server's first frame
+  private lastState: FmdxState | null = null;
+
+  constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks) {
+    this.base = baseUrl.replace(/\/+$/, '');
+    this.uuid = uuid;
+    this.cb = callbacks;
+  }
+
+  connect(frequency?: number, _mode?: SDRMode): Promise<void> {
+    // NB: we do NOT auto-tune on connect — the tuner is shared; we adopt the
+    // server's current frequency and only retune on explicit user action.
+    // `frequency` (e.g. from a deep link) is applied after the first state frame.
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let ws: WebSocket;
+      try { ws = new WebSocket(wsUrl(this.base, '/text')); }
+      catch (e) { reject(e); return; }
+      this.ws = ws;
+
+      ws.onopen = () => {
+        this.cb.onConnect();
+        this.cb.onLink?.(3);
+        // Audio is a separate native WS opened from the http base.
+        if (!this.audioStarted) { Vibe?.startFmdxAudio?.(this.base); this.audioStarted = true; }
+        // Optional deep-link retune once we're live (shared-tuner: this DOES
+        // retune for everyone, so only when explicitly requested).
+        if (frequency != null) setTimeout(() => { if (!this.destroyed) this.tune(frequency); }, 400);
+        if (!settled) { settled = true; resolve(); }
+      };
+      ws.onmessage = (e) => {
+        if (typeof e.data !== 'string') return;   // server pushes JSON text
+        try { this.onFrame(JSON.parse(e.data)); }
+        catch { /* non-JSON keepalive — ignore */ }
+      };
+      ws.onerror = () => { if (!settled) { settled = true; reject(new Error('FM-DX WebSocket error')); } };
+      ws.onclose = (ev) => {
+        this.cb.onLink?.(0);
+        this.cb.onDisconnect();
+        this.cb.onServerLost?.();
+        if (!settled) { settled = true; reject(new Error('FM-DX closed (' + ev.code + ')')); }
+      };
+    });
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+    if (this.audioStarted) { Vibe?.stopFmdxAudio?.(); this.audioStarted = false; }
+    const ws = this.ws; this.ws = null;
+    if (ws) { try { ws.onclose = null; ws.close(); } catch {} }
+  }
+
+  disconnectSocket(): void {
+    // Pause: drop the /text socket but leave the native audio session (lock
+    // screen card) — matches the OWRX/Kiwi "release" behaviour.
+    const ws = this.ws; this.ws = null;
+    if (ws) { try { ws.onclose = null; ws.close(); } catch {} }
+  }
+
+  // ── Incoming whole-state frame ──────────────────────────────────────────────
+  private onFrame(j: any): void {
+    // Some frames are for other channels (e.g. plugin data) — require a freq.
+    const mhz = parseFloat(j?.freq);
+    if (!Number.isFinite(mhz)) return;
+    const freqHz = Math.round(mhz * 1e6);
+    this.freq = freqHz;
+
+    const rtFlag = String(j?.rt_flag ?? '0') === '1';
+    const rt = String((rtFlag ? j?.rt1 : j?.rt0) ?? '').trim();
+    const ps = String(j?.ps ?? '').trim();
+    const tx = j?.txInfo && typeof j.txInfo === 'object' ? {
+      tx:   j.txInfo.tx   != null ? String(j.txInfo.tx)   : undefined,
+      city: j.txInfo.city != null ? String(j.txInfo.city) : undefined,
+      itu:  j.txInfo.itu  != null ? String(j.txInfo.itu)  : undefined,
+      erp:  Number(j.txInfo.erp),
+      pol:  j.txInfo.pol  != null ? String(j.txInfo.pol)  : undefined,
+      dist: Number(j.txInfo.dist),
+      azi:  Number(j.txInfo.azi),
+    } : undefined;
+
+    const state: FmdxState = {
+      freqHz,
+      sig:    Number(j?.sig) || 0,
+      stereo: !!j?.st,
+      rds:    !!j?.rds,
+      pi:     String(j?.pi ?? '').replace(/\?/g, '').trim(),
+      ps,
+      rt,
+      pty:    Number(j?.pty) || 0,
+      tp:     !!j?.tp,
+      ta:     !!j?.ta,
+      af:     Array.isArray(j?.af) ? j.af.map((k: any) => Math.round(Number(k) * 1000)).filter((n: number) => Number.isFinite(n)) : [],
+      users:  Number(j?.users) || 0,
+      tx,
+    };
+    this.lastState = state;
+
+    this.cb.onFmdxState?.(state);
+    this.cb.onStatus(this.getStatus());
+    if (state.sig) this.cb.onSMeter?.(state.sig);   // dBf (tuner labels accordingly)
+    // Feed the shared station-name path too (now-playing / VTS).
+    this.cb.onMetadata?.({ stationName: ps || undefined, text: rt || undefined, badge: 'RDS', stereo: state.stereo });
+  }
+
+  // ── Control ─────────────────────────────────────────────────────────────────
+  private send(cmd: string): void {
+    const ws = this.ws;
+    if (ws && ws.readyState === 1) { try { ws.send(cmd); } catch {} }
+  }
+
+  tune(frequency: number, _mode?: SDRMode, _opts?: { recenter?: boolean }): void {
+    // T<kHz>. The server clamps to its tuning range and (on a locked tuner)
+    // silently ignores — the next state frame reveals the actual frequency.
+    const khz = Math.round(frequency / 1000);
+    this.freq = frequency;                 // optimistic; server frame confirms
+    this.send('T' + khz);
+  }
+
+  syncFrequency(frequency: number, _mode?: SDRMode): void { this.freq = frequency; }
+
+  getStatus(): SDRStatus {
+    return {
+      frequency:     this.freq,
+      mode:          'wfm',
+      bandwidthLow:  -100_000,
+      bandwidthHigh:  100_000,
+      binCount:       0,
+      binBandwidth:   0,
+      centerHz:       this.freq,
+      bwHz:           200_000,
+    };
+  }
+  getView(): SDRStatus { return this.getStatus(); }
+
+  /** Latest parsed state, for a screen that mounts after the first frame. */
+  getFmdxState(): FmdxState | null { return this.lastState; }
+
+  // ── No-ops: FM-DX has no waterfall / zoom / pan / mode / bandwidth control ──
+  setFollowMode(_follow: boolean): void {}
+  panSpan(): { loHz: number; hiHz: number; movable: boolean } {
+    return { loHz: this.freq, hiHz: this.freq, movable: false };
+  }
+  setMode(_mode: SDRMode): void {}
+  setBandwidth(_low: number, _high: number): void {}
+  zoom(_frequency: number, _binBandwidth: number): void {}
+  pan(_frequency: number): void {}
+  resetView(): void {}
+  setRate(_divisor: number): void {}
+  pauseSpectrum(): void {}
+  resumeSpectrum(): void {}
+}

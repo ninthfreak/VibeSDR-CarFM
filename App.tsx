@@ -12,6 +12,7 @@ LogBox.ignoreAllLogs();
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import SDRScreen            from './src/screens/SDRScreen';
 import RtlTcpServerScreen   from './src/screens/RtlTcpServerScreen';
+import TunerScreen          from './src/screens/TunerScreen';
 import CrashBoundary        from './src/components/CrashBoundary';
 import { installCrashGuard } from './src/services/crashGuard';
 import { ThemeProvider }    from './src/contexts/ThemeContext';
@@ -28,6 +29,7 @@ export type RootStackParamList = {
     viewMode:        ViewMode;
     serverLongitude?: number | null;
     serverType?:     'ubersdr' | 'kiwi' | 'owrx';   // v3 multi-backend; default ubersdr
+    // NB FM-DX servers route to the 'Tuner' screen instead (see below), not here.
     // V4 local hardware (Android): connect to the on-device shim on localhost.
     // Audio comes from its /ws/audio (external-PCM engine), not the UberSDR /ws.
     isLocal?:        boolean;
@@ -51,6 +53,14 @@ export type RootStackParamList = {
   };
   // RTL-TCP server (Android): share this device's USB dongle over the network.
   RtlTcpServer: { name?: string } | undefined;
+  // FM-DX Webserver (v7): single shared FM tuner, server-side demod + RDS, MP3
+  // audio. Distinct tuner UI (no waterfall) — see TunerScreen.
+  Tuner: {
+    baseUrl:       string;
+    instanceName?: string;
+    viewMode:      ViewMode;
+    initialFreq?:  number;   // deep-link retune (retunes the shared tuner for all)
+  };
 };
 
 export const splashBridge = {
@@ -200,6 +210,7 @@ export default function App() {
             <Stack.Screen name="InstancePicker" component={InstancePickerScreen} options={{ headerShown: false }} />
             <Stack.Screen name="SDR"            component={SDRScreen}            options={{ headerShown: false, gestureEnabled: false }} />
             <Stack.Screen name="RtlTcpServer"   component={RtlTcpServerScreen}   options={{ headerShown: false }} />
+            <Stack.Screen name="Tuner"          component={TunerScreen}          options={{ headerShown: false }} />
           </Stack.Navigator>
         </NavigationContainer>
         </CrashBoundary>

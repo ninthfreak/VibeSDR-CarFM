@@ -5,21 +5,23 @@
 // filtered out — we only handle UberSDR / OpenWebRX / KiwiSDR.
 
 import { SDRInstance, fetchInstances } from './instancesApi';
+import { fetchFmdxServers } from './fmdxDirectory';
 
-export type DirectoryId = 'ubersdr' | 'receiverbook' | 'kiwisdr';
+export type DirectoryId = 'ubersdr' | 'receiverbook' | 'kiwisdr' | 'fmdx';
 
 export interface DirectoryMeta {
   id:    DirectoryId;
   name:  string;
   desc:  string;
   /** which backends this directory yields — drives the footer logo/labels. */
-  kinds: ('ubersdr' | 'owrx' | 'kiwi')[];
+  kinds: ('ubersdr' | 'owrx' | 'kiwi' | 'fmdx')[];
 }
 
 export const DIRECTORIES: DirectoryMeta[] = [
   { id: 'ubersdr',     name: 'UberSDR',     desc: 'Official UberSDR instances',                 kinds: ['ubersdr'] },
   { id: 'receiverbook', name: 'Receiverbook', desc: 'OpenWebRX + KiwiSDR (receiverbook.de)',     kinds: ['owrx', 'kiwi'] },
   { id: 'kiwisdr',     name: 'KiwiSDR',     desc: 'Public KiwiSDR network (kiwisdr.com)',        kinds: ['kiwi'] },
+  { id: 'fmdx',        name: 'FM-DX',       desc: 'FM-DX Webserver network (servers.fmdx.org)',  kinds: ['fmdx'] },
 ];
 
 const RECEIVERBOOK_URL = 'https://www.receiverbook.de/map';
@@ -133,11 +135,26 @@ async function fetchKiwiList(lat?: number, lon?: number): Promise<SDRInstance[]>
     });
 }
 
+/** FM-DX Webserver network (servers.fmdx.org) → SDRInstance rows tagged 'fmdx'.
+ *  location carries "city · TUNER" so the row shows the tuner type at a glance. */
+async function fetchFmdx(lat?: number, lon?: number): Promise<SDRInstance[]> {
+  const servers = await fetchFmdxServers(lat, lon);
+  return servers.map((s) => blank({
+    name: s.name,
+    url: s.url,
+    location: [s.city, s.tuner ? s.tuner.toUpperCase() : ''].filter(Boolean).join(' · '),
+    latitude: s.lat, longitude: s.lon, distance: s.distance,
+    countryCode: s.iso ? s.iso.toUpperCase() : null,
+    serverType: 'fmdx',
+  }));
+}
+
 /** Fetch a directory's instances, normalised + distance-sorted when located. */
 export async function fetchDirectory(id: DirectoryId, lat?: number, lon?: number): Promise<SDRInstance[]> {
   let list: SDRInstance[];
   if (id === 'ubersdr')      list = await fetchInstances(lat, lon);
   else if (id === 'receiverbook') list = await fetchReceiverbook(lat, lon);
+  else if (id === 'fmdx')    list = await fetchFmdx(lat, lon);
   else                       list = await fetchKiwiList(lat, lon);
   // distance ascending when we have it, else leave source order
   if (lat != null && lon != null) {

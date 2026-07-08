@@ -14,7 +14,37 @@
 
 import type { SDRStatus, SDRMode, SDRCallbacks } from './UberSDRClient';
 
-export type BackendKind = 'ubersdr' | 'kiwi' | 'owrx';
+export type BackendKind = 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx';
+
+/** FM-DX transmitter identification (from the server's maps.fmdx.org lookup).
+ *  Distances/azimuths are relative to the SERVER's QTH, not the listener. */
+export interface FmdxTxInfo {
+  tx?:   string;   // transmitter/station name
+  city?: string;
+  itu?:  string;   // ITU country prefix
+  erp?:  number;   // kW
+  pol?:  string;   // polarisation (h/v)
+  dist?: number;   // km from server QTH
+  azi?:  number;   // degrees from server QTH
+}
+
+/** Whole-state snapshot from an FM-DX Webserver `/text` frame, normalised for
+ *  the tuner screen. Delivered via BackendCallbacks.onFmdxState. */
+export interface FmdxState {
+  freqHz:  number;
+  sig:     number;    // dBf (TEF scale)
+  stereo:  boolean;
+  rds:     boolean;
+  pi:      string;    // hex PI code ('' when none)
+  ps:      string;    // programme service (station) name
+  rt:      string;    // current RadioText bank
+  pty:     number;    // programme type (European RDS table)
+  tp:      boolean;
+  ta:      boolean;
+  af:      number[];  // alternative frequencies, Hz
+  users:   number;
+  tx?:     FmdxTxInfo;
+}
 
 export interface ProfileInfo {
   id:        string;
@@ -173,6 +203,9 @@ export interface BackendCallbacks extends SDRCallbacks {
   onModes?: (list: BackendMode[]) => void;
   /** OWRX: live RDS (FM) / DAB station metadata. Cleared with empty fields. */
   onMetadata?: (meta: StationMeta) => void;
+  /** FM-DX: whole-state telemetry per `/text` frame (freq, sig, RDS, txInfo, AF,
+   *  users). Drives the tuner screen; supersedes onMetadata for that backend. */
+  onFmdxState?: (state: FmdxState) => void;
   /** OWRX: the WS closed UNEXPECTEDLY (server crash/restart — common on OWRX),
    *  as opposed to a user pause/navigation. The UI keeps the session alive and
    *  shows a "server stopped responding" prompt instead of silently dropping. */

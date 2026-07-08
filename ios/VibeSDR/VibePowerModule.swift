@@ -305,6 +305,177 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     stopEngine()
   }
 
+  // ── FM-DX Webserver audio (v7 spike): native MP3-over-WS. The server owns
+  //    demod + RDS; we just decode 3LAS MP3 frames and play them. Separate WS +
+  //    decoder from the UberSDR opus path (that path stays exactly as-is). ──
+  private var fmdxConn: NWConnection?
+  private var fmdxGen = 0
+  private var fmdxDecoder: FmdxMp3Decoder?
+  private var fmdxBase = ""
+
+  /// baseUrl = the FM-DX server root (http(s)://host[:port]); we open `<host>/audio`.
+  @objc func startFmdxAudio(_ baseUrl: String) {
+    NSLog("[VibePowerModule] startFmdxAudio %@", baseUrl)
+    stopEngine()
+    fmdxBase   = baseUrl
+    isRunning  = true
+    isMuted    = false
+    externalAudio = false            // native-WS path, not JS-push
+    dataSaverDisconnected = false
+    reconnectFailed = false
+    packetCount = 0
+    lastPacketAt = Date()
+    configureAVSession()
+    startEngine()
+    openFmdxWs()
+    DispatchQueue.main.async {
+      self.setupRemoteCommands()
+      self.updateNowPlaying()
+    }
+  }
+
+  @objc func stopFmdxAudio() {
+    NSLog("[VibePowerModule] stopFmdxAudio")
+    stopEngine()                     // closeFmdxWs() runs inside stopEngine
+  }
+
+  private func fmdxWsURL(_ base: String) -> URL? {
+    var s = base.trimmingCharacters(in: .whitespaces)
+    if s.hasPrefix("https://") { s = "wss://" + s.dropFirst(8) }
+    else if s.hasPrefix("http://") { s = "ws://" + s.dropFirst(7) }
+    s = s.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    return URL(string: s + "/audio")
+  }
+
+  private func closeFmdxWs() {
+    fmdxGen &+= 1                     // supersede any in-flight receive/reconnect
+    fmdxConn?.cancel(); fmdxConn = nil
+    fmdxDecoder = nil
+  }
+
+  private func openFmdxWs() {
+    guard let url = fmdxWsURL(fmdxBase) else {
+      NSLog("[VibePowerModule] bad FM-DX audio URL from base: %@", fmdxBase); return
+    }
+    NSLog("[VibePowerModule] opening FM-DX audio WS: %@", url.absoluteString)
+    fmdxGen &+= 1
+    let gen = fmdxGen
+
+    let dec = FmdxMp3Decoder()
+    dec.onPcm = { [weak self] pcm, ch, rate in
+      // Decoder runs on audioQ (feed is dispatched there), so play inline.
+      self?.playFmdxPcm(pcm, channels: ch, rate: rate)
+    }
+    fmdxDecoder = dec
+
+    let secure = (url.scheme == "wss")
+    let params: NWParameters = secure ? .tls : .tcp
+    let wsOpts = NWProtocolWebSocket.Options()
+    wsOpts.autoReplyPing = true
+    params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)
+
+    let conn = NWConnection(to: .url(url), using: params)
+    fmdxConn = conn
+    conn.stateUpdateHandler = { [weak self] state in
+      guard let self, self.isRunning, self.fmdxGen == gen else { return }
+      switch state {
+      case .ready:
+        NSLog("[VibePowerModule] FM-DX audio WS ready")
+        // 3LAS handshake: request the MP3 fallback stream.
+        self.sendFmdxText(#"{"type":"fallback","data":"mp3"}"#, conn: conn)
+        self.fmdxReceive(conn, gen: gen)
+      case .waiting(let err):
+        NSLog("[VibePowerModule] FM-DX audio WS waiting: %@", "\(err)")
+      case .failed(let err):
+        NSLog("[VibePowerModule] FM-DX audio WS failed: %@ — reconnecting in 2s", "\(err)")
+        self.scheduleFmdxReconnect(gen: gen)
+      case .cancelled:
+        break
+      default:
+        break
+      }
+    }
+    conn.start(queue: wsQueue)
+  }
+
+  private func fmdxReceive(_ conn: NWConnection, gen: Int) {
+    conn.receiveMessage { [weak self] (data, context, _, error) in
+      guard let self, self.isRunning, self.fmdxGen == gen, self.fmdxConn === conn else { return }
+      if let error {
+        NSLog("[VibePowerModule] FM-DX audio WS receive error: %@ — reconnecting", "\(error)")
+        self.scheduleFmdxReconnect(gen: gen); return
+      }
+      let op = (context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
+                as? NWProtocolWebSocket.Metadata)?.opcode
+      switch op {
+      case .binary:
+        if let data, !data.isEmpty {
+          self.packetCount += 1
+          self.lastPacketAt = Date()
+          if self.packetCount <= 3 {
+            NSLog("[VibePowerModule] FM-DX audio pkt#%d len=%d", self.packetCount, data.count)
+          }
+          self.audioQ.async { self.fmdxDecoder?.feed(data) }
+        }
+      case .close:
+        NSLog("[VibePowerModule] FM-DX audio WS closed by peer — reconnecting")
+        self.scheduleFmdxReconnect(gen: gen); return
+      default:
+        break   // text handshake acks / ping-pong
+      }
+      self.fmdxReceive(conn, gen: gen)   // re-arm
+    }
+  }
+
+  private func scheduleFmdxReconnect(gen: Int) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+      guard let self, self.isRunning, self.fmdxGen == gen else { return }
+      self.openFmdxWs()
+    }
+  }
+
+  private func sendFmdxText(_ text: String, conn: NWConnection) {
+    guard let data = text.data(using: .utf8) else { return }
+    let md  = NWProtocolWebSocket.Metadata(opcode: .text)
+    let ctx = NWConnection.ContentContext(identifier: "fmdxSend", metadata: [md])
+    conn.send(content: data, contentContext: ctx, isComplete: true,
+              completion: .contentProcessed { err in
+                if let err { NSLog("[VibePowerModule] FM-DX ws send error: %@", "\(err)") }
+              })
+  }
+
+  /// interleaved LE Int16 PCM → planar float stereo → 48k → scheduleOut.
+  /// Mirrors the tail of handlePacket / pushExternalPcm.
+  private func playFmdxPcm(_ data: Data, channels: Int, rate: Double) {
+    guard isRunning, !isMuted, data.count >= 2 else { return }
+    let total  = data.count / 2
+    let frames = channels == 2 ? total / 2 : total
+    guard frames > 0,
+          let inFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate,
+                                    channels: ENGINE_CH, interleaved: false),
+          let inBuf = AVAudioPCMBuffer(pcmFormat: inFmt, frameCapacity: AVAudioFrameCount(frames)) else { return }
+    inBuf.frameLength = AVAudioFrameCount(frames)
+    let left  = inBuf.floatChannelData![0]
+    let right = inBuf.floatChannelData![1]
+    data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+      let s16 = raw.bindMemory(to: Int16.self)
+      if channels == 2 {
+        for i in 0..<frames {
+          left[i]  = Float(Int16(littleEndian: s16[i*2]))   / 32768.0
+          right[i] = Float(Int16(littleEndian: s16[i*2+1])) / 32768.0
+        }
+      } else {
+        for i in 0..<frames {
+          let v = Float(Int16(littleEndian: s16[i])) / 32768.0
+          left[i] = v; right[i] = v
+        }
+      }
+    }
+    guard let out = convertTo48k(inBuf) else { return }
+    if recArmed { writeRecording(out) }
+    scheduleOut(out)
+  }
+
   /** Called from JS on app-foreground: instant zombie check instead of
    *  waiting for the next watchdog tick. */
   @objc func revive() {
@@ -991,6 +1162,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     healthTimer?.invalidate()
     healthTimer = nil
     closeAudioWs()
+    closeFmdxWs()
     destroyDecoder()
     recArmed = false
     audioQ.async { [weak self] in
