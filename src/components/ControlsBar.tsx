@@ -487,46 +487,38 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
   const s = useUiScale();
   const [sigW, setSigW] = useState(0);
 
-  // Recording pulse — menu button border cycles red
+  // Recording / chat-unread pulses. These drive an OVERLAY border's OPACITY with
+  // the NATIVE driver (UI thread) — NOT borderColor with useNativeDriver:false.
+  // The JS driver fires setNativeProps ~60fps, and under the New Architecture each
+  // one forces a full-tree Yoga layout; on the FM-DX tuner (a large dial + many
+  // absolutely-positioned tick/label nodes) that pegged the JS thread and iOS
+  // killed the app for exceeding its background-CPU limit. Native opacity costs
+  // nothing on the JS thread.
   const recPulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (isRecording) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(recPulse, { toValue: 1, duration: 2500, useNativeDriver: false }),
-          Animated.timing(recPulse, { toValue: 0, duration: 2500, useNativeDriver: false }),
-        ])
-      ).start();
-    } else {
-      recPulse.stopAnimation();
-      recPulse.setValue(0);
+      const a = Animated.loop(Animated.sequence([
+        Animated.timing(recPulse, { toValue: 1, duration: 2500, useNativeDriver: true }),
+        Animated.timing(recPulse, { toValue: 0, duration: 2500, useNativeDriver: true }),
+      ]));
+      a.start();
+      return () => { a.stop(); recPulse.setValue(0); };
     }
+    recPulse.setValue(0);
   }, [isRecording, recPulse]);
 
-  // Chat unread pulse — chat button border cycles blue
   const chatPulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (chatUnread) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(chatPulse, { toValue: 1, duration: 2500, useNativeDriver: false }),
-          Animated.timing(chatPulse, { toValue: 0, duration: 2500, useNativeDriver: false }),
-        ])
-      ).start();
-    } else {
-      chatPulse.stopAnimation();
-      chatPulse.setValue(0);
+      const a = Animated.loop(Animated.sequence([
+        Animated.timing(chatPulse, { toValue: 1, duration: 2500, useNativeDriver: true }),
+        Animated.timing(chatPulse, { toValue: 0, duration: 2500, useNativeDriver: true }),
+      ]));
+      a.start();
+      return () => { a.stop(); chatPulse.setValue(0); };
     }
+    chatPulse.setValue(0);
   }, [chatUnread, chatPulse]);
-
-  const menuBorderColor = recPulse.interpolate({
-    inputRange:  [0, 1],
-    outputRange: [t.btnBorder, 'rgba(255,60,60,1.00)'],
-  });
-  const chatBorderColor = chatPulse.interpolate({
-    inputRange:  [0, 1],
-    outputRange: [t.btnBorder, 'rgba(100,180,255,1.00)'],
-  });
 
   // All dp values go through s.r() — port of applyUiScale()'s r() function
   const SIG_H      = s.r(s.isTablet ? 62 : 40); // taller on tablet so the meter shows above/below the tall two-line pill
@@ -598,7 +590,9 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
         </TouchableOpacity>
 
         {/* MENU */}
-        <Animated.View style={[por.btn, { minHeight: BTN_H, borderColor: menuBorderColor, borderWidth: 1 }]}>
+        <View style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder, borderWidth: 1 }]}>
+          <Animated.View pointerEvents="none"
+            style={[StyleSheet.absoluteFill, { borderRadius: 4, borderWidth: 1, borderColor: 'rgba(255,60,60,1)', opacity: recPulse }]} />
           <TouchableOpacity
             ref={tourRef('menuBtn')}
             style={{ flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' }}
@@ -608,10 +602,12 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
               ? <Text style={{ color: t.btnText, fontFamily: t.font, fontSize: s.f(t.btnSize) }}>‹ Back</Text>
               : <Hamburger color={t.btnText} lineW={HBURG_W} />}
           </TouchableOpacity>
-        </Animated.View>
+        </View>
 
         {/* CHAT */}
-        <Animated.View style={[por.btn, { minHeight: BTN_H, borderColor: chatBorderColor, borderWidth: 1, opacity: chatOff ? 0.4 : 1 }]}>
+        <View style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder, borderWidth: 1, opacity: chatOff ? 0.4 : 1 }]}>
+          <Animated.View pointerEvents="none"
+            style={[StyleSheet.absoluteFill, { borderRadius: 4, borderWidth: 1, borderColor: 'rgba(100,180,255,1)', opacity: chatPulse }]} />
           <TouchableOpacity
             style={{ flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' }}
             onPress={chatOff ? undefined : onChat} disabled={chatOff} activeOpacity={0.75} hitSlop={10}
@@ -619,7 +615,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
             {/* decorative — don't let the Skia view contest the touch */}
             <ChatIcon size={ICON_SZ} color={t.btnText} />
           </TouchableOpacity>
-        </Animated.View>
+        </View>
 
         {/* SHARE */}
         <TouchableOpacity
