@@ -37,7 +37,7 @@ interface Props {
 
 const MIN_SPAN = 2_000_000;   // max zoom-in = 2 MHz visible
 
-export default function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, view, onViewChange }: Props) {
+function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, view, onViewChange }: Props) {
   const [w, setW] = useState(0);
   const onLayout = (e: LayoutChangeEvent) => setW(e.nativeEvent.layout.width);
   const fullSpan = Math.max(1, hiHz - loHz);
@@ -209,3 +209,5 @@ const styles = StyleSheet.create({
   tickLbl: { position: 'absolute', width: 20, textAlign: 'center', fontSize: 10, fontWeight: 'bold' },
   staLbl: { position: 'absolute', fontSize: 9 },
 });
+
+export default React.memo(FmdxDial);

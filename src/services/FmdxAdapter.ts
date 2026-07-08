@@ -61,6 +61,7 @@ export class FmdxAdapter implements SDRBackend {
   private imsOn = false;
   private textGen = 0;
   private textReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private paused = false;            // power-saving pause — suppress auto-reconnect
   private deepLinkFreq?: number;
 
   constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks) {
@@ -120,7 +121,7 @@ export class FmdxAdapter implements SDRBackend {
   }
 
   private scheduleTextReconnect(): void {
-    if (this.textReconnectTimer || this.destroyed) return;
+    if (this.textReconnectTimer || this.destroyed || this.paused) return;
     this.textReconnectTimer = setTimeout(() => {
       this.textReconnectTimer = null;
       if (!this.destroyed) this.openTextWs();
@@ -178,6 +179,32 @@ export class FmdxAdapter implements SDRBackend {
     // screen card) — matches the OWRX/Kiwi "release" behaviour.
     const ws = this.ws; this.ws = null;
     if (ws) { try { ws.onclose = null; ws.close(); } catch {} }
+  }
+
+  /** Power-saving PAUSE — the user stopped listening (lock-screen pause, AirPods
+   *  out, Bluetooth off). Fully drop the /text + /chat control sockets (freezes
+   *  SNR/RDS) and suppress auto-reconnect, so nothing keeps streaming in the
+   *  background draining battery. The native side stops the /audio stream in
+   *  parallel. resumeFromPower() (on ▶) reopens everything. This makes FM-DX a
+   *  true disconnect-on-pause, like UberSDR — not a mute-in-place. */
+  pauseForPower(): void {
+    if (this.paused) return;
+    this.paused = true;
+    this.textGen++;                                        // supersede any in-flight socket
+    if (this.textReconnectTimer) { clearTimeout(this.textReconnectTimer); this.textReconnectTimer = null; }
+    const ws = this.ws; this.ws = null;
+    if (ws) { try { ws.onclose = null; ws.close(); } catch {} }
+    const cw = this.chatWs; this.chatWs = null;
+    if (cw) { try { cw.onclose = null; cw.close(); } catch {} }
+    this.cb.onLink?.(0);
+    this.cb.onChatEnabled?.(false);
+    this.cb.onDisconnect();
+  }
+
+  resumeFromPower(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    if (!this.destroyed) this.openTextWs();
   }
 
   // ── Incoming whole-state frame ──────────────────────────────────────────────

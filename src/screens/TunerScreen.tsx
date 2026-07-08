@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable, NativeEventEmitter, NativeModules } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { v4 as uuidv4 } from 'uuid';
@@ -59,6 +59,13 @@ export default function TunerScreen({ route, navigation }: Props) {
   const styles = useMemo(() => makeStyles(theme), [theme]);
 
   const backendRef = useRef<SDRBackend | null>(null);
+  const pausedRef = useRef(false);   // power-saving pause — freezes the meter + SNR
+  // The /text stream pushes state many times a second (signal meter etc.). A full
+  // React re-render per frame pegs the JS thread → iOS kills the app for exceeding
+  // its background-CPU limit. So the live meter is driven imperatively (meterBus,
+  // no re-render) and the React state (panels/dial) is committed at ~5 Hz only.
+  const latestStRef = useRef<FmdxState | null>(null);
+  const stThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const destroyed = useRef(false);
 
   const [st, setSt] = useState<FmdxState | null>(null);
@@ -162,7 +169,15 @@ export default function TunerScreen({ route, navigation }: Props) {
       onFmdxInfo: (info) => { if (!destroyed.current) setServerInfo(info); },
       onFmdxState: (s) => {
         if (destroyed.current) return;
-        setSt(s);
+        // Commit to React state at ~5 Hz (trailing) — NOT per frame. The dial +
+        // panels don't need 20–30 Hz; the live meter is imperative (below).
+        latestStRef.current = s;
+        if (!stThrottleRef.current) {
+          stThrottleRef.current = setTimeout(() => {
+            stThrottleRef.current = null;
+            if (!destroyed.current && latestStRef.current) setSt(latestStRef.current);
+          }, 200);
+        }
         // Data flowing → link good; feed the signal fill too.
         lastFrameAt.current = Date.now();
         const sn = Math.min(1, Math.max(0, s.sig / 70));
@@ -212,6 +227,7 @@ export default function TunerScreen({ route, navigation }: Props) {
       if (commitTimer.current) clearTimeout(commitTimer.current);
       if (convergeTimer.current) clearTimeout(convergeTimer.current);
       if (dialFlushTimer.current) clearTimeout(dialFlushTimer.current);
+      if (stThrottleRef.current) clearTimeout(stThrottleRef.current);
       backendRef.current?.destroy();
       backendRef.current = null;
     };
@@ -221,12 +237,36 @@ export default function TunerScreen({ route, navigation }: Props) {
   //    stale (green → yellow → red → down), independent of a single frame. ──
   useEffect(() => {
     const id = setInterval(() => {
+      if (pausedRef.current) {   // paused for power saving — meter flat, SNR frozen
+        meterBus.emit({ level: 0, peak: 0, snr: 0, dbfs: 0, active: false, link: 0 });
+        return;
+      }
       const gap = Date.now() - lastFrameAt.current;
       const link: 0 | 1 | 2 | 3 = gap < 2000 ? 3 : gap < 4000 ? 2 : gap < 8000 ? 1 : 0;
       const sn = link > 0 ? lastSigNorm.current : 0;
       meterBus.emit({ level: sn, peak: sn, snr: 0, dbfs: 0, active: link > 0, link });
     }, 1000);
     return () => clearInterval(id);
+  }, [meterBus]);
+
+  // ── Power-saving pause (lock-screen pause / AirPods out / Bluetooth off) ──────
+  //    Native emits VibeMuted + stops the /audio stream; we drop the /text + /chat
+  //    control sockets too so the whole FM-DX session disconnects (no background
+  //    battery drain, SNR freezes) — a true disconnect like UberSDR, not a mute.
+  //    ▶ (VibeMuted false) reopens everything.
+  useEffect(() => {
+    const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = emitter.addListener('VibeMuted', (e: { muted: boolean }) => {
+      pausedRef.current = !!e.muted;
+      const b = backendRef.current as any;
+      if (e.muted) {
+        b?.pauseForPower?.();
+        meterBus.emit({ level: 0, peak: 0, snr: 0, dbfs: 0, active: false, link: 0 });
+      } else {
+        b?.resumeFromPower?.();
+      }
+    });
+    return () => sub.remove();
   }, [meterBus]);
 
   // ── Station logo (radio-browser, EXACT-name match only so we never show the
@@ -289,6 +329,12 @@ export default function TunerScreen({ route, navigation }: Props) {
     backendRef.current?.tune(f);
   }, [armTarget]);
 
+  // Stable callback so <FmdxDial> (React.memo) isn't re-rendered every parent
+  // render — the dial only needs to re-render when its own props change.
+  const onDialTune = useCallback((hz: number) => {
+    onConfirmFreq(Math.round(hz / 100_000) * 100_000);
+  }, [onConfirmFreq]);
+
   // Zoom drum → zoom the dial (FM-DX has no bandwidth). Octave zoom anchored on
   // the tuned frequency, clamped to [2 MHz, full band].
   const onDialZoom = useCallback((px: number) => {
@@ -338,7 +384,7 @@ export default function TunerScreen({ route, navigation }: Props) {
           loHz={FM_LO}
           hiHz={FM_HI}
           stations={dialStations}
-          onTune={(hz) => onConfirmFreq(Math.round(hz / 100_000) * 100_000)}
+          onTune={onDialTune}
           theme={theme}
           view={dialView}
           onViewChange={setDialView}
