@@ -70,11 +70,22 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   { v: 'V5.2.1', detail: 'Privacy: the optional location used to sort the instance list by distance is now taken and shared at approximate (coarse, ~1 km) accuracy only, instead of a precise fix. Location stays entirely optional and every other feature works without it.' },
   { v: 'V5.2.2', detail: 'iPad and tablet polish. The signal meter now frames the frequency correctly on tablets (the coloured level showed above and below the readout on phones but not on larger screens), and the on-screen decoders (RTTY, NAVTEX, WEFAX, SSTV, Morse) now work in landscape on tablets, which have the room a phone doesn’t. The HAPTICS toggle is now hidden on devices with no haptic motor (all iPads, and any Android tablet without one) so it’s no longer a dead button.' },
   { v: 'V6.1.0', detail: 'Networked RTL-SDR. VibeSDR now auto-discovers rtl_tcp servers on your Wi-Fi (via Bonjour/mDNS) and lists them under a new “Discovered” section — no IP typing needed (iOS and Android). And on Android you can now share a plugged-in RTL-SDR over the network as an RTL-TCP server, so an iPhone or any rtl_tcp client can use the dongle remotely — handy for a good antenna location or an always-on phone. Includes an optional bandwidth cap, an editable name shown to other devices, and a live status notification. Plugging in an RTL-SDR on Android now asks whether to listen on the device or share it. The location and local-network permission prompts also now explain exactly what they’re for.' },
+  { v: 'V7.0.0', detail: 'FM-DX Webserver support — a whole new kind of receiver. VibeSDR now connects to the worldwide network of FM-DX Webserver tuners (from servers.fmdx.org): real, remote FM broadcast tuners you share with other listeners. New vintage-radio tuning dial that learns and pins every station name as you tune across the band, full RDS (station name, RadioText, PI code, PTY, TP/TA, stereo), a dBf signal meter, transmitter details (site, power, distance and bearing from the receiver), tap-to-tune alternative frequencies, station logos and country flags. Because the tuner is shared, there’s built-in chat, a listener counter, and the lock-screen skip buttons are disabled so you can’t accidentally retune it for everyone. The demodulator button opens mono/stereo, cEQ, iMS and an antenna switch (when the server offers one). Station logos and country flags now also appear on local RTL-SDR and networked WFM using the RDS PI code, with an on-device logo cache so they persist even offline. Pausing from the lock screen disconnects to save battery and reconnects on play.' },
   { v: 'V6.0.0', detail: 'A major under-the-hood upgrade for iOS 27. VibeSDR now builds on React Native’s New Architecture (required for iOS 27 / Xcode 27 support, since Apple no longer accepts the older toolchain). Alongside that: RTL-SDR local hardware and RTL-TCP tuning is fixed — typing a frequency now retunes cleanly first time (it previously needed a nudge of the tuning drum), a race in the on-device tuner has been eliminated. Local Hardware and each RTL-TCP source now remember their own last frequency, mode and hardware settings independently (including VHF/UHF stations, which used to reset). Plugging an RTL-SDR into an Android phone and choosing “Open in VibeSDR” now goes straight to Local Hardware instead of your default instance. On Android, background audio now correctly holds up on devices that aggressively restrict apps — if your phone is throttling VibeSDR in the background, the app now detects it and shows you how to allow background usage. Plus the first-launch tutorial no longer appears on top of the welcome screen.' },
 ];
 
 const FUTURE_PLANS: string[] = [
   'There’s no fixed roadmap from here — V4 delivered the big one (local SDR hardware) and V5 replaced its engine with VibeSDR’s own GPL-free DSP. Ongoing work is polish, more decoders and more backends as they come. If general USB SDR access ever lands on iOS, the on-device engine is already cross-platform (it powers RTL-TCP on iPhone today), so Local Hardware would follow.',
+];
+
+const V7_CHANGES: string[] = [
+  'FM-DX Webserver support: VibeSDR now connects to the worldwide network of FM-DX Webserver tuners (from servers.fmdx.org) — real remote FM broadcast tuners, shared live with other listeners. Pick one from the new FM-DX directory (or save it as a favourite).',
+  'Vintage tuning dial: a green-on-black analogue-style band scale with a red needle that learns and pins every station name as you tune across the band. Pinch or use the zoom drum to zoom in on a crowded part of the band; tap the dial to tune.',
+  'Full RDS + station info: station name (PS), scrolling RadioText, PI code, programme type, TP/TA and stereo, plus a dBf signal meter, the transmitter’s site, power, distance and bearing from the receiver, and tap-to-tune alternative frequencies.',
+  'Station logos and country flags: shown for the tuned station — and now also on local RTL-SDR and networked WFM, matched from the RDS PI code. Discovered logos are cached on your device so they still show when you’re offline.',
+  'Shared-tuner etiquette: because everyone shares one tuner, there’s built-in chat and a listener counter, a heads-up when you connect, and the lock-screen skip buttons are disabled so you can’t accidentally retune it for everyone.',
+  'Demodulator options: tap the demodulator button for mono/stereo, cEQ, iMS, and an antenna switch when the server offers one (probed automatically on connect).',
+  'Power-saving pause: pausing from the lock screen or pulling your headphones disconnects the shared tuner to save battery and network, and playback reconnects the moment you press play.',
 ];
 
 const V6_1_CHANGES: string[] = [
@@ -214,7 +225,7 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
           <View style={styles.heroRow}>
             <Image source={require('../../assets/icon.png')} style={styles.icon} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.appName}>VibeSDR V6</Text>
+              <Text style={styles.appName}>VibeSDR V7</Text>
               <Text style={styles.appVer}>Version {APP_VERSION}</Text>
               <Text style={styles.appSub}>A native mobile client for UberSDR, OpenWebRX & KiwiSDR receivers — and your own RTL-SDR hardware</Text>
             </View>
@@ -228,7 +239,15 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
             <Text style={styles.link}>Visit my UberSDR instance: stuey3d.tunnel.ubersdr.org</Text>
           </TouchableOpacity>
 
-          <Text style={styles.section}>WHAT'S NEW IN V6.1.0</Text>
+          <Text style={styles.section}>WHAT'S NEW IN V7.0.0</Text>
+          {V7_CHANGES.map((c) => (
+            <View key={c} style={styles.bulletRow}>
+              <Text style={styles.bulletDot}>•</Text>
+              <Text style={styles.bulletText}>{c}</Text>
+            </View>
+          ))}
+
+          <Text style={styles.section}>V6.1.0 CHANGES</Text>
           {V6_1_CHANGES.map((c) => (
             <View key={c} style={styles.bulletRow}>
               <Text style={styles.bulletDot}>•</Text>
