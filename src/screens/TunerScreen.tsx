@@ -9,7 +9,7 @@ import { createBackend } from '../services/UberSDRAdapter';
 import type { SDRBackend, FmdxState } from '../services/SDRBackend';
 import { lookupStationLogo } from '../services/stationLogo';
 import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
-import ControlsBar from '../components/ControlsBar';
+import ControlsBar, { createMeterBus } from '../components/ControlsBar';
 import ChatDrawer, { type ChatMessage } from '../components/ChatDrawer';
 import FreqModal from '../components/FreqModal';
 import FmdxDial, { type DialStation } from '../components/FmdxDial';
@@ -82,6 +82,13 @@ export default function TunerScreen({ route, navigation }: Props) {
   const [displayFreq, setDisplayFreq] = useState(95_000_000);
   const [step, setStep] = useState(100_000);
   const [freqModalOpen, setFreqModalOpen] = useState(false);
+  const [dialView, setDialView] = useState({ lo: FM_LO, hi: FM_HI });
+
+  // Meter bus — carries the signal fill AND the 3-bar server-connection link
+  // quality (derived from /text frame arrival, since FM-DX has no FFT frames).
+  const meterBus = useMemo(() => createMeterBus(), []);
+  const lastFrameAt = useRef(Date.now());
+  const lastSigNorm = useRef(0);
   const dragFreqRef = useRef<number | null>(null);
   const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const vfoPendingHz = useRef(0);
@@ -135,6 +142,11 @@ export default function TunerScreen({ route, navigation }: Props) {
       onFmdxState: (s) => {
         if (destroyed.current) return;
         setSt(s);
+        // Data flowing → link good; feed the signal fill too.
+        lastFrameAt.current = Date.now();
+        const sn = Math.min(1, Math.max(0, s.sig / 70));
+        lastSigNorm.current = sn;
+        meterBus.emit({ level: sn, peak: sn, snr: 0, dbfs: s.sig, active: true, link: 3 });
         if (s.rds && s.ps) learnStation(s.freqHz, s.ps);  // pin RDS name to the dial
         if (dragFreqRef.current != null) return;          // dragging — drum owns the display
         const target = targetFreqRef.current;
@@ -170,6 +182,18 @@ export default function TunerScreen({ route, navigation }: Props) {
       backendRef.current = null;
     };
   }, [baseUrl]);
+
+  // ── Connection-link watchdog: degrade the 3-bar meter when /text frames go
+  //    stale (green → yellow → red → down), independent of a single frame. ──
+  useEffect(() => {
+    const id = setInterval(() => {
+      const gap = Date.now() - lastFrameAt.current;
+      const link: 0 | 1 | 2 | 3 = gap < 2000 ? 3 : gap < 4000 ? 2 : gap < 8000 ? 1 : 0;
+      const sn = link > 0 ? lastSigNorm.current : 0;
+      meterBus.emit({ level: sn, peak: sn, snr: 0, dbfs: 0, active: link > 0, link });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [meterBus]);
 
   // ── Station logo (radio-browser, EXACT-name match only so we never show the
   //    wrong station's logo). Use the transmitter's full station name — far
@@ -228,6 +252,22 @@ export default function TunerScreen({ route, navigation }: Props) {
     backendRef.current?.tune(f);
   }, [armTarget]);
 
+  // Zoom drum → zoom the dial (FM-DX has no bandwidth). Octave zoom anchored on
+  // the tuned frequency, clamped to [2 MHz, full band].
+  const onDialZoom = useCallback((px: number) => {
+    setDialView((v) => {
+      const sp0 = v.hi - v.lo;
+      const full = FM_HI - FM_LO;
+      const sp = Math.max(2_000_000, Math.min(full, sp0 * Math.pow(0.5, px / 90)));
+      const anchor = clampFm(displayFreq);
+      const rel = sp0 > 0 ? (anchor - v.lo) / sp0 : 0.5;
+      let lo = anchor - rel * sp, hi = lo + sp;
+      if (lo < FM_LO) { lo = FM_LO; hi = lo + sp; }
+      if (hi > FM_HI) { hi = FM_HI; lo = hi - sp; }
+      return { lo, hi };
+    });
+  }, [displayFreq]);
+
   // ── Chat handlers ───────────────────────────────────────────────────────────
   const onJoin = useCallback((cs: string) => {
     const clean = cs.trim().replace(/[^A-Za-z0-9\-_/]/g, '').slice(0, 20);
@@ -247,12 +287,12 @@ export default function TunerScreen({ route, navigation }: Props) {
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
       {/* Header (Back lives in the control island's menu slot) */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right }]}>
         <Text style={styles.title} numberOfLines={1}>{instanceName ?? 'FM-DX'}</Text>
         {!!st && <Text style={styles.users}>{st.users} 👤</Text>}
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 14, gap: 12 }}>
+      <ScrollView contentContainerStyle={{ paddingVertical: 14, paddingLeft: 14 + insets.left, paddingRight: 14 + insets.right, gap: 12 }}>
         {error && <Text style={styles.err}>{error}</Text>}
 
         {/* Vintage tuning dial — every RDS name we decode is pinned to its freq */}
@@ -263,6 +303,8 @@ export default function TunerScreen({ route, navigation }: Props) {
           stations={dialStations}
           onTune={(hz) => onConfirmFreq(Math.round(hz / 100_000) * 100_000)}
           theme={theme}
+          view={dialView}
+          onViewChange={setDialView}
         />
 
         {/* PI (signal reading lives under the mode label; station name + RDS
@@ -307,7 +349,7 @@ export default function TunerScreen({ route, navigation }: Props) {
 
       {/* VTS — current station identity + RadioText, above the island (like the
           SDR screen's station readout) */}
-      <View style={styles.vts}>
+      <View style={[styles.vts, { marginLeft: 14 + insets.left, marginRight: 14 + insets.right }]}>
         <View style={styles.vtsLogo}>
           {logo
             ? <Image source={{ uri: logo }} style={styles.vtsLogoImg} resizeMode="contain" />
@@ -326,21 +368,22 @@ export default function TunerScreen({ route, navigation }: Props) {
         </View>
       </View>
 
-      {/* The app's real control island — single VFO drum (no bandwidth) */}
+      {/* The app's real control island — wrapped exactly like SDRScreen's
+          pillWrap (inset 8px each side, bottom = safe-area + 8; bar's own
+          bottomInset is 0 so the rounded corners aren't clipped). */}
+      <View style={{ marginHorizontal: 8, marginBottom: insets.bottom + 8 }}>
       <ControlsBar
         frequency={displayFreq}
         mode="wfm"
         step={step}
         connected={connected}
-        signalLevel={sigNorm}
-        peakLevel={sigNorm}
-        snrDb={st?.sig ?? 0}
+        meterBus={meterBus}
         signalActive={connected}
         fmStereo={!!st?.stereo}
         freqUnit="mhz"
-        bottomInset={insets.bottom}
+        bottomInset={0}
         onVfoDelta={onVfoDelta}
-        onBwDelta={() => {}}
+        onBwDelta={onDialZoom}
         onMode={() => {}}
         onStep={setStep}
         onMenu={() => navigation.goBack()}
@@ -348,12 +391,13 @@ export default function TunerScreen({ route, navigation }: Props) {
         onFreqTap={() => setFreqModalOpen(true)}
         chatUnread={chatUnread}
         instanceHost={instanceName ?? 'FM-DX'}
-        singleDrum
+        vfoNoInertia
         menuAsBack
         stepList={FM_STEPS}
         meterLabel={st ? `${Math.round(st.sig)} dBf` : ''}
         freqFormat={(hz) => (hz / 1e6).toFixed(3)}
       />
+      </View>
 
       <FreqModal
         visible={freqModalOpen}

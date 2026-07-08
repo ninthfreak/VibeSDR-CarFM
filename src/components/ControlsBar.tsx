@@ -202,6 +202,8 @@ export interface ControlsBarProps {
   chatDisabled?: boolean;
   /** FM-DX tuner: no bandwidth/zoom — render only the full-width VFO drum. */
   singleDrum?: boolean;
+  /** Disable VFO-drum fling inertia (FM-DX shared tuner: lift = stop). */
+  vfoNoInertia?: boolean;
   /** Override the STEP-button cycle list (Hz). FM-DX locks this to FM steps
    *  instead of the freq-derived HF/VHF defaults. */
   stepList?: number[];
@@ -329,7 +331,8 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
   const { theme: t } = useTheme();
   // Skin parity (lsvSnrDisp): plain "NNdb", not a synthetic S-meter reading.
   const m = useMeters(bus);
-  const liveSnrText = m ? meterText(meterMode ?? 'snr', m) : snrText;
+  // An explicit snrText (FM-DX "28 dBf") wins over the bus-computed text.
+  const liveSnrText = snrText ? snrText : (m ? meterText(meterMode ?? 'snr', m) : '');
   const liveActive  = m ? m.active : signalActive;
   return (
     // maxWidth cap: the pill must NEVER swallow the signal bar — on narrow
@@ -478,7 +481,7 @@ function useDrumSwipeGuard() {
 
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
-  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack }: any) {
+  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -630,7 +633,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
 
       {/* Row 3 — drums (single full-width VFO for FM-DX; vfo+zoom otherwise) */}
       <View ref={mergeRefs(drumRowRef, tourRef('vfoDrum'))} onLayout={guardDrums} style={{ flexDirection: 'row', gap: COL_GAP }}>
-        <DrumWheel type="vfo"  height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={singleDrum} />
+        <DrumWheel type="vfo"  height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />
         {!singleDrum && <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />}
       </View>
 
@@ -671,7 +674,7 @@ const por = StyleSheet.create({
 
 function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
-  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack }: any) {
+  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -707,7 +710,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
 
       {/* VFO drum + clock */}
       <View ref={tourRef('vfoDrum')} style={{ flex: 1, minWidth: s.r(80) }}>
-        <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={singleDrum} />
+        <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />
         <Text style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
           {clock}
         </Text>
@@ -809,6 +812,7 @@ function ControlsBar({
   chatShareDisabled = false,
   chatDisabled = false,
   singleDrum = false,
+  vfoNoInertia = false,
   stepList,
   meterLabel,
   menuAsBack = false,
@@ -856,7 +860,7 @@ function ControlsBar({
     clock, isRecording, recTime, chatUnread,
     csDisabled: chatShareDisabled,
     chatOff: chatShareDisabled || chatDisabled,
-    singleDrum, menuAsBack,
+    singleDrum, menuAsBack, vfoNoInertia,
   };
 
   return (

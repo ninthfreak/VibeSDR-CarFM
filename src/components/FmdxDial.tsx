@@ -1,12 +1,13 @@
-import React, { useState, useMemo } from 'react';
-import { View, Text, Pressable, StyleSheet, type LayoutChangeEvent } from 'react-native';
+import React, { useState, useMemo, useRef } from 'react';
+import { View, Text, StyleSheet, type LayoutChangeEvent } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import type { ThemeTokens } from '../contexts/ThemeContext';
 
 // Vintage analogue tuning dial for the FM-DX tuner (v7, plan §2c). A horizontal
 // FM-band scale with a moving needle at the current frequency and station-name
-// labels at the frequencies where we've decoded RDS (client-learned map) or hold
-// a bookmark. Tap anywhere on the dial to tune there. No plugin required — this
-// is the universal fallback when a server has no Spectrum Graph plugin.
+// labels at the frequencies where we've decoded RDS (client-learned map). Tap to
+// tune, PINCH to zoom into a clustered part of the band, PAN to scroll, and
+// double-tap to reset to the full band. No plugin required.
 
 export interface DialStation {
   freqHz: number;
@@ -29,105 +30,174 @@ interface Props {
   onTune:  (hz: number) => void;
   theme:   ThemeTokens;
   height?: number;
+  /** Controlled zoom/pan window (so the zoom drum can drive it too). */
+  view:         { lo: number; hi: number };
+  onViewChange: (v: { lo: number; hi: number }) => void;
 }
 
-export default function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 118 }: Props) {
+const MIN_SPAN = 2_000_000;   // max zoom-in = 2 MHz visible
+
+export default function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, view, onViewChange }: Props) {
   const [w, setW] = useState(0);
   const onLayout = (e: LayoutChangeEvent) => setW(e.nativeEvent.layout.width);
-  const span = Math.max(1, hiHz - loHz);
-  const x = (hz: number) => ((hz - loHz) / span) * w;
+  const fullSpan = Math.max(1, hiHz - loHz);
   const t = theme;
 
-  // Major ticks every 1 MHz; labels every 2 MHz.
-  const ticks = useMemo(() => {
-    const out: { mhz: number; major: boolean }[] = [];
-    const startM = Math.ceil(loHz / 1e6);
-    const endM = Math.floor(hiHz / 1e6);
-    for (let m = startM; m <= endM; m++) out.push({ mhz: m, major: m % 2 === 0 });
+  // Controlled zoom/pan window. viewRef mirrors the prop so gesture callbacks
+  // read the live value without stale closures.
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const startView = useRef(view);
+  const vLo = view.lo, vHi = view.hi, vSpan = Math.max(1, vHi - vLo);
+  const x = (hz: number) => ((hz - vLo) / vSpan) * w;
+
+  const gesture = useMemo(() => {
+    const clampWin = (lo: number, sp: number) => {
+      let l = lo, h = lo + sp;
+      if (l < loHz) { l = loHz; h = l + sp; }
+      if (h > hiHz) { h = hiHz; l = h - sp; }
+      return { lo: l, hi: h };
+    };
+    const pan = Gesture.Pan().activeOffsetX([-8, 8]).failOffsetY([-12, 12])
+      .onBegin(() => { startView.current = viewRef.current; })
+      .onUpdate((e) => {
+        if (!w) return;
+        const s = startView.current; const sp = s.hi - s.lo;
+        onViewChange(clampWin(s.lo - (e.translationX / w) * sp, sp));
+      });
+    const pinch = Gesture.Pinch()
+      .onBegin(() => { startView.current = viewRef.current; })
+      .onUpdate((e) => {
+        if (!w) return;
+        const s = startView.current; const sp0 = s.hi - s.lo;
+        const sp = Math.max(MIN_SPAN, Math.min(fullSpan, sp0 / e.scale));
+        const focalHz = s.lo + (Math.max(0, Math.min(w, e.focalX)) / w) * sp0;
+        onViewChange(clampWin(focalHz - (e.focalX / w) * sp, sp));
+      });
+    const tap = Gesture.Tap().maxDistance(10).onEnd((e) => {
+      if (!w) return;
+      const v = viewRef.current;
+      onTune(v.lo + (Math.max(0, Math.min(w, e.x)) / w) * (v.hi - v.lo));
+    });
+    const doubleTap = Gesture.Tap().numberOfTaps(2).onEnd(() => onViewChange({ lo: loHz, hi: hiHz }));
+    return Gesture.Exclusive(doubleTap, Gesture.Race(tap, Gesture.Simultaneous(pan, pinch)));
+  }, [w, loHz, hiHz, fullSpan, onTune, onViewChange]);
+
+  // Scale sits at the TOP; station names cascade DOWN one side (vintage-radio
+  // style). Rows step down below the MHz numbers.
+  const SCALE_Y = 20;
+  const ROWS = useMemo(() => {
+    const out: number[] = [];
+    for (let y = SCALE_Y + 24; y <= height - 12; y += 15) out.push(y);
     return out;
-  }, [loHz, hiHz]);
+  }, [height]);
+
+  // Which learned station are we tuned to (for the highlight)?
+  const curKey = useMemo(() => {
+    let best: number | null = null, bestD = 60_000;   // within ~60 kHz
+    for (const s of stations) { const d = Math.abs(s.freqHz - freqHz); if (d < bestD) { bestD = d; best = s.freqHz; } }
+    return best != null ? `${best}` : null;
+  }, [stations, freqHz]);
+
+  // Adaptive scale: pick the finest label step that keeps ≤ ~12 labels across
+  // the visible span (2 MHz → 1 → 0.5 → 0.2 → 0.1 as you zoom in). Minor ticks
+  // subdivide it. Integer Hz math avoids float drift.
+  const ticks = useMemo(() => {
+    const span = vHi - vLo;
+    const ladder = [100_000, 200_000, 500_000, 1_000_000, 2_000_000];
+    let labelStep = 2_000_000;
+    for (const s of ladder) { if (span / s <= 12) { labelStep = s; break; } }
+    const minorStep = labelStep >= 500_000 ? labelStep / 5 : labelStep / 2;
+    const start = Math.ceil(vLo / minorStep) * minorStep;
+    const out: { hz: number; major: boolean }[] = [];
+    for (let f = start; f <= vHi; f += minorStep) {
+      out.push({ hz: f, major: f % labelStep === 0 });
+    }
+    return out;
+  }, [vLo, vHi]);
 
   // Every in-range station gets a tick (proof it was saved). NAME labels use
   // collision avoidance (two rows, min gap) so dense city bands stay readable —
   // the current station always wins a label; others fill remaining space.
   const { ticks: staTicks, labels } = useMemo(() => {
-    const empty = { ticks: [] as { key: string; px: number }[], labels: [] as { key: string; px: number; name: string; row: 0 | 1 }[] };
+    const empty = { ticks: [] as { key: string; px: number }[], labels: [] as { key: string; px: number; name: string; top: number }[] };
     if (!w) return empty;
-    const MIN_GAP = 50;
-    const inRange = [...stations].filter(s => s.freqHz >= loHz && s.freqHz <= hiHz && s.name)
+    const MIN_GAP = 46;
+    const inRange = [...stations].filter(s => s.freqHz >= vLo && s.freqHz <= vHi && s.name)
       .sort((a, b) => a.freqHz - b.freqHz);
     const ticks = inRange.map(s => ({ key: `${s.freqHz}`, px: x(s.freqHz) }));
-    // Place the current station's label first so it's never dropped.
+    // Place the current station first so it's never dropped, then nearest-out.
     const ordered = [...inRange].sort((a, b) =>
       Math.abs(a.freqHz - freqHz) - Math.abs(b.freqHz - freqHz));
-    const rows: number[][] = [[], []];
-    const labels: { key: string; px: number; name: string; row: 0 | 1 }[] = [];
+    const rowsX: number[][] = ROWS.map(() => []);
+    const labels: { key: string; px: number; name: string; top: number }[] = [];
     for (const s of ordered) {
       const px = x(s.freqHz);
-      const row = (rows[0].every(p => Math.abs(p - px) >= MIN_GAP)) ? 0
-                : (rows[1].every(p => Math.abs(p - px) >= MIN_GAP)) ? 1 : -1;
-      if (row < 0) continue;
-      rows[row].push(px);
-      labels.push({ key: `${s.freqHz}`, px, name: s.name, row: row as 0 | 1 });
+      let placed = -1;
+      for (let r = 0; r < ROWS.length; r++) {
+        if (rowsX[r].every(p => Math.abs(p - px) >= MIN_GAP)) { placed = r; break; }
+      }
+      if (placed < 0) continue;
+      rowsX[placed].push(px);
+      labels.push({ key: `${s.freqHz}`, px, name: s.name, top: ROWS[placed] });
     }
     return { ticks, labels };
-  }, [stations, w, loHz, hiHz, freqHz]);
+  }, [stations, w, vLo, vHi, freqHz, ROWS]);
 
   const needleX = w ? x(freqHz) : 0;
-  const midY = height / 2;
 
   return (
-    <Pressable
-      onLayout={onLayout}
-      onPress={(e) => {
-        if (!w) return;
-        const px = Math.max(0, Math.min(w, e.nativeEvent.locationX));
-        onTune(loHz + (px / w) * span);
-      }}
-      style={[styles.wrap, { height, backgroundColor: FACE, borderColor: t.barBorder }]}
-    >
-      {/* Baseline */}
-      <View style={[styles.baseline, { top: midY, backgroundColor: GREEN_DIM }]} />
+    <GestureDetector gesture={gesture}>
+      <View
+        onLayout={onLayout}
+        style={[styles.wrap, { height, backgroundColor: FACE, borderColor: t.barBorder }]}
+      >
+        {/* Baseline (near the top) */}
+        <View style={[styles.baseline, { top: SCALE_Y, backgroundColor: GREEN_DIM }]} />
 
-      {/* Ticks + MHz labels */}
-      {w > 0 && ticks.map(({ mhz, major }) => {
-        const px = x(mhz * 1e6);
-        return (
-          <React.Fragment key={mhz}>
-            <View style={{ position: 'absolute', left: px, top: midY - (major ? 8 : 4), width: 1, height: major ? 16 : 8, backgroundColor: GREEN_DIM }} />
-            {major && (
-              <Text style={[styles.tickLbl, { left: px - 10, top: midY + 10, color: GREEN, fontFamily: t.font }]}>{mhz}</Text>
-            )}
-          </React.Fragment>
-        );
-      })}
+        {/* Ticks (point down from the scale) + MHz labels beneath */}
+        {w > 0 && ticks.map(({ hz, major }) => {
+          const px = x(hz);
+          if (px < -18 || px > w + 18) return null;
+          const mhz = hz / 1e6;
+          const lbl = Number.isInteger(mhz) ? String(mhz) : mhz.toFixed(1);
+          return (
+            <React.Fragment key={hz}>
+              <View style={{ position: 'absolute', left: px, top: SCALE_Y, width: 1, height: major ? 12 : 6, backgroundColor: GREEN_DIM }} />
+              {major && (
+                <Text style={[styles.tickLbl, { left: px - 16, width: 32, top: SCALE_Y + 13, color: GREEN, fontFamily: t.font }]}>{lbl}</Text>
+              )}
+            </React.Fragment>
+          );
+        })}
 
-      {/* A tick for every saved station */}
-      {staTicks.map(({ key, px }) => (
-        <View key={`t${key}`} style={{ position: 'absolute', left: px, top: midY - 7, width: 1, height: 14, backgroundColor: GREEN_SOFT }} />
-      ))}
+        {/* A tick for every saved station, hanging off the scale */}
+        {staTicks.map(({ key, px }) => (
+          <View key={`t${key}`} style={{ position: 'absolute', left: px, top: SCALE_Y - 6, width: 1, height: 12, backgroundColor: key === curKey ? RED : GREEN_SOFT }} />
+        ))}
 
-      {/* Station name labels (collision-avoided; current station always shown) */}
-      {labels.map(({ key, px, name, row }) => (
-        <Text
-          key={`l${key}`}
-          numberOfLines={1}
-          style={[styles.staLbl, {
-            left: px - 30, width: 60, color: GREEN_SOFT, fontFamily: t.font,
-            top: row === 0 ? 4 : height - 16,
-            textAlign: 'center',
-          }]}
-        >{name}</Text>
-      ))}
+        {/* Station name labels — cascading down one side; tuned station in red */}
+        {labels.map(({ key, px, name, top }) => (
+          <Text
+            key={`l${key}`}
+            numberOfLines={1}
+            style={[styles.staLbl, {
+              left: px - 30, width: 60, fontFamily: t.font, top, textAlign: 'center',
+              color: key === curKey ? RED : GREEN_SOFT,
+              fontWeight: key === curKey ? 'bold' : 'normal',
+            }]}
+          >{name}</Text>
+        ))}
 
-      {/* Current-frequency needle (warm red, matches the drum) */}
-      {w > 0 && (
-        <>
-          <View style={{ position: 'absolute', left: needleX, top: 2, width: 2, height: height - 4, backgroundColor: RED }} />
-          <View style={{ position: 'absolute', left: needleX - 5, top: 0, width: 0, height: 0, borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 7, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: RED }} />
-        </>
-      )}
-    </Pressable>
+        {/* Current-frequency needle (warm red, matches the drum) */}
+        {w > 0 && needleX >= 0 && needleX <= w && (
+          <>
+            <View style={{ position: 'absolute', left: needleX, top: 2, width: 2, height: height - 4, backgroundColor: RED }} />
+            <View style={{ position: 'absolute', left: needleX - 5, top: 0, width: 0, height: 0, borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 7, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: RED }} />
+          </>
+        )}
+      </View>
+    </GestureDetector>
   );
 }
 
