@@ -7,7 +7,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { createBackend } from '../services/UberSDRAdapter';
 import type { SDRBackend, FmdxState, FmdxServerInfo } from '../services/SDRBackend';
-import { lookupStationLogo } from '../services/stationLogo';
+import { resolveStationLogo } from '../services/stationLogoCache';
 import { isoToFlag, ituToIso, validIso } from '../services/rdsCountry';
 import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
 import ControlsBar, { createMeterBus } from '../components/ControlsBar';
@@ -235,7 +235,7 @@ export default function TunerScreen({ route, navigation }: Props) {
     if (!logoName || key === lastLogoName.current) return;
     lastLogoName.current = key;
     setLogo(null);
-    lookupStationLogo(logoName, logoIso || undefined).then((url) => {
+    resolveStationLogo({ pi: st?.pi, name: logoName, iso: logoIso || undefined }).then((url) => {
       if (!destroyed.current && lastLogoName.current === key) setLogo(url);
     });
   }, [logoName, logoIso]);

@@ -79,7 +79,7 @@ import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
-import { lookupStationLogo } from '../services/stationLogo';
+import { resolveStationLogo } from '../services/stationLogoCache';
 import { isoToFlag, validIso } from '../services/rdsCountry';
 import CenterVfoButton from '../components/CenterVfoButton';
 import PasswordModal from '../components/PasswordModal';
@@ -578,7 +578,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [activeDabId, setActiveDabId] = useState<number>(0);
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
-  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; badge?: string; countryIso?: string }>({});
+  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; badge?: string; countryIso?: string; pi?: string }>({});
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
   const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
@@ -1908,7 +1908,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // so a live station name shows uniformly regardless of source.
         liveStationRef.current = meta.stationName ?? '';
         liveBadgeRef.current = meta.badge;
-        setLiveStation({ name: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso });
+        setLiveStation({ name: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi });
         if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
@@ -3090,10 +3090,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     lastLiveLogoKey.current = key;
     if (!wfm || !name) { setLiveLogo(null); return; }
     setLiveLogo(null);
-    lookupStationLogo(name, iso || undefined).then((url) => {
+    resolveStationLogo({ pi: liveStation.pi, name, iso: iso || undefined }).then((url) => {
       if (!destroyed.current && lastLiveLogoKey.current === key) setLiveLogo(url);
     });
-  }, [liveStation.name, liveStation.countryIso, status.mode]);
+  }, [liveStation.name, liveStation.countryIso, liveStation.pi, status.mode]);
 
   // ── VTS-aware media session ────────────────────────────────────────────────
   // Track  = freq (user's unit) + demod + tune step ("648 kHz AM · 9 kHz step")
