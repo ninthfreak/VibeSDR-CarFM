@@ -239,13 +239,19 @@ export class FmdxAdapter implements SDRBackend {
     const url = /^https?:\/\//.test(base) ? base + '/static_data' : 'http://' + base + '/static_data';
     fetch(url).then((r) => r.json()).then((j) => {
       if (this.destroyed) return;
+      // ant = { enabled, ant1:{enabled,name}, ant2:{...}, … }. Only expose the
+      // switch when ant.enabled, and only the individual antennas marked enabled.
+      // Keys are antN (1-based); the Z command / `ant` state are 0-based → id=N-1.
       const antennas: { id: number; name: string }[] = [];
       const ant = j?.ant;
-      if (ant && typeof ant === 'object') {
+      if (ant && typeof ant === 'object' && ant.enabled) {
         for (const k of Object.keys(ant)) {
+          if (k === 'enabled') continue;
           const v = (ant as any)[k];
-          const name = typeof v === 'string' ? v : (v?.name ?? `Antenna ${k}`);
-          if (name) antennas.push({ id: Number(k), name: String(name) });
+          if (!v || typeof v !== 'object' || v.enabled !== true) continue;
+          const m = /(\d+)/.exec(k);
+          const id = m ? parseInt(m[1], 10) - 1 : antennas.length;
+          antennas.push({ id, name: String(v.name ?? k) });
         }
       }
       this.cb.onFmdxInfo?.({ antennas, bwSwitch: !!j?.bwSwitch });
