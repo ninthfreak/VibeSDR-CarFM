@@ -82,13 +82,16 @@ interface Props {
   onDelta: (pxDelta: number) => void;
   style?:  ViewStyle;
   fontFamily?: string;
+  /** Disable fling inertia — lift = stop. FM-DX shared tuner (coasting past your
+   *  target retunes for everyone). Default false keeps the SDR coast. */
+  noInertia?: boolean;
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function DrumWheel({
   type, width: widthProp = 0, height, onDelta, style,
-  fontFamily = 'Atkinson Hyperlegible',
+  fontFamily = 'Atkinson Hyperlegible', noInertia = false,
 }: Props) {
   const [measuredW, setMeasuredW] = useState(widthProp);
   const W = widthProp > 0 ? widthProp : measuredW;
@@ -183,6 +186,7 @@ export default function DrumWheel({
   }, [type, sendDelta, settleTick]);
 
   const startInertia = useCallback(() => {
+    if (noInertia) { vel.current = 0; return; }   // shared tuner: lift = stop
     // Flick gate: real flicks release at hundreds of px/s; anything under
     // ~50 px/s is deliberate positioning and must NOT coast (MIN_VEL=0.8 let
     // gentle releases tick the tune off the signal).
@@ -191,7 +195,7 @@ export default function DrumWheel({
     if (rafId.current) cancelAnimationFrame(rafId.current);
     rafTS.current = performance.now();
     rafId.current = requestAnimationFrame(inertia);
-  }, [inertia]);
+  }, [inertia, noInertia]);
 
   // ── Gesture (unchanged) ──────────────────────────────────────────────────────
   const gesture = Gesture.Pan()

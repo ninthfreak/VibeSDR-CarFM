@@ -27,25 +27,22 @@ export async function lookupStationLogo(name: string, iso?: string): Promise<str
 
   const p = (async (): Promise<string | null> => {
     try {
-      const params = new URLSearchParams({
-        name: name, limit: '5', order: 'votes', reverse: 'true', hidebroken: 'true',
-      });
-      if (iso) params.set('countrycode', iso.toUpperCase());
-      const res = await fetch(`${HOST}/json/stations/search?${params.toString()}`, {
-        headers: { 'User-Agent': 'VibeSDR/7 (FM-DX tuner)' },
-      });
+      // byname/ is a substring match (search?name= over-filters and returns []).
+      // Ordered by votes so the popular station wins a common-name query.
+      const url = `${HOST}/json/stations/byname/${encodeURIComponent(name)}?limit=10&order=votes&reverse=true&hidebroken=true`;
+      const res = await fetch(url, { headers: { 'User-Agent': 'VibeSDR/7 (FM-DX tuner)' } });
       const rows: any[] = await res.json();
-      // Prefer a station whose name reasonably matches and has an HTTPS favicon.
-      for (const r of Array.isArray(rows) ? rows : []) {
+      const list = Array.isArray(rows) ? rows : [];
+      // EXACT normalized-name match only, with an HTTPS favicon. radio-browser's
+      // byname results are polluted with near-miss / foreign stations, so a loose
+      // match shows the WRONG logo (worse than none). Exact match = confident or
+      // nothing → monogram. Optional country tie-breaker when known.
+      for (const r of list) {
         const fav = String(r?.favicon ?? '');
-        if (fav.startsWith('https://') && norm(String(r?.name ?? '')).includes(q.split(' ')[0])) {
-          return fav;
-        }
-      }
-      // Otherwise first HTTPS favicon at all.
-      for (const r of Array.isArray(rows) ? rows : []) {
-        const fav = String(r?.favicon ?? '');
-        if (fav.startsWith('https://')) return fav;
+        if (!fav.startsWith('https://')) continue;
+        if (norm(String(r?.name ?? '')) !== q) continue;
+        if (iso && String(r?.countrycode ?? '').toUpperCase() !== iso.toUpperCase()) continue;
+        return fav;
       }
       return null;
     } catch {

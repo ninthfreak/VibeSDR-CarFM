@@ -1,23 +1,24 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { v4 as uuidv4 } from 'uuid';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { createBackend } from '../services/UberSDRAdapter';
 import type { SDRBackend, FmdxState } from '../services/SDRBackend';
 import { lookupStationLogo } from '../services/stationLogo';
+import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
+import ControlsBar from '../components/ControlsBar';
+import ChatDrawer, { type ChatMessage } from '../components/ChatDrawer';
+import FreqModal from '../components/FreqModal';
 
-// FM-DX Webserver tuner screen (v7). A single shared hardware tuner: server-side
-// demod + RDS, MP3 audio decoded natively. No waterfall. First build = tiers 1–2
-// (RDS block + station logo + audio); spectrum / vintage dial come later.
+// FM-DX Webserver tuner screen (v7). Single shared hardware tuner: server-side
+// demod + RDS, native MP3 audio. No waterfall — station/RDS panels fill the top,
+// and the app's real control island (single VFO drum, no bandwidth) sits at the
+// bottom so it reads as native VibeSDR. Chat is first-class (shared tuning).
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Tuner'>;
-
-const AMBER = '#ffb833';
-const BG = '#0A0A12';
-const PANEL = '#14141f';
-const DIM = '#8a8a72';
 
 const PTY = [
   'None', 'News', 'Current Affairs', 'Information', 'Sport', 'Education', 'Drama',
@@ -29,9 +30,21 @@ const PTY = [
 ];
 
 const FM_LO = 87_500_000, FM_HI = 108_000_000;
+const clampFm = (hz: number) => Math.min(FM_HI, Math.max(FM_LO, hz));
+// FM step ladder (Hz) — server accepts any kHz via T<kHz>, so we lock the STEP
+// button to broadcast-FM-sensible values (1 kHz DX → 1 MHz coarse).
+const FM_STEPS = [1_000, 10_000, 100_000, 1_000_000];
+// VFO drum feel — ported from SDRScreen's velocity-adaptive tuning.
+const DRUM_VFO_SENS = 22, VFO_FINE_MULT = 4, VFO_VEL_FINE = 40, VFO_VEL_FAST = 350;
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const zulu = () => { const d = new Date(); return `${pad2(d.getUTCHours())}${pad2(d.getUTCMinutes())}z`; };
 
 export default function TunerScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName } = route.params;
+  const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(theme), [theme]);
+
   const backendRef = useRef<SDRBackend | null>(null);
   const destroyed = useRef(false);
 
@@ -41,9 +54,46 @@ export default function TunerScreen({ route, navigation }: Props) {
   const [logo, setLogo] = useState<string | null>(null);
   const lastLogoName = useRef<string>('');
 
+  // Tuning: displayFreq is what the pill/drum show; while dragging we update it
+  // locally and only COMMIT (tune the shared radio) on settle so a drum spin
+  // doesn't spam retunes for everyone. When not dragging, the server frame drives it.
+  const [displayFreq, setDisplayFreq] = useState(95_000_000);
+  const [step, setStep] = useState(100_000);
+  const [freqModalOpen, setFreqModalOpen] = useState(false);
+  const dragFreqRef = useRef<number | null>(null);
+  const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const vfoPendingHz = useRef(0);
+  const vfoVel = useRef({ t: 0, v: 0 });   // EMA thumb speed, px/s
+  // After we command a tune, the server keeps streaming the OLD freq for a beat
+  // before it retunes. Hold our target and ignore mismatching frames until it
+  // converges (or a grace timeout — a locked/spectator server never will), so
+  // the display doesn't bounce back to the old frequency.
+  const targetFreqRef = useRef<number | null>(null);
+  const convergeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armTarget = useCallback((f: number) => {
+    targetFreqRef.current = f;
+    if (convergeTimer.current) clearTimeout(convergeTimer.current);
+    convergeTimer.current = setTimeout(() => { targetFreqRef.current = null; }, 3000);
+  }, []);
+
+  // Chat
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatUnread, setChatUnread] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [myCallsign, setMyCallsign] = useState<string | null>(null);
+  const myCallsignRef = useRef<string | null>(null);
+  const chatOpenRef = useRef(false);
+  const msgId = useRef(0);
+  useEffect(() => { myCallsignRef.current = myCallsign; }, [myCallsign]);
+  useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
+
+  const CALLSIGN_KEY = `lsv_chat_callsign:${baseUrl}`;
+
   // ── Connect / teardown ──────────────────────────────────────────────────────
   useEffect(() => {
     destroyed.current = false;
+    AsyncStorage.getItem(CALLSIGN_KEY).then((cs) => { if (!destroyed.current && cs) setMyCallsign(cs); });
+
     const uuid = uuidv4();
     const backend = createBackend('fmdx', baseUrl, uuid, {
       onSpectrum: () => {},
@@ -52,66 +102,124 @@ export default function TunerScreen({ route, navigation }: Props) {
       onConnect:  () => { if (!destroyed.current) { setConnected(true); setError(null); } },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
       onServerLost: () => { if (!destroyed.current) setError('Server stopped responding'); },
-      onFmdxState: (s) => { if (!destroyed.current) setSt(s); },
+      onFmdxState: (s) => {
+        if (destroyed.current) return;
+        setSt(s);
+        if (dragFreqRef.current != null) return;          // dragging — drum owns the display
+        const target = targetFreqRef.current;
+        if (target != null) {
+          if (s.freqHz === target) {                       // server caught up
+            targetFreqRef.current = null;
+            if (convergeTimer.current) clearTimeout(convergeTimer.current);
+            setDisplayFreq(s.freqHz);
+          }
+          // else: still the stale old freq — hold the target, don't bounce
+        } else {
+          setDisplayFreq(s.freqHz);                        // idle — server drives
+        }
+      },
+      onChatMessage: (name, text) => {
+        if (destroyed.current) return;
+        const own = name === myCallsignRef.current;
+        setChatMessages((prev) => [...prev.slice(-99), {
+          id: `m${msgId.current++}`, type: own ? 'own' : 'other', user: name, text, ts: zulu(),
+        }]);
+        if (!chatOpenRef.current) setChatUnread(true);
+      },
     });
     backendRef.current = backend;
     backend.connect().catch((e) => { if (!destroyed.current) setError(String(e?.message ?? e)); });
 
     return () => {
       destroyed.current = true;
+      if (commitTimer.current) clearTimeout(commitTimer.current);
+      if (convergeTimer.current) clearTimeout(convergeTimer.current);
       backendRef.current?.destroy();
       backendRef.current = null;
     };
   }, [baseUrl]);
 
-  // ── Station logo (radio-browser favicon; monogram fallback) ─────────────────
+  // ── Station logo (radio-browser, EXACT-name match only so we never show the
+  //    wrong station's logo). Use the transmitter's full station name — far
+  //    better than the truncated RDS PS. Monogram when there's no confident hit. ──
+  const logoName = st?.tx?.tx?.trim() || st?.ps?.trim() || '';
   useEffect(() => {
-    const name = st?.ps?.trim() ?? '';
-    if (!name || name === lastLogoName.current) return;
-    lastLogoName.current = name;
+    if (!logoName || logoName === lastLogoName.current) return;
+    lastLogoName.current = logoName;
     setLogo(null);
-    lookupStationLogo(name).then((url) => {
-      if (!destroyed.current && lastLogoName.current === name) setLogo(url);
+    lookupStationLogo(logoName).then((url) => {
+      if (!destroyed.current && lastLogoName.current === logoName) setLogo(url);
     });
-  }, [st?.ps]);
+  }, [logoName]);
 
-  // ── Tuning (shared tuner — retunes for everyone) ────────────────────────────
-  const tuneBy = useCallback((deltaHz: number) => {
-    const cur = st?.freqHz ?? FM_LO;
-    const next = Math.min(FM_HI, Math.max(FM_LO, Math.round((cur + deltaHz) / 10_000) * 10_000));
-    backendRef.current?.tune(next);
-  }, [st?.freqHz]);
+  // ── Drum tuning: velocity-adaptive accumulator, snapped to the step grid,
+  //    committed once on settle (shared tuner — don't spam retunes). ───────────
+  const commitTune = useCallback(() => {
+    const f = dragFreqRef.current;
+    dragFreqRef.current = null;
+    if (f != null) { armTarget(f); backendRef.current?.tune(f); }
+  }, [armTarget]);
 
-  const freqMhz = st ? (st.freqHz / 1e6).toFixed(3) : '––.–––';
+  const onVfoDelta = useCallback((pxDelta: number) => {
+    const s = step;
+    const now = Date.now();
+    const gap = now - vfoVel.current.t;
+    vfoVel.current.t = now;
+    if (gap > 300) vfoVel.current.v = 0;
+    else {
+      const inst = Math.abs(pxDelta) / (Math.max(8, gap) / 1000);
+      vfoVel.current.v = vfoVel.current.v * 0.7 + inst * 0.3;
+    }
+    const k = Math.max(0, Math.min(1, (vfoVel.current.v - VFO_VEL_FINE) / (VFO_VEL_FAST - VFO_VEL_FINE)));
+    const pxPerStep = DRUM_VFO_SENS * (VFO_FINE_MULT - (VFO_FINE_MULT - 1) * k);
+    vfoPendingHz.current += (pxDelta * s) / pxPerStep;
+    const steps = Math.round(vfoPendingHz.current / s);
+    if (!steps) return;
+    vfoPendingHz.current -= steps * s;
+    const cur = dragFreqRef.current ?? displayFreq;
+    const snapped = Math.round(cur / s) * s;              // lock to the step grid
+    const newHz = clampFm(snapped + steps * s);
+    if (newHz === cur) return;
+    dragFreqRef.current = newHz;
+    setDisplayFreq(newHz);
+    if (commitTimer.current) clearTimeout(commitTimer.current);
+    commitTimer.current = setTimeout(commitTune, 220);
+  }, [displayFreq, step, commitTune]);
+
+  const onConfirmFreq = useCallback((hz: number) => {
+    const f = clampFm(hz);
+    dragFreqRef.current = null;
+    setDisplayFreq(f);
+    armTarget(f);
+    backendRef.current?.tune(f);
+  }, [armTarget]);
+
+  // ── Chat handlers ───────────────────────────────────────────────────────────
+  const onJoin = useCallback((cs: string) => {
+    const clean = cs.trim().replace(/[^A-Za-z0-9\-_/]/g, '').slice(0, 20);
+    if (!clean) return;
+    setMyCallsign(clean);
+    AsyncStorage.setItem(CALLSIGN_KEY, clean).catch(() => {});
+  }, [CALLSIGN_KEY]);
+  const onSend = useCallback((text: string) => {
+    if (myCallsignRef.current) (backendRef.current as any)?.sendChat?.(text, myCallsignRef.current);
+  }, []);
+  const openChat = useCallback(() => { setChatOpen(true); setChatUnread(false); }, []);
+
   const ps = st?.ps?.trim() || (connected ? '' : 'Connecting…');
   const monogram = (st?.ps?.trim() || '?').slice(0, 3).toUpperCase();
+  const sigNorm = Math.min(1, Math.max(0, (st?.sig ?? 0) / 70));
 
   return (
-    <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
-      {/* Header */}
+    <SafeAreaView style={styles.root} edges={['top']}>
+      {/* Header (Back lives in the control island's menu slot) */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.back}>
-          <Text style={styles.backTxt}>‹ Back</Text>
-        </TouchableOpacity>
         <Text style={styles.title} numberOfLines={1}>{instanceName ?? 'FM-DX'}</Text>
-        <Text style={styles.users}>{st ? `${st.users}👤` : ''}</Text>
+        {!!st && <Text style={styles.users}>{st.users} 👤</Text>}
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 14, gap: 12 }}>
         {error && <Text style={styles.err}>{error}</Text>}
-
-        {/* Frequency + tuning */}
-        <View style={styles.panel}>
-          <Text style={styles.freq}>{freqMhz}<Text style={styles.freqUnit}> MHz</Text></Text>
-          <View style={styles.tuneRow}>
-            {[[-1_000_000, '−1'], [-100_000, '−0.1'], [-10_000, '−.01'],
-              [10_000, '+.01'], [100_000, '+0.1'], [1_000_000, '+1']].map(([d, lbl]) => (
-              <TouchableOpacity key={lbl as string} style={styles.tuneBtn} onPress={() => tuneBy(d as number)}>
-                <Text style={styles.tuneBtnTxt}>{lbl}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
 
         {/* Logo + station name + pills */}
         <View style={[styles.panel, styles.stationRow]}>
@@ -123,34 +231,25 @@ export default function TunerScreen({ route, navigation }: Props) {
           <View style={{ flex: 1 }}>
             <Text style={styles.station} numberOfLines={1}>{ps}</Text>
             <View style={styles.pills}>
-              {st?.stereo && <Pill label="STEREO" on />}
-              {st?.rds && <Pill label="RDS" on />}
-              {st?.tp && <Pill label="TP" on />}
-              {st?.ta && <Pill label="TA" on />}
-              {!!st && <Pill label={PTY[st.pty] ?? 'None'} />}
+              {st?.stereo && <Pill label="STEREO" on styles={styles} />}
+              {st?.rds && <Pill label="RDS" on styles={styles} />}
+              {st?.tp && <Pill label="TP" on styles={styles} />}
+              {st?.ta && <Pill label="TA" on styles={styles} />}
+              {!!st && <Pill label={PTY[st.pty] ?? 'None'} styles={styles} />}
             </View>
           </View>
         </View>
 
-        {/* Signal + PI */}
-        <View style={styles.metaRow}>
-          <View style={[styles.panel, styles.metaCell]}>
-            <Text style={styles.metaLabel}>SIGNAL</Text>
-            <Text style={styles.metaVal}>{st ? st.sig.toFixed(1) : '––'}<Text style={styles.metaUnit}> dBf</Text></Text>
-            <View style={styles.sigBarBg}>
-              <View style={[styles.sigBarFill, { width: `${Math.min(100, Math.max(0, ((st?.sig ?? 0) / 70) * 100))}%` }]} />
-            </View>
-          </View>
-          <View style={[styles.panel, styles.metaCell]}>
-            <Text style={styles.metaLabel}>PI CODE</Text>
-            <Text style={styles.metaVal}>{st?.pi || '––––'}</Text>
-          </View>
+        {/* PI (signal reading now lives under the mode label in the island) */}
+        <View style={styles.panel}>
+          <Text style={styles.metaLabel}>PI CODE</Text>
+          <Text style={styles.metaVal}>{st?.pi || '––––'}</Text>
         </View>
 
         {/* RadioText */}
         <View style={styles.panel}>
           <Text style={styles.metaLabel}>RADIOTEXT</Text>
-          <Text style={styles.rt}>{st?.rt || '—'}</Text>
+          <Text style={styles.rt}>{st?.rt?.replace(/\s{2,}/g, ' ').trim() || '—'}</Text>
         </View>
 
         {/* Transmitter (relative to the RECEIVER's location) */}
@@ -167,23 +266,80 @@ export default function TunerScreen({ route, navigation }: Props) {
           </View>
         )}
 
-        {/* Alternative frequencies */}
+        {/* Alternative frequencies — tap to tune (same station elsewhere) */}
         {!!st?.af?.length && (
           <View style={styles.panel}>
-            <Text style={styles.metaLabel}>AF</Text>
-            <Text style={styles.af}>{st.af.map((h) => (h / 1e6).toFixed(1)).join('  ')}</Text>
+            <Text style={styles.metaLabel}>AF · TAP TO TUNE</Text>
+            <View style={styles.afRow}>
+              {st.af.map((h, i) => (
+                <TouchableOpacity key={`${h}-${i}`} style={styles.afChip} onPress={() => onConfirmFreq(h)} activeOpacity={0.7}>
+                  <Text style={styles.afChipTxt}>{(h / 1e6).toFixed(1)}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
         )}
 
         {!connected && !error && (
-          <View style={{ alignItems: 'center', padding: 20 }}><ActivityIndicator color={AMBER} /></View>
+          <View style={{ alignItems: 'center', padding: 20 }}><ActivityIndicator color={theme.btnActiveText} /></View>
         )}
       </ScrollView>
+
+      {/* The app's real control island — single VFO drum (no bandwidth) */}
+      <ControlsBar
+        frequency={displayFreq}
+        mode="wfm"
+        step={step}
+        connected={connected}
+        signalLevel={sigNorm}
+        peakLevel={sigNorm}
+        snrDb={st?.sig ?? 0}
+        signalActive={connected}
+        fmStereo={!!st?.stereo}
+        freqUnit="mhz"
+        bottomInset={insets.bottom}
+        onVfoDelta={onVfoDelta}
+        onBwDelta={() => {}}
+        onMode={() => {}}
+        onStep={setStep}
+        onMenu={() => navigation.goBack()}
+        onChat={openChat}
+        onFreqTap={() => setFreqModalOpen(true)}
+        chatUnread={chatUnread}
+        instanceHost={instanceName ?? 'FM-DX'}
+        singleDrum
+        menuAsBack
+        stepList={FM_STEPS}
+        meterLabel={st ? `${Math.round(st.sig)} dBf` : ''}
+        freqFormat={(hz) => (hz / 1e6).toFixed(3)}
+      />
+
+      <FreqModal
+        visible={freqModalOpen}
+        currentHz={displayFreq}
+        onConfirm={onConfirmFreq}
+        onClose={() => setFreqModalOpen(false)}
+        unit="mhz"
+        lockUnit
+        minHz={FM_LO}
+        maxHz={FM_HI}
+      />
+
+      <ChatDrawer
+        visible={chatOpen}
+        messages={chatMessages}
+        myCallsign={myCallsign}
+        onJoin={onJoin}
+        onSend={onSend}
+        onClose={() => setChatOpen(false)}
+        onChangeName={() => setMyCallsign(null)}
+        textOnly
+      />
     </SafeAreaView>
   );
 }
 
-function Pill({ label, on }: { label: string; on?: boolean }) {
+function Pill({ label, on, styles }: { label: string; on?: boolean; styles: any }) {
   return (
     <View style={[styles.pill, on && styles.pillOn]}>
       <Text style={[styles.pillTxt, on && styles.pillTxtOn]}>{label}</Text>
@@ -191,39 +347,40 @@ function Pill({ label, on }: { label: string; on?: boolean }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: BG },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, gap: 10 },
-  back: { paddingVertical: 4, paddingRight: 8 },
-  backTxt: { color: AMBER, fontFamily: 'Courier', fontSize: 15 },
-  title: { flex: 1, color: '#EEE', fontFamily: 'Courier', fontSize: 15, fontWeight: 'bold' },
-  users: { color: DIM, fontFamily: 'Courier', fontSize: 12 },
-  err: { color: '#E66', fontFamily: 'Courier', fontSize: 13, textAlign: 'center' },
-  panel: { backgroundColor: PANEL, borderRadius: 12, padding: 14 },
-  freq: { color: '#FFF', fontFamily: 'Courier', fontSize: 48, fontWeight: 'bold', textAlign: 'center' },
-  freqUnit: { fontSize: 18, color: DIM, fontWeight: 'normal' },
-  tuneRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10, gap: 6 },
-  tuneBtn: { flex: 1, backgroundColor: '#22222e', borderRadius: 8, paddingVertical: 12, alignItems: 'center' },
-  tuneBtnTxt: { color: AMBER, fontFamily: 'Courier', fontSize: 13, fontWeight: 'bold' },
-  stationRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  logoBox: { width: 72, height: 72, borderRadius: 10, backgroundColor: '#0c0c14', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  logo: { width: 68, height: 68 },
-  monogram: { color: AMBER, fontFamily: 'Courier', fontSize: 24, fontWeight: 'bold' },
-  station: { color: '#FFF', fontFamily: 'Courier', fontSize: 22, fontWeight: 'bold' },
-  pills: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
-  pill: { borderColor: DIM, borderWidth: 1, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
-  pillOn: { backgroundColor: AMBER, borderColor: AMBER },
-  pillTxt: { color: DIM, fontFamily: 'Courier', fontSize: 10, fontWeight: 'bold' },
-  pillTxtOn: { color: '#111' },
-  metaRow: { flexDirection: 'row', gap: 12 },
-  metaCell: { flex: 1 },
-  metaLabel: { color: AMBER, fontFamily: 'Courier', fontSize: 11, fontWeight: 'bold', marginBottom: 4 },
-  metaVal: { color: '#FFF', fontFamily: 'Courier', fontSize: 26, fontWeight: 'bold' },
-  metaUnit: { fontSize: 14, color: DIM, fontWeight: 'normal' },
-  sigBarBg: { height: 6, backgroundColor: '#0c0c14', borderRadius: 3, marginTop: 8, overflow: 'hidden' },
-  sigBarFill: { height: 6, backgroundColor: AMBER },
-  rt: { color: '#DDD', fontFamily: 'Courier', fontSize: 15, marginTop: 4 },
-  txName: { color: '#FFF', fontFamily: 'Courier', fontSize: 15, fontWeight: 'bold', marginTop: 2 },
-  txMeta: { color: DIM, fontFamily: 'Courier', fontSize: 12, marginTop: 3 },
-  af: { color: '#DDD', fontFamily: 'Courier', fontSize: 15, marginTop: 4, letterSpacing: 1 },
-});
+function makeStyles(t: ThemeTokens) {
+  const F = t.font;
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: '#080601' },
+    header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, gap: 12, borderBottomWidth: 1, borderBottomColor: t.barBorder },
+    back: { paddingVertical: 2, paddingRight: 4 },
+    backTxt: { color: t.btnActiveText, fontFamily: F, fontSize: 15 },
+    title: { flex: 1, color: t.freqColor, fontFamily: F, fontSize: 18, fontWeight: 'bold', letterSpacing: 1 },
+    users: { color: t.snrColor, fontFamily: F, fontSize: 13 },
+    err: { color: '#ff8a8a', fontFamily: F, fontSize: 13, textAlign: 'center' },
+    panel: { backgroundColor: t.barBg, borderRadius: 14, borderWidth: 1, borderColor: t.barBorder, padding: 14 },
+    stationRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+    logoBox: { width: 72, height: 72, borderRadius: 10, backgroundColor: t.pillBg, borderWidth: 1, borderColor: t.barBorder, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+    logo: { width: 68, height: 68 },
+    monogram: { color: t.btnActiveText, fontFamily: F, fontSize: 22, fontWeight: 'bold' },
+    station: { color: t.freqColor, fontFamily: F, fontSize: 22, fontWeight: 'bold' },
+    pills: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+    pill: { borderColor: t.btnBorder, borderWidth: 1, borderRadius: 5, paddingHorizontal: 8, paddingVertical: 4, backgroundColor: t.btnBg },
+    pillOn: { backgroundColor: t.btnActiveBg, borderColor: t.btnActiveBdr },
+    pillTxt: { color: t.unitColor, fontFamily: F, fontSize: 10, fontWeight: 'bold', letterSpacing: 1 },
+    pillTxtOn: { color: t.btnActiveText },
+    metaRow: { flexDirection: 'row', gap: 12 },
+    metaCell: { flex: 1 },
+    metaLabel: { color: t.sectionColor, fontFamily: F, fontSize: 11, fontWeight: 'bold', letterSpacing: 2, marginBottom: 4 },
+    metaVal: { color: t.freqColor, fontFamily: F, fontSize: 26, fontWeight: 'bold' },
+    metaUnit: { fontSize: 14, color: t.unitColor, fontWeight: 'normal' },
+    sigBarBg: { height: 6, backgroundColor: t.pillBg, borderRadius: 3, marginTop: 8, overflow: 'hidden' },
+    sigBarFill: { height: 6, backgroundColor: t.btnActiveText },
+    rt: { color: t.freqColor, fontFamily: F, fontSize: 15, marginTop: 4 },
+    txName: { color: t.freqColor, fontFamily: F, fontSize: 15, fontWeight: 'bold', marginTop: 2 },
+    txMeta: { color: t.unitColor, fontFamily: F, fontSize: 12, marginTop: 3 },
+    af: { color: t.freqColor, fontFamily: F, fontSize: 15, marginTop: 4, letterSpacing: 1 },
+    afRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
+    afChip: { backgroundColor: t.btnBg, borderWidth: 1, borderColor: t.btnBorder, borderRadius: 6, paddingHorizontal: 12, paddingVertical: 7 },
+    afChipTxt: { color: t.btnActiveText, fontFamily: F, fontSize: 15, fontWeight: 'bold' },
+  });
+}

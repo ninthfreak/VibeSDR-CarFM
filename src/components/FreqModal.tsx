@@ -21,6 +21,8 @@ interface FreqModalProps {
    *  widens it so VHF/UHF entries (e.g. 96.6 MHz) aren't rejected. */
   minHz?:    number;
   maxHz?:    number;
+  /** Lock to MHz (FM-DX broadcast) — grey out the Hz/kHz options. */
+  lockUnit?: boolean;
 }
 
 function toDisplay(hz: number, unit: Unit): string {
@@ -40,7 +42,7 @@ function fromDisplay(val: string, unit: Unit): number {
 export default function FreqModal({
   visible, currentHz, onConfirm, onClose,
   unit: unitProp, onUnit,
-  minHz = MIN_FREQ_HZ, maxHz = MAX_FREQ_HZ,
+  minHz = MIN_FREQ_HZ, maxHz = MAX_FREQ_HZ, lockUnit = false,
 }: FreqModalProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
@@ -130,10 +132,12 @@ export default function FreqModal({
             {(['hz', 'khz', 'mhz'] as Unit[]).map(u => (
               <TouchableOpacity
                 key={u}
+                disabled={lockUnit && u !== 'mhz'}
                 style={[
                   st.unitBtn,
                   { borderColor: bdrDim, paddingVertical: btnPadY },
                   unit === u && { borderColor: bdrBrt, backgroundColor: t.btnActiveBg },
+                  lockUnit && u !== 'mhz' && { opacity: 0.3 },
                 ]}
                 onPress={() => switchUnit(u)}
               >

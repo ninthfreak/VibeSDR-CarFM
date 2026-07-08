@@ -200,6 +200,20 @@ export interface ControlsBarProps {
   chatShareDisabled?: boolean;
   /** Grey out chat only (e.g. KiwiSDR has no chat, but still has a shareable URL). */
   chatDisabled?: boolean;
+  /** FM-DX tuner: no bandwidth/zoom — render only the full-width VFO drum. */
+  singleDrum?: boolean;
+  /** Override the STEP-button cycle list (Hz). FM-DX locks this to FM steps
+   *  instead of the freq-derived HF/VHF defaults. */
+  stepList?: number[];
+  /** Static text shown under the mode label (the meter-text slot) when there's
+   *  no meter bus — FM-DX puts its "26.2 dBf" reading here. */
+  meterLabel?: string;
+  /** Render the MENU button as a Back (‹) button — FM-DX has no menu; onMenu
+   *  becomes the back action. */
+  menuAsBack?: boolean;
+  /** Override the frequency string formatting (FM-DX shows 3-dp MHz instead of
+   *  the unit-based full-resolution format HF needs). */
+  freqFormat?: (hz: number) => string;
 }
 
 // ── Signal bar canvas ─────────────────────────────────────────────────────────
@@ -464,7 +478,7 @@ function useDrumSwipeGuard() {
 
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
-  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff }: any) {
+  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -587,7 +601,9 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
             style={{ flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' }}
             onPress={onMenu} activeOpacity={0.75} hitSlop={10}
           >
-            <Hamburger color={t.btnText} lineW={HBURG_W} />
+            {menuAsBack
+              ? <Text style={{ color: t.btnText, fontFamily: t.font, fontSize: s.f(t.btnSize) }}>‹ Back</Text>
+              : <Hamburger color={t.btnText} lineW={HBURG_W} />}
           </TouchableOpacity>
         </Animated.View>
 
@@ -612,10 +628,10 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
 
       </View>
 
-      {/* Row 3 — drums 50/50 */}
+      {/* Row 3 — drums (single full-width VFO for FM-DX; vfo+zoom otherwise) */}
       <View ref={mergeRefs(drumRowRef, tourRef('vfoDrum'))} onLayout={guardDrums} style={{ flexDirection: 'row', gap: COL_GAP }}>
-        <DrumWheel type="vfo"  height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} />
-        <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta}  style={{ flex: 1 }} />
+        <DrumWheel type="vfo"  height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={singleDrum} />
+        {!singleDrum && <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />}
       </View>
 
       {/* Row 4 — clock · link quality · rec */}
@@ -655,7 +671,7 @@ const por = StyleSheet.create({
 
 function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
-  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff }: any) {
+  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -691,7 +707,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
 
       {/* VFO drum + clock */}
       <View ref={tourRef('vfoDrum')} style={{ flex: 1, minWidth: s.r(80) }}>
-        <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} />
+        <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={singleDrum} />
         <Text style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
           {clock}
         </Text>
@@ -719,7 +735,9 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
           style={[lnd.lsBtn, { borderColor: isRecording ? 'rgba(220,40,40,0.90)' : t.btnBorder }]}
           onPress={onMenu} activeOpacity={0.75} hitSlop={10}
         >
-          <Hamburger color={t.btnText} lineW={HBURG_W} />
+          {menuAsBack
+            ? <Text style={{ color: t.btnText, fontFamily: t.font, fontSize: s.f(11) }}>‹</Text>
+            : <Hamburger color={t.btnText} lineW={HBURG_W} />}
         </TouchableOpacity>
       </View>
 
@@ -755,10 +773,12 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
         </TouchableOpacity>
       </View>
 
-      {/* Zoom drum */}
-      <View style={{ flex: 1, minWidth: s.r(80) }}>
-        <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />
-      </View>
+      {/* Zoom drum (omitted for FM-DX single-drum tuner) */}
+      {!singleDrum && (
+        <View style={{ flex: 1, minWidth: s.r(80) }}>
+          <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />
+        </View>
+      )}
 
     </View>
   );
@@ -788,21 +808,26 @@ function ControlsBar({
   onShare: onShareProp,
   chatShareDisabled = false,
   chatDisabled = false,
+  singleDrum = false,
+  stepList,
+  meterLabel,
+  menuAsBack = false,
+  freqFormat,
 }: ControlsBarProps) {
   const { theme: t } = useTheme();
   const s = useUiScale();
 
-  const freqStr   = useMemo(() => formatHz(frequency, freqUnit), [frequency, freqUnit]);
+  const freqStr   = useMemo(() => freqFormat ? freqFormat(frequency) : formatHz(frequency, freqUnit), [frequency, freqUnit, freqFormat]);
   const unit      = useMemo(() => freqUnitLabel(freqUnit),       [freqUnit]);
   const stepLabel = useMemo(() => formatStep(step),      [step]);
-  const snrText   = ''; // legacy fallback — live text comes from the bus + meterText()
+  const snrText   = meterLabel ?? ''; // FM-DX static reading; live text comes from the bus + meterText()
   const clock     = useClock();
 
   const cycleStep = useCallback(() => {
-    const list = stepsForFreq(frequency);
+    const list = stepList ?? stepsForFreq(frequency);
     const idx = list.indexOf(step);
     onStep(list[(idx + 1) % list.length] ?? list[0]);
-  }, [step, onStep, frequency]);
+  }, [step, onStep, frequency, stepList]);
 
   // Parent supplies the deep-link share (instance URL + freq/mode/bw/zoom
   // params — tappable straight into the station); plain text is the fallback
@@ -831,6 +856,7 @@ function ControlsBar({
     clock, isRecording, recTime, chatUnread,
     csDisabled: chatShareDisabled,
     chatOff: chatShareDisabled || chatDisabled,
+    singleDrum, menuAsBack,
   };
 
   return (

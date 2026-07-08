@@ -27,7 +27,7 @@ const FMDX_CAPS: BackendCapabilities = {
   serverSideZoom: false,   // no waterfall at all
   smeter:         'message',
   freqRange:      [87_500_000, 108_000_000],   // FM broadcast band (refine from /static_data later)
-  chat:           false,
+  chat:           true,    // /chat WS — vital on a shared tuner ("can I retune?")
   serverNR:       false,
   maxBandwidth:   { default: 100_000, wfm: 100_000 },
 };
@@ -50,6 +50,7 @@ export class FmdxAdapter implements SDRBackend {
   private base: string;
   private cb: BackendCallbacks;
   private ws: WebSocket | null = null;
+  private chatWs: WebSocket | null = null;
   private audioStarted = false;
   private destroyed = false;
 
@@ -77,6 +78,8 @@ export class FmdxAdapter implements SDRBackend {
       ws.onopen = () => {
         this.cb.onConnect();
         this.cb.onLink?.(3);
+        this.cb.onChatEnabled?.(true);
+        this.openChatWs();
         // Audio is a separate native WS opened from the http base.
         if (!this.audioStarted) { Vibe?.startFmdxAudio?.(this.base); this.audioStarted = true; }
         // Optional deep-link retune once we're live (shared-tuner: this DOES
@@ -104,6 +107,43 @@ export class FmdxAdapter implements SDRBackend {
     if (this.audioStarted) { Vibe?.stopFmdxAudio?.(); this.audioStarted = false; }
     const ws = this.ws; this.ws = null;
     if (ws) { try { ws.onclose = null; ws.close(); } catch {} }
+    const cw = this.chatWs; this.chatWs = null;
+    if (cw) { try { cw.onclose = null; cw.close(); } catch {} }
+  }
+
+  // ── Chat (/chat WS) — shared-tuner coordination ─────────────────────────────
+  private openChatWs(): void {
+    if (this.chatWs) return;
+    let cw: WebSocket;
+    try { cw = new WebSocket(wsUrl(this.base, '/chat')); }
+    catch { return; }
+    this.chatWs = cw;
+    cw.onmessage = (e) => {
+      if (typeof e.data !== 'string') return;
+      try {
+        const j = JSON.parse(e.data);
+        // The server sends a 'clientIp' control frame + chat frames {nickname,
+        // message, time, admin?, history?}. Render only ones with a message.
+        if (j?.type === 'clientIp') return;
+        if (j?.message != null) {
+          this.cb.onChatMessage?.(String(j.nickname ?? '?'), String(j.message));
+        }
+      } catch { /* ignore */ }
+    };
+    cw.onclose = () => { this.chatWs = null; };
+    cw.onerror = () => {};
+  }
+
+  /** ChatDrawer onSend → post to the shared server chat. FM-DX needs no join;
+   *  the nickname rides every message (≤32 chars, message ≤255). */
+  sendChat(text: string, name: string): void {
+    const cw = this.chatWs;
+    if (!cw || cw.readyState !== 1) return;
+    const payload = JSON.stringify({
+      nickname: (name || 'VibeSDR').slice(0, 32),
+      message:  String(text).slice(0, 255),
+    });
+    try { cw.send(payload); } catch {}
   }
 
   disconnectSocket(): void {
