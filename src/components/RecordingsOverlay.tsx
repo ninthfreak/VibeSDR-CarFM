@@ -16,7 +16,7 @@ import {
   ActivityIndicator, Alert, FlatList, Modal, NativeModules, Platform,
   Pressable, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 
@@ -190,6 +190,9 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} transparent={false}>
+      {/* Modals render outside the app's SafeAreaProvider, so SafeAreaView reads
+          zero insets (title drew under the status bar / notch). Own provider fixes it. */}
+      <SafeAreaProvider>
       <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
         <View style={styles.bar}>
           <Text style={styles.title}>RECORDINGS</Text>
@@ -211,6 +214,7 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
           />
         )}
       </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   );
 }
