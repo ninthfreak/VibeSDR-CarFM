@@ -113,6 +113,7 @@ export default function TunerScreen({ route, navigation }: Props) {
   const [forcedMono, setForcedMono] = useState(false);
   const [demodOpen, setDemodOpen] = useState(false);
   const [serverInfo, setServerInfo] = useState<FmdxServerInfo | null>(null);
+  const [showNotice, setShowNotice] = useState(false);   // first-connect shared-tuner notice
 
   // Meter bus — carries the signal fill AND the 3-bar server-connection link
   // quality (derived from /text frame arrival, since FM-DX has no FFT frames).
@@ -148,11 +149,14 @@ export default function TunerScreen({ route, navigation }: Props) {
   useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
 
   const CALLSIGN_KEY = `lsv_chat_callsign:${baseUrl}`;
+  const NOTICE_KEY = 'lsv_fmdx_shared_notice_v1';
+  const dismissNotice = useCallback(() => { setShowNotice(false); AsyncStorage.setItem(NOTICE_KEY, '1').catch(() => {}); }, []);
 
   // ── Connect / teardown ──────────────────────────────────────────────────────
   useEffect(() => {
     destroyed.current = false;
     AsyncStorage.getItem(CALLSIGN_KEY).then((cs) => { if (!destroyed.current && cs) setMyCallsign(cs); });
+    AsyncStorage.getItem(NOTICE_KEY).then((v) => { if (!destroyed.current && !v) setShowNotice(true); });
     AsyncStorage.getItem(DIAL_KEY).then((raw) => {
       if (destroyed.current || !raw) return;
       try {
@@ -180,8 +184,11 @@ export default function TunerScreen({ route, navigation }: Props) {
         lastSigNorm.current = sn;
         meterBus.emit({ level: sn, peak: sn, snr: 0, dbfs: s.sig, active: true, link: 3 });
         if (s.rds && s.ps) learnStation(s.freqHz, s.ps);  // pin RDS name to the dial
-        // Lock-screen card: FM station name (or freq) as the title (dedupّd).
-        const npTitle = s.ps?.trim() || `${(s.freqHz / 1e6).toFixed(1)} FM`;
+        // Lock-screen card: "STATION · 89.2" (freq beside the RDS name), or just
+        // the frequency until RDS locks. Deduped so we don't spam the card.
+        const mhz = (s.freqHz / 1e6).toFixed(1);
+        const psName = s.ps?.trim();
+        const npTitle = psName ? `${psName} · ${mhz}` : `${mhz} MHz`;
         if (npTitle !== lastNpTitle.current) {
           lastNpTitle.current = npTitle;
           VibePowerModule?.setNowPlaying?.(npTitle, instanceName ?? 'FM-DX');
@@ -251,6 +258,9 @@ export default function TunerScreen({ route, navigation }: Props) {
       if (!destroyed.current && lastLogoName.current === key) setLogo(url);
     });
   }, [logoName, logoIso]);
+
+  // Inlay the resolved station logo on the lock-screen artwork.
+  useEffect(() => { (VibePowerModule as any)?.setStationLogo?.(logo ?? ''); }, [logo]);
 
   // ── Drum tuning: velocity-adaptive accumulator, snapped to the step grid,
   //    committed once on settle (shared tuner — don't spam retunes). ───────────
@@ -450,6 +460,24 @@ export default function TunerScreen({ route, navigation }: Props) {
       </View>
       </View>
 
+      {/* First-connect shared-tuner notice */}
+      <Modal visible={showNotice} transparent animationType="fade" onRequestClose={dismissNotice}>
+        <View style={styles.noticeBackdrop}>
+          <View style={styles.noticeCard}>
+            <Text style={styles.noticeTitle}>SHARED TUNER</Text>
+            <Text style={styles.noticeBody}>
+              This is one radio shared by everyone connected — <Text style={styles.noticeBold}>tuning changes the frequency for all listeners</Text>.
+            </Text>
+            <Text style={styles.noticeItem}>💬  Please ask in chat before you retune.</Text>
+            <Text style={styles.noticeItem}>🔒  Lock-screen / headphone skip is disabled here, so you can't retune everyone by accident.</Text>
+            <Text style={styles.noticeItem}>👤  The counter at the top shows how many people are listening.</Text>
+            <TouchableOpacity style={styles.noticeBtn} onPress={dismissNotice}>
+              <Text style={styles.noticeBtnTxt}>GOT IT</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Demodulator options sheet (mode-pill tap) — mono/stereo, cEQ, iMS, antenna */}
       <Modal visible={demodOpen} transparent animationType="fade" onRequestClose={() => setDemodOpen(false)}>
         <Pressable style={styles.sheetBackdrop} onPress={() => setDemodOpen(false)}>
@@ -563,6 +591,14 @@ function makeStyles(t: ThemeTokens) {
     vtsLogoImg: { width: 38, height: 38 },
     vtsMono: { color: t.btnActiveText, fontFamily: F, fontSize: 14, fontWeight: 'bold' },
     vtsTopRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    noticeBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', padding: 26 },
+    noticeCard: { backgroundColor: '#14141f', borderRadius: 16, borderWidth: 1, borderColor: t.btnActiveBdr, padding: 22 },
+    noticeTitle: { color: t.btnActiveText, fontFamily: F, fontSize: 14, fontWeight: 'bold', letterSpacing: 2, marginBottom: 12, textAlign: 'center' },
+    noticeBody: { color: t.freqColor, fontFamily: F, fontSize: 15, lineHeight: 21, marginBottom: 14 },
+    noticeBold: { fontWeight: 'bold', color: t.btnActiveText },
+    noticeItem: { color: t.unitColor, fontFamily: F, fontSize: 14, lineHeight: 20, marginBottom: 10 },
+    noticeBtn: { marginTop: 8, alignItems: 'center', paddingVertical: 13, borderRadius: 8, backgroundColor: t.btnActiveBg, borderWidth: 1, borderColor: t.btnActiveBdr },
+    noticeBtnTxt: { color: t.btnActiveText, fontFamily: F, fontSize: 15, fontWeight: 'bold', letterSpacing: 1 },
     sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
     sheet: { backgroundColor: '#101018', borderTopLeftRadius: 18, borderTopRightRadius: 18, borderWidth: 1, borderColor: t.barBorder, padding: 18, paddingBottom: 30, gap: 8 },
     sheetTitle: { color: t.sectionColor, fontFamily: F, fontSize: 12, fontWeight: 'bold', letterSpacing: 2, marginBottom: 6 },

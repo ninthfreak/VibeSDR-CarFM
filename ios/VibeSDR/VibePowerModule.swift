@@ -196,6 +196,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // Composited album art (app icon + server-type logo inset), cached per type
   private var npArtwork: MPMediaItemArtwork?
   private var npArtworkType = ""
+  // FM-DX: the resolved station logo (radio-browser favicon), inlaid left of the
+  // FM-DX mark on the lock-screen artwork. Downloaded from the URL JS resolves.
+  private var stationLogoImg: UIImage?
+  private var stationLogoUrl = ""
   // Media skip routing: "step" = native tune±step; "bookmark" = emit
   // VibeSkip and let JS jump bookmarks (it owns the VTS station list)
   private var skipMode = "step"
@@ -1489,7 +1493,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private func updateNowPlaying() {
     refreshArtwork()  // keep the inset glyph/countdown in step with the state
     let mhz = String(format: "%.3f MHz", Double(currentFreq) / 1_000_000)
-    let fallbackTitle  = "\(mhz) \(currentMode.uppercased())"
+    // FM-DX pushes its own title from JS; never fall back to the stale UberSDR
+    // freq/mode (currentFreq/currentMode belong to the last UberSDR session).
+    let fallbackTitle  = fmdxAudio ? "FM-DX" : "\(mhz) \(currentMode.uppercased())"
     let fallbackArtist = instanceName.isEmpty ? currentBase : instanceName
     let title: String
     let artist: String
@@ -1540,6 +1546,26 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     DispatchQueue.main.async { self.updateNowPlaying() }  // refreshes art + pushes
   }
 
+  /// FM-DX: the resolved station logo URL (radio-browser favicon). Downloaded and
+  /// inlaid on the album art. Empty clears it (→ monogram-only art).
+  @objc func setStationLogo(_ url: String) {
+    let u = url.trimmingCharacters(in: .whitespaces)
+    if u == stationLogoUrl { return }
+    stationLogoUrl = u
+    if u.isEmpty {
+      stationLogoImg = nil; lastArtworkKey = ""
+      DispatchQueue.main.async { self.updateNowPlaying() }
+      return
+    }
+    guard let link = URL(string: u) else { return }
+    URLSession.shared.dataTask(with: link) { [weak self] data, _, _ in
+      guard let self, let data, let img = UIImage(data: data), self.stationLogoUrl == u else { return }
+      self.stationLogoImg = img
+      self.lastArtworkKey = ""   // force a re-composite with the logo
+      DispatchQueue.main.async { self.updateNowPlaying() }
+    }.resume()
+  }
+
   // Composite the album art with a state-aware bottom-right inset: the server
   // logo while playing, a muted-speaker glyph + minutes-to-disconnect while
   // muted, a disconnected glyph once the data saver has dropped the stream.
@@ -1548,7 +1574,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     guard let base = UIImage(named: "artwork_base") else { return }
     let key = reconnectFailed ? "fail"
             : dataSaverDisconnected ? "disc"
-            : "play-\(npArtworkType)"
+            : "play-\(npArtworkType)-\(stationLogoImg != nil ? stationLogoUrl : "")"
     guard key != lastArtworkKey else { return }
     lastArtworkKey = key
 
@@ -1580,6 +1606,18 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         icon.draw(in: box)
       } else if let overlay = UIImage(named: "logo_\(npArtworkType)") {
         overlay.draw(in: rect)
+      }
+      // FM-DX: inlay the resolved station logo bottom-LEFT (mirrors the FM-DX
+      // mark bottom-right). Aspect-fit onto a rounded dark tile so any favicon reads.
+      if npArtworkType == "fmdx", let logo = stationLogoImg {
+        let lrect = CGRect(x: pad, y: size.height - inset - pad, width: inset, height: inset)
+        let tile = UIBezierPath(roundedRect: lrect, cornerRadius: inset * 0.14)
+        UIColor(white: 1.0, alpha: 0.92).setFill(); tile.fill()
+        let ip = inset * 0.12
+        let box = lrect.insetBy(dx: ip, dy: ip)
+        let s = min(box.width / logo.size.width, box.height / logo.size.height)
+        let w = logo.size.width * s, h = logo.size.height * s
+        logo.draw(in: CGRect(x: box.midX - w / 2, y: box.midY - h / 2, width: w, height: h))
       }
     }
     npArtwork = MPMediaItemArtwork(boundsSize: img.size) { _ in img }

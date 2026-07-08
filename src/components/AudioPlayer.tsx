@@ -27,6 +27,7 @@ export const VibePowerModule = NativeModules.VibePowerModule as
       sendAudioCommand:  (json: string) => void;
       setNowPlaying:     (title: string, artist: string) => void;
       setArtwork:        (serverType: string) => void;
+      setStationLogo?:   (url: string) => void;   // FM-DX: inlay station favicon on the art
       setMediaSkipMode:  (mode: 'step' | 'bookmark') => void;
       setBrowseItems?:   (json: string) => void;
       setReconnectFailed?: (failed: boolean) => void;
