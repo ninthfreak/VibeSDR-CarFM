@@ -18,6 +18,13 @@ A mobile-first SDR receiver app for iOS and Android — and far more than a sing
 
 ## Screenshots
 
+### FM-DX Webserver (new in v7)
+
+| | |
+|---|---|
+| ![FM-DX tuner](screenshots/19-fmdx-tuner.png) | ![FM-DX lock screen](screenshots/20-fmdx-lockscreen.png) |
+| *FM-DX tuner — vintage dial that learns station names, RDS, transmitter info, tap-to-tune AFs, station logo + flag (Newcastle-upon-Tyne)* | *Lock-screen Now Playing — station logo inlay + frequency (BBC R2 · 89.0)* |
+
 | | | |
 |---|---|---|
 | ![Portrait waterfall](screenshots/03-waterfall-portrait.jpeg) | ![Lock screen](screenshots/05-lockscreen.jpeg) | ![Apple Watch](screenshots/06-apple-watch.jpeg) |
@@ -201,6 +208,9 @@ cd modules/vibe-local-sdr && ./build_ios.sh
 | **Phil Karn (KA9Q)** | ka9q-radio (radiod), the SDR engine underneath UberSDR |
 | **John Seamons (ZL/KF6VO)** | Creator of KiwiSDR |
 | **Jakob Ketterl (DD5JFK) & the OpenWebRX+ project** | OpenWebRX / OpenWebRX+ servers |
+| **NoobishSVK & contributors** | FM-DX Webserver + the servers.fmdx.org receiver map — protocol reference for the FM-DX backend and its 3LAS MP3 audio (GPL-3.0) |
+| **radio-browser.info** | Community station directory used to look up FM-DX / RDS station logos |
+| **Konrad Kosmatka** | librdsparser — reference for the RDS PI + ECC → country mapping (IEC 62106) behind the RDS country flags |
 | **Osmocom / librtlsdr** | RTL-SDR USB driver (Android local hardware + rtl_tcp) |
 | **Mark Borgerding (KissFFT)** | BSD-licensed FFT vendored in the VibeDSP engine |
 | **Karlis Goba (ft8_lib)** | FT8 / FT4 decoding |
@@ -223,7 +233,7 @@ Full licence: <https://www.gnu.org/licenses/gpl-3.0.html>
 
 The official App Store / Google Play / TestFlight builds are covered by an additional permission under GPLv3 §7 — see [`APPSTORE-EXCEPTION.md`](APPSTORE-EXCEPTION.md). The complete source for every released build remains available here under the GPLv3.
 
-UberSDR, OpenWebRX/OpenWebRX+ and KiwiSDR are the property of their respective creators and subject to their own licence terms.
+UberSDR, OpenWebRX/OpenWebRX+, KiwiSDR and FM-DX Webserver are the property of their respective creators and subject to their own licence terms.
 
 ## Privacy
 
