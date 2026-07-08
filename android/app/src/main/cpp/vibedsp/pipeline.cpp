@@ -99,6 +99,10 @@ void RxPipeline::rebuildAudio() {
                 auto* self = (RxPipeline*)c;
                 if (self->cb_.rdsText) self->cb_.rdsText(self->cb_.ctx, rt);
             };
+            rcb.ecc = [](void* c, uint16_t, uint8_t ecc) {
+                auto* self = (RxPipeline*)c;
+                if (self->cb_.rdsEcc) self->cb_.rdsEcc(self->cb_.ctx, ecc);
+            };
             rdsDemod_.configure(chFs_, rcb);
             break;
         }

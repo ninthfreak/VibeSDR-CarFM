@@ -306,6 +306,7 @@ public:
         void* ctx = nullptr;
         void (*ps)(void* ctx, uint16_t pi, const char* ps8) = nullptr;        // 8-char station name
         void (*radiotext)(void* ctx, const char* rt64) = nullptr;             // up to 64 chars
+        void (*ecc)(void* ctx, uint16_t pi, uint8_t ecc) = nullptr;           // Extended Country Code (group 1A)
     };
     void setCallbacks(const Callbacks& c) { cb_ = c; }
     void reset();
@@ -325,6 +326,7 @@ private:
     bool blkOk_[4] = {false, false, false, false};
     char ps_[9] = {0};
     char rt_[65] = {0};
+    uint8_t ecc_ = 0;                 // last decoded Extended Country Code (0 = none)
     Callbacks cb_{};
 };
 
@@ -375,6 +377,8 @@ public:
         void (*rdsPs)(void* ctx, uint16_t pi, const char* ps8) = nullptr;
         // Optional: WFM RDS RadioText (up to 64 chars).
         void (*rdsText)(void* ctx, const char* rt64) = nullptr;
+        // Optional: WFM RDS Extended Country Code (group 1A) → station country.
+        void (*rdsEcc)(void* ctx, uint8_t ecc) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
         void (*stereo)(void* ctx, bool locked) = nullptr;
     };

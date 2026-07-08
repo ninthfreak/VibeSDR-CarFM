@@ -85,6 +85,7 @@ void RdsDecoder::reset() {
     for (int i = 0; i < 4; ++i) { blk_[i] = 0; blkOk_[i] = false; }
     std::memset(ps_, 0, sizeof ps_);
     std::memset(rt_, 0, sizeof rt_);
+    ecc_ = 0;
 }
 
 void RdsDecoder::pushBit(int bit) {
@@ -144,6 +145,14 @@ void RdsDecoder::parseGroup() {
             rt_[addr * 2 + 0] = (char)((blk_[3] >> 8) & 0xFF);
             rt_[addr * 2 + 1] = (char)(blk_[3] & 0xFF);
             if (cb_.radiotext) cb_.radiotext(cb_.ctx, rt_);
+        }
+    } else if (gtype == 1 && ver == 0) {                // 1A — slow labelling → ECC
+        // Block C variant 0 (bits 14-12 == 0) carries the Extended Country Code
+        // in its low byte. Combined with the PI country nibble it identifies the
+        // station's country (RDS/IEC 62106).
+        if (blkOk_[2] && ((blk_[2] >> 12) & 0x7) == 0) {
+            ecc_ = (uint8_t)(blk_[2] & 0xFF);
+            if (ecc_ && cb_.ecc) cb_.ecc(cb_.ctx, pi, ecc_);
         }
     }
 }

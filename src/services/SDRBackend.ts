@@ -187,6 +187,10 @@ export interface StationMeta {
   badge?: string;
   /** WFM stereo pilot detected (V4 local hardware) — drives the stereo icon. */
   stereo?: boolean;
+  /** RDS PI code (hex, e.g. 'C712') — station identity for logo/country lookup. */
+  pi?: string;
+  /** ISO country (RDS ECC-derived, or receiver-location fallback) — flag + logo. */
+  countryIso?: string;
 }
 
 /** Additive callbacks for v3 backends — UI ignores when absent. */

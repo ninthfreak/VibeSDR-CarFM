@@ -79,6 +79,8 @@ import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
+import { lookupStationLogo } from '../services/stationLogo';
+import { isoToFlag, validIso } from '../services/rdsCountry';
 import CenterVfoButton from '../components/CenterVfoButton';
 import PasswordModal from '../components/PasswordModal';
 import {
@@ -576,9 +578,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [activeDabId, setActiveDabId] = useState<number>(0);
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
-  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; badge?: string }>({});
+  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; badge?: string; countryIso?: string }>({});
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
+  const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
+  const lastLiveLogoKey = useRef('');
   const [fmStereo, setFmStereo] = useState(false);   // WFM stereo pilot (local hardware)
 
   // DAB speed correction is remembered PER STATION (ensemble + programme), since
@@ -1904,7 +1908,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // so a live station name shows uniformly regardless of source.
         liveStationRef.current = meta.stationName ?? '';
         liveBadgeRef.current = meta.badge;
-        setLiveStation({ name: meta.stationName, text: meta.text, badge: meta.badge });
+        setLiveStation({ name: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso });
         if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
@@ -3061,15 +3065,35 @@ export default function SDRScreen({ route, navigation }: Props) {
     // RDS: append the scrolling radiotext after the station name (the VTS bar
     // marquees overflow). e.g. "BBC Nhtn — BBC Radio Northampton …We love …".
     const display = liveStation.text ? `${name} — ${liveStation.text}` : name;
-    if (display !== vtsLastStation.current) {
-      vtsLastStation.current = display;
+    // WFM broadcast FM: show the RDS country flag + station logo (from PI/ECC).
+    const wfm = status.mode === 'wfm';
+    const flag = wfm && validIso(liveStation.countryIso) ? isoToFlag(liveStation.countryIso) : undefined;
+    const logoUrl = wfm ? (liveLogo ?? undefined) : undefined;
+    const composite = `${display}|${flag ?? ''}|${logoUrl ?? ''}`;
+    if (composite !== vtsLastStation.current) {
+      vtsLastStation.current = composite;
       vtsKey.current++;
       // Live server data (RDS/DMR/DAB) holds on screen until it changes/clears
       // — only the static bookmark/band notifs time out. Badge flags the source.
-      setVtsNotif({ key: vtsKey.current, name: display, kind: 'station-on', hold: true, badge: liveBadgeRef.current });
+      setVtsNotif({ key: vtsKey.current, name: display, kind: 'station-on', hold: true, badge: liveBadgeRef.current, flag, logoUrl });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveStation.name, liveStation.text]);
+  }, [liveStation.name, liveStation.text, liveStation.countryIso, liveLogo, status.mode]);
+
+  // ── WFM RDS station logo (radio-browser favicon, country-filtered) ──────────
+  useEffect(() => {
+    const name = liveStation.name?.trim();
+    const iso = validIso(liveStation.countryIso) ? liveStation.countryIso!.toUpperCase() : '';
+    const wfm = status.mode === 'wfm';
+    const key = `${wfm ? 1 : 0}|${name ?? ''}|${iso}`;
+    if (key === lastLiveLogoKey.current) return;
+    lastLiveLogoKey.current = key;
+    if (!wfm || !name) { setLiveLogo(null); return; }
+    setLiveLogo(null);
+    lookupStationLogo(name, iso || undefined).then((url) => {
+      if (!destroyed.current && lastLiveLogoKey.current === key) setLiveLogo(url);
+    });
+  }, [liveStation.name, liveStation.countryIso, status.mode]);
 
   // ── VTS-aware media session ────────────────────────────────────────────────
   // Track  = freq (user's unit) + demod + tune step ("648 kHz AM · 9 kHz step")

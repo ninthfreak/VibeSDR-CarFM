@@ -8,6 +8,7 @@ import { RootStackParamList } from '../../App';
 import { createBackend } from '../services/UberSDRAdapter';
 import type { SDRBackend, FmdxState, FmdxServerInfo } from '../services/SDRBackend';
 import { lookupStationLogo } from '../services/stationLogo';
+import { isoToFlag, ituToIso, validIso } from '../services/rdsCountry';
 import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
 import ControlsBar, { createMeterBus } from '../components/ControlsBar';
 import { VibePowerModule } from '../components/AudioPlayer';
@@ -33,30 +34,10 @@ const PTY = [
 
 const FM_LO = 87_500_000, FM_HI = 108_000_000;
 const clampFm = (hz: number) => Math.min(FM_HI, Math.max(FM_LO, hz));
-/** ISO-3166 alpha-2 → flag emoji (regional indicator symbols). */
-function isoToFlag(iso?: string): string {
-  if (!iso || iso.length !== 2 || !/^[A-Za-z]{2}$/.test(iso)) return '';
-  const base = 0x1F1E6, up = iso.toUpperCase();
-  return String.fromCodePoint(base + up.charCodeAt(0) - 65, base + up.charCodeAt(1) - 65);
-}
-// FMLIST/ITU broadcasting country symbol → ISO alpha-2. The transmitter DB's
-// `itu` is authoritative; the RDS `country_iso` often mis-decodes ('UN').
-const ITU_TO_ISO: Record<string, string> = {
-  G: 'GB', F: 'FR', D: 'DE', I: 'IT', E: 'ES', HOL: 'NL', BEL: 'BE', LUX: 'LU',
-  AUT: 'AT', SUI: 'CH', POR: 'PT', IRL: 'IE', NOR: 'NO', S: 'SE', FIN: 'FI',
-  DNK: 'DK', POL: 'PL', CZE: 'CZ', SVK: 'SK', HNG: 'HU', ROU: 'RO', BUL: 'BG',
-  GRC: 'GR', HRV: 'HR', SVN: 'SI', SRB: 'RS', UKR: 'UA', RUS: 'RU', EST: 'EE',
-  LVA: 'LV', LTU: 'LT', ISL: 'IS', TUR: 'TR', ALB: 'AL', MKD: 'MK', BIH: 'BA',
-  MNE: 'ME', AND: 'AD', LIE: 'LI', MCO: 'MC', SMR: 'SM', MLT: 'MT', CYP: 'CY',
-};
 /** Best country for flag/logo: transmitter ITU (reliable) → RDS country_iso
  *  (only if a real code, not 'UN'/blank). Returns ISO alpha-2 or ''. */
 function countryOf(st: FmdxState | null): string {
-  const itu = st?.tx?.itu?.trim().toUpperCase();
-  if (itu && ITU_TO_ISO[itu]) return ITU_TO_ISO[itu];
-  const iso = st?.countryIso?.trim().toUpperCase();
-  if (iso && /^[A-Z]{2}$/.test(iso) && iso !== 'UN' && iso !== 'XX') return iso;
-  return '';
+  return ituToIso(st?.tx?.itu) || (validIso(st?.countryIso) ? st!.countryIso!.trim().toUpperCase() : '');
 }
 // FM step ladder (Hz) — server accepts any kHz via T<kHz>, so we lock the STEP
 // button to broadcast-FM-sensible values (1 kHz DX → 1 MHz coarse).

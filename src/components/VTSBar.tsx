@@ -35,7 +35,8 @@ export interface VtsNotifData {
   hold?:      boolean;  // stay up (no auto-dismiss) — digital-voice caller display
   badge?:     string;   // live-data tag (e.g. 'RDS', 'DMR') — shown before the name
   source?:    'eibi' | 'server' | 'user';  // bookmark origin → source icon
-  flag?:      string;   // transmitter-country flag (EiBi bookmarks)
+  flag?:      string;   // transmitter-country flag (EiBi bookmarks / RDS)
+  logoUrl?:   string;   // resolved WFM RDS station logo (radio-browser favicon)
 }
 
 const NOTIF_MS = 8000;
@@ -132,7 +133,9 @@ export default function VTSBar({ notif, bottom, serverType }: { notif: VtsNotifD
       <Text style={[styles.arrow, { color: leftCol }]}>◄</Text>
       {/* Source mark: live-data badge (RDS logo / text) wins; otherwise the
           bookmark-origin icon — backend logo, EiBi mark, or phone glyph. */}
-      {shown.badge === 'RDS'
+      {shown.logoUrl
+        ? <Image source={{ uri: shown.logoUrl }} style={styles.staLogo} resizeMode="contain" />
+        : shown.badge === 'RDS'
         ? <Image source={RDS_LOGO} style={styles.rdsLogo} resizeMode="contain" />
         : !!shown.badge
           ? <Text style={styles.badge}>{shown.badge}</Text>
@@ -211,6 +214,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderRadius: 4,
     paddingHorizontal: 3,
+    marginRight: 5,
+  },
+  staLogo: {
+    width: 20,
+    height: 20,
+    backgroundColor: '#ffffff',
+    borderRadius: 4,
     marginRight: 5,
   },
   srcLogo: {

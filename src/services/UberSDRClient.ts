@@ -18,6 +18,7 @@
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzip } from 'pako';
 import { VibePowerModule } from '../components/AudioPlayer';
+import { eccPiToIso } from './rdsCountry';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -731,11 +732,18 @@ export class UberSDRClient {
       const ps = typeof msg.ps === 'string' ? msg.ps.trim() : '';
       const rt = typeof msg.radiotext === 'string' ? msg.radiotext.trim() : '';
       const stereo = msg.stereo === true;
+      // PI (hex) + ECC → station country (for the flag + logo lookup), same as
+      // the FM-DX backend. The shim sends pi (int, -1 = none) and ecc (0 = none).
+      const pi = typeof msg.pi === 'number' && msg.pi >= 0
+        ? msg.pi.toString(16).toUpperCase().padStart(4, '0') : undefined;
+      const ecc = typeof msg.ecc === 'number' && msg.ecc > 0 ? msg.ecc : undefined;
       (this.callbacks as any).onMetadata?.({
         stationName: ps || undefined,
         text: rt || undefined,
         badge: ps ? 'RDS' : undefined,
         stereo,
+        pi,
+        countryIso: eccPiToIso(ecc, pi) || undefined,
       });
       return;
     }
