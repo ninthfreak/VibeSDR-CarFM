@@ -716,6 +716,19 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   @objc func setMuted(_ muted: Bool) {
     isMuted = muted
     sendEvent(withName: "VibeMuted", body: ["muted": muted])
+    // FM-DX: a continuous native MP3-over-WS stream (shared tuner — no per-user
+    // session to drop). Pause = mute in place (keep the /text + audio WS and the
+    // decoder alive); ▶ just restarts the engine/player. NEVER disconnect — an
+    // AirPods-removal interruption otherwise landed in the "Disconnected" card and
+    // ▶ couldn't recover (bug: the resume event is UberSDR-only).
+    if fmdxAudio {
+      DispatchQueue.main.async {
+        if muted { self.playerNode?.pause() }
+        else     { try? self.audioEngine?.start(); self.playerNode?.play() }
+        self.updateNowPlaying()
+      }
+      return
+    }
     // OWRX/Kiwi (external): tuning + WS live in JS, and an OWRX reconnect RESETS
     // the server to its default profile — so we deliberately do NOT offer a
     // play-to-reconnect card here. PAUSE fully releases the media controls
@@ -1232,6 +1245,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         DispatchQueue.main.async {
           if self.dataSaverDisconnected {
             self.setMuted(false)   // full reconnect, identical to pressing ▶
+          } else if self.fmdxAudio && self.isMuted {
+            self.setMuted(false)   // FM-DX mutes in place on interruption → unmute to resume
           } else if !self.isMuted {
             try? self.audioEngine?.start(); self.playerNode?.play()
           }
@@ -1513,6 +1528,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // paused state for the lock screen even though we're not disconnected.
     let paused = dataSaverDisconnected || reconnectFailed
               || (externalAudio && externalPauseMode == "resume" && isMuted)
+              || (fmdxAudio && isMuted)
     var info: [String: Any] = [
       MPMediaItemPropertyTitle:             title,
       MPMediaItemPropertyArtist:            artist,
