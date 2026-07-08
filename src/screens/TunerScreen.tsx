@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable, NativeEventEmitter, NativeModules } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable, NativeEventEmitter, NativeModules, Alert, Platform } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
+import RecordingsOverlay from '../components/RecordingsOverlay';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { v4 as uuidv4 } from 'uuid';
@@ -106,6 +108,10 @@ export default function TunerScreen({ route, navigation }: Props) {
   const [bottomH, setBottomH] = useState(0);   // measured VTS+island height → ScrollView bottom padding
   const [forcedMono, setForcedMono] = useState(false);
   const [demodOpen, setDemodOpen] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recSeconds, setRecSeconds] = useState(0);
+  const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [recordingsOpen, setRecordingsOpen] = useState(false);
   const [serverInfo, setServerInfo] = useState<FmdxServerInfo | null>(null);
   const [showNotice, setShowNotice] = useState(false);   // first-connect shared-tuner notice
 
@@ -365,6 +371,45 @@ export default function TunerScreen({ route, navigation }: Props) {
   }, []);
   const openChat = useCallback(() => { setChatOpen(true); setChatUnread(false); }, []);
 
+  // ── Recording (no menu on the tuner — controls live in the header) ───────────
+  const fmtRec = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const toggleRecording = useCallback(() => {
+    if (!isRecording) {
+      (VibePowerModule as any)?.startRecording(Math.round(displayFreq || 0), 'wfm')
+        .then(() => {
+          setRecSeconds(0);
+          recTimerRef.current = setInterval(() => setRecSeconds((s: number) => s + 1), 1000);
+          setIsRecording(true);
+        })
+        .catch((e: Error) => Alert.alert('Recording', `Could not start recording: ${e.message}`));
+    } else {
+      if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
+      setRecSeconds(0);
+      setIsRecording(false);
+      VibePowerModule?.stopRecording()
+        .then(async (path: string | null) => {
+          if (!path) return;
+          if (Platform.OS === 'android') {
+            try {
+              const cu = await FileSystem.getContentUriAsync(path.startsWith('file://') ? path : 'file://' + path);
+              VibePowerModule?.shareRecording(cu);
+            } catch {}
+          } else {
+            VibePowerModule?.shareRecording(path);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [isRecording, displayFreq]);
+  useEffect(() => () => { if (recTimerRef.current) clearInterval(recTimerRef.current); }, []);
+
+  // Playing a saved recording (expo-audio) fights the live native engine for the
+  // audio session — mute FM-DX (disconnects) while the browser is active, resume
+  // on close. Reuses the VibeMuted path (native closes/reopens its own WS).
+  const onRecordingsActive = useCallback((active: boolean) => {
+    (NativeModules.VibePowerModule as any)?.setMuted?.(active);
+  }, []);
+
   const ps = st?.ps?.trim() || (paused ? 'Paused' : connected ? '' : 'Connecting…');
   const resumeFromPause = useCallback(() => { (VibePowerModule as any)?.setMuted?.(false); }, []);
   const monogram = (st?.ps?.trim() || '?').slice(0, 3).toUpperCase();
@@ -375,6 +420,14 @@ export default function TunerScreen({ route, navigation }: Props) {
       {/* Header (Back lives in the control island's menu slot) */}
       <View style={[styles.header, { paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right }]}>
         <Text style={styles.title} numberOfLines={1}>{instanceName ?? 'FM-DX'}</Text>
+        {/* Record + recordings library (no menu on the tuner) */}
+        <TouchableOpacity style={styles.hdrBtn} onPress={toggleRecording} hitSlop={8} activeOpacity={0.7}>
+          <View style={[styles.recDot, isRecording && styles.recDotOn]} />
+          <Text style={[styles.hdrBtnTxt, isRecording && styles.recActiveTxt]}>{isRecording ? fmtRec(recSeconds) : 'REC'}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.hdrBtn} onPress={() => setRecordingsOpen(true)} hitSlop={8} activeOpacity={0.7}>
+          <Text style={styles.hdrBtnTxt}>≡ Library</Text>
+        </TouchableOpacity>
         {!!st && !paused && <Text style={styles.users}>{st.users} 👤</Text>}
       </View>
 
@@ -558,6 +611,8 @@ export default function TunerScreen({ route, navigation }: Props) {
         </Pressable>
       </Modal>
 
+      <RecordingsOverlay visible={recordingsOpen} onClose={() => setRecordingsOpen(false)} onActiveChange={onRecordingsActive} />
+
       <FreqModal
         visible={freqModalOpen}
         currentHz={displayFreq}
@@ -611,6 +666,11 @@ function makeStyles(t: ThemeTokens) {
     backTxt: { color: t.btnActiveText, fontFamily: F, fontSize: 15 },
     title: { flex: 1, color: t.freqColor, fontFamily: F, fontSize: 18, fontWeight: 'bold', letterSpacing: 1 },
     users: { color: t.snrColor, fontFamily: F, fontSize: 13 },
+    hdrBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 8, borderWidth: 1, borderColor: t.btnBorder },
+    hdrBtnTxt: { color: t.btnText, fontFamily: F, fontSize: 12, fontWeight: 'bold', letterSpacing: 0.5 },
+    recDot: { width: 9, height: 9, borderRadius: 4.5, backgroundColor: 'rgba(255,255,255,0.4)' },
+    recDotOn: { backgroundColor: '#ff3b3b' },
+    recActiveTxt: { color: '#ff6b6b' },
     err: { color: '#ff8a8a', fontFamily: F, fontSize: 13, textAlign: 'center' },
     pausedBanner: {
       position: 'absolute', alignSelf: 'center', zIndex: 60,
