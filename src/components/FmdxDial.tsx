@@ -58,14 +58,14 @@ export default function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, 
       if (h > hiHz) { h = hiHz; l = h - sp; }
       return { lo: l, hi: h };
     };
-    const pan = Gesture.Pan().activeOffsetX([-8, 8]).failOffsetY([-12, 12])
+    const pan = Gesture.Pan().runOnJS(true).activeOffsetX([-8, 8]).failOffsetY([-12, 12])
       .onBegin(() => { startView.current = viewRef.current; })
       .onUpdate((e) => {
         if (!w) return;
         const s = startView.current; const sp = s.hi - s.lo;
         onViewChange(clampWin(s.lo - (e.translationX / w) * sp, sp));
       });
-    const pinch = Gesture.Pinch()
+    const pinch = Gesture.Pinch().runOnJS(true)
       .onBegin(() => { startView.current = viewRef.current; })
       .onUpdate((e) => {
         if (!w) return;
@@ -74,12 +74,12 @@ export default function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, 
         const focalHz = s.lo + (Math.max(0, Math.min(w, e.focalX)) / w) * sp0;
         onViewChange(clampWin(focalHz - (e.focalX / w) * sp, sp));
       });
-    const tap = Gesture.Tap().maxDistance(10).onEnd((e) => {
+    const tap = Gesture.Tap().runOnJS(true).maxDistance(10).onEnd((e) => {
       if (!w) return;
       const v = viewRef.current;
       onTune(v.lo + (Math.max(0, Math.min(w, e.x)) / w) * (v.hi - v.lo));
     });
-    const doubleTap = Gesture.Tap().numberOfTaps(2).onEnd(() => onViewChange({ lo: loHz, hi: hiHz }));
+    const doubleTap = Gesture.Tap().runOnJS(true).numberOfTaps(2).onEnd(() => onViewChange({ lo: loHz, hi: hiHz }));
     return Gesture.Exclusive(doubleTap, Gesture.Race(tap, Gesture.Simultaneous(pan, pinch)));
   }, [w, loHz, hiHz, fullSpan, onTune, onViewChange]);
 
@@ -103,6 +103,7 @@ export default function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, 
   // the visible span (2 MHz → 1 → 0.5 → 0.2 → 0.1 as you zoom in). Minor ticks
   // subdivide it. Integer Hz math avoids float drift.
   const ticks = useMemo(() => {
+    if (!Number.isFinite(vLo) || !Number.isFinite(vHi) || vHi <= vLo) return [] as { hz: number; major: boolean }[];
     const span = vHi - vLo;
     const ladder = [100_000, 200_000, 500_000, 1_000_000, 2_000_000];
     let labelStep = 2_000_000;
@@ -157,12 +158,13 @@ export default function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, 
 
         {/* Ticks (point down from the scale) + MHz labels beneath */}
         {w > 0 && ticks.map(({ hz, major }) => {
+          if (!Number.isFinite(hz)) return null;
           const px = x(hz);
           if (px < -18 || px > w + 18) return null;
           const mhz = hz / 1e6;
           const lbl = Number.isInteger(mhz) ? String(mhz) : mhz.toFixed(1);
           return (
-            <React.Fragment key={hz}>
+            <React.Fragment key={`m${hz}`}>
               <View style={{ position: 'absolute', left: px, top: SCALE_Y, width: 1, height: major ? 12 : 6, backgroundColor: GREEN_DIM }} />
               {major && (
                 <Text style={[styles.tickLbl, { left: px - 16, width: 32, top: SCALE_Y + 13, color: GREEN, fontFamily: t.font }]}>{lbl}</Text>

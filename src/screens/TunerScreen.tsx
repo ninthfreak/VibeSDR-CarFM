@@ -39,6 +39,25 @@ function isoToFlag(iso?: string): string {
   const base = 0x1F1E6, up = iso.toUpperCase();
   return String.fromCodePoint(base + up.charCodeAt(0) - 65, base + up.charCodeAt(1) - 65);
 }
+// FMLIST/ITU broadcasting country symbol → ISO alpha-2. The transmitter DB's
+// `itu` is authoritative; the RDS `country_iso` often mis-decodes ('UN').
+const ITU_TO_ISO: Record<string, string> = {
+  G: 'GB', F: 'FR', D: 'DE', I: 'IT', E: 'ES', HOL: 'NL', BEL: 'BE', LUX: 'LU',
+  AUT: 'AT', SUI: 'CH', POR: 'PT', IRL: 'IE', NOR: 'NO', S: 'SE', FIN: 'FI',
+  DNK: 'DK', POL: 'PL', CZE: 'CZ', SVK: 'SK', HNG: 'HU', ROU: 'RO', BUL: 'BG',
+  GRC: 'GR', HRV: 'HR', SVN: 'SI', SRB: 'RS', UKR: 'UA', RUS: 'RU', EST: 'EE',
+  LVA: 'LV', LTU: 'LT', ISL: 'IS', TUR: 'TR', ALB: 'AL', MKD: 'MK', BIH: 'BA',
+  MNE: 'ME', AND: 'AD', LIE: 'LI', MCO: 'MC', SMR: 'SM', MLT: 'MT', CYP: 'CY',
+};
+/** Best country for flag/logo: transmitter ITU (reliable) → RDS country_iso
+ *  (only if a real code, not 'UN'/blank). Returns ISO alpha-2 or ''. */
+function countryOf(st: FmdxState | null): string {
+  const itu = st?.tx?.itu?.trim().toUpperCase();
+  if (itu && ITU_TO_ISO[itu]) return ITU_TO_ISO[itu];
+  const iso = st?.countryIso?.trim().toUpperCase();
+  if (iso && /^[A-Z]{2}$/.test(iso) && iso !== 'UN' && iso !== 'XX') return iso;
+  return '';
+}
 // FM step ladder (Hz) — server accepts any kHz via T<kHz>, so we lock the STEP
 // button to broadcast-FM-sensible values (1 kHz DX → 1 MHz coarse).
 const FM_STEPS = [1_000, 10_000, 100_000, 1_000_000];
@@ -222,7 +241,7 @@ export default function TunerScreen({ route, navigation }: Props) {
   //    wrong station's logo). Use the transmitter's full station name — far
   //    better than the truncated RDS PS. Monogram when there's no confident hit. ──
   const logoName = st?.tx?.tx?.trim() || st?.ps?.trim() || '';
-  const logoIso = st?.countryIso ?? '';
+  const logoIso = countryOf(st);
   useEffect(() => {
     const key = `${logoName}|${logoIso}`;
     if (!logoName || key === lastLogoName.current) return;
@@ -386,7 +405,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         </View>
         <View style={{ flex: 1 }}>
           <View style={styles.vtsTopRow}>
-            {!!isoToFlag(st?.countryIso) && <Text style={styles.vtsFlag}>{isoToFlag(st?.countryIso)}</Text>}
+            {!!isoToFlag(countryOf(st)) && <Text style={styles.vtsFlag}>{isoToFlag(countryOf(st))}</Text>}
             <Text style={styles.vtsName} numberOfLines={1}>{ps || '—'}</Text>
             {st?.stereo && <Pill label="ST" on styles={styles} />}
             {st?.tp && <Pill label="TP" on styles={styles} />}
@@ -446,8 +465,8 @@ export default function TunerScreen({ route, navigation }: Props) {
               <View style={{ marginTop: 6 }}>
                 <Text style={styles.sheetLabel}>ANTENNA</Text>
                 <View style={styles.antRow}>
-                  {serverInfo!.antennas.map((a) => (
-                    <TouchableOpacity key={a.id}
+                  {serverInfo!.antennas.map((a, i) => (
+                    <TouchableOpacity key={`ant${i}`}
                       style={[styles.antBtn, st?.ant === a.id && styles.antBtnOn]}
                       onPress={() => (backendRef.current as any)?.setAntenna?.(a.id)}>
                       <Text style={[styles.antBtnTxt, st?.ant === a.id && styles.antBtnTxtOn]} numberOfLines={1}>{a.name}</Text>

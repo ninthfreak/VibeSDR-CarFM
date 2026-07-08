@@ -33,18 +33,26 @@ export async function lookupStationLogo(name: string, iso?: string): Promise<str
       const res = await fetch(url, { headers: { 'User-Agent': 'VibeSDR/7 (FM-DX tuner)' } });
       const rows: any[] = await res.json();
       const list = Array.isArray(rows) ? rows : [];
-      // EXACT normalized-name match only, with an HTTPS favicon. radio-browser's
-      // byname results are polluted with near-miss / foreign stations, so a loose
-      // match shows the WRONG logo (worse than none). Exact match = confident or
-      // nothing → monogram. Optional country tie-breaker when known.
+      // Country-filtered fuzzy match. The COUNTRY filter (from the transmitter's
+      // ITU, reliable) is the safety net against wrong-country logos, so within
+      // the country we take the best shared-token name match rather than exact —
+      // databases name the same station differently ("Pride Radio" vs "Pride FM").
+      const qTokens = q.split(' ').filter((t) => t.length > 1);
+      let bestFav: string | null = null, bestScore = 0;
       for (const r of list) {
         const fav = String(r?.favicon ?? '');
         if (!fav.startsWith('https://')) continue;
-        if (norm(String(r?.name ?? '')) !== q) continue;
         if (iso && String(r?.countrycode ?? '').toUpperCase() !== iso.toUpperCase()) continue;
-        return fav;
+        const rTokens = norm(String(r?.name ?? '')).split(' ').filter((t) => t.length > 1);
+        const shared = rTokens.filter((t) => qTokens.includes(t)).length;
+        if (shared === 0) continue;                       // need at least one real word in common
+        // Overlap ratio; light penalty for extra words so the closest name wins.
+        const score = shared / Math.max(qTokens.length, rTokens.length);
+        if (score > bestScore) { bestScore = score; bestFav = fav; }
       }
-      return null;
+      // Exact match (or strong overlap) required when NO country to anchor on.
+      if (!iso && bestScore < 0.8) return null;
+      return bestFav;
     } catch {
       return null;
     }
