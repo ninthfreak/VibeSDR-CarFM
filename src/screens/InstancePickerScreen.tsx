@@ -392,7 +392,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
     const name = tcpName.trim() || `${parsed.host}:${parsed.port}`;
     if (save) {
       const next = [...tcpFavs.filter(f => !(f.host === parsed.host && f.port === parsed.port)),
-                    { name, host: parsed.host, port: parsed.port }];
+                    { name, host: parsed.host, port: parsed.port, proto: tcpProto }];
       setTcpFavs(next); saveTcpFavs(next).catch(() => {});
     }
     const proto = tcpProto;
@@ -944,7 +944,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
                   {tcpFavs.map((f) => (
                     <TouchableOpacity key={`${f.host}:${f.port}`}
                       style={[styles.row, { borderColor: C.amber }]}
-                      onPress={() => connectTcp(f.host, f.port, f.name)}
+                      onPress={() => (f.proto === 'spyserver' ? connectSpy : connectTcp)(f.host, f.port, f.name)}
                       onLongPress={() => Alert.alert(f.name, `${f.host}:${f.port}`, [
                         { text: 'Cancel', style: 'cancel' },
                         { text: 'Delete', style: 'destructive', onPress: () => removeTcpFav(f) },

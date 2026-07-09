@@ -29,7 +29,9 @@ export async function toggleFavourite(fav: Favourite, current: Favourite[]): Pro
 // ── RTL-TCP named favourites (host:port + friendly name) ──────────────────────
 const TCP_KEY = 'vsdr_rtltcp_favs';
 
-export type TcpFav = { name: string; host: string; port: number };
+// `proto` is optional for backwards compatibility: favourites saved before
+// SpyServer support existed have no field and must keep resolving to rtl_tcp.
+export type TcpFav = { name: string; host: string; port: number; proto?: 'rtltcp' | 'spyserver' };
 
 export async function getTcpFavs(): Promise<TcpFav[]> {
   try {

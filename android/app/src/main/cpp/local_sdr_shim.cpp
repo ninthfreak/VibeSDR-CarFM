@@ -1757,6 +1757,7 @@ void LocalSdrShim::setGain(int gainTenthDb) {
 void LocalSdrShim::setPpm(int ppm) {
     if (!p) return;
     if (p->useSpy()) return;   // no ppm setting in the SpyServer protocol
+
     if (p->useTcp()) { p->sendTcpCmd(0x05, (uint32_t)ppm); return; }
     if (!p->dev) return;
     rtlsdr_set_freq_correction(p->dev, ppm); LOGI("ppm: %d", ppm);
@@ -1869,6 +1870,10 @@ LocalSdrShim::NetStatus LocalSdrShim::getNetStatus() {
 std::vector<int> LocalSdrShim::getTunerGains() {
     std::vector<int> out;
     if (!p) return out;
+    // SpyServer transmits a bare gain INDEX and never the dB values, so the UI has
+    // no table unless we supply one. Without this the gain slider has nothing to
+    // offer and gain looks uncontrollable. (Stock clients just show a 0..29 dial.)
+    if (p->useSpy()) return p->spyGains;
     if (p->useTcp()) return p->tcpGains;     // rtl_tcp header has no values → R820T table
     if (!p->dev) return out;
     int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
