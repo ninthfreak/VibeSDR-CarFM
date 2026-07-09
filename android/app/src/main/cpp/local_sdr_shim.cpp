@@ -266,6 +266,14 @@ struct LocalSdrShim::Impl {
     double spyFftSpan = 0.0;               // 0 = not a SpyServer session
     uint32_t spyIqFormat = 1;              // FORMAT_UINT8 / FORMAT_INT16, per device resolution
     std::atomic<bool> spyClosed{false};    // server hung up (session limit / tuner taken)
+    // Noise floor of our own FFT (engine dBFS) and of the server's frames (its own
+    // dB scale). The server's dB is NOT dBFS: raw*range/255 - range put a typical
+    // RTL noise floor near -78 dB where the engine reports about -100, so feeding
+    // it straight to the waterfall saturated everything above the floor and made
+    // the level jump at the zoom handover. Align the two on the floor they share.
+    std::atomic<float> iqFloorDb{-100.0f};
+    std::atomic<float> spyDbOffset{0.0f};   // smoothed correction, engine dB - server dB
+    bool spyOffsetPrimed = false;
     std::atomic<double> spyFftCenter{0.0};
     int spyDecim = 0;
     uint32_t spyDbRange = 140;
@@ -409,10 +417,25 @@ struct LocalSdrShim::Impl {
     void tuneHw(double logicalCenter) {
         uint32_t hz = (uint32_t)llround(logicalCenter + HW_OFFSET_HZ);
         if (useSpy()) {
-            // ONLY the IQ centre. The server's FFT centre stays where it is, so the
-            // wide waterfall does not jump when the VFO drags the narrow IQ window
-            // around. (Verified: the two centres are independent. SDR# does this.)
             spy->setIqFrequency(hz);
+            // The centres are independent, but not UNBOUNDED: the device only covers
+            // its own span, so an IQ centre far from the FFT centre forces the server
+            // to retune the hardware — silently dragging the FFT with it while we
+            // still believe it sits where we parked it, which mislabels every
+            // frequency on the waterfall. Keep the FFT with the IQ, recentring only
+            // past 40% of the span so the display stays still during ordinary tuning.
+            const double fc = spyFftCenter.load();
+            if (spyFftSpan > 0.0 && std::fabs((double)hz - fc) > spyFftSpan * 0.4) {
+                spy->setFftFrequency(hz);
+                spyFftCenter.store((double)hz);
+                viewCenter.store((double)hz);   // keep the display over visible spectrum
+                // Copy the socket out, THEN send. tuneHw() runs under modeMtx, and
+                // holding clientMtx across sendConfig() (which takes sendMtx) would
+                // invert the lock order the spectrum path uses.
+                std::shared_ptr<net::Socket> sc;
+                { std::lock_guard<std::mutex> lk(clientMtx); sc = specClient; }
+                if (sc) sendConfig(sc);
+            }
         }
         else if (useTcp()) sendTcpCmd(0x01, hz);
         else if (dev) rtlsdr_set_center_freq(dev, hz);
@@ -559,6 +582,11 @@ struct LocalSdrShim::Impl {
                 double eSum = 0; int eN = 0;
                 for (int i = 0; i <= half / 2; i++)          { eSum += dbAt(-(bins/2) + i); eSum += dbAt((bins/2 - 1) - i); eN += 2; }
                 spectrumSnr.store((cN && eN) ? (float)(cSum/cN - eSum/eN) : 0.0f);
+                // Band-edge average = our own noise floor, in the engine's dBFS.
+                // emitServerFft() aligns the server's differently-scaled dB onto
+                // this, so the two waterfall sources agree and the colour map is
+                // fed the values it was designed for.
+                if (eN) iqFloorDb.store((float)(eSum / eN));
             }
             sendWs(sock, 0x2, frame.data(), frame.size());
             if (n % 10 == 0) sendFmMeta(sock);   // RDS + stereo ~1/sec
@@ -660,12 +688,28 @@ struct LocalSdrShim::Impl {
         // Signed source-bin offset of the display centre from the FFT centre.
         const double viewOffsetBin = (viewCenter.load() - spyFftCenter.load()) / srcBinHz;
 
-        // u8 -> dB (linear over [-dbRange, 0]); then the client's own +256 encoding.
+        // u8 -> the server's dB (linear over [-dbRange, 0]).
         const double dbPerCount = (double)spyDbRange / 255.0;
+        auto rawDb = [&](int idx) -> double {
+            return bins[idx] * dbPerCount - (double)spyDbRange;
+        };
+
+        // Calibrate: the server's noise floor, in ITS dB, vs ours in engine dBFS.
+        // Median is the floor here — most bins are noise, and it ignores carriers.
+        {
+            std::vector<uint8_t> sorted(bins, bins + n);
+            std::nth_element(sorted.begin(), sorted.begin() + n / 2, sorted.end());
+            const double serverFloor = sorted[n / 2] * dbPerCount - (double)spyDbRange;
+            const double want = (double)iqFloorDb.load() - serverFloor;
+            if (!spyOffsetPrimed) { spyDbOffset.store((float)want); spyOffsetPrimed = true; }
+            else spyDbOffset.store((float)(spyDbOffset.load() * 0.95 + want * 0.05));  // slow
+        }
+        const double off = (double)spyDbOffset.load();
+
         auto dbAt = [&](int sOff) -> float {
             int idx = n / 2 + sOff;
             if (idx < 0) idx = 0; else if (idx >= n) idx = n - 1;
-            return (float)(bins[idx] * dbPerCount - (double)spyDbRange);
+            return (float)(rawDb(idx) + off);
         };
 
         std::vector<uint8_t> frame(22 + outBins);

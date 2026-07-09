@@ -332,6 +332,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   // SpyServer with canControl=0: another client holds the tuner, so tuning would
   // silently do nothing. Show it rather than letting the user fight a dead dial.
   const [readOnly, setReadOnly] = useState(false);
+  // True when the local session's IQ comes from a SpyServer: most RTL-specific
+  // hardware controls then belong to the server operator, not us.
+  const [isSpy, setIsSpy] = useState(false);
   // Session limit (minutes) from the directory. The server enforces it; we just
   // warn up front and count down, rather than letting it look like a crash.
   const sessionLimitMins: number = route.params.sessionLimitMins ?? 0;
@@ -2164,6 +2167,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           return;
         }
         // Another client owns the tuner: the dial would silently do nothing.
+        setIsSpy(!!s.spy);
         if (s.spy) setReadOnly(!s.canControl);
 
         const n = s.stalls ?? 0;
@@ -3924,6 +3928,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* v4 local hardware: RTL-SDR controls submenu */}
       {isLocal ? (
         <LocalHardwarePanel
+          isSpy={isSpy}
           visible={hwOpen}
           onClose={() => setHwOpen(false)}
           gains={hwGains}
