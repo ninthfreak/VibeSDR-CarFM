@@ -368,6 +368,7 @@ RtlTcpServer::Status RtlTcpServer::getStatus() const {
     s.sampleRate   = impl->sampleRate;
     s.overrideRate = impl->overrideRate.load();
     s.droppedBytes = impl->droppedBytes.load(std::memory_order_relaxed);
+    s.port         = impl->port;
     std::lock_guard<std::mutex> lk(impl->clientMtx);
     if (impl->client && impl->client->alive.load()) {
         s.clientConnected = true;

@@ -55,6 +55,7 @@ echo "== shim + net + decoders =="
 cxx "$CPP/local_sdr_shim.cpp"
 cxx "$CPP/net_shim.cpp"
 cxx "$CPP/spyserver/spyserver_messages.cpp"
+cxx "$CPP/spyserver/spyserver_client.cpp"
 for d in fsk_decoder wefax_decoder ft8_decoder sstv_decoder audio_nr auto_notch; do cxx "$CPP/decoders/$d.cpp"; done
 
 echo "== ft8_lib (plain KissFFT) =="

@@ -106,6 +106,26 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStartTcp(
     return bound;
 }
 
+// SpyServer: IQ from a SpyServer-compatible server. Same return contract as
+// nativeStartTcp (bound localhost port, or -1).
+extern "C" JNIEXPORT jint JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeStartSpyServer(
+        JNIEnv* env, jobject /*thiz*/, jstring host, jint port,
+        jdouble centerFreq, jdouble sampleRate, jint gainTenthDb,
+        jint fftSize, jdouble fftRate, jstring mode) {
+    const char* hostC = host ? env->GetStringUTFChars(host, nullptr) : "";
+    std::string hostS = hostC ? hostC : "";
+    if (host && hostC) env->ReleaseStringUTFChars(host, hostC);
+    const char* modeC = mode ? env->GetStringUTFChars(mode, nullptr) : "";
+    std::string modeS = modeC ? modeC : "";
+    if (mode && modeC) env->ReleaseStringUTFChars(mode, modeC);
+    std::string err;
+    int bound = vibe::LocalSdrShim::instance().startSpyServer(
+        hostS, port, centerFreq, sampleRate, gainTenthDb, fftSize, fftRate, modeS, err);
+    if (bound < 0) LOGE("startSpyServer failed: %s", err.c_str());
+    return bound;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeStopSpectrum(JNIEnv* /*env*/, jobject /*thiz*/) {
     // Tear down on a detached thread so the JS/bridge caller never blocks if the
@@ -246,6 +266,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
     j += ",\"sampleRate\":"   + std::to_string(s.sampleRate);
     j += ",\"overrideRate\":" + std::to_string(s.overrideRate);
     j += ",\"droppedBytes\":" + std::to_string(s.droppedBytes);
+    j += ",\"port\":"         + std::to_string(s.port);
     j += "}";
     return env->NewStringUTF(j.c_str());
 }

@@ -64,7 +64,8 @@
 #endif
 
 #include "vibedsp/vibedsp.h"        // V5 clean-room GPL-free DSP engine (RxPipeline)
-#include "net_shim.h"               // V5 clean-room GPL-free TCP socket wrapper
+#include "net_shim.h"
+#include "spyserver/spyserver_client.h"               // V5 clean-room GPL-free TCP socket wrapper
 #include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
 #include "decoders/wefax_decoder.h" // WEFAX (audio-extension decoder)
 #include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
@@ -248,6 +249,14 @@ struct LocalSdrShim::Impl {
     // hardware setters send rtl_tcp commands instead of calling rtlsdr_*.
     std::shared_ptr<net::Socket> tcpSock;
     std::atomic<bool> tcpRunning{false};
+
+    // SpyServer client path. Mutually exclusive with tcpSock/dev — the shim drives
+    // exactly one IQ source. IQ arrives as u8 (we negotiate FORMAT_UINT8), which is
+    // byte-identical to what the USB and rtl_tcp paths feed enqueueIq().
+    std::unique_ptr<spyserver::SpyServerClient> spy;
+    bool useSpy() const { return (bool)spy; }
+    std::vector<int> spyGains;             // device gain table (tenths dB)
+
     int tcpTunerType = 0;
     std::vector<int> tcpGains;            // tuner gains (tenths dB) from the header
     // rtl_tcp 5-byte command: [code][param big-endian u32].
@@ -382,7 +391,13 @@ struct LocalSdrShim::Impl {
     // Tune the radio to (logical centre + HW_OFFSET_HZ).
     void tuneHw(double logicalCenter) {
         uint32_t hz = (uint32_t)llround(logicalCenter + HW_OFFSET_HZ);
-        if (useTcp()) sendTcpCmd(0x01, hz);
+        if (useSpy()) {
+            // Move both streams together: the IQ we demodulate and the server-side
+            // FFT that will drive the waterfall.
+            spy->setIqFrequency(hz);
+            spy->setFftFrequency(hz);
+        }
+        else if (useTcp()) sendTcpCmd(0x01, hz);
         else if (dev) rtlsdr_set_center_freq(dev, hz);
     }
 
@@ -1346,6 +1361,30 @@ struct LocalSdrShim::Impl {
         ((Impl*)ctx)->enqueueIq(buf, (int)(len / 2));
     }
 
+    // SpyServer read loop: the client owns framing; we just forward IQ into the
+    // same queue the USB/rtl_tcp paths feed. Blocks with backpressure exactly like
+    // tcpReadLoop, so the 250 ms jitter buffer applies here too.
+    void spyReadLoop() {
+        vibeThreadName("vibe-spy");
+        auto lastData = std::chrono::steady_clock::now();
+        spy->run(tcpRunning,
+            [&](const uint8_t* data, size_t bytes, uint32_t fmt) {
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastData).count()
+                        >= kStallMs)
+                    netStalls.fetch_add(1, std::memory_order_relaxed);
+                lastData = now;
+                // We negotiate uint8, so this is the shim's native IQ layout.
+                if (fmt == spyserver::FORMAT_UINT8)
+                    enqueueIq(data, (int)(bytes / 2), /*blockIfFull=*/true);
+            },
+            [&](const uint8_t* /*bins*/, size_t /*count*/) {
+                // Phase 2 step 2: feed the server's FFT straight to the waterfall.
+                // For now the shim computes its own FFT from the IQ above, exactly
+                // as it does for USB and rtl_tcp, so the waterfall already works.
+            });
+    }
+
     // RTL-TCP read loop: pull u8 I/Q from the socket in ~32 KB chunks and enqueue.
     // Reads what's available (low latency) and carries a stray odd byte so I/Q
     // pairs never misalign across reads.
@@ -1512,6 +1551,79 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
     return chosen;
 }
 
+int LocalSdrShim::startSpyServer(const std::string& host, int port,
+                                double centerFreq, double sampleRate, int gainTenthDb,
+                                int fftSize, double fftRate, const std::string& mode,
+                                std::string& err) {
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (p) { LOGI("stale shim found on SpyServer start — tearing down"); stopLocked(); }
+    auto* impl = new Impl();
+    impl->fftSize = fftSize;
+    impl->fftRate = fftRate;
+    impl->rtlCenter.store(centerFreq);
+    impl->viewCenter.store(centerFreq);
+    impl->audioFreq.store(centerFreq);
+    impl->mode = mode.empty() ? "nfm" : mode;
+
+    impl->spy = std::make_unique<spyserver::SpyServerClient>();
+    if (!impl->spy->connect(host, port, "VibeSDR", err)) { delete impl; return -1; }
+
+    const auto& info = impl->spy->deviceInfo();
+    // The server dictates the rate; ignore the caller's request rather than
+    // pretending we got it. Decimation 0 = full device rate (step 1: prove the
+    // protocol end-to-end with the existing pipeline). Narrow IQ + the server's
+    // FFT stream — the actual bandwidth win — comes next.
+    impl->sampleRate = info.maximumSampleRate > 0 ? (double)info.maximumSampleRate : sampleRate;
+    impl->fftSize    = fftSizeForRate(impl->sampleRate);
+
+    // SpyServer sends a bare gain INDEX and never the dB values, so map through
+    // the device's table ourselves. RTL-SDR tables are the R820T one we already ship.
+    impl->spyGains.assign(kR820tGains, kR820tGains + (sizeof(kR820tGains) / sizeof(int)));
+    const uint32_t gainIdx = gainTenthDb < 0
+        ? (uint32_t)(impl->spyGains.size() / 2)     // no AGC in the protocol: mid-scale
+        : spyserver::SpyServerClient::gainIndexForTenthDb(impl->spyGains, gainTenthDb);
+
+    // Same jitter buffer as the rtl_tcp path — decimation shrinks the stream but
+    // does nothing about a WiFi stall.
+    impl->iqPrefillSamples = (size_t)(impl->sampleRate * 0.25);
+    impl->iqMaxSamples     = impl->iqPrefillSamples * 2;
+
+    const uint32_t hwHz = (uint32_t)llround(centerFreq + Impl::HW_OFFSET_HZ);
+    if (!impl->spy->startStream(spyserver::STREAM_MODE_IQ | spyserver::STREAM_MODE_FFT,
+                                spyserver::FORMAT_UINT8, /*decimation=*/0,
+                                hwHz, gainIdx, /*fftDisplayPixels=*/1024, hwHz)) {
+        err = "SpyServer refused the stream settings";
+        impl->spy->close(); delete impl; return -1;
+    }
+
+    impl->startEngine();
+    impl->buildAudio();
+
+    int chosen = -1;
+    for (int p2 = 48000; p2 < 48050; p2++) {
+        try { impl->listener = net::listen("127.0.0.1", p2); chosen = p2; break; }
+        catch (...) { impl->listener = nullptr; }
+    }
+    if (!impl->listener) {
+        err = "could not bind localhost port";
+        impl->teardownAudio(); impl->rx.stop();
+        impl->spy->close(); delete impl; return -1;
+    }
+    impl->port = chosen;
+    impl->serverRunning.store(true);
+    impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
+
+    impl->startDspThread();
+    impl->tcpRunning.store(true);                 // shared "network source alive" flag
+    impl->rtlThread = std::thread([impl]{ impl->spyReadLoop(); });
+
+    p = impl;
+    LOGI("SpyServer started: %s:%d center=%.0f rate=%.0f control=%d port=%d",
+         host.c_str(), port, centerFreq, impl->sampleRate,
+         (int)impl->spy->canControl(), chosen);
+    return chosen;
+}
+
 void LocalSdrShim::stop() {
     // Serialise with start()/stop(): app teardown fires stopSpectrum from several
     // Kotlin paths (unmount + invalidate), possibly concurrently — without this
@@ -1540,6 +1652,7 @@ void LocalSdrShim::stopLocked() {
     // Stop the IQ source. USB: cancel the async read. RTL-TCP: clear the run flag
     // and close the socket so the blocked recv() returns and the read thread exits.
     if (impl->dev) rtlsdr_cancel_async(impl->dev);
+    if (impl->useSpy()) { impl->tcpRunning.store(false); impl->spy->close(); }
     if (impl->useTcp()) { impl->tcpRunning.store(false); if (impl->tcpSock) impl->tcpSock->close(); }
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
     // IQ source stopped -> stop the DSP consumer (drains/clears the queue) before
@@ -1622,6 +1735,15 @@ void LocalSdrShim::setDecoderFreq(double hz) {
 // ── Hardware controls ─────────────────────────────────────────────────────────
 void LocalSdrShim::setGain(int gainTenthDb) {
     if (!p) return;
+    if (p->useSpy()) {
+        // No AGC in the protocol — "auto" has no wire representation, so mid-scale.
+        const uint32_t idx = gainTenthDb < 0
+            ? (uint32_t)(p->spyGains.size() / 2)
+            : spyserver::SpyServerClient::gainIndexForTenthDb(p->spyGains, gainTenthDb);
+        p->spy->setGainIndex(idx);
+        LOGI("gain: index %u", idx);
+        return;
+    }
     if (p->useTcp()) {
         if (gainTenthDb < 0) p->sendTcpCmd(0x03, 0);
         else { p->sendTcpCmd(0x03, 1); p->sendTcpCmd(0x04, (uint32_t)gainTenthDb); }
@@ -1634,6 +1756,7 @@ void LocalSdrShim::setGain(int gainTenthDb) {
 }
 void LocalSdrShim::setPpm(int ppm) {
     if (!p) return;
+    if (p->useSpy()) return;   // no ppm setting in the SpyServer protocol
     if (p->useTcp()) { p->sendTcpCmd(0x05, (uint32_t)ppm); return; }
     if (!p->dev) return;
     rtlsdr_set_freq_correction(p->dev, ppm); LOGI("ppm: %d", ppm);
@@ -1733,7 +1856,7 @@ void LocalSdrShim::setDeemphasis(double tau) {
 }
 LocalSdrShim::NetStatus LocalSdrShim::getNetStatus() {
     NetStatus s;
-    if (!p || !p->useTcp()) return s;
+    if (!p || !(p->useTcp() || p->useSpy())) return s;   // USB path: nothing to report
     s.tcp = true;
     s.stalls         = p->netStalls.load(std::memory_order_relaxed);
     s.droppedSamples = p->iqDroppedSamples.load(std::memory_order_relaxed);

@@ -21,6 +21,14 @@ public:
 
     // RTL-TCP source (rtl_tcp protocol over the network — no USB/librtlsdr, so it
     // works on iOS too). Same pipeline as start(), IQ from a TCP socket.
+    // SpyServer-compatible backend. Mirrors startTcp(): network IQ into the same
+    // DSP pipeline, so demod/decoders/NR/audio all work unchanged — and, like
+    // startTcp, it has no USB dependency and therefore works on iOS too.
+    int startSpyServer(const std::string& host, int port,
+                       double centerFreq, double sampleRate, int gainTenthDb,
+                       int fftSize, double fftRate, const std::string& mode,
+                       std::string& err);
+
     int startTcp(const std::string& host, int port,
                  double centerFreq, double sampleRate, int gainTenthDb,
                  int fftSize, double fftRate, const std::string& mode, std::string& err);

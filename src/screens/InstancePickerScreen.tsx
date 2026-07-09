@@ -101,6 +101,9 @@ export default function InstancePickerScreen({ navigation }: Props) {
   const [tcpName,     setTcpName]       = useState('');
   const [tcpHost,     setTcpHost]       = useState('');
   const [tcpPort,     setTcpPort]       = useState('1234');
+  // Which protocol the manual-add modal speaks. rtl_tcp = raw full-rate IQ;
+  // spyserver = server-side decimation (far less bandwidth, works over cellular).
+  const [tcpProto,    setTcpProto]      = useState<'rtltcp' | 'spyserver'>('rtltcp');
   // null = directory CHOOSER (favourites + directory cards); set = that
   // directory's instance list.
   const [selectedDir, setSelectedDir]   = useState<DirectoryId | null>(null);
@@ -349,15 +352,39 @@ export default function InstancePickerScreen({ navigation }: Props) {
     }
   }, [navigation, viewMode]);
 
+  // SpyServer-compatible: same wiring as connectTcp (network IQ -> on-device shim),
+  // so demod/decoders/audio work unchanged, on iOS too. The server dictates the
+  // sample rate, so we don't ask for one.
+  const connectSpy = useCallback(async (host: string, port: number, name: string) => {
+    const Local = (NativeModules as any).VibeLocalSDR;
+    if (!Local?.startSpyServer) { Alert.alert('SpyServer', 'Not available on this build.'); return; }
+    setConnecting(true);
+    try {
+      const res = await Local.startSpyServer({
+        host, port,
+        centerFreq: 100_000_000, fftSize: 8192, fftRate: 10, mode: 'wfm',
+      }) as { port: number; wsBaseUrl: string };
+      setConnecting(false);
+      navigation.navigate('SDR', {
+        baseUrl: res.wsBaseUrl, instanceName: name || `${host}:${port}`, viewMode,
+        serverType: 'ubersdr', isLocal: true, isTcp: true, localPort: res.port,
+        tcpHost: host, tcpPort: port, localGen: newLocalSession(),
+      });
+    } catch (e: any) {
+      setConnecting(false);
+      Alert.alert('SpyServer', e?.message ?? `Could not connect to ${host}:${port}.`);
+    }
+  }, [navigation, viewMode]);
+
   // Parse the add-RTL-TCP modal: accept "host", "host:port", or separate fields.
   const parseTcpEntry = useCallback((): { host: string; port: number } | null => {
     let h = tcpHost.trim();
     let p = parseInt(tcpPort.trim(), 10);
     if (h.includes(':')) { const [hh, pp] = h.split(':'); h = hh.trim(); if (pp) p = parseInt(pp.trim(), 10); }
     if (!h) return null;
-    if (!Number.isFinite(p) || p <= 0 || p > 65535) p = 1234;
+    if (!Number.isFinite(p) || p <= 0 || p > 65535) p = tcpProto === 'spyserver' ? 5555 : 1234;
     return { host: h, port: p };
-  }, [tcpHost, tcpPort]);
+  }, [tcpHost, tcpPort, tcpProto]);
 
   const tcpModalConnect = useCallback((save: boolean) => {
     const parsed = parseTcpEntry();
@@ -368,9 +395,11 @@ export default function InstancePickerScreen({ navigation }: Props) {
                     { name, host: parsed.host, port: parsed.port }];
       setTcpFavs(next); saveTcpFavs(next).catch(() => {});
     }
+    const proto = tcpProto;
     setTcpModal(false); setTcpName(''); setTcpHost(''); setTcpPort('1234');
-    connectTcp(parsed.host, parsed.port, name);
-  }, [parseTcpEntry, tcpName, tcpFavs, connectTcp]);
+    if (proto === 'spyserver') connectSpy(parsed.host, parsed.port, name);
+    else connectTcp(parsed.host, parsed.port, name);
+  }, [parseTcpEntry, tcpName, tcpFavs, connectTcp, connectSpy, tcpProto]);
 
   const removeTcpFav = useCallback((fav: TcpFav) => {
     const next = tcpFavs.filter(f => !(f.host === fav.host && f.port === fav.port));
@@ -654,7 +683,22 @@ export default function InstancePickerScreen({ navigation }: Props) {
       <Modal visible={tcpModal} transparent animationType="fade" onRequestClose={() => setTcpModal(false)}>
         <View style={styles.tcpBackdrop}>
           <View style={[styles.tcpCard, { borderColor: C.amber }]}>
-            <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, letterSpacing: 1, marginBottom: 10 }}>RTL-TCP SERVER</Text>
+            <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, letterSpacing: 1, marginBottom: 10 }}>ADD A SERVER</Text>
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+              {([['rtltcp', 'RTL-TCP'], ['spyserver', 'SpyServer']] as const).map(([id, label]) => (
+                <TouchableOpacity key={id} onPress={() => { setTcpProto(id); setTcpPort(id === 'spyserver' ? '5555' : '1234'); }}
+                  style={[styles.tcpBtnAlt, { flex: 1, alignItems: 'center',
+                          borderColor: tcpProto === id ? C.amber : C.border,
+                          backgroundColor: tcpProto === id ? C.amber + '22' : 'transparent' }]}>
+                  <Text style={{ fontFamily: F, fontSize: fs(13), color: tcpProto === id ? C.amber : C.textDim }}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, marginBottom: 10 }}>
+              {tcpProto === 'spyserver'
+                ? 'Low bandwidth — works over hotspots and mobile data. Speaks the SpyServer protocol used by SDR# and SDR++.'
+                : 'Raw full-rate IQ — needs a fast local network. Works with virtually all SDR software.'}
+            </Text>
             <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
               placeholder="Name (e.g. Shack Pi)" placeholderTextColor={C.textDim}
               value={tcpName} onChangeText={setTcpName} autoCorrect={false} />
@@ -662,7 +706,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
               placeholder="Host or IP (e.g. 192.168.1.50)" placeholderTextColor={C.textDim}
               value={tcpHost} onChangeText={setTcpHost} autoCapitalize="none" autoCorrect={false} keyboardType="url" />
             <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
-              placeholder="Port (default 1234)" placeholderTextColor={C.textDim}
+              placeholder={tcpProto === 'spyserver' ? 'Port (default 5555)' : 'Port (default 1234)'} placeholderTextColor={C.textDim}
               value={tcpPort} onChangeText={setTcpPort} keyboardType="number-pad" />
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 8, flexWrap: 'wrap' }}>
               <TouchableOpacity style={styles.tcpBtnAlt} onPress={() => setTcpModal(false)}>

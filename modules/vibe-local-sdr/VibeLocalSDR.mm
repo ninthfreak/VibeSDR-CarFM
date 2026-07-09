@@ -51,6 +51,35 @@ RCT_EXPORT_METHOD(startTcp:(NSDictionary *)opts
              @"wsBaseUrl": [NSString stringWithFormat:@"http://127.0.0.1:%d", bound] });
 }
 
+// ── SpyServer ───────────────────────────────────────────────────────────────
+RCT_EXPORT_METHOD(startSpyServer:(NSDictionary *)opts
+                        resolver:(RCTPromiseResolveBlock)resolve
+                        rejecter:(RCTPromiseRejectBlock)reject) {
+  NSString *host = opts[@"host"];
+  if (![host isKindOfClass:[NSString class]] || host.length == 0) {
+    reject(@"no_host", @"host required", nil); return;
+  }
+  int port = (int)numOr(opts, @"port", 5555);
+  double centerFreq = numOr(opts, @"centerFreq", 100000000.0);
+  double sampleRate = numOr(opts, @"sampleRate", 2400000.0);
+  int gain          = opts[@"gainTenthDb"] ? (int)numOr(opts, @"gainTenthDb", -1) : -1;
+  int fftSize       = (int)numOr(opts, @"fftSize", 1024);
+  double fftRate    = numOr(opts, @"fftRate", 20.0);
+  NSString *mode    = [opts[@"mode"] isKindOfClass:[NSString class]] ? opts[@"mode"] : @"nfm";
+
+  std::string err;
+  int bound = vibe::LocalSdrShim::instance().startSpyServer(
+      std::string(host.UTF8String), port, centerFreq, sampleRate, gain,
+      fftSize, fftRate, std::string(mode.UTF8String), err);
+  if (bound <= 0) {
+    reject(@"start_failed",
+           [NSString stringWithFormat:@"SpyServer %@:%d failed: %s", host, port, err.c_str()], nil);
+    return;
+  }
+  resolve(@{ @"port": @(bound),
+             @"wsBaseUrl": [NSString stringWithFormat:@"http://127.0.0.1:%d", bound] });
+}
+
 RCT_EXPORT_METHOD(stopSpectrum:(RCTPromiseResolveBlock)resolve
                       rejecter:(RCTPromiseRejectBlock)reject) {
   vibe::LocalSdrShim::instance().stop();
