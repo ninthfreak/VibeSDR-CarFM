@@ -326,6 +326,9 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // ── V4 local hardware controls (RTL-SDR) ──────────────────────────────────
   const isLocal = !!route.params.isLocal;
+  // rtl_tcp network health, polled from the shim's jitter buffer. 3 = good (also the
+  // resting value on the USB path, where it never clamps anything).
+  const netLinkRef = useRef<0|1|2|3>(3);
   // Per-device persistence suffix so each local source keeps its OWN remembered
   // setup (frequency/mode/step + hardware config). RTL-TCP is keyed by host:port,
   // so UberSDR-over-RTL-TCP and a real-hardware RTL-TCP server never share state;
@@ -1810,7 +1813,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       onLink: (q) => {
         if (destroyed.current) return;
         const b = meterBus.current;
-        b.emit({ ...b.value, link: q });
+        // On the rtl_tcp path the backend's FFT-timing quality is measured AFTER the
+        // jitter buffer, so it reads green while the network is starving the buffer.
+        // Clamp it with the real network health — a bad link can only make it worse.
+        const eff = Math.min(q, netLinkRef.current) as 0|1|2|3;
+        b.emit({ ...b.value, link: eff });
         // UberSDR auto-reconnects silently — without a cue the app just looks
         // frozen when the link drops (e.g. the instance reboots). But the spectrum
         // is deliberately paused on minimise/resume, which briefly starves the
@@ -2088,6 +2095,27 @@ export default function SDRScreen({ route, navigation }: Props) {
   const lastTuneLoaded = useRef(false);
   // One-shot: a deep-link initial tune is applied on the first connect only.
   const deepLinkTuneApplied = useRef(false);
+  // rtl_tcp link meter: poll the shim's network-stall counter — periods where the
+  // socket delivered nothing for >120 ms. That is the honest client-side view of
+  // the link; the backend's own quality reading is FFT-frame timing measured after
+  // the jitter buffer, so it stays green while the network is failing.
+  useEffect(() => {
+    if (!isLocal) return;
+    let last = -1;
+    const t = setInterval(async () => {
+      try {
+        const s = await LocalHw?.getNetStatus?.();
+        if (!s?.tcp) { netLinkRef.current = 3; return; }   // USB path: nothing to clamp
+        const n = s.stalls ?? 0;
+        if (last < 0) { last = n; return; }                // first sample: no delta yet
+        const delta = n - last;
+        last = n;
+        netLinkRef.current = delta === 0 ? 3 : delta <= 2 ? 2 : 1;
+      } catch {}
+    }, 2000);
+    return () => clearInterval(t);
+  }, [isLocal]);
+
   // Bypass-password prompt — rate-limited/blocked connections show this
   // directly (the instance password gets around per-IP limits); submitting
   // replaces the screen with a fresh session carrying the password on every

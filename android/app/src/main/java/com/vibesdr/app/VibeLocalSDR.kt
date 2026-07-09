@@ -103,7 +103,9 @@ object VibeLocalSDR {
     fun stopServer() { if (loaded) nativeStopServer() }
     fun setServerSampleRate(rate: Double) { if (loaded) nativeSetServerSampleRate(rate) }
     fun getServerStatus(): String { return if (loaded) nativeGetServerStatus() else "{\"running\":false}" }
+    fun getNetStatus(): String { return if (loaded) nativeGetNetStatus() else "{\"tcp\":false}" }
 
+    private external fun nativeGetNetStatus(): String
     private external fun nativeHello(): String
     private external fun nativeProbeRtl(fd: Int, vid: Int, pid: Int): String
     private external fun nativeStartSpectrum(

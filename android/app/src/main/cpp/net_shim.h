@@ -33,6 +33,13 @@ public:
     // Peer IP address ("a.b.c.d"), or "" if unavailable. For UI/logging.
     std::string peerAddress();
 
+    // Kernel socket buffer sizing. A large send buffer lets a high-rate IQ stream
+    // ride out brief WiFi radio stalls before the userspace queue starts dropping;
+    // a large receive buffer does the same on the client side. The kernel may clamp
+    // the request — these return false on outright failure, never fatal.
+    bool setSendBufferSize(int bytes);
+    bool setRecvBufferSize(int bytes);
+
     // Send all `len` bytes; returns len on success, -1 on error.
     int send(const uint8_t* data, size_t len, const Address* dest = nullptr);
     int sendstr(const std::string& str, const Address* dest = nullptr);

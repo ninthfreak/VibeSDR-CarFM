@@ -9,7 +9,6 @@ Pod::Spec.new do |s|
   s.source       = { :path => '.' }
 
   s.source_files = '*.{mm,h}'
-  s.public_header_files = 'include/*.h'
 
   # V5: a single GPL-FREE static lib (the clean-room VibeDSP engine + shim,
   # KissFFT BSD-3). SDR++ Brown / FFTW / VOLK / zstd are GONE — that's the whole
@@ -25,7 +24,13 @@ Pod::Spec.new do |s|
   s.pod_target_xcconfig = {
     'CLANG_CXX_LANGUAGE_STANDARD' => 'c++17',
     'CLANG_CXX_LIBRARY' => 'libc++',
-    'HEADER_SEARCH_PATHS' => '"$(PODS_TARGET_SRCROOT)/include"',
+    # Compile VibeLocalSDR.mm against the CANONICAL shim header in the shared
+    # native tree — the same file build_ios.sh compiles the static lib from.
+    # There used to be a hand-copied duplicate in ./include, which silently went
+    # stale whenever the shim's API changed: the .a had the new symbol, the .mm
+    # was compiled against the old header, and the iOS archive failed (or worse,
+    # would have linked against a mismatched ABI). One header, no copies.
+    'HEADER_SEARCH_PATHS' => '"$(PODS_TARGET_SRCROOT)/../../android/app/src/main/cpp"',
     'OTHER_LDFLAGS' => '-ObjC',
   }
 end

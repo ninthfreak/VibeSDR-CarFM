@@ -34,6 +34,16 @@ std::string Socket::peerAddress() {
     return std::string(buf);
 }
 
+bool Socket::setSendBufferSize(int bytes) {
+    if (fd_ < 0) return false;
+    return ::setsockopt(fd_, SOL_SOCKET, SO_SNDBUF, &bytes, sizeof(bytes)) == 0;
+}
+
+bool Socket::setRecvBufferSize(int bytes) {
+    if (fd_ < 0) return false;
+    return ::setsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &bytes, sizeof(bytes)) == 0;
+}
+
 int Socket::send(const uint8_t* data, size_t len, const Address*) {
     if (!open_ || fd_ < 0) return -1;
     size_t off = 0;

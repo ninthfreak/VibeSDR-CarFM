@@ -126,6 +126,10 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     // shim holds the fd), so we keep it here rather than close it after open.
     private var sessionConn: android.hardware.usb.UsbDeviceConnection? = null
 
+    // Held only for the duration of an rtl_tcp CLIENT session (network IQ in).
+    // The USB path needs no WiFi lock; the server path holds its own in the FGS.
+    private val tcpWifiLock by lazy { VibeWifiLock(reactContext, "VibeSDR:RtlTcpClient") }
+
     /**
      * Open the first attached RTL-SDR and start the local-SDR spectrum server.
      * Resolves with { port, wsBaseUrl } so JS can point UberSDRClient at
@@ -192,6 +196,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
 
         val bound = VibeLocalSDR.startTcp(host, port, centerFreq, sampleRate, gain, fftSize, fftRate, mode)
         if (bound <= 0) { promise.reject("start_failed", "could not connect to rtl_tcp $host:$port (see logcat)"); return }
+        // Receiving a multi-Mbit IQ stream is as power-save-sensitive as serving one.
+        tcpWifiLock.acquire()
         Log.i(TAG, "rtl_tcp $host:$port started on port $bound")
         val res = Arguments.createMap()
         res.putInt("port", bound)
@@ -285,9 +291,26 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             m.putString("clientAddr", o.optString("clientAddr", ""))
             m.putDouble("sampleRate", o.optLong("sampleRate", 0).toDouble())
             m.putDouble("overrideRate", o.optLong("overrideRate", 0).toDouble())
+            m.putDouble("droppedBytes", o.optLong("droppedBytes", 0).toDouble())
             promise.resolve(m)
         } catch (e: Throwable) {
             promise.reject("status_failed", e.message)
+        }
+    }
+
+    /** rtl_tcp CLIENT link health — drives the connection meter on the network path. */
+    @ReactMethod
+    fun getNetStatus(promise: Promise) {
+        try {
+            val o = org.json.JSONObject(VibeLocalSDR.getNetStatus())
+            val m = Arguments.createMap()
+            m.putBoolean("tcp", o.optBoolean("tcp", false))
+            m.putDouble("stalls", o.optLong("stalls", 0).toDouble())
+            m.putDouble("droppedSamples", o.optLong("droppedSamples", 0).toDouble())
+            m.putDouble("bufferedMs", o.optLong("bufferedMs", 0).toDouble())
+            promise.resolve(m)
+        } catch (e: Throwable) {
+            promise.reject("net_status_failed", e.message)
         }
     }
 
@@ -396,6 +419,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
 
     private fun stopSpectrumInternal() {
         try { VibeLocalSDR.stopSpectrum() } catch (_: Throwable) {}
+        tcpWifiLock.release()
         sessionConn?.let { try { it.close() } catch (_: Exception) {} }
         sessionConn = null
     }

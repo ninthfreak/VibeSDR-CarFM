@@ -317,9 +317,42 @@ struct LocalSdrShim::Impl {
     std::deque<std::vector<cf32>> iqQueue;
     std::mutex iqMtx;
     std::condition_variable iqCv;
+    std::condition_variable iqSpaceCv;          // TCP reader waits here when full
     std::atomic<bool> dspRunning{false};
     std::thread dspThread;
-    static constexpr size_t IQ_QUEUE_MAX = 8;   // drop oldest beyond this (overrun)
+    static constexpr size_t IQ_QUEUE_MAX = 8;   // USB: drop oldest beyond this (overrun)
+
+    // ── Network jitter buffer (TCP path only) ────────────────────────────────
+    // USB IQ arrives on a hardware clock and the queue idles near empty, so 8
+    // chunks is plenty. NETWORK IQ arrives in bursts around WiFi stalls, and the
+    // DSP thread is NOT paced by the audio sink (audio is pushed non-blocking to
+    // the WebView over the localhost WS) — it drains as fast as the CPU allows and
+    // then blocks on iqCv. So the stream's timing comes straight from the socket:
+    // a 200 ms radio stall punches a 200 ms hole in the audio.
+    //
+    // Fix: prefill a standing backlog before the DSP starts draining. Because the
+    // DSP can only consume what arrives (it blocks when empty), that backlog then
+    // PERSISTS as a delay line — a stall eats the backlog instead of the audio,
+    // and the recovery burst refills it. Costs `prefill` of latency, buys `prefill`
+    // of stall tolerance.
+    //
+    // Sized in samples, not chunks: TCP recv() returns whatever is available, so
+    // chunk counts wouldn't pin the latency. cf32 = 8 bytes/sample, so at 2.4 MSPS
+    // 250 ms is ~4.8 MB and the 2x cap ~9.6 MB.
+    size_t iqQueuedSamples = 0;
+    size_t iqPrefillSamples = 0;                // 0 = no prefill (USB path)
+    size_t iqMaxSamples     = 0;                // 0 = unused (USB path)
+    bool   iqPrefilled      = false;            // set once the backlog is built
+    std::atomic<uint64_t> iqDroppedSamples{0};  // client-side overruns (was silent)
+
+    // Network stalls: the socket delivered NOTHING for longer than this. Measured on
+    // the reader thread, which is the only place that sees the network directly.
+    //
+    // Do NOT measure this as "iqQueue went empty" — the DSP drains faster than real
+    // time and parks on iqCv, so an empty queue is the normal resting state and
+    // would read as a permanent stall.
+    static constexpr int64_t kStallMs = 120;    // ~2 WiFi beacon intervals
+    std::atomic<uint64_t> netStalls{0};
 
     // Offset tuning: the RTL is physically tuned HW_OFFSET_HZ ABOVE the logical
     // centre (rtlCenter) so the zero-IF DC spike never lands on the channel —
@@ -1213,17 +1246,43 @@ struct LocalSdrShim::Impl {
     // Convert `sampCount` interleaved u8 I/Q samples to cf32 and ENQUEUE for the
     // dspThread. Must stay cheap (no DSP, no modeMtx) so the libusb callback
     // returns promptly. Drops the oldest buffer on overrun to bound latency.
-    void enqueueIq(const uint8_t* buf, int sampCount) {
+    // `blockIfFull`: TCP reader may wait for space (surplus stays in the kernel's
+    // receive buffer, where u8 IQ is 4x denser than cf32). The USB callback must
+    // NEVER block — blocking libusb's handler stalls the whole device — so it
+    // keeps the drop-oldest behaviour.
+    void enqueueIq(const uint8_t* buf, int sampCount, bool blockIfFull = false) {
         if (sampCount <= 0) return;
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
         std::vector<cf32> v((size_t)sampCount);
         convU8ToF32(buf, reinterpret_cast<float*>(v.data()), sampCount * 2);  // NEON
         {
-            std::lock_guard<std::mutex> lk(iqMtx);
-            if (iqQueue.size() >= IQ_QUEUE_MAX) iqQueue.pop_front();   // overrun: drop oldest
+            std::unique_lock<std::mutex> lk(iqMtx);
+            if (iqMaxSamples > 0) {
+                if (blockIfFull) {
+                    iqSpaceCv.wait(lk, [this]{
+                        return iqQueuedSamples < iqMaxSamples || !dspRunning.load();
+                    });
+                    if (!dspRunning.load()) return;
+                } else if (iqQueuedSamples >= iqMaxSamples) {
+                    dropOldestLocked();
+                }
+            } else if (iqQueue.size() >= IQ_QUEUE_MAX) {
+                dropOldestLocked();                       // USB: bounded by chunk count
+            }
+            iqQueuedSamples += v.size();
             iqQueue.push_back(std::move(v));
         }
         iqCv.notify_one();
+    }
+
+    // Caller holds iqMtx. Counts what it discards — this used to be silent, which
+    // is why the server could report a healthy link while the client broke up.
+    void dropOldestLocked() {
+        if (iqQueue.empty()) return;
+        size_t n = iqQueue.front().size();
+        iqQueuedSamples -= n;
+        iqQueue.pop_front();
+        iqDroppedSamples.fetch_add(n, std::memory_order_relaxed);
     }
 
     // ── DSP consumer (dedicated thread, OFF the libusb path) ────────────────
@@ -1243,11 +1302,26 @@ struct LocalSdrShim::Impl {
             std::vector<cf32> buf;
             {
                 std::unique_lock<std::mutex> lk(iqMtx);
+                // One-shot prefill at stream start. The DSP is NOT paced by this
+                // queue — it drains faster than real time and parks on iqCv, so an
+                // empty queue here is normal, not starvation. What the prefill buys
+                // is 250 ms of extra audio pushed downstream into the WebView's
+                // audio buffer, which DOES run on a real-time clock; that buffer is
+                // where the jitter actually gets absorbed.
+                if (!iqPrefilled && iqPrefillSamples > 0) {
+                    iqCv.wait(lk, [this]{
+                        return iqQueuedSamples >= iqPrefillSamples || !dspRunning.load();
+                    });
+                    if (!dspRunning.load()) break;
+                    iqPrefilled = true;
+                }
                 iqCv.wait(lk, [this]{ return !iqQueue.empty() || !dspRunning.load(); });
                 if (!dspRunning.load()) break;
                 buf = std::move(iqQueue.front());
                 iqQueue.pop_front();
+                iqQueuedSamples -= buf.size();
             }
+            iqSpaceCv.notify_one();
             std::lock_guard<std::recursive_mutex> mlk(modeMtx);
             rx.feed(buf.data(), (int)buf.size());
         }
@@ -1260,9 +1334,12 @@ struct LocalSdrShim::Impl {
     void stopDspThread() {
         dspRunning.store(false);
         iqCv.notify_all();
+        iqSpaceCv.notify_all();      // release a TCP reader parked on backpressure
         if (dspThread.joinable()) dspThread.join();
         std::lock_guard<std::mutex> lk(iqMtx);
         iqQueue.clear();
+        iqQueuedSamples = 0;
+        iqPrefilled = false;
     }
 
     static void asyncHandler(unsigned char* buf, uint32_t len, void* ctx) {
@@ -1277,12 +1354,18 @@ struct LocalSdrShim::Impl {
         const int CHUNK = 32768;                 // bytes (16384 IQ samples)
         std::vector<uint8_t> buf(CHUNK + 1);
         int carry = 0;                            // 0/1 leftover byte from last read
+        auto lastData = std::chrono::steady_clock::now();
         while (tcpRunning.load()) {
             auto s = tcpSock; if (!s) break;
             int got = s->recv(buf.data() + carry, CHUNK, false, 5000);
             if (got <= 0) { if (!tcpRunning.load()) break; continue; }
+            auto now = std::chrono::steady_clock::now();
+            auto gapMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             now - lastData).count();
+            if (gapMs >= kStallMs) netStalls.fetch_add(1, std::memory_order_relaxed);
+            lastData = now;
             int total = carry + got;
-            enqueueIq(buf.data(), total / 2);
+            enqueueIq(buf.data(), total / 2, /*blockIfFull=*/true);
             carry = total & 1;                    // keep the trailing half-sample byte
             if (carry) buf[0] = buf[total - 1];
         }
@@ -1378,6 +1461,15 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
     try { impl->tcpSock = net::connect(host, port); }
     catch (...) { impl->tcpSock = nullptr; }
     if (!impl->tcpSock) { err = "could not connect to rtl_tcp " + host + ":" + std::to_string(port); delete impl; return -1; }
+    // 1 MB receive buffer: absorbs WiFi stalls on the receiving side so the IQ
+    // stream doesn't gap when the radio naps. Kernel may clamp; not fatal.
+    impl->tcpSock->setRecvBufferSize(1024 * 1024);
+
+    // Network jitter buffer: 250 ms of standing backlog, capped at 500 ms. Enough
+    // to ride out a WiFi power-save / retry stall; small enough that retuning still
+    // feels responsive. Only the TCP path sets these (USB leaves them at 0).
+    impl->iqPrefillSamples = (size_t)(sampleRate * 0.25);
+    impl->iqMaxSamples     = impl->iqPrefillSamples * 2;
     uint8_t hdr[12];
     if (impl->tcpSock->recv(hdr, 12, true, 8000) != 12 || memcmp(hdr, "RTL0", 4) != 0) {
         err = "bad rtl_tcp header (not an rtl_tcp server?)"; impl->tcpSock->close(); impl->tcpSock = nullptr; delete impl; return -1;
@@ -1639,6 +1731,18 @@ void LocalSdrShim::setDeemphasis(double tau) {
     p->rx.setDeemphasis(tau);   // engine applies 0/50us/75us on the next rebuild
     LOGI("deemphasis: %.0f us", tau * 1e6);
 }
+LocalSdrShim::NetStatus LocalSdrShim::getNetStatus() {
+    NetStatus s;
+    if (!p || !p->useTcp()) return s;
+    s.tcp = true;
+    s.stalls         = p->netStalls.load(std::memory_order_relaxed);
+    s.droppedSamples = p->iqDroppedSamples.load(std::memory_order_relaxed);
+    double rate = p->sampleRate > 0 ? p->sampleRate : 1.0;
+    std::lock_guard<std::mutex> lk(p->iqMtx);
+    s.bufferedMs = (uint32_t)(p->iqQueuedSamples * 1000.0 / rate);
+    return s;
+}
+
 std::vector<int> LocalSdrShim::getTunerGains() {
     std::vector<int> out;
     if (!p) return out;

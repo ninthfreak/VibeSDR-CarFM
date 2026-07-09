@@ -9,7 +9,8 @@ import { RootStackParamList } from '../../App';
 import { themeFor } from '../constants/theme';
 import {
   startRtlTcpServer, stopRtlTcpServer, setServerSampleRate, getServerStatus,
-  getServerName, saveServerName, BANDWIDTH_OPTIONS, type ServerInfo, type ServerStatus,
+  getServerName, saveServerName, formatBytes, BANDWIDTH_OPTIONS,
+  type ServerInfo, type ServerStatus,
 } from '../services/rtlTcpServer';
 import { advertiseRtlTcp, stopAdvertiseRtlTcp } from '../services/mdns';
 
@@ -26,7 +27,9 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
   const [override, setOverride] = useState(0);
   const [starting, setStarting] = useState(true);
   const [error, setError]     = useState<string | null>(null);
+  const [dropping, setDropping] = useState(false);   // drops grew since the last poll
   const startedRef = useRef(false);
+  const lastDropRef = useRef(0);
 
   // Start the server (once) + advertise.
   useEffect(() => {
@@ -68,7 +71,11 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
     if (starting || error) return;
     const t = setInterval(async () => {
       const s = await getServerStatus();
-      if (s) setStatus(s);
+      if (!s) return;
+      const dropped = s.droppedBytes ?? 0;
+      setDropping(dropped > lastDropRef.current);
+      lastDropRef.current = dropped;
+      setStatus(s);
     }, 2000);
     return () => clearInterval(t);
   }, [starting, error]);
@@ -97,6 +104,15 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
   const bwActual = status?.sampleRate
     ? `${(status.sampleRate / 1e6).toFixed(3).replace(/\.?0+$/, '')} MHz`
     : '—';
+
+  const dropped = status?.droppedBytes ?? 0;
+  const linkLine = !status?.client ? '—'
+    : dropped === 0 ? 'Good'
+    : `${formatBytes(dropped)} dropped`;
+  const linkColor = !status?.client ? C.goldDim
+    : dropping ? C.red
+    : dropped > 0 ? C.amber
+    : C.green;
 
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: C.bg }]}>
@@ -140,6 +156,16 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
                   {clientLine}
                 </Text>
               </View>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.label, { color: C.textDim, fontFamily: F }]}>LINK</Text>
+                <Text style={[styles.value, { color: linkColor, fontFamily: F }]}>{linkLine}</Text>
+              </View>
+              {dropping && (
+                <Text style={[styles.hint, { color: C.red, fontFamily: F, marginTop: 6 }]}>
+                  ⚠ The network can't keep up — try a lower bandwidth setting, or move
+                  closer to the router.
+                </Text>
+              )}
             </View>
 
             {/* Advertised name */}
