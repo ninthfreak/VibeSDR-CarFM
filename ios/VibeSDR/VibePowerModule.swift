@@ -284,18 +284,26 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       guard let self else { return }
       let total = data.count / 2
       let n = ch2 ? total / 2 : total
+      // Stereo frames get a real 2-channel planar buffer. This used to downmix L+R
+      // to mono, which silently threw away WFM stereo on EVERY local path (USB,
+      // RTL-TCP, SpyServer) — the pilot locked, the stereo icon lit, and the audio
+      // was mono. Mono frames still arrive as 1 channel and convertTo48k upmixes.
       guard n > 0,
-            let inFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                      sampleRate: rate, channels: 1, interleaved: false),
+            let inFmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate,
+                                      channels: ch2 ? self.ENGINE_CH : 1, interleaved: false),
             let inBuf = AVAudioPCMBuffer(pcmFormat: inFmt, frameCapacity: AVAudioFrameCount(n)) else { return }
       inBuf.frameLength = AVAudioFrameCount(n)
-      let ch = inBuf.floatChannelData![0]
       data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
         let s16 = raw.bindMemory(to: Int16.self)
         if ch2 {
-          // Downmix interleaved L,R → mono (the engine plays mono).
-          for i in 0..<n { ch[i] = (Float(Int16(littleEndian: s16[i*2])) + Float(Int16(littleEndian: s16[i*2+1]))) / 65536.0 }
+          let left  = inBuf.floatChannelData![0]
+          let right = inBuf.floatChannelData![1]
+          for i in 0..<n {
+            left[i]  = Float(Int16(littleEndian: s16[i*2]))   / 32768.0
+            right[i] = Float(Int16(littleEndian: s16[i*2+1])) / 32768.0
+          }
         } else {
+          let ch = inBuf.floatChannelData![0]
           for i in 0..<n { ch[i] = Float(Int16(littleEndian: s16[i])) / 32768.0 }
         }
       }
