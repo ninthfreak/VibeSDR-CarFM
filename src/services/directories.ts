@@ -22,7 +22,11 @@ export const DIRECTORIES: DirectoryMeta[] = [
   { id: 'receiverbook', name: 'Receiverbook', desc: 'OpenWebRX + KiwiSDR (receiverbook.de)',     kinds: ['owrx', 'kiwi'] },
   { id: 'kiwisdr',     name: 'KiwiSDR',     desc: 'Public KiwiSDR network (kiwisdr.com)',        kinds: ['kiwi'] },
   { id: 'fmdx',        name: 'FM-DX',       desc: 'FM-DX Webserver network (servers.fmdx.org)',  kinds: ['fmdx'] },
-  { id: 'spyserver',   name: 'SpyServer',   desc: 'Public SpyServer-compatible receivers (airspy.com)', kinds: ['spyserver'] },
+  // SpyServer directory listing DELIBERATELY NOT shown (2026-07-09). The public
+  // directory is 219 random hobbyist servers, most full/unreachable/session-
+  // limited, so browsing it is a wall of try-and-fail. fetchSpyServers + the
+  // 'spyserver' dispatch below stay (dead but trivially revived). Connecting to a
+  // SPECIFIC known SpyServer is still available via the manual add-server modal.
 ];
 
 const SPYSERVER_DIR_URL = 'https://airspy.com/directory/status.json';
