@@ -26,9 +26,18 @@ This brief covers four phases:
 - **Phase 3** — SpyServer **client** backend adapter (connect to any SpyServer).
 
 Rationale for SpyServer: raw rtl_tcp at 2.4 MSPS is ~38 Mbit/s sustained; SpyServer's
-server-side decimation brings a typical narrowband session down to single-digit Mbit/s,
-making phone-hotspot and mobile-data use viable. Building the server first also gives us
-a local reference instance for developing the client.
+server-side decimation brings a typical narrowband session down to single-digit Mbit/s.
+Building the server first also gives us a local reference instance for developing the
+client.
+
+> **UPDATE 2026-07-09 (post-Phase-0).** The "makes phone-hotspot use viable" half of
+> that rationale is WRONG and has been removed. Phase 0 shipped and full-rate
+> 2.4 MSPS now runs cleanly over an iPhone personal hotspot: the limit on WiFi was
+> *stalls*, not bandwidth, and the WifiLock + client jitter buffer fixed them. An
+> early "15.8 MB dropped" reading was misread as a sustained deficit — `droppedBytes`
+> is cumulative since client connect, and 15.8 MB is only ~3.3 s of stream across a
+> whole session. Decimation remains strongly motivated by **cellular uplink** (the
+> remote-node case), power, marginal links, and SDR#/SDR++ compatibility. See §2.6.
 
 ---
 
@@ -182,11 +191,17 @@ avoid a second FGS declaration).
   frequency/decimation (matching stock SpyServer's model) — if that materially
   complicates v1, restrict to single client like the rtl_tcp server and document it.
   State the chosen policy in the UI.
-- **FFT stream:** stock SpyServer offers a separate FFT/spectrum stream that some
-  clients use for the wide waterfall while IQ stays narrow. **Verify against real
-  client behaviour** (SDR# and SDR++) whether omitting it degrades UX; if clients
-  function acceptably without it, defer to a follow-up phase and document; VibeDSP
-  already has FFT machinery if it's needed in v1.
+- **FFT stream: REQUIRED in v1** (decided 2026-07-09, was "defer if acceptable").
+  Stock SpyServer sends a separate spectrum stream — server-computed FFT, raw
+  8-bit magnitude bins, NOT compressed and NOT decimated IQ — so the client draws
+  a full-width waterfall over the whole 2.4 MHz while the IQ stays narrow. A
+  2048-bin frame at 20 fps is ~40 KB/s. This is what makes the session *feel* like
+  rtl_tcp to the user; without it a remote node is a keyhole and cannot be
+  scanned, which defeats the point of a low-noise remote receiver. VibeDSP already
+  has the FFT machinery. Note UberSDR compresses its spectrum stream and SpyServer
+  does not — sending compressed bins would work in loopback and fail against every
+  real SDR#/SDR++ client. Take the exact bin count, dB scaling and message layout
+  from the pcap, not from inference.
 
 ### 2.3 UI
 
@@ -200,7 +215,72 @@ avoid a second FGS declaration).
 Keep the existing name, port, and bandwidth-override controls; add the drop/health
 indicator from Phase 0 to both modes.
 
-### 2.4 Acceptance criteria (Phase 2)
+Also on this screen (agreed 2026-07-09):
+
+- **Bind scope** — LAN-only by DEFAULT; "allow connections from any network" is a
+  deliberate, explained choice. The SpyServer protocol has NO authentication:
+  anyone who reaches the port gets the tuner, and since it is single-tuner they
+  can lock the owner out. The UI must say so plainly rather than imply we handle
+  it. A VPN is the authentication for most users.
+- **Reachable addresses** — list the addresses the server is actually bound and
+  reachable on, including any GLOBAL IPv6. Costs nothing and quietly answers the
+  cellular question: carriers that hand out routable IPv6 make a remote node
+  directly reachable, with no tunnel.
+- **Persist toggle** — default is an ad-hoc, one-shot share (server dies with the
+  screen, as today). The toggle makes it survive screen exit, WiFi changes and
+  reboots for set-and-forget nodes. See §2.5.
+
+**Explicitly OUT of scope: tunnels, DDNS, relays, accounts.** Each is an endless
+support burden and none is VibeSDR's problem. Docs get a sentence instead:
+"Serving over the internet requires a reachable address — a public IP, a VPN such
+as Tailscale, or a tunnel. Mobile networks usually place you behind carrier NAT,
+where inbound connections are not possible."
+
+The picker's **existing manual add-server-by-address** path (the add-RTL-TCP modal,
+`InstancePickerScreen.tsx` ~line 653: friendly name + `host` / `host:port`, Connect
+or Save & Connect) is what makes remote nodes usable, and it must gain a SpyServer
+option. mDNS is multicast and does NOT traverse layer-3 VPNs (Tailscale/WireGuard),
+so a VPN-connected remote receiver is routable but never discoverable — manual add
+is the only way in. It also serves static IPs and tunnels. Nothing new to build:
+extend what predates mDNS.
+
+### 2.5 Persist mode (set-and-forget nodes)
+
+Motivating case: an old Android + RTL-SDR at the base of an antenna, solar
+powered, remote (allotment), reached over WiFi or a VPN. Independent of the
+SpyServer protocol — build and test it against rtl_tcp FIRST, then Phase 2
+inherits a service that already survives.
+
+- The server's lifecycle is currently tied to `RtlTcpServerScreen`'s mount
+  (leaving the screen stops it and frees the dongle). Persist mode must break
+  that coupling — a real refactor of ownership, not a flag.
+- `RECEIVE_BOOT_COMPLETED` + boot receiver to restart the FGS.
+- Battery-optimisation exemption, or Doze eventually kills it (reuse the v6 Moto
+  background-restriction detection).
+- Re-advertise mDNS when WiFi drops and returns — the IP may have changed.
+- Rebind/recover on interface change rather than dying.
+
+### 2.6 Why Phase 2, revisited (2026-07-09)
+
+The brief's original rationale — that raw rtl_tcp is too heavy for a phone
+hotspot — **did not survive testing.** After the Phase 0 WifiLock + client jitter
+buffer, a full-rate 2.4 MSPS session runs cleanly over an iPhone personal
+hotspot. Stalls, not bandwidth, were the reliability limit on WiFi.
+
+What decimation is actually for:
+
+- **Cellular uplink.** ~600 kbit/s all-in for a narrowband session + FFT stream,
+  vs 38 Mbit/s for raw IQ. This is the case where decimation *enables* something
+  rather than optimising it — the remote-node story above depends on it.
+- **Power** on a solar node (pushing 4.8 MB/s over WiFi all day is not free).
+- **SDR# / SDR++ compatibility**, which is a feature regardless of bandwidth.
+- Marginal links generally (a mast-base node on a weak WiFi path).
+
+Note the jitter buffer and WifiLock are INHERITED by, not superseded by, the
+SpyServer path: decimation shrinks the stream but does nothing about a 270 ms
+WiFi stall — you would just lose 270 ms of a smaller stream.
+
+### 2.7 Acceptance criteria (Phase 2)
 
 - **Cross-validation is mandatory — VibeSDR↔VibeSDR loopback is NOT sufficient** (a
   spec misreading would be invisible in loopback). The server must be exercised by:
