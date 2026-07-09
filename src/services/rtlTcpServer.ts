@@ -17,7 +17,16 @@ export type ServerStatus = {
   clientAddr: string;
   sampleRate: number;
   overrideRate: number;   // 0 = client-controlled
+  droppedBytes: number;   // IQ dropped since the current client connected
 };
+
+// Human-readable byte count for the drop counter.
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
 
 // Bandwidth override options. value 0 = client-controlled (default).
 export const BANDWIDTH_OPTIONS: { label: string; value: number }[] = [

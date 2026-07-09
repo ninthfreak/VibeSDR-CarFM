@@ -22,8 +22,8 @@ import org.json.JSONObject
  * CPU awake while the phone serves its USB dongle over the network, and shows a
  * live notification (bandwidth + connected client). Uses the `connectedDevice`
  * FGS type (there's no audio — the mediaPlayback service is for on-device
- * listening) and a PARTIAL_WAKE_LOCK so screen-off doze can't stall the
- * USB/TCP stream.
+ * listening), a PARTIAL_WAKE_LOCK so screen-off doze can't stall the USB/TCP
+ * stream, and a WifiLock so the radio doesn't power-save mid-stream.
  *
  * The notification text is refreshed on a 2s timer from the native server
  * status, so it stays current even when the JS/UI is backgrounded.
@@ -54,6 +54,7 @@ class RtlTcpServerService : Service() {
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private val wifiLock by lazy { VibeWifiLock(this, "VibeSDR:RtlTcpServer") }
     private val handler = Handler(Looper.getMainLooper())
     private var name = "VibeSDR RTL-SDR"
     private var ip = ""
@@ -77,6 +78,7 @@ class RtlTcpServerService : Service() {
         ensureChannel()
         startForegroundInternal()
         acquireWakeLock()
+        wifiLock.acquire()
         handler.removeCallbacks(ticker)
         handler.post(ticker)
         return START_STICKY
@@ -164,6 +166,7 @@ class RtlTcpServerService : Service() {
     override fun onDestroy() {
         handler.removeCallbacks(ticker)
         releaseWakeLock()
+        wifiLock.release()
         super.onDestroy()
     }
 }

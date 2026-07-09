@@ -46,6 +46,7 @@ public:
         std::string clientAddr;         // "ip:port" of the connected client, or ""
         uint32_t sampleRate    = 0;     // rate currently applied to the dongle
         uint32_t overrideRate  = 0;     // 0 = client-controlled
+        uint64_t droppedBytes  = 0;     // IQ dropped since this client connected
     };
     Status getStatus() const;
 

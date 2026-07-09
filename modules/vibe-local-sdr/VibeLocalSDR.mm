@@ -91,6 +91,17 @@ RCT_EXPORT_METHOD(setNrStrength:(double)s)      { vibe::LocalSdrShim::instance()
 RCT_EXPORT_METHOD(getNrCpu:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
   resolve(@(vibe::LocalSdrShim::instance().getNrCpu()));
 }
+// rtl_tcp CLIENT link health (jitter buffer). Matches the Android module's shape.
+RCT_EXPORT_METHOD(getNetStatus:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+  auto s = vibe::LocalSdrShim::instance().getNetStatus();
+  resolve(@{
+    @"tcp":            @(s.tcp),
+    @"stalls":         @((double)s.stalls),
+    @"droppedSamples": @((double)s.droppedSamples),
+    @"bufferedMs":     @((double)s.bufferedMs),
+  });
+}
+
 RCT_EXPORT_METHOD(getTunerGains:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
   std::vector<int> g = vibe::LocalSdrShim::instance().getTunerGains();
   NSMutableArray *out = [NSMutableArray arrayWithCapacity:g.size()];

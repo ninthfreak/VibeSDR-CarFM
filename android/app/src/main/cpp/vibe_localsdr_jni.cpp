@@ -245,6 +245,20 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
     j += ",\"clientAddr\":\"" + s.clientAddr + "\"";
     j += ",\"sampleRate\":"   + std::to_string(s.sampleRate);
     j += ",\"overrideRate\":" + std::to_string(s.overrideRate);
+    j += ",\"droppedBytes\":" + std::to_string(s.droppedBytes);
+    j += "}";
+    return env->NewStringUTF(j.c_str());
+}
+
+// rtl_tcp CLIENT link health (jitter buffer). JSON, like the server status above.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeGetNetStatus(JNIEnv* env, jobject) {
+    auto s = vibe::LocalSdrShim::instance().getNetStatus();
+    std::string j = "{";
+    j += "\"tcp\":"             + std::string(s.tcp ? "true" : "false");
+    j += ",\"stalls\":"         + std::to_string(s.stalls);
+    j += ",\"droppedSamples\":" + std::to_string(s.droppedSamples);
+    j += ",\"bufferedMs\":"     + std::to_string(s.bufferedMs);
     j += "}";
     return env->NewStringUTF(j.c_str());
 }

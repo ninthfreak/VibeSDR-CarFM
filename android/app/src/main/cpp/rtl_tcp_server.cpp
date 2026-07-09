@@ -41,6 +41,10 @@ enum {
 // memory bounded and, crucially, never lets a slow socket stall the USB reader.
 static constexpr size_t kClientQueueCapBytes = 4 * 1024 * 1024;
 
+// Kernel send buffer for the client socket. Absorbs the WiFi radio's brief
+// power-save / retransmit stalls before the userspace queue above starts dropping.
+static constexpr int kClientSendBufBytes = 1024 * 1024;
+
 struct RtlTcpServer::Impl {
     rtlsdr_dev_t* dev   = nullptr;
     int           usbFd = -1;
@@ -73,6 +77,10 @@ struct RtlTcpServer::Impl {
     // Serialises all rtlsdr_* control calls (reader thread + override changes).
     std::mutex devMtx;
 
+    // IQ bytes dropped because the client's queue was full. Reset per client, so
+    // the UI reports "this session" rather than a number the user can't clear.
+    std::atomic<uint64_t> droppedBytes{0};
+
     // Fan the raw u8 IQ buffer to the connected client's send queue (drop-newest
     // if the client is too slow — never blocks the USB callback thread).
     void fanoutIq(const uint8_t* buf, size_t len) {
@@ -81,7 +89,10 @@ struct RtlTcpServer::Impl {
         if (!c || !c->alive.load()) return;
         {
             std::lock_guard<std::mutex> lk(c->qmtx);
-            if (c->queuedBytes + len > kClientQueueCapBytes) return;  // drop
+            if (c->queuedBytes + len > kClientQueueCapBytes) {
+                droppedBytes.fetch_add(len, std::memory_order_relaxed);
+                return;                                               // drop
+            }
             c->queue.emplace_back(buf, buf + len);
             c->queuedBytes += len;
         }
@@ -155,6 +166,9 @@ struct RtlTcpServer::Impl {
         auto c = std::make_shared<Client>();
         c->sock = sock;
         c->addr = addr;
+        droppedBytes.store(0, std::memory_order_relaxed);
+        if (!sock->setSendBufferSize(kClientSendBufBytes))
+            LOGI("SO_SNDBUF %d not honoured (kernel default retained)", kClientSendBufBytes);
 
         // 12-byte "RTL0" dongle header, exactly as rtl_tcp sends it.
         uint8_t hdr[12];
@@ -353,6 +367,7 @@ RtlTcpServer::Status RtlTcpServer::getStatus() const {
     s.running      = impl->running.load();
     s.sampleRate   = impl->sampleRate;
     s.overrideRate = impl->overrideRate.load();
+    s.droppedBytes = impl->droppedBytes.load(std::memory_order_relaxed);
     std::lock_guard<std::mutex> lk(impl->clientMtx);
     if (impl->client && impl->client->alive.load()) {
         s.clientConnected = true;

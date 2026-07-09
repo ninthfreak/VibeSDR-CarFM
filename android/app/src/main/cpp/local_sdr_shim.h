@@ -58,6 +58,16 @@ public:
     // Returns supported tuner gains (tenths of dB); empty if not running.
     std::vector<int> getTunerGains();
 
+    // Network (rtl_tcp client) link health. `tcp` is false on the USB path, where
+    // none of this applies. Counters are cumulative for the session.
+    struct NetStatus {
+        bool     tcp        = false;
+        uint64_t stalls     = 0;   // socket delivered nothing for >120ms
+        uint64_t droppedSamples = 0;
+        uint32_t bufferedMs = 0;   // current standing backlog
+    };
+    NetStatus getNetStatus();
+
 private:
     LocalSdrShim() = default;
     void stopLocked();      // teardown; caller must hold g_lifecycle
