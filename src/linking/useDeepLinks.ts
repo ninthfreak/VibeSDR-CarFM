@@ -18,7 +18,7 @@ import { CommonActions } from '@react-navigation/native';
 import { navigationRef } from '../../App';
 import { getViewMode } from '../services/viewMode';
 import { parseVibeSdrUrl, resolveRequest, type ResolvedTarget } from './DeepLinkHandler';
-import { markDeepLinkActive } from './deepLinkState';
+import { markDeepLinkActive, markInitialLinkChecked } from './deepLinkState';
 
 function toast(msg: string) {
   if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.LONG);
@@ -94,9 +94,14 @@ export function useDeepLinks(ready: boolean) {
     void process(url);
   };
 
-  // Cold start + warm-start listener.
+  // Cold start + warm-start listener. The picker blocks its default-instance
+  // auto-connect until this probe answers (link or not), so ALWAYS mark it
+  // checked — including on null/throw, which is the common "no link" case.
   useEffect(() => {
-    Linking.getInitialURL().then(handle).catch(() => {});
+    Linking.getInitialURL()
+      .then(handle)
+      .catch(() => {})
+      .finally(markInitialLinkChecked);
     const sub = Linking.addEventListener('url', (e) => handle(e.url));
     return () => sub.remove();
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -49,17 +49,27 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
           let factory = appDelegate.reactNativeFactory else { return }
 
     let window = UIWindow(windowScene: windowScene)
+
+    // Cold-start deep link (vibesdr://). Under the scene lifecycle the launch URL
+    // arrives HERE, in connectionOptions — never in didFinishLaunchingWithOptions.
+    //
+    // It must be handed to RN as a launch option: Linking.getInitialURL() resolves
+    // from launchOptions[.url], so passing nil makes it return null on EVERY cold
+    // start. Posting RCTOpenURLNotification instead does not work either — that
+    // fires while RN is still starting, before JS mounts its 'url' listener, so
+    // the link is silently dropped and the app opens the default instance.
+    var launchOptions: [AnyHashable: Any] = [:]
+    if let url = connectionOptions.urlContexts.first?.url {
+      launchOptions[UIApplication.LaunchOptionsKey.url] = url
+    }
+
     // Reuses RN's high-level start path, but hosts the root view in the scene's
     // window (sets rootViewController + makeKeyAndVisible internally).
-    factory.startReactNative(withModuleName: "main", in: window, launchOptions: nil)
+    factory.startReactNative(withModuleName: "main", in: window, launchOptions: launchOptions)
     self.window = window
     appDelegate.window = window
 
-    // Cold-start deep link / universal link (vibesdr:// and https). With the
-    // scene lifecycle these arrive here, not in AppDelegate.
-    if let url = connectionOptions.urlContexts.first?.url {
-      RCTLinkingManager.application(UIApplication.shared, open: url, options: [:])
-    }
+    // Universal links (https) still arrive as user activities.
     for activity in connectionOptions.userActivities {
       _ = RCTLinkingManager.application(UIApplication.shared, continue: activity, restorationHandler: { _ in })
     }
