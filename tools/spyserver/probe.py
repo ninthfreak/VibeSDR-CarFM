@@ -44,23 +44,47 @@ def attempt(label, payload):
     print(f"[{label}] GOT {len(buf)} bytes")
     return buf
 
+DEV = {0: "Invalid", 1: "Airspy One / Mini", 2: "Airspy HF+", 3: "RTL-SDR"}
+
 def dump(buf):
-    print("\nraw:", buf[:96].hex(" "), "\n")
+    # Server messages use a 20-byte header, unlike the client's 8-byte one.
     off = 0
-    while off + 8 <= len(buf):
-        mtype, blen = struct.unpack_from("<II", buf, off)
-        body = buf[off+8: off+8+blen]
-        print(f"  msg type={mtype} (0x{mtype:08x}) body={blen}")
-        if body:
-            print(f"    hex : {body[:64].hex(' ')}")
-            if blen % 4 == 0:
-                u = struct.unpack("<" + "I"*(blen//4), body[:blen - blen % 4])
-                print(f"    u32s: {list(u)}")
-            printable = bytes(c if 32 <= c < 127 else 46 for c in body[:48])
-            print(f"    ascii: {printable.decode()}")
-        if blen == 0 or off + 8 + blen > len(buf):
+    while off + 20 <= len(buf):
+        pid, mt, st, seq, bl = struct.unpack_from("<IIIII", buf, off)
+        if pid >> 16 != 0x0200 or off + 20 + bl > len(buf):
             break
-        off += 8 + blen
+        body = buf[off+20: off+20+bl]
+        low = mt & 0xFFFF
+        if low == 0 and bl >= 48:
+            f = struct.unpack("<12I", body[:48])
+            ser = f[1]
+            # Some devices put ASCII in the serial field.
+            asc = ser.to_bytes(4, "little")
+            ser_s = asc.decode() if all(32 <= c < 127 for c in asc) else f"0x{ser:08x}"
+            print("  DEVICE INFO")
+            print(f"    device            : {DEV.get(f[0], f'unknown({f[0]})')}")
+            print(f"    serial            : {ser_s}")
+            print(f"    max sample rate   : {f[2]:,} S/s")
+            print(f"    max bandwidth     : {f[3]:,} Hz   (this is the FFT/waterfall span)")
+            print(f"    decimation stages : {f[4]}   (min stage {f[10]})")
+            print(f"    gain steps        : 0..{f[6]}")
+            print(f"    frequency range   : {f[7]/1e6:,.3f} .. {f[8]/1e6:,.3f} MHz")
+            print(f"    ADC resolution    : {f[9]} bits  -> use "
+                  f"{'int16' if f[9] > 8 else 'uint8'} IQ")
+            print(f"    forced IQ format  : {f[11] or 'none (client chooses)'}")
+            lo = f[2] / (1 << f[4])
+            print(f"    narrowest IQ rate : {lo:,.0f} S/s "
+                  f"({lo * (2 if f[9] <= 8 else 4) / 1024:,.0f} KB/s)")
+        elif low == 1 and bl >= 40:
+            c = struct.unpack("<10I", body[:40])
+            print("  CLIENT SYNC")
+            print(f"    can control       : {'YES' if c[0] else 'NO (read-only: someone else holds the tuner)'}")
+            print(f"    gain index        : {c[1]}")
+            print(f"    device centre     : {c[2]/1e6:,.4f} MHz")
+            print(f"    IQ centre         : {c[3]/1e6:,.4f} MHz")
+            print(f"    FFT centre        : {c[4]/1e6:,.4f} MHz")
+            print(f"    tunable range     : {c[5]/1e6:,.3f} .. {c[6]/1e6:,.3f} MHz")
+        off += 20 + bl
 
 for label, name in (("no-NUL (as SDR++)", b"VibeSDR-probe"),
                     ("NUL-terminated",    b"VibeSDR-probe\x00")):

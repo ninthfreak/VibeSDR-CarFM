@@ -256,6 +256,22 @@ struct LocalSdrShim::Impl {
     std::unique_ptr<spyserver::SpyServerClient> spy;
     bool useSpy() const { return (bool)spy; }
     std::vector<int> spyGains;             // device gain table (tenths dB)
+    int lastGainTenthDb = -1;              // re-applied across a stream restart
+
+    // Wide-waterfall geometry. The server's FFT stream spans maximumBandwidth and
+    // is centred on SETTING_FFT_FREQUENCY, INDEPENDENTLY of the narrow IQ we
+    // demodulate (verified on the wire — see spyserver/PROTOCOL_NOTES.md). That
+    // split is the entire point: 2 MHz of waterfall for ~30 KB/s while the IQ
+    // stays narrow enough to stream over cellular.
+    double spyFftSpan = 0.0;               // 0 = not a SpyServer session
+    uint32_t spyIqFormat = 1;              // FORMAT_UINT8 / FORMAT_INT16, per device resolution
+    std::atomic<double> spyFftCenter{0.0};
+    int spyDecim = 0;
+    uint32_t spyDbRange = 140;
+
+    // The span the CLIENT thinks it is looking at. Everywhere except SpyServer the
+    // display span is just the IQ rate; there it is the server's FFT span.
+    double displaySpan() const { return spyFftSpan > 0.0 ? spyFftSpan : sampleRate; }
 
     int tcpTunerType = 0;
     std::vector<int> tcpGains;            // tuner gains (tenths dB) from the header
@@ -392,10 +408,10 @@ struct LocalSdrShim::Impl {
     void tuneHw(double logicalCenter) {
         uint32_t hz = (uint32_t)llround(logicalCenter + HW_OFFSET_HZ);
         if (useSpy()) {
-            // Move both streams together: the IQ we demodulate and the server-side
-            // FFT that will drive the waterfall.
+            // ONLY the IQ centre. The server's FFT centre stays where it is, so the
+            // wide waterfall does not jump when the VFO drags the narrow IQ window
+            // around. (Verified: the two centres are independent. SDR# does this.)
             spy->setIqFrequency(hz);
-            spy->setFftFrequency(hz);
         }
         else if (useTcp()) sendTcpCmd(0x01, hz);
         else if (dev) rtlsdr_set_center_freq(dev, hz);
@@ -478,6 +494,14 @@ struct LocalSdrShim::Impl {
         std::shared_ptr<net::Socket> sock;
         { std::lock_guard<std::mutex> lk(clientMtx); sock = specClient; }
 
+        // Hybrid waterfall: the IQ FFT only covers `sampleRate` of spectrum. When the
+        // user is zoomed out past that (SpyServer only, where displaySpan is wider),
+        // the server's FFT stream paints the frame instead — see emitServerFft().
+        // Zoomed in, we win: our own FFT of the narrow IQ has far finer bins than
+        // the server's ~977 Hz.
+        const double shownHz = displaySpan() / zoomFactor.load();
+        if (emit && shownHz > sampleRate * 0.95) emit = false;
+
         if (emit && sock && sock->isOpen()) {
             // Emit a FIXED OUT_BINS bins (GPU-safe waterfall texture width — a
             // 32768-wide texture exceeds mobile GPU limits and the waterfall
@@ -486,7 +510,11 @@ struct LocalSdrShim::Impl {
             // when downsampling (don't drop narrow carriers).
             double zoom = zoomFactor.load();
             const int outBins = OUT_BINS;
-            const double step = (double)bins / (zoom * (double)outBins); // src bins / out bin
+            // Source bins per output bin. Written in terms of the DISPLAY span so it
+            // stays correct when that is decoupled from the IQ rate (SpyServer).
+            // Reduces to bins/(zoom*outBins) whenever displaySpan == sampleRate.
+            const double srcBinHz = sampleRate / (double)bins;
+            const double step = (shownHz / (double)outBins) / srcBinHz;  // src bins / out bin
             std::vector<uint8_t> frame(22 + outBins);
             frame[0]='S';frame[1]='P';frame[2]='E';frame[3]='C';frame[4]=0x01;frame[5]=0x03;
             uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -548,6 +576,117 @@ struct LocalSdrShim::Impl {
         }
         std::fill(fftAccum.begin(), fftAccum.end(), 0.0f);
         accumCount = 0;
+    }
+
+    // Re-negotiate the IQ decimation for the current mode (SpyServer only).
+    //
+    // Decimation is chosen from the demod bandwidth, so a mode change can demand a
+    // different rate — NFM at stage 5 gives 75 kHz of IQ, which cannot carry WFM's
+    // 200 kHz. The protocol has no in-place decimation change (stock clients always
+    // stop, resend every setting, and restart), so that is what we do. Brief audio
+    // gap, exactly as SDR#/SDR++ exhibit.
+    //
+    // Caller must NOT hold modeMtx: stopDspThread() joins the DSP thread, which
+    // takes modeMtx per buffer, so holding it here would deadlock (the same trap
+    // setSampleRate() documents). Returns true if the stream was restarted.
+    bool spyRetuneDecimation() {
+        if (!useSpy()) return false;
+        const auto& info = spy->deviceInfo();
+        const auto mp = paramsFor(mode);
+        const double needHz = std::max(mp.bandwidth * 1.6, 48000.0);
+        const uint32_t maxStage = std::max(info.decimationStageCount, info.minimumIQDecimation);
+        int decim = (int)info.minimumIQDecimation;      // never below the server's floor
+        for (uint32_t st = info.minimumIQDecimation; st <= maxStage; ++st) {
+            const double r = (double)info.maximumSampleRate / (double)(1u << st);
+            if (r < needHz) break;
+            decim = (int)st;
+        }
+        if (decim == spyDecim) return false;
+
+        const double newRate = (double)info.maximumSampleRate / (double)(1u << decim);
+        LOGI("SpyServer mode=%s -> decim %d..%d (%.0f -> %.0f S/s)",
+             mode.c_str(), spyDecim, decim, sampleRate, newRate);
+
+        // Quiesce the DSP before the rate changes underneath it, exactly as
+        // setSampleRate() does for the USB path.
+        tcpRunning.store(false);
+        stopDspThread();
+
+        spyDecim   = decim;
+        sampleRate = newRate;
+        fftSize    = fftSizeForRate(sampleRate);
+        iqPrefillSamples = (size_t)(sampleRate * 0.25);
+        iqMaxSamples     = iqPrefillSamples * 2;
+
+        const uint32_t iqHz  = (uint32_t)llround(rtlCenter.load() + HW_OFFSET_HZ);
+        const uint32_t fftHz = (uint32_t)llround(spyFftCenter.load());
+        const uint32_t gainIdx = lastGainTenthDb < 0
+            ? (uint32_t)(spyGains.size() / 2)
+            : spyserver::SpyServerClient::gainIndexForTenthDb(spyGains, lastGainTenthDb);
+        spy->startStream(spyserver::STREAM_MODE_IQ | spyserver::STREAM_MODE_FFT,
+                         spyIqFormat, (uint32_t)decim, iqHz, gainIdx, 2048, fftHz);
+
+        rx.stop();
+        startEngine();
+        startDspThread();
+        tcpRunning.store(true);
+        { std::lock_guard<std::mutex> lk(clientMtx); if (specClient) sendConfig(specClient); }
+        return true;
+    }
+
+    // Paint the waterfall from the SERVER's FFT stream (SpyServer wide view).
+    // Mirrors onSpectrum's frame format exactly — same SPEC header, same OUT_BINS,
+    // same peak-hold downsample — but reads u8 dB bins spanning spyFftSpan around
+    // spyFftCenter instead of our own FFT of the IQ.
+    //
+    // Skipped whenever the view fits inside the IQ window: there onSpectrum's own
+    // FFT is far finer (36 Hz vs ~977 Hz bins), so the zoom drum stays smooth.
+    void emitServerFft(const uint8_t* bins, int n) {
+        if (n <= 1 || spyFftSpan <= 0.0) return;
+        const double shownHz = displaySpan() / zoomFactor.load();
+        if (shownHz <= sampleRate * 0.95) return;      // zoomed in: IQ FFT owns it
+
+        std::shared_ptr<net::Socket> sock;
+        { std::lock_guard<std::mutex> lk(clientMtx); sock = specClient; }
+        if (!sock || !sock->isOpen()) return;
+        uint64_t frameNo = frameCounter.fetch_add(1);
+        int div = rateDivisor.load();
+        if (div > 1 && (frameNo % (uint64_t)div) != 0) return;
+
+        const int outBins = OUT_BINS;
+        const double srcBinHz = spyFftSpan / (double)n;
+        const double step = (shownHz / (double)outBins) / srcBinHz;   // src bins / out bin
+        // Signed source-bin offset of the display centre from the FFT centre.
+        const double viewOffsetBin = (viewCenter.load() - spyFftCenter.load()) / srcBinHz;
+
+        // u8 -> dB (linear over [-dbRange, 0]); then the client's own +256 encoding.
+        const double dbPerCount = (double)spyDbRange / 255.0;
+        auto dbAt = [&](int sOff) -> float {
+            int idx = n / 2 + sOff;
+            if (idx < 0) idx = 0; else if (idx >= n) idx = n - 1;
+            return (float)(bins[idx] * dbPerCount - (double)spyDbRange);
+        };
+
+        std::vector<uint8_t> frame(22 + outBins);
+        frame[0]='S';frame[1]='P';frame[2]='E';frame[3]='C';frame[4]=0x01;frame[5]=0x03;
+        uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::memcpy(&frame[6], &ts, 8);
+        uint64_t f = (uint64_t)llround(viewCenter.load());
+        std::memcpy(&frame[14], &f, 8);
+        for (int i = 0; i < outBins; i++) {
+            int signedOut = (i <= outBins / 2) ? i : i - outBins;
+            double center = signedOut * step + viewOffsetBin;
+            int lo = (int)std::floor(center - step / 2.0);
+            int hi = (int)std::ceil(center + step / 2.0);
+            if (hi <= lo) hi = lo + 1;
+            float best = -1e9f;
+            for (int sB = lo; sB < hi; sB++) { float v = dbAt(sB); if (v > best) best = v; }
+            int v = (int)lround(best + 256.0);
+            frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
+        }
+        sendWs(sock, 0x2, frame.data(), frame.size());
+        if (frameNo % 10 == 0) sendFmMeta(sock);
     }
 
     // ── Audio callback (Stage 4) ───────────────────────────────────────────
@@ -884,12 +1023,19 @@ struct LocalSdrShim::Impl {
         // rtlCenter and there is never a concurrent hardware tune.
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
         audioFreq.store(freq);
-        double limit = sampleRate / 2.0 - 50000.0;
+        // Guard band before we recentre the capture. The fixed 50 kHz was fine at
+        // 2.4 MSPS but goes NEGATIVE once decimation makes the IQ narrow (SpyServer),
+        // which would retune on every tiny nudge.
+        double limit = sampleRate / 2.0 - std::min(50000.0, sampleRate * 0.15);
         if (std::fabs(freq - rtlCenter.load()) > limit) {
-            // The VFO has tuned outside the captured window — recentre the dongle
-            // (and the display) on it so we don't end up showing dead air.
+            // The VFO has tuned outside the captured window — recentre the capture
+            // on it so we don't end up showing dead air.
             rtlCenter.store(freq);
-            viewCenter.store(freq);
+            // On SpyServer the display is the server's WIDE FFT, which the narrow IQ
+            // window slides underneath. Moving viewCenter here would yank the
+            // waterfall sideways on every recentre; the view only follows when the
+            // VFO leaves the FFT span entirely (handled in the zoom/pan path).
+            if (!useSpy()) viewCenter.store(freq);
             tuneHw(freq);
         }
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
@@ -916,7 +1062,11 @@ struct LocalSdrShim::Impl {
         sendWs(sock, 0x1, (const uint8_t*)s.data(), s.size());
     }
     void sendConfig(const std::shared_ptr<net::Socket>& sock) {
-        double effective = sampleRate / zoomFactor.load();           // zoom-aware span
+        // NB: displaySpan(), not sampleRate. On SpyServer the waterfall is the
+        // server's wide FFT while the IQ is narrow, so the client's zoom/pan model
+        // must be built on the span it can actually SEE.
+        const double span = displaySpan();
+        double effective = span / zoomFactor.load();                  // zoom-aware span
         double binBw = effective / (double)OUT_BINS;                  // we emit OUT_BINS bins
         char buf[320];
         // maxBandwidth = full (unzoomed) device span — the client caps zoom-out
@@ -924,7 +1074,7 @@ struct LocalSdrShim::Impl {
         snprintf(buf, sizeof buf,
             "{\"type\":\"config\",\"centerFreq\":%lld,\"binCount\":%d,"
             "\"binBandwidth\":%.6f,\"totalBandwidth\":%.1f,\"maxBandwidth\":%.1f}",
-            (long long)llround(viewCenter.load()), OUT_BINS, binBw, effective, sampleRate);
+            (long long)llround(viewCenter.load()), OUT_BINS, binBw, effective, span);
         sendText(sock, buf);
     }
 
@@ -1004,7 +1154,9 @@ struct LocalSdrShim::Impl {
         }
         if (type == "mode") {
             std::string m = jsonStr(msg, "mode");
-            if (!m.empty() && m != mode) { mode = m; buildAudio(); }
+            // Decimation is derived from the mode's bandwidth, so re-negotiate it
+            // BEFORE rebuilding the audio chain (it may change sampleRate/fftSize).
+            if (!m.empty() && m != mode) { mode = m; spyRetuneDecimation(); buildAudio(); }
             return;
         }
         if (type == "bandwidth") {
@@ -1290,6 +1442,34 @@ struct LocalSdrShim::Impl {
         iqCv.notify_one();
     }
 
+    // int16 IQ (16-bit devices: Airspy et al). Same queue, same backpressure; only
+    // the sample conversion differs. Public SpyServers are not all 8-bit RTL-SDRs,
+    // and feeding a 16-bit device's stream through the u8 path would be garbage.
+    void enqueueIqInt16(const int16_t* buf, int sampCount, bool blockIfFull) {
+        if (sampCount <= 0) return;
+        if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
+        std::vector<cf32> v((size_t)sampCount);
+        constexpr float kInv = 1.0f / 32768.0f;
+        for (int i = 0; i < sampCount; i++)
+            v[i] = cf32(buf[2*i] * kInv, buf[2*i + 1] * kInv);
+        {
+            std::unique_lock<std::mutex> lk(iqMtx);
+            if (iqMaxSamples > 0) {
+                if (blockIfFull) {
+                    iqSpaceCv.wait(lk, [this]{
+                        return iqQueuedSamples < iqMaxSamples || !dspRunning.load();
+                    });
+                    if (!dspRunning.load()) return;
+                } else if (iqQueuedSamples >= iqMaxSamples) {
+                    dropOldestLocked();
+                }
+            }
+            iqQueuedSamples += v.size();
+            iqQueue.push_back(std::move(v));
+        }
+        iqCv.notify_one();
+    }
+
     // Caller holds iqMtx. Counts what it discards — this used to be silent, which
     // is why the server could report a healthy link while the client broke up.
     void dropOldestLocked() {
@@ -1374,15 +1554,14 @@ struct LocalSdrShim::Impl {
                         >= kStallMs)
                     netStalls.fetch_add(1, std::memory_order_relaxed);
                 lastData = now;
-                // We negotiate uint8, so this is the shim's native IQ layout.
+                // Format is negotiated from the device's ADC resolution, so honour
+                // whichever the server is actually sending.
                 if (fmt == spyserver::FORMAT_UINT8)
                     enqueueIq(data, (int)(bytes / 2), /*blockIfFull=*/true);
+                else if (fmt == spyserver::FORMAT_INT16)
+                    enqueueIqInt16((const int16_t*)data, (int)(bytes / 4), /*blockIfFull=*/true);
             },
-            [&](const uint8_t* /*bins*/, size_t /*count*/) {
-                // Phase 2 step 2: feed the server's FFT straight to the waterfall.
-                // For now the shim computes its own FFT from the IQ above, exactly
-                // as it does for USB and rtl_tcp, so the waterfall already works.
-            });
+            [&](const uint8_t* bins, size_t count) { emitServerFft(bins, (int)count); });
     }
 
     // RTL-TCP read loop: pull u8 I/Q from the socket in ~32 KB chunks and enqueue.
@@ -1569,16 +1748,66 @@ int LocalSdrShim::startSpyServer(const std::string& host, int port,
     if (!impl->spy->connect(host, port, "VibeSDR", err)) { delete impl; return -1; }
 
     const auto& info = impl->spy->deviceInfo();
-    // The server dictates the rate; ignore the caller's request rather than
-    // pretending we got it. Decimation 0 = full device rate (step 1: prove the
-    // protocol end-to-end with the existing pipeline). Narrow IQ + the server's
-    // FFT stream — the actual bandwidth win — comes next.
-    impl->sampleRate = info.maximumSampleRate > 0 ? (double)info.maximumSampleRate : sampleRate;
+    if (info.maximumSampleRate == 0) {
+        err = "SpyServer reported no sample rate"; impl->spy->close(); delete impl; return -1;
+    }
+
+    // Pick the DEEPEST decimation whose rate still comfortably carries the mode's
+    // bandwidth. This is where the bandwidth win lives, and it must be derived from
+    // the server's own DEVICE_INFO — public servers are not all RTL-SDRs. An Airspy
+    // One runs at 10 MSPS, so a hardcoded "decimation 0" would pull 20 MB/s from a
+    // stranger's uplink.
+    // 1.6x the demod bandwidth covers the filter skirts and leaves the VFO room to
+    // move before retune() has to recentre the IQ window. The 48 kHz floor keeps the
+    // audio chain fed on narrow modes (SSB/CW would otherwise pick an absurd stage).
+    const auto mp = paramsFor(impl->mode);
+    const double needHz = std::max(mp.bandwidth * 1.6, 48000.0);
+    // START at minimumIQDecimation, never 0. An Airspy One advertises min stage 5
+    // (and 6 MSPS, 12-bit): starting at 0 and only raising the stage when a rate
+    // satisfies the bandwidth leaves decim=0 whenever even the minimum stage is too
+    // narrow — which for WFM it is. That would pull 24 MB/s off a stranger's server.
+    // If no stage is wide enough, take the minimum: it's the widest we're allowed.
+    const uint32_t maxStage = std::max(info.decimationStageCount, info.minimumIQDecimation);
+    int decim = (int)info.minimumIQDecimation;
+    for (uint32_t st = info.minimumIQDecimation; st <= maxStage; ++st) {
+        const double r = (double)info.maximumSampleRate / (double)(1u << st);
+        if (r < needHz) break;
+        decim = (int)st;
+    }
+    impl->spyDecim   = decim;
+    impl->sampleRate = (double)info.maximumSampleRate / (double)(1u << decim);
     impl->fftSize    = fftSizeForRate(impl->sampleRate);
 
-    // SpyServer sends a bare gain INDEX and never the dB values, so map through
-    // the device's table ourselves. RTL-SDR tables are the R820T one we already ship.
-    impl->spyGains.assign(kR820tGains, kR820tGains + (sizeof(kR820tGains) / sizeof(int)));
+    // Wide waterfall geometry, straight from the server.
+    impl->spyFftSpan = info.maximumBandwidth > 0 ? (double)info.maximumBandwidth
+                                                 : (double)info.maximumSampleRate;
+    impl->spyFftCenter.store(centerFreq);
+    impl->spyDbRange = 140;
+
+    // SpyServer sends a bare gain INDEX and never the dB values, so the client must
+    // supply a table. Public servers are NOT all RTL-SDRs: an Airspy HF advertises
+    // maximumGainIndex = 8, so the 29-entry R820T table would have us sending
+    // indices the server has to clamp or reject. Only use it when the device really
+    // is an RTL-SDR AND the index count matches; otherwise synthesise a monotonic
+    // table of the right length so the slider stays usable and in range.
+    const size_t nGains = (size_t)info.maximumGainIndex + 1;
+    const size_t rtlGains = sizeof(kR820tGains) / sizeof(int);
+    if (info.deviceType == spyserver::DEVICE_RTLSDR && nGains >= rtlGains) {
+        impl->spyGains.assign(kR820tGains, kR820tGains + rtlGains);
+    } else {
+        impl->spyGains.resize(nGains);
+        for (size_t i = 0; i < nGains; ++i)                 // evenly spread 0..49.6 dB
+            impl->spyGains[i] = (int)llround(496.0 * (double)i / (double)(nGains > 1 ? nGains - 1 : 1));
+    }
+
+    // Match the wire format to the device's ADC. uint8 is lossless on an 8-bit
+    // RTL-SDR and half the bytes; on a 16-bit Airspy it would discard 8 bits of a
+    // considerably better receiver. forcedIQFormat != 0 means the server dictates.
+    uint32_t iqFormat = spyserver::FORMAT_UINT8;
+    if (info.forcedIQFormat != 0)      iqFormat = info.forcedIQFormat;
+    else if (info.resolution > 8)      iqFormat = spyserver::FORMAT_INT16;
+    impl->spyIqFormat = iqFormat;
+    impl->lastGainTenthDb = gainTenthDb;
     const uint32_t gainIdx = gainTenthDb < 0
         ? (uint32_t)(impl->spyGains.size() / 2)     // no AGC in the protocol: mid-scale
         : spyserver::SpyServerClient::gainIndexForTenthDb(impl->spyGains, gainTenthDb);
@@ -1588,10 +1817,17 @@ int LocalSdrShim::startSpyServer(const std::string& host, int port,
     impl->iqPrefillSamples = (size_t)(impl->sampleRate * 0.25);
     impl->iqMaxSamples     = impl->iqPrefillSamples * 2;
 
-    const uint32_t hwHz = (uint32_t)llround(centerFreq + Impl::HW_OFFSET_HZ);
+    // IQ carries the offset-tuning shift the DSP expects; the FFT does not (its
+    // bins are read straight against spyFftCenter).
+    const uint32_t iqHz  = (uint32_t)llround(centerFreq + Impl::HW_OFFSET_HZ);
+    const uint32_t fftHz = (uint32_t)llround(centerFreq);
+    // 2048 bins over the span: ~977 Hz on a 2 MHz RTL server, ~30 KB/s at 15 fps.
+    // Finer than this costs bandwidth for detail the waterfall can't show, and the
+    // IQ FFT takes over anyway once you zoom in.
+    constexpr uint32_t kFftPixels = 2048;
     if (!impl->spy->startStream(spyserver::STREAM_MODE_IQ | spyserver::STREAM_MODE_FFT,
-                                spyserver::FORMAT_UINT8, /*decimation=*/0,
-                                hwHz, gainIdx, /*fftDisplayPixels=*/1024, hwHz)) {
+                                iqFormat, (uint32_t)decim,
+                                iqHz, gainIdx, kFftPixels, fftHz)) {
         err = "SpyServer refused the stream settings";
         impl->spy->close(); delete impl; return -1;
     }
@@ -1618,8 +1854,9 @@ int LocalSdrShim::startSpyServer(const std::string& host, int port,
     impl->rtlThread = std::thread([impl]{ impl->spyReadLoop(); });
 
     p = impl;
-    LOGI("SpyServer started: %s:%d center=%.0f rate=%.0f control=%d port=%d",
-         host.c_str(), port, centerFreq, impl->sampleRate,
+    LOGI("SpyServer started: %s:%d center=%.0f decim=%d iqRate=%.0f fftSpan=%.0f "
+         "control=%d port=%d",
+         host.c_str(), port, centerFreq, decim, impl->sampleRate, impl->spyFftSpan,
          (int)impl->spy->canControl(), chosen);
     return chosen;
 }
@@ -1737,9 +1974,12 @@ void LocalSdrShim::setGain(int gainTenthDb) {
     if (!p) return;
     if (p->useSpy()) {
         // No AGC in the protocol — "auto" has no wire representation, so mid-scale.
-        const uint32_t idx = gainTenthDb < 0
+        p->lastGainTenthDb = gainTenthDb;
+        uint32_t idx = gainTenthDb < 0
             ? (uint32_t)(p->spyGains.size() / 2)
             : spyserver::SpyServerClient::gainIndexForTenthDb(p->spyGains, gainTenthDb);
+        const uint32_t maxIdx = p->spy->deviceInfo().maximumGainIndex;
+        if (idx > maxIdx) idx = maxIdx;
         p->spy->setGainIndex(idx);
         LOGI("gain: index %u", idx);
         return;
