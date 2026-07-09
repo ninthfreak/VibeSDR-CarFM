@@ -953,7 +953,11 @@ struct LocalSdrShim::Impl {
         demodOffset = (mp.kind == ModeParams::CW) ? -mp.bandwidth * 0.5 : 0.0;
 
         rxMode = rxModeFor(mp.kind);
-        rxBwHz = mp.bandwidth;
+        // Clamp to what the IQ can actually carry. Most public SpyServers cap the
+        // streamed IQ rate (some as low as 12 kS/s), so a mode's nominal bandwidth
+        // can exceed the whole capture — WFM's 200 kHz on a 12 kS/s stream. Asking
+        // the engine for a filter wider than its input is meaningless.
+        rxBwHz = std::min(mp.bandwidth, sampleRate * 0.8);
         vfoBwHz.store(mp.bandwidth);
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
         LOGI("audio chain: mode=%s bw=%.0f ch=%d", mode.c_str(), mp.bandwidth, mp.channels);
@@ -1170,7 +1174,7 @@ struct LocalSdrShim::Impl {
     void setBandwidth(double bw) {
         if (bw <= 0) return;
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
-        rxBwHz = std::min(bw, sampleRate);
+        rxBwHz = std::min(bw, sampleRate * 0.8);
         vfoBwHz.store(rxBwHz);
         // CW: ignore the client's narrow passband override (cwu/cwl send ±200 Hz =
         // 400 Hz wide). With the USB demod the carrier must sit at a POSITIVE audio
@@ -1179,7 +1183,7 @@ struct LocalSdrShim::Impl {
         // Keep the mode's fixed CW filter (buildAudio's 1200 Hz) and -bw/2 beat-note
         // offset so the tone stays a clear ~600 Hz, centred, audible on-signal.
         if (rxMode == vibedsp::RxPipeline::Mode::CW) {
-            rxBwHz = paramsFor(mode).bandwidth;     // restore the CW filter width
+            rxBwHz = std::min(paramsFor(mode).bandwidth, sampleRate * 0.8);  // restore CW filter width
             vfoBwHz.store(rxBwHz);
             demodOffset = -rxBwHz * 0.5;
             rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
