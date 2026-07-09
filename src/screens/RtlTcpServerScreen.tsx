@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet, Alert,
-  PermissionsAndroid, Platform,
+  PermissionsAndroid, Platform, Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -10,15 +10,22 @@ import { themeFor } from '../constants/theme';
 import {
   startRtlTcpServer, stopRtlTcpServer, setServerSampleRate, getServerStatus,
   getServerName, saveServerName, formatBytes, BANDWIDTH_OPTIONS,
+  getServerPersist, saveServerPersist,
   type ServerInfo, type ServerStatus,
 } from '../services/rtlTcpServer';
 import { advertiseRtlTcp, stopAdvertiseRtlTcp } from '../services/mdns';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'RtlTcpServer'>;
 
-// The RTL-TCP server control screen. Owns the full lifecycle: starts the server
-// + mDNS advert on mount, tears both down on unmount (so leaving = back to the
-// instance list, dongle freed for on-device use).
+// The RTL-TCP server control screen.
+//
+// Ad-hoc mode (default): owns the full lifecycle — starts the server + mDNS
+// advert on mount, tears both down on unmount, so leaving frees the dongle.
+//
+// Persist mode ("keep sharing"): the SERVER owns its own lifecycle, held up by
+// the foreground service. The screen starts it if it isn't running, ADOPTS it if
+// it is, and never stops it on unmount — only the explicit STOP button does.
+// This is what a set-and-forget node needs (phone + dongle at an antenna base).
 export default function RtlTcpServerScreen({ navigation, route }: Props) {
   const { colors: C, font: F } = themeFor();
   const [name, setName]       = useState(route.params?.name ?? 'VibeSDR RTL-SDR');
@@ -28,15 +35,41 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
   const [starting, setStarting] = useState(true);
   const [error, setError]     = useState<string | null>(null);
   const [dropping, setDropping] = useState(false);   // drops grew since the last poll
+  const [persist, setPersist] = useState(false);     // keep sharing after leaving
   const startedRef = useRef(false);
   const lastDropRef = useRef(0);
+  // The unmount cleanup closes over the first render, so it can't read `persist`
+  // state. Mirror it into a ref that the cleanup can see.
+  const persistRef = useRef(false);
 
-  // Start the server (once) + advertise.
+  // Start the server (once) + advertise — or ADOPT one already running (persist
+  // mode left it up when the screen was last closed). Starting a second server on
+  // the same dongle would fail on the USB open, so adopt must come first.
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
     let cancelled = false;
     (async () => {
+      const persisted = await getServerPersist();
+      if (cancelled) return;
+      setPersist(persisted);
+      persistRef.current = persisted;
+
+      const existing = await getServerStatus();
+      if (cancelled) return;
+      if (existing?.running && existing.port > 0) {
+        const adoptedName = await getServerName(route.params?.name ?? 'VibeSDR RTL-SDR');
+        if (cancelled) return;
+        setName(adoptedName);
+        setInfo({ ip: existing.ip || '0.0.0.0', port: existing.port, name: adoptedName });
+        setOverride(existing.overrideRate ?? 0);
+        setStatus(existing);
+        lastDropRef.current = existing.droppedBytes ?? 0;
+        setStarting(false);
+        advertiseRtlTcp(adoptedName, existing.port);   // idempotent; IP may have changed
+        return;
+      }
+
       const initialName = await getServerName(route.params?.name ?? 'VibeSDR RTL-SDR');
       if (cancelled) return;
       setName(initialName);
@@ -60,8 +93,12 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
     return () => { cancelled = true; };
   }, []);
 
-  // Teardown on unmount (any way of leaving the screen).
+  // Teardown on unmount (any way of leaving the screen) — UNLESS persist mode is
+  // on, in which case the server outlives the screen and only the explicit STOP
+  // button ends it. Read the ref, not the state: this cleanup runs once, closed
+  // over the first render's values.
   useEffect(() => () => {
+    if (persistRef.current) return;   // keep sharing; FGS holds it up
     stopAdvertiseRtlTcp();
     stopRtlTcpServer();
   }, []);
@@ -79,6 +116,12 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
     }, 2000);
     return () => clearInterval(t);
   }, [starting, error]);
+
+  const applyPersist = useCallback((on: boolean) => {
+    setPersist(on);
+    persistRef.current = on;
+    saveServerPersist(on);
+  }, []);
 
   const applyOverride = useCallback((value: number) => {
     setOverride(value);
@@ -119,8 +162,9 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
       <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
         <Text style={[styles.h1, { color: C.amber, fontFamily: F }]}>RTL-TCP Server</Text>
         <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
-          Sharing this phone's RTL-SDR over your network. Leaving this screen stops the
-          server and frees the dongle for use on this device.
+          {persist
+            ? "Sharing this phone's RTL-SDR over your network. Sharing continues in the background until you press STOP."
+            : "Sharing this phone's RTL-SDR over your network. Leaving this screen stops the server and frees the dongle for use on this device."}
         </Text>
 
         {starting && (
@@ -182,6 +226,27 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
               Shown to clients discovering this server on the network.
             </Text>
+
+            {/* Persist ("keep sharing") — off = ad-hoc share that ends with this screen. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>KEEP SHARING</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                  Keep the server running
+                </Text>
+                <Switch
+                  value={persist}
+                  onValueChange={applyPersist}
+                  trackColor={{ false: C.border, true: C.green }}
+                  thumbColor={C.amber}
+                />
+              </View>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                {persist
+                  ? 'Sharing continues when you leave this screen. The dongle stays busy, so this device can’t receive on it. Use STOP to end sharing.'
+                  : 'Sharing stops when you leave this screen, freeing the dongle for use on this device.'}
+              </Text>
+            </View>
 
             {/* Bandwidth override */}
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>BANDWIDTH OVERRIDE</Text>

@@ -128,6 +128,9 @@ RCT_EXPORT_METHOD(getNetStatus:(RCTPromiseResolveBlock)resolve rejecter:(RCTProm
     @"stalls":         @((double)s.stalls),
     @"droppedSamples": @((double)s.droppedSamples),
     @"bufferedMs":     @((double)s.bufferedMs),
+    @"spy":            @(s.spy),
+    @"canControl":     @(s.canControl),
+    @"closed":         @(s.closed),
   });
 }
 

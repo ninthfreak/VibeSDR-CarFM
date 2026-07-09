@@ -21,6 +21,7 @@ export interface SDRInstance {
   // keeps working unchanged.
   deviceType?:   string;   // 'RTL-SDR' | 'AirspyHF+' | 'AirspyOne'
   full?:         boolean;  // every client slot taken right now
+  sessionLimitMins?: number;  // 0/undefined = no limit; else the server kicks you after this
 }
 
 const BASE_URL = 'https://instances.ubersdr.org/api/instances?conditions=true';

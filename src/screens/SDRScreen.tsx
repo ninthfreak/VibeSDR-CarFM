@@ -329,6 +329,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   // rtl_tcp network health, polled from the shim's jitter buffer. 3 = good (also the
   // resting value on the USB path, where it never clamps anything).
   const netLinkRef = useRef<0|1|2|3>(3);
+  // SpyServer with canControl=0: another client holds the tuner, so tuning would
+  // silently do nothing. Show it rather than letting the user fight a dead dial.
+  const [readOnly, setReadOnly] = useState(false);
+  // Session limit (minutes) from the directory. The server enforces it; we just
+  // warn up front and count down, rather than letting it look like a crash.
+  const sessionLimitMins: number = route.params.sessionLimitMins ?? 0;
+  const [sessionEndsAt, setSessionEndsAt] = useState<number | null>(null);
+  const [sessionLeftMs, setSessionLeftMs] = useState<number | null>(null);
+  const noticeShownRef = useRef(false);
   // Per-device persistence suffix so each local source keeps its OWN remembered
   // setup (frequency/mode/step + hardware config). RTL-TCP is keyed by host:port,
   // so UberSDR-over-RTL-TCP and a real-hardware RTL-TCP server never share state;
@@ -2095,6 +2104,38 @@ export default function SDRScreen({ route, navigation }: Props) {
   const lastTuneLoaded = useRef(false);
   // One-shot: a deep-link initial tune is applied on the first connect only.
   const deepLinkTuneApplied = useRef(false);
+  // Start the session countdown once we're actually connected.
+  useEffect(() => {
+    if (!connected || !sessionLimitMins || sessionEndsAt) return;
+    setSessionEndsAt(Date.now() + sessionLimitMins * 60_000);
+  }, [connected, sessionLimitMins, sessionEndsAt]);
+
+  useEffect(() => {
+    if (!sessionEndsAt) return;
+    const tick = () => setSessionLeftMs(Math.max(0, sessionEndsAt - Date.now()));
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [sessionEndsAt]);
+
+  // One combined notice covering BOTH constraints — a read-only, time-limited
+  // receiver should not produce two popups in a row.
+  useEffect(() => {
+    if (noticeShownRef.current || !connected) return;
+    if (!readOnly && !sessionLimitMins) return;
+    noticeShownRef.current = true;
+    const parts: string[] = [];
+    if (readOnly) parts.push(
+      'This receiver is listen-only — another user is controlling it, so tuning ' +
+      'and mode controls are disabled.');
+    if (sessionLimitMins) parts.push(
+      `This receiver limits each listener to ${sessionLimitMins} minutes. ` +
+      'A countdown is shown next to the clock, and it will disconnect you when the time is up.');
+    Alert.alert(readOnly && sessionLimitMins ? 'Listen-only, and time limited'
+                : readOnly ? 'Listen-only receiver' : 'Time-limited receiver',
+                parts.join('\n\n'));
+  }, [connected, readOnly, sessionLimitMins]);
+
   // rtl_tcp link meter: poll the shim's network-stall counter — periods where the
   // socket delivered nothing for >120 ms. That is the honest client-side view of
   // the link; the backend's own quality reading is FFT-frame timing measured after
@@ -2102,10 +2143,29 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!isLocal) return;
     let last = -1;
+    let toldClosed = false;
     const t = setInterval(async () => {
       try {
         const s = await LocalHw?.getNetStatus?.();
         if (!s?.tcp) { netLinkRef.current = 3; return; }   // USB path: nothing to clamp
+
+        // The SpyServer hung up. It is NOT a generic connection loss: public
+        // servers enforce session limits (30 min – 24 h) and hand the single
+        // tuner to whoever asks next. Say so, once.
+        if (s.spy && s.closed && !toldClosed) {
+          toldClosed = true;
+          Alert.alert(
+            'Receiver disconnected',
+            'The SpyServer closed the connection. Public receivers often limit how ' +
+            'long one listener can stay, and many allow only one at a time — someone ' +
+            'else may now have the tuner.',
+            [{ text: 'OK', onPress: () => navigation.goBack() }],
+          );
+          return;
+        }
+        // Another client owns the tuner: the dial would silently do nothing.
+        if (s.spy) setReadOnly(!s.canControl);
+
         const n = s.stalls ?? 0;
         if (last < 0) { last = n; return; }                // first sample: no delta yet
         const delta = n - last;
@@ -2114,7 +2174,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       } catch {}
     }, 2000);
     return () => clearInterval(t);
-  }, [isLocal]);
+  }, [isLocal, navigation]);
 
   // Bypass-password prompt — rate-limited/blocked connections show this
   // directly (the instance password gets around per-IP limits); submitting
@@ -3461,6 +3521,24 @@ export default function SDRScreen({ route, navigation }: Props) {
       })()}
 
       {/* Kiwi receiver full (too_busy) — all channels in use. */}
+      {/* Read-only: another client owns the tuner (public SpyServers are usually
+          single-tuner). Passive strip, not a blocking card — you can still listen
+          to whatever they have it tuned to. */}
+      {readOnly && (
+        <View pointerEvents="none" style={{
+          position: 'absolute', top: 0, left: 0, right: 0, alignItems: 'center', zIndex: 40,
+        }}>
+          <View style={{
+            marginTop: 6, paddingHorizontal: 12, paddingVertical: 5, borderRadius: 6,
+            backgroundColor: 'rgba(0,0,0,0.75)', borderWidth: 1, borderColor: '#ffb84d',
+          }}>
+            <Text style={{ color: '#ffb84d', fontSize: 12, textAlign: 'center' }}>
+              Listen-only — another user is controlling this receiver
+            </Text>
+          </View>
+        </View>
+      )}
+
       {serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
@@ -3607,6 +3685,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         }}
       >
         <ControlsBar
+          readOnly={readOnly}
+          sessionLeft={sessionLeftMs == null ? null : {
+            text: `${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`,
+            urgent: sessionLeftMs < 120_000,
+          }}
           frequency={status.frequency}
           mode={status.mode}
           step={step}

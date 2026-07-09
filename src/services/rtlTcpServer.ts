@@ -18,6 +18,8 @@ export type ServerStatus = {
   sampleRate: number;
   overrideRate: number;   // 0 = client-controlled
   droppedBytes: number;   // IQ dropped since the current client connected
+  port: number;           // bound port (0 when not running)
+  ip: string;             // this device's LAN address ('' when not running)
 };
 
 // Human-readable byte count for the drop counter.
@@ -39,6 +41,27 @@ export const BANDWIDTH_OPTIONS: { label: string; value: number }[] = [
 ];
 
 const NAME_KEY = 'vsdr_rtltcp_server_name';
+const PERSIST_KEY = 'vsdr_rtltcp_server_persist';
+
+/**
+ * Persist ("keep sharing") mode.
+ *
+ * OFF (default) — an ad-hoc, one-shot share: the server is owned by the server
+ * screen and dies when you leave it, freeing the dongle for on-device use. This
+ * is what most people want and it can't be left running by accident.
+ *
+ * ON — a set-and-forget node (e.g. an old phone + dongle at the base of an
+ * antenna). The server outlives the screen, so leaving the screen no longer
+ * stops it; only the explicit STOP button does. The foreground service keeps it
+ * alive. Callers must re-adopt a running server rather than starting a second
+ * one on the same dongle.
+ */
+export async function getServerPersist(): Promise<boolean> {
+  try { return (await AsyncStorage.getItem(PERSIST_KEY)) === '1'; } catch { return false; }
+}
+export async function saveServerPersist(on: boolean): Promise<void> {
+  try { await AsyncStorage.setItem(PERSIST_KEY, on ? '1' : '0'); } catch {}
+}
 
 export async function getServerName(fallback = 'VibeSDR RTL-SDR'): Promise<string> {
   try { return (await AsyncStorage.getItem(NAME_KEY)) || fallback; } catch { return fallback; }

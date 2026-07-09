@@ -355,7 +355,8 @@ export default function InstancePickerScreen({ navigation }: Props) {
   // SpyServer-compatible: same wiring as connectTcp (network IQ -> on-device shim),
   // so demod/decoders/audio work unchanged, on iOS too. The server dictates the
   // sample rate, so we don't ask for one.
-  const connectSpy = useCallback(async (host: string, port: number, name: string) => {
+  const connectSpy = useCallback(async (host: string, port: number, name: string,
+                                       sessionLimitMins?: number) => {
     const Local = (NativeModules as any).VibeLocalSDR;
     if (!Local?.startSpyServer) { Alert.alert('SpyServer', 'Not available on this build.'); return; }
     setConnecting(true);
@@ -369,6 +370,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
         baseUrl: res.wsBaseUrl, instanceName: name || `${host}:${port}`, viewMode,
         serverType: 'ubersdr', isLocal: true, isTcp: true, localPort: res.port,
         tcpHost: host, tcpPort: port, localGen: newLocalSession(),
+        sessionLimitMins,
       });
     } catch (e: any) {
       setConnecting(false);
@@ -617,7 +619,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
             // it runs through the on-device shim, not a WebSocket to a page.
             if (inst.serverType === 'spyserver') {
               const m = /^spyserver:\/\/([^:]+):(\d+)$/.exec(inst.url);
-              if (m) connectSpy(m[1], parseInt(m[2], 10), inst.name);
+              if (m) connectSpy(m[1], parseInt(m[2], 10), inst.name, inst.sessionLimitMins);
               return;
             }
             connect(inst.url, inst.name, undefined, inst.longitude, inst.serverType);

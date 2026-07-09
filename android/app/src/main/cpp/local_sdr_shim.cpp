@@ -265,6 +265,7 @@ struct LocalSdrShim::Impl {
     // stays narrow enough to stream over cellular.
     double spyFftSpan = 0.0;               // 0 = not a SpyServer session
     uint32_t spyIqFormat = 1;              // FORMAT_UINT8 / FORMAT_INT16, per device resolution
+    std::atomic<bool> spyClosed{false};    // server hung up (session limit / tuner taken)
     std::atomic<double> spyFftCenter{0.0};
     int spyDecim = 0;
     uint32_t spyDbRange = 140;
@@ -1566,6 +1567,13 @@ struct LocalSdrShim::Impl {
                     enqueueIqInt16((const int16_t*)data, (int)(bytes / 4), /*blockIfFull=*/true);
             },
             [&](const uint8_t* bins, size_t count) { emitServerFft(bins, (int)count); });
+        // run() only returns when the link dies or we asked it to stop. If we did
+        // not ask, the SERVER hung up: session time limit, or another client took
+        // the tuner. Say which rather than reporting a generic connection loss.
+        if (tcpRunning.load()) {
+            spyClosed.store(true);
+            LOGI("SpyServer closed the connection (session limit, or the tuner was taken)");
+        }
     }
 
     // RTL-TCP read loop: pull u8 I/Q from the socket in ~32 KB chunks and enqueue.
@@ -2105,6 +2113,11 @@ LocalSdrShim::NetStatus LocalSdrShim::getNetStatus() {
     s.tcp = true;
     s.stalls         = p->netStalls.load(std::memory_order_relaxed);
     s.droppedSamples = p->iqDroppedSamples.load(std::memory_order_relaxed);
+    if (p->useSpy()) {
+        s.spy        = true;
+        s.canControl = p->spy->canControl();     // refreshed from every CLIENT_SYNC
+        s.closed     = p->spyClosed.load();
+    }
     double rate = p->sampleRate > 0 ? p->sampleRate : 1.0;
     std::lock_guard<std::mutex> lk(p->iqMtx);
     s.bufferedMs = (uint32_t)(p->iqQueuedSamples * 1000.0 / rate);

@@ -37,6 +37,10 @@ export type RootStackParamList = {
     // RTL-TCP: same on-device shim but fed IQ from an rtl_tcp server over the
     // network (no USB → works on iOS). Reuses the isLocal wiring; isTcp drives the
     // RTL-TCP icon/labels, tcpHost/tcpPort allow reconnect.
+    // Some public receivers cap how long one listener may stay (SpyServer's
+    // maxSessionDuration; other directories expose the same idea). 0/undefined =
+    // unlimited. Drives the on-connect warning and the countdown by the clock.
+    sessionLimitMins?: number;
     isTcp?:          boolean;
     tcpHost?:        string;
     tcpPort?:        number;

@@ -337,6 +337,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             m.putDouble("stalls", o.optLong("stalls", 0).toDouble())
             m.putDouble("droppedSamples", o.optLong("droppedSamples", 0).toDouble())
             m.putDouble("bufferedMs", o.optLong("bufferedMs", 0).toDouble())
+            m.putBoolean("spy", o.optBoolean("spy", false))
+            m.putBoolean("canControl", o.optBoolean("canControl", true))
+            m.putBoolean("closed", o.optBoolean("closed", false))
             promise.resolve(m)
         } catch (e: Throwable) {
             promise.reject("net_status_failed", e.message)

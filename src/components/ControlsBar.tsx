@@ -216,6 +216,10 @@ export interface ControlsBarProps {
   /** Override the frequency string formatting (FM-DX shows 3-dp MHz instead of
    *  the unit-based full-resolution format HF needs). */
   freqFormat?: (hz: number) => string;
+  /** SpyServer: another client owns the tuner — grey the drums, disable tuning. */
+  readOnly?: boolean;
+  /** Time-limited receiver countdown shown beside the clock. */
+  sessionLeft?: { text: string; urgent: boolean } | null;
 }
 
 // ── Signal bar canvas ─────────────────────────────────────────────────────────
@@ -481,7 +485,8 @@ function useDrumSwipeGuard() {
 
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
-  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia }: any) {
+  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
+  readOnly, sessionLeft }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -627,18 +632,29 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
 
       </View>
 
-      {/* Row 3 — drums (single full-width VFO for FM-DX; vfo+zoom otherwise) */}
-      <View ref={mergeRefs(drumRowRef, tourRef('vfoDrum'))} onLayout={guardDrums} style={{ flexDirection: 'row', gap: COL_GAP }}>
+      {/* Row 3 — drums (single full-width VFO for FM-DX; vfo+zoom otherwise).
+          Greyed and inert on a read-only receiver: another client owns the tuner,
+          so the drums would spin and change nothing. */}
+      <View ref={mergeRefs(drumRowRef, tourRef('vfoDrum'))} onLayout={guardDrums}
+            pointerEvents={readOnly ? 'none' : 'auto'}
+            style={{ flexDirection: 'row', gap: COL_GAP, opacity: readOnly ? 0.35 : 1 }}>
         <DrumWheel type="vfo"  height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />
         {!singleDrum && <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />}
       </View>
 
       {/* Row 4 — clock · link quality · rec */}
       <View style={por.clockRow}>
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <Text style={[por.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
             {clock}
           </Text>
+          {/* Time-limited receiver: how long before the server drops us. */}
+          {!!sessionLeft && (
+            <Text style={{ color: sessionLeft.urgent ? '#ff6b6b' : t.clockColor,
+                           fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9 }}>
+              ⏳{sessionLeft.text}
+            </Text>
+          )}
         </View>
         <LinkIndicator bus={bus} />
         <View style={{ flex: 1, alignItems: 'flex-end' }}>

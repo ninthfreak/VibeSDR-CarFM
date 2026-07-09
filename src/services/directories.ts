@@ -194,6 +194,8 @@ async function fetchSpyServers(lat?: number, lon?: number): Promise<SDRInstance[
         serverType: 'spyserver',
         deviceType: r.deviceType ?? undefined,
         full: users >= maxUsers,
+        sessionLimitMins: typeof r.maxSessionDuration === 'number' && r.maxSessionDuration > 0
+          ? r.maxSessionDuration : undefined,
       };
     });
 }

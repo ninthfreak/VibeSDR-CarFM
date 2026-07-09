@@ -73,6 +73,14 @@ public:
         uint64_t stalls     = 0;   // socket delivered nothing for >120ms
         uint64_t droppedSamples = 0;
         uint32_t bufferedMs = 0;   // current standing backlog
+        // SpyServer only. `spy` distinguishes the backend; `canControl` is false
+        // when another client owns the tuner (a read-only server), and `closed`
+        // means the server hung up — session time limit, or it handed the tuner
+        // to someone else. Both must be surfaced, not reported as a generic
+        // "connection lost".
+        bool     spy        = false;
+        bool     canControl = true;
+        bool     closed     = false;
     };
     NetStatus getNetStatus();
 

@@ -280,6 +280,9 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetNetStatus(JNIEnv* env, jobject) {
     j += ",\"stalls\":"         + std::to_string(s.stalls);
     j += ",\"droppedSamples\":" + std::to_string(s.droppedSamples);
     j += ",\"bufferedMs\":"     + std::to_string(s.bufferedMs);
+    j += ",\"spy\":"            + std::string(s.spy ? "true" : "false");
+    j += ",\"canControl\":"     + std::string(s.canControl ? "true" : "false");
+    j += ",\"closed\":"         + std::string(s.closed ? "true" : "false");
     j += "}";
     return env->NewStringUTF(j.c_str());
 }
