@@ -39,7 +39,7 @@ import {
   getDefaultInstance,
   setDefaultInstance,
 } from '../services/defaultInstance';
-import { isDeepLinkActive } from '../linking/deepLinkState';
+import { isDeepLinkActive, whenInitialLinkChecked } from '../linking/deepLinkState';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
          TcpFav, getTcpFavs, saveTcpFavs } from '../services/favourites';
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
@@ -184,6 +184,12 @@ export default function InstancePickerScreen({ navigation }: Props) {
       // A default instance still auto-connects straight through — unless a
       // vibesdr:// deep link is driving this launch (it owns the session and
       // resets us to its target; auto-connecting to the default would stomp it).
+      //
+      // WAIT for the cold-start link probe before deciding. getInitialURL() is
+      // async, so merely SAMPLING the flag here races it: on a QR cold start the
+      // picker could win, auto-connect to the default, and the link would arrive
+      // too late (it opened the default instance instead of the scanned one).
+      await whenInitialLinkChecked();
       if (!cancelled && dEarly && !isDeepLinkActive()) {
         navigation.navigate('SDR', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: null });
       }
