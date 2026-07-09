@@ -569,7 +569,12 @@ struct LocalSdrShim::Impl {
         // Zoomed in, we win: our own FFT of the narrow IQ has far finer bins than
         // the server's ~977 Hz.
         const double shownHz = displaySpan() / zoomFactor.load();
-        if (emit && shownHz > sampleRate * 0.95) emit = false;
+        // ONLY on SpyServer, where displaySpan() is the server's wider FFT span, can
+        // the view exceed what our IQ covers. On USB and rtl_tcp displaySpan() IS
+        // sampleRate, so at zoom 1.0 this compared sampleRate > 0.95*sampleRate and
+        // suppressed every frame — a blank waterfall on the paths that have no
+        // server FFT to fall back on.
+        if (emit && useSpy() && shownHz > sampleRate * 0.95) emit = false;
 
         if (emit && sock && sock->isOpen()) {
             // Emit a FIXED OUT_BINS bins (GPU-safe waterfall texture width — a

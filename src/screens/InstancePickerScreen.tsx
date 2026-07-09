@@ -277,6 +277,11 @@ export default function InstancePickerScreen({ navigation }: Props) {
     if (!Local?.startSpectrum) { Alert.alert('Local Hardware', 'Not available on this build.'); return; }
     setConnecting(true);
     try {
+      // TEMPORARY (VibeServer bring-up): serve the shim's spectrum/audio WS on the
+      // LAN so a remote VibeSDR can connect to this phone. NO AUTHENTICATION YET —
+      // this must be removed, or gated behind the sharing screen + PIN, before any
+      // build reaches a user. It exposes tuning control to the whole network.
+      try { Local.setServeOnLan?.(true); } catch {}
       const res = await Local.startSpectrum({
         // fftSize 8192 over 2.4 MHz ≈ 293 Hz/bin (sharp AM/SSB); fftRate 10 to
         // match UberSDR's line cadence so the waterfall interpolation lines up.
