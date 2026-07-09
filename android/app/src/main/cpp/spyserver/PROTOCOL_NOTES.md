@@ -161,3 +161,37 @@ gives peak = -32.2 dB and floor = -78.3 dB, which are sane dBFS figures for a
 strong local broadcast on an RTL-SDR. Consistent with observation but NOT proven
 -- we never fed the server a calibrated level. Treat the exact constant as
 provisional; the geometry above is certain.
+
+## IQ and FFT centres are INDEPENDENT (verified 2026-07-09)
+
+Set FFT_FREQUENCY = 96.3 MHz and IQ_FREQUENCY = 96.6 MHz with decimation 4, then
+measured both streams:
+
+    FFT frame: peak at bin 668/1024 over a 2.0 MHz span
+               -> +305 kHz from the FFT centre = 96.6047 MHz
+               (the real station is 96.6; error 4.7 kHz ~= 1.5 bins)
+    IQ stream: exactly 150,000 S/s = 2,400,000 / 2^4, centred on 96.6 MHz
+
+So `decimation stage N -> rate / 2^N` is confirmed, and the FFT centre does NOT
+follow the IQ centre. This is what SDR# relies on: it parks the FFT on the device
+centre for a wide waterfall and slides IQ_FREQUENCY around to follow the VFO. Our
+own capture shows it doing exactly that (FFT 96.3 MHz, IQ 96.6 MHz).
+
+CLIENT_SYNC is NOT re-emitted after a settings change -- its iqCenterFrequency /
+deviceCenterFrequency go stale immediately. Do not use it to track state; track
+what you asked for.
+
+## VibeSDR design that follows from this
+
+- Display span = DeviceInfo.maximumBandwidth on SpyServer (2.0 MHz), sampleRate
+  on USB / rtl_tcp. The shim's sendConfig must advertise the DISPLAY span, not
+  the IQ rate, or the client's zoom model is wrong.
+- Waterfall is HYBRID: zoomed out, frames come from the server's FFT stream
+  (~977 Hz bins at 2048 pixels). Zoom in until the view fits inside the IQ
+  window and frames come from the shim's own FFT of the narrow IQ (36 Hz bins at
+  decim 4) -- far finer than the server can offer, and it keeps the zoom drum
+  smooth.
+- IQ follows the VFO via the shim's existing retune() recentre. The FFT centre
+  stays put so the waterfall doesn't jump.
+- Squelch (channelDb) and SNR keep using the IQ FFT: narrow, accurate, and
+  unaffected by the display source.
