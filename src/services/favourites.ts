@@ -2,7 +2,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const KEY = 'vsdr_favourites';
 
-export type Favourite = { name: string; url: string; serverType?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx' };
+// SpyServer favourites carry url = spyserver://host:port (the protocol has no
+// web UI to point a browser at); the picker routes on serverType.
+export type Favourite = { name: string; url: string; serverType?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx' | 'spyserver' };
 
 export async function getFavourites(): Promise<Favourite[]> {
   try {

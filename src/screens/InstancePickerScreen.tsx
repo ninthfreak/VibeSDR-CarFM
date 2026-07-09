@@ -426,6 +426,13 @@ export default function InstancePickerScreen({ navigation }: Props) {
     // owrx) and letting it "detect" would mis-open an FM-DX fav as UberSDR
     // (waterfall) — trust the stored type and route straight to the tuner.
     if (fav.serverType === 'fmdx') { connect(fav.url, fav.name, undefined, null, 'fmdx'); return; }
+    // SpyServer speaks a raw TCP protocol — detectServerType only sniffs HTTP
+    // backends and would mis-open it as UberSDR. Route on the stored type.
+    if (fav.serverType === 'spyserver') {
+      const m = /^spyserver:\/\/([^:]+):(\d+)$/.exec(fav.url);
+      if (m) connectSpy(m[1], parseInt(m[2], 10), fav.name);
+      return;
+    }
     // Re-detect on every connect. A SUCCESSFUL detection is authoritative and
     // self-heals a wrong stored type (e.g. an UberSDR-with-kiwi-emulation that a
     // previous build mis-saved as kiwi). Detection returns null only when the
@@ -605,7 +612,16 @@ export default function InstancePickerScreen({ navigation }: Props) {
             favoured && !isDefault && { borderColor: 'rgba(255,80,80,0.4)' },
             isFull && { opacity: 0.4 },
           ]}
-          onPress={() => connect(inst.url, inst.name, undefined, inst.longitude, inst.serverType)}
+          onPress={() => {
+            // SpyServer isn't a web backend: its "url" is spyserver://host:port and
+            // it runs through the on-device shim, not a WebSocket to a page.
+            if (inst.serverType === 'spyserver') {
+              const m = /^spyserver:\/\/([^:]+):(\d+)$/.exec(inst.url);
+              if (m) connectSpy(m[1], parseInt(m[2], 10), inst.name);
+              return;
+            }
+            connect(inst.url, inst.name, undefined, inst.longitude, inst.serverType);
+          }}
           disabled={connecting || isFull}
         >
           <View style={styles.rowMain}>
