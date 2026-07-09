@@ -67,6 +67,12 @@ enum Setting : uint32_t {
     // The client asks for its WINDOW WIDTH in pixels and the server bins down to
     // exactly that many u8 values per frame. The server's own fft_bin_bits is
     // internal and never appears on the wire.
+    //
+    // Frame geometry, verified against a known 96.6 MHz WFM carrier: the bins
+    // span DeviceInfo::maximumBandwidth (NOT maximumSampleRate), centred on
+    // SETTING_FFT_FREQUENCY, ascending in frequency with bin 0 at
+    // centre - span/2. No fftshift. Reading the span as maximumSampleRate puts
+    // the carrier 47 bins wrong.
     SETTING_FFT_DISPLAY_PIXELS = 205,
 
     // Seen from SDR# but not identified. 206 was sent as 0; 207 as a frequency
@@ -171,5 +177,19 @@ struct ClientSync {
     uint32_t reserved;                 // 10th u32; purpose unobserved
 };
 static_assert(sizeof(ClientSync) == 40, "wire layout");
+
+// FFT bin -> dB. PROVISIONAL: consistent with a captured spectrum (carrier at
+// -32 dB, noise floor at -78 dB) but never checked against a calibrated source.
+constexpr float fftBinToDb(uint8_t raw, uint32_t dbRange, int32_t dbOffset) {
+    return raw * ((float)dbRange / 255.0f) - (float)dbRange + (float)dbOffset;
+}
+
+// Hz of the first FFT bin, and the width of each. Span is maximumBandwidth.
+constexpr double fftBinWidthHz(uint32_t maximumBandwidth, uint32_t displayPixels) {
+    return displayPixels ? (double)maximumBandwidth / displayPixels : 0.0;
+}
+constexpr double fftFirstBinHz(uint32_t fftCenterHz, uint32_t maximumBandwidth) {
+    return (double)fftCenterHz - (double)maximumBandwidth / 2.0;
+}
 
 }  // namespace vibe::spyserver

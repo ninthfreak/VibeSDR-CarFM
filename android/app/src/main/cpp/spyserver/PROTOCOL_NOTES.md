@@ -132,3 +132,32 @@ and it is why Phase 2/3 exist. rtl_tcp cannot do it at any setting.
 
 Our client should default to uint8 or int16 and pick decimation from the demod
 bandwidth, never full rate.
+
+## FFT frame geometry — SOLVED against a known carrier (96.6 MHz WFM)
+
+Averaged 200 FFT frames while a real WFM broadcast sat at 96.6 MHz with
+FFT_FREQUENCY = 96,300,000 and FFT_DISPLAY_PIXELS = 1534.
+
+    bins            = FFT_DISPLAY_PIXELS exactly (1534 u8 values, one per bin)
+    span            = DeviceInfo.maximumBandwidth (2,000,000 Hz)  <-- NOT maximumSampleRate
+    centre          = FFT_FREQUENCY
+    order           = ascending frequency, bin 0 = centre - span/2. No fftshift.
+    bin width       = span / bins = 1304 Hz here
+
+Verification: the peak landed in bin 998.
+    span = 2.0 MHz -> 96.6012 MHz   (1.2 kHz error, well under one 1304 Hz bin)
+    span = 2.4 MHz -> 96.6614 MHz   (61 kHz error, ~47 bins out)
+The bump was 132 bins = 172 kHz wide, matching WFM's ~180 kHz. At 2.4 MHz it
+would read 207 kHz, too wide. Both tests agree: the span is maximumBandwidth.
+
+### dB scaling (probable, not proven)
+
+Values ran 106 (noise floor) to 196 (carrier peak) with FFT_DB_RANGE = 140 and
+FFT_DB_OFFSET = 0. A linear map of u8 0..255 onto [-DB_RANGE + OFFSET, OFFSET]:
+
+    dB = raw * (DB_RANGE / 255) - DB_RANGE + DB_OFFSET
+
+gives peak = -32.2 dB and floor = -78.3 dB, which are sane dBFS figures for a
+strong local broadcast on an RTL-SDR. Consistent with observation but NOT proven
+-- we never fed the server a calibrated level. Treat the exact constant as
+provisional; the geometry above is certain.
