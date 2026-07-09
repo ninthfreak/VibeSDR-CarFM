@@ -141,6 +141,10 @@ RCT_EXPORT_METHOD(getTunerGains:(RCTPromiseResolveBlock)resolve rejecter:(RCTPro
   resolve(out);
 }
 
+// VibeServer serving needs the USB dongle, which iOS does not have. The setter
+// exists so JS need not branch, but there is nothing here to serve.
+RCT_EXPORT_METHOD(setServeOnLan:(BOOL)on) { vibe::LocalSdrShim::setServeOnLan(on); }
+
 // ── USB (Android-only) — reject on iOS ──────────────────────────────────────
 RCT_EXPORT_METHOD(startSpectrum:(NSDictionary *)opts
                        resolver:(RCTPromiseResolveBlock)resolve

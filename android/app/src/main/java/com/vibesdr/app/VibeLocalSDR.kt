@@ -114,6 +114,11 @@ object VibeLocalSDR {
         host: String, port: Int, centerFreq: Double, sampleRate: Double,
         gainTenthDb: Int, fftSize: Int, fftRate: Double, mode: String): Int
 
+    /** VibeServer: serve the shim's spectrum/audio WS on the LAN, not just loopback.
+     *  Call before startSpectrum(). */
+    fun setServeOnLan(on: Boolean) { ensureLoaded(); nativeSetServeOnLan(on) }
+    private external fun nativeSetServeOnLan(on: Boolean)
+
     private external fun nativeGetNetStatus(): String
     private external fun nativeHello(): String
     private external fun nativeProbeRtl(fd: Int, vid: Int, pid: Int): String

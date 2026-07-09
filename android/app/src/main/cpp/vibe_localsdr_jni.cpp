@@ -126,6 +126,13 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStartSpyServer(
     return bound;
 }
 
+// VibeServer: bind the shim's WS server to the LAN. Must be called BEFORE
+// nativeStartSpectrum. Off by default — it exposes a tuning-control channel.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetServeOnLan(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::setServeOnLan(on);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeStopSpectrum(JNIEnv* /*env*/, jobject /*thiz*/) {
     // Tear down on a detached thread so the JS/bridge caller never blocks if the

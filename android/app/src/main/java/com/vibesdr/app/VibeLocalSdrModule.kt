@@ -229,6 +229,10 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(res)
     }
 
+    /** VibeServer: bind the shim's WS server to the LAN before starting a session. */
+    @ReactMethod
+    fun setServeOnLan(on: Boolean) { VibeLocalSDR.setServeOnLan(on) }
+
     @ReactMethod
     fun stopSpectrum(promise: Promise) {
         stopSpectrumInternal()

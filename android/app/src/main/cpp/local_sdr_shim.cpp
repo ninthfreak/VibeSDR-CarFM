@@ -1695,6 +1695,15 @@ struct LocalSdrShim::Impl {
 // Serialises start()/stop() so concurrent app-teardown calls can't double-free.
 static std::mutex g_lifecycle;
 
+// VibeServer: bind the shim's own WS server to the LAN rather than loopback.
+// Deliberately a separate opt-in rather than a start() parameter — this exposes a
+// tuning-control channel, so it must be an explicit act, not a defaulted argument
+// somebody forgets to pass.
+static std::atomic<bool> g_serveOnLan{false};
+void LocalSdrShim::setServeOnLan(bool on) { g_serveOnLan.store(on); }
+bool LocalSdrShim::serveOnLan() { return g_serveOnLan.load(); }
+static const char* bindHost() { return g_serveOnLan.load() ? "0.0.0.0" : "127.0.0.1"; }
+
 LocalSdrShim& LocalSdrShim::instance() { static LocalSdrShim inst; return inst; }
 
 int LocalSdrShim::start(int fd, int vid, int pid,
@@ -1735,7 +1744,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
 
     int chosen = -1;
     for (int port = 48000; port < 48050; port++) {
-        try { impl->listener = net::listen("127.0.0.1", port); chosen = port; break; }
+        try { impl->listener = net::listen(bindHost(), port); chosen = port; break; }
         catch (...) { impl->listener = nullptr; }
     }
     if (!impl->listener) {
