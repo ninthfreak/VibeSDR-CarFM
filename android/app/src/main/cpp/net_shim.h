@@ -82,6 +82,9 @@ private:
 // Bind + listen on host:port. Throws std::runtime_error on failure.
 std::shared_ptr<Listener> listen(const std::string& host, int port);
 // Connect to host:port. Throws std::runtime_error on failure.
-std::shared_ptr<Socket> connect(const std::string& host, int port);
+// `timeoutMs` > 0 bounds the TCP handshake. The default blocking ::connect() waits
+// for the OS timeout (~75 s on an unreachable host), which is far too long to hold
+// a UI — and, worse, to hold a lifecycle lock behind.
+std::shared_ptr<Socket> connect(const std::string& host, int port, int timeoutMs = 0);
 
 } // namespace net

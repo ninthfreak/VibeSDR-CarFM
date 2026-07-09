@@ -274,6 +274,51 @@ struct LocalSdrShim::Impl {
     std::atomic<float> iqFloorDb{-100.0f};
     std::atomic<float> spyDbOffset{0.0f};   // smoothed correction, engine dB - server dB
     bool spyOffsetPrimed = false;
+
+    // The server's FFT frames are painted on their OWN thread. emitServerFft()
+    // builds a frame and sendWs()s it to the WebView — a blocking socket write. Run
+    // that on the IQ reader (which also blocks on jitter-buffer backpressure) and any
+    // hesitation in the WebView stops us draining the TCP socket, the server's queue
+    // overflows, and the audio stutters. The IQ path must never wait on the display.
+    //
+    // Latest-frame-wins: a waterfall row we failed to draw in time is worthless, so
+    // an undrawn frame is replaced rather than queued.
+    std::atomic<bool> spyFftRunning{false};   // NOT tcpRunning: that toggles on a
+                                             // decimation restart, which would kill
+                                             // the painter permanently.
+    std::vector<uint8_t> spyFftPending;
+    bool spyFftHasFrame = false;
+    std::mutex spyFftMtx;
+    std::condition_variable spyFftCv;
+    std::thread spyFftThread;
+
+    void spyFftLoop() {
+        vibeThreadName("vibe-spy-fft");
+        std::vector<uint8_t> frame;
+        while (spyFftRunning.load()) {
+            {
+                std::unique_lock<std::mutex> lk(spyFftMtx);
+                spyFftCv.wait_for(lk, std::chrono::milliseconds(200),
+                                  [this]{ return spyFftHasFrame || !spyFftRunning.load(); });
+                if (!spyFftRunning.load()) break;
+                if (!spyFftHasFrame) continue;
+                frame.swap(spyFftPending);
+                spyFftHasFrame = false;
+            }
+            emitServerFft(frame.data(), (int)frame.size());
+        }
+    }
+
+    // Called on the IQ reader thread: copy and hand off. Never blocks.
+    void queueServerFft(const uint8_t* bins, int n) {
+        if (n <= 0) return;
+        {
+            std::lock_guard<std::mutex> lk(spyFftMtx);
+            spyFftPending.assign(bins, bins + n);
+            spyFftHasFrame = true;
+        }
+        spyFftCv.notify_one();
+    }
     std::atomic<double> spyFftCenter{0.0};
     int spyDecim = 0;
     uint32_t spyDbRange = 140;
@@ -1610,7 +1655,7 @@ struct LocalSdrShim::Impl {
                 else if (fmt == spyserver::FORMAT_INT16)
                     enqueueIqInt16((const int16_t*)data, (int)(bytes / 4), /*blockIfFull=*/true);
             },
-            [&](const uint8_t* bins, size_t count) { emitServerFft(bins, (int)count); });
+            [&](const uint8_t* bins, size_t count) { queueServerFft(bins, (int)count); });
         // run() only returns when the link dies or we asked it to stop. If we did
         // not ask, the SERVER hung up: session time limit, or another client took
         // the tuner. Say which rather than reporting a generic connection loss.
@@ -1907,7 +1952,9 @@ int LocalSdrShim::startSpyServer(const std::string& host, int port,
 
     impl->startDspThread();
     impl->tcpRunning.store(true);                 // shared "network source alive" flag
-    impl->rtlThread = std::thread([impl]{ impl->spyReadLoop(); });
+    impl->rtlThread    = std::thread([impl]{ impl->spyReadLoop(); });
+    impl->spyFftRunning.store(true);
+    impl->spyFftThread = std::thread([impl]{ impl->spyFftLoop(); });
 
     p = impl;
     LOGI("SpyServer started: %s:%d center=%.0f decim=%d iqRate=%.0f fftSpan=%.0f "
@@ -1945,7 +1992,13 @@ void LocalSdrShim::stopLocked() {
     // Stop the IQ source. USB: cancel the async read. RTL-TCP: clear the run flag
     // and close the socket so the blocked recv() returns and the read thread exits.
     if (impl->dev) rtlsdr_cancel_async(impl->dev);
-    if (impl->useSpy()) { impl->tcpRunning.store(false); impl->spy->close(); }
+    if (impl->useSpy()) {
+        impl->tcpRunning.store(false);
+        impl->spyFftRunning.store(false);
+        impl->spyFftCv.notify_all();
+        if (impl->spyFftThread.joinable()) impl->spyFftThread.join();
+        impl->spy->close();
+    }
     if (impl->useTcp()) { impl->tcpRunning.store(false); if (impl->tcpSock) impl->tcpSock->close(); }
     if (impl->rtlThread.joinable()) impl->rtlThread.join();
     // IQ source stopped -> stop the DSP consumer (drains/clears the queue) before

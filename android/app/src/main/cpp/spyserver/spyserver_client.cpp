@@ -66,10 +66,13 @@ bool SpyServerClient::readMessage(std::vector<uint8_t>& buf, size_t& msgLen, int
 
 bool SpyServerClient::connect(const std::string& host, int port,
                               const std::string& clientName, std::string& err) {
-    try { sock_ = net::connect(host, port); }
+    // 6 s: a public server across the internet needs more than a LAN hop, but the
+    // caller holds a lifecycle lock, so an unreachable host must not wedge the app.
+    try { sock_ = net::connect(host, port, /*timeoutMs=*/6000); }
     catch (...) { sock_ = nullptr; }
     if (!sock_) {
-        err = "could not connect to " + host + ":" + std::to_string(port);
+        err = "could not reach " + host + ":" + std::to_string(port) +
+              " — the server may be offline or unreachable from this network";
         return false;
     }
     sock_->setRecvBufferSize(1024 * 1024);   // ride out WiFi stalls, as rtl_tcp does
