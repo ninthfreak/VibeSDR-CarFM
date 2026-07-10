@@ -303,6 +303,57 @@ vibedsp::RxPipeline::Mode rxModeFor(ModeParams::Kind k) {
 
 } // namespace
 
+// ── IMA-ADPCM encoder (VibeServer compressed audio, ~4:1) ───────────────────
+// Standard IMA/DVI tables. Each WS audio frame is self-contained: its 4-byte
+// preamble carries the seed predictor+index, so the client decodes it statelessly
+// (robust to a client that joins mid-stream). State still carries frame-to-frame
+// on the server so quality doesn't reset each frame.
+namespace {
+static const int kAdpcmStep[89] = {
+    7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,
+    88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,
+    544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,
+    2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,
+    10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767};
+static const int kAdpcmIndex[16] = {-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8};
+
+struct AdpcmState { int predictor = 0; int index = 0; };
+
+static inline int adpcmEncodeSample(int sample, AdpcmState& st) {
+    int step = kAdpcmStep[st.index];
+    int diff = sample - st.predictor;
+    int code = 0;
+    if (diff < 0) { code = 8; diff = -diff; }
+    int vpdiff = step >> 3;
+    if (diff >= step) { code |= 4; diff -= step; vpdiff += step; }
+    step >>= 1;
+    if (diff >= step) { code |= 2; diff -= step; vpdiff += step; }
+    step >>= 1;
+    if (diff >= step) { code |= 1;             vpdiff += step; }
+    if (code & 8) st.predictor -= vpdiff; else st.predictor += vpdiff;
+    if (st.predictor > 32767) st.predictor = 32767;
+    else if (st.predictor < -32768) st.predictor = -32768;
+    st.index += kAdpcmIndex[code & 15];
+    if (st.index < 0) st.index = 0; else if (st.index > 88) st.index = 88;
+    return code & 15;
+}
+
+// Append one channel block: [pred int16 LE][index u8][0 pad] + ceil(n/2) nibble
+// bytes (low nibble = first sample). Seeds the preamble from st's CURRENT value,
+// then advances st across the block.
+static void adpcmEncodeBlock(std::vector<uint8_t>& out, const int16_t* pcm, int n, AdpcmState& st) {
+    out.push_back((uint8_t)(st.predictor & 0xff));
+    out.push_back((uint8_t)((st.predictor >> 8) & 0xff));
+    out.push_back((uint8_t)st.index);
+    out.push_back(0);
+    for (int i = 0; i < n; i += 2) {
+        int lo = adpcmEncodeSample(pcm[i], st);
+        int hi = (i + 1 < n) ? adpcmEncodeSample(pcm[i + 1], st) : 0;
+        out.push_back((uint8_t)(lo | (hi << 4)));
+    }
+}
+} // namespace
+
 // ── VibeServer server-side state (declared here so Impl members can see it) ──
 // LAN bind flag + PIN secret + compatibility limits + audio-codec toggle. The
 // public setter methods that write these live after the Impl struct.
@@ -663,6 +714,10 @@ struct LocalSdrShim::Impl {
     int rdsPi = -1;
     int rdsEcc = 0;                          // RDS Extended Country Code (0 = none)
     std::atomic<bool> stereoDetected{false};
+    // VibeServer ADPCM encoder state. M = (L+R)/2 stays continuous across
+    // mono<->stereo transitions (mono also feeds it (L+R)/2), so the mid channel
+    // never resets; S = (L-R)/2 is only sent when a stereo pilot is locked.
+    AdpcmState adpcmM, adpcmS;
     std::atomic<float> spectrumSnr{0.0f};   // peak−floor (dB), centre vs edges
 
     // Audio-extension decoder (RTTY etc.) on /ws/dxcluster — fed the demod audio.
@@ -979,6 +1034,48 @@ struct LocalSdrShim::Impl {
     }
     static void stereoCb(void* ctx, bool locked) { ((Impl*)ctx)->stereoDetected.store(locked); }
 
+    // Frame + send one block of interleaved int16 PCM to the audio client. On the
+    // VibeServer path with compression on it emits IMA-ADPCM (~4:1): mono as one
+    // block (format 1), stereo as M/S two-block (format 2, dropping S when the
+    // pilot is unlocked). Otherwise raw int16 exactly as UberSDR (format 0) — the
+    // loopback local-listen path always takes this branch.
+    void sendAudioPcm(const std::shared_ptr<net::Socket>& sock, const int16_t* pcm, int count, int ch) {
+        if (count <= 0) return;
+        bool compress = g_serveOnLan.load() && g_vsCompressAudio.load();
+        if (!compress) {
+            // header: [0]=channels, [1]=0 (raw), [2..5]=sampleRate u32 LE, int16 PCM
+            std::vector<uint8_t> frame(6 + (size_t)count * ch * 2);
+            frame[0] = (uint8_t)ch; frame[1] = 0;
+            uint32_t sr = (uint32_t)AUDIO_SR; std::memcpy(&frame[2], &sr, 4);
+            std::memcpy(frame.data() + 6, pcm, (size_t)count * ch * 2);
+            sendWs(sock, 0x2, frame.data(), frame.size());
+            return;
+        }
+        bool stereo = (ch == 2 && stereoDetected.load());
+        // header: [0]=out channels, [1]=format (1 mono / 2 M/S), [2..5]=rate,
+        // [6..7]=u16 sample count per channel.
+        std::vector<uint8_t> frame; frame.reserve(8 + count);
+        frame.push_back(stereo ? 2 : 1);
+        frame.push_back(stereo ? 2 : 1);
+        uint32_t sr = (uint32_t)AUDIO_SR;
+        frame.push_back((uint8_t)(sr & 0xff)); frame.push_back((uint8_t)((sr >> 8) & 0xff));
+        frame.push_back((uint8_t)((sr >> 16) & 0xff)); frame.push_back((uint8_t)((sr >> 24) & 0xff));
+        frame.push_back((uint8_t)(count & 0xff)); frame.push_back((uint8_t)((count >> 8) & 0xff));
+        std::vector<int16_t> mid((size_t)count), side;
+        if (ch == 2) {
+            for (int i = 0; i < count; i++) mid[i] = (int16_t)((pcm[2*i] + pcm[2*i+1]) >> 1);
+        } else {
+            std::memcpy(mid.data(), pcm, (size_t)count * 2);
+        }
+        adpcmEncodeBlock(frame, mid.data(), count, adpcmM);
+        if (stereo) {
+            side.resize((size_t)count);
+            for (int i = 0; i < count; i++) side[i] = (int16_t)((pcm[2*i] - pcm[2*i+1]) >> 1);
+            adpcmEncodeBlock(frame, side.data(), count, adpcmS);
+        }
+        sendWs(sock, 0x2, frame.data(), frame.size());
+    }
+
     void onAudio(stereo_t* data, int count, int ch) {
         if (count <= 0) return;
         // Feed the audio-extension decoder (mono int16) — runs even with no audio
@@ -1024,28 +1121,21 @@ struct LocalSdrShim::Impl {
             }
             if (nrOut.empty()) return;          // still filling the first STFT frame
             int n2 = (int)nrOut.size();
-            std::vector<uint8_t> frame(6 + (size_t)n2 * 2);
-            frame[0] = 1; frame[1] = 0;
-            uint32_t sr0 = (uint32_t)AUDIO_SR; std::memcpy(&frame[2], &sr0, 4);
-            int16_t* pcm0 = (int16_t*)(frame.data() + 6);
+            std::vector<int16_t> pcm0((size_t)n2);
             for (int i = 0; i < n2; i++) {
                 int s = (int)lround(nrOut[i] * 32767.0f);
                 pcm0[i] = (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
             }
-            sendWs(sock, 0x2, frame.data(), frame.size());
+            sendAudioPcm(sock, pcm0.data(), n2, 1);
             return;
         }
 
-        // header: [0]=channels, [1]=0, [2..5]=sampleRate u32 LE, then int16 PCM
-        std::vector<uint8_t> frame(6 + (size_t)count * ch * 2);
-        frame[0] = (uint8_t)ch; frame[1] = 0;
-        uint32_t sr = (uint32_t)AUDIO_SR; std::memcpy(&frame[2], &sr, 4);
-        int16_t* pcm = (int16_t*)(frame.data() + 6);
         const float g = audioGain.load();
         auto cvt = [g](float v) -> int16_t {
             int s = (int)lround(v * g * 32767.0f);
             return (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
         };
+        std::vector<int16_t> pcm((size_t)count * ch);
         if (ch == 2) {
             // Stereo lock comes from the engine's pilot-PLL callback (stereoCb),
             // so we just pack the decoded L/R here.
@@ -1053,7 +1143,7 @@ struct LocalSdrShim::Impl {
         } else {
             for (int i = 0; i < count; i++) pcm[i] = cvt(data[i].l);
         }
-        sendWs(sock, 0x2, frame.data(), frame.size());
+        sendAudioPcm(sock, pcm.data(), count, ch);
     }
 
     // ── Audio-extension decoder (RTTY) ─────────────────────────────────────
