@@ -233,6 +233,106 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun setServeOnLan(on: Boolean) { VibeLocalSDR.setServeOnLan(on) }
 
+    // ── VibeServer (share this dongle with server-side DSP; compressed) ───────
+    // Runs the SAME shim as a local session but LAN-bound and silent on this
+    // phone: no local audio/spectrum client, so the single client slot goes to
+    // the one remote VibeSDR. Config (pin/limits/compress) is applied before the
+    // shim starts. Resolves { ip, port, name } for the sharing screen + mDNS.
+    @ReactMethod
+    fun startVibeServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
+        val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return }
+        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) }
+            ?: run { promise.reject("no_device", "No RTL-SDR found"); return }
+        if (!mgr.hasPermission(dev)) {
+            openAndProbeThen(mgr, dev, promise) { startVibeServerNow(mgr, dev, opts, promise) }
+            return
+        }
+        startVibeServerNow(mgr, dev, opts, promise)
+    }
+
+    private fun startVibeServerNow(
+        mgr: UsbManager, dev: UsbDevice,
+        opts: com.facebook.react.bridge.ReadableMap, promise: Promise
+    ) {
+        stopSpectrumInternal()
+        stopServerInternal()
+        val conn = mgr.openDevice(dev)
+            ?: run { promise.reject("open_failed", "openDevice returned null"); return }
+        val fd = conn.fileDescriptor
+        if (fd < 0) { conn.close(); promise.reject("bad_fd", "Invalid file descriptor"); return }
+        sessionConn = conn
+
+        val name       = if (opts.hasKey("name")) opts.getString("name") ?: "VibeSDR" else "VibeSDR"
+        val centerFreq = if (opts.hasKey("centerFreq")) opts.getDouble("centerFreq") else 100_000_000.0
+        val sampleRate = if (opts.hasKey("sampleRate")) opts.getDouble("sampleRate") else 2_400_000.0
+        val gain       = if (opts.hasKey("gainTenthDb")) opts.getInt("gainTenthDb") else -1
+        val fftSize    = if (opts.hasKey("fftSize")) opts.getInt("fftSize") else 1024
+        val fftRate    = if (opts.hasKey("fftRate")) opts.getDouble("fftRate") else 20.0
+        val mode       = if (opts.hasKey("mode")) opts.getString("mode") ?: "nfm" else "nfm"
+        // VibeServer config: PIN ("" = open), limits (0 = none), audio compression.
+        val pin        = if (opts.hasKey("pin")) opts.getString("pin") ?: "" else ""
+        val maxBw      = if (opts.hasKey("maxBandwidthHz")) opts.getDouble("maxBandwidthHz") else 0.0
+        val maxFps     = if (opts.hasKey("maxFftRate")) opts.getDouble("maxFftRate") else 0.0
+        val compress   = if (opts.hasKey("compressAudio")) opts.getBoolean("compressAudio") else true
+
+        VibeLocalSDR.setVibeServerAuth(pin)
+        VibeLocalSDR.setVibeServerLimits(maxBw, maxFps)
+        VibeLocalSDR.setVibeServerCompressAudio(compress)
+        VibeLocalSDR.setServeOnLan(true)
+
+        val port = VibeLocalSDR.startSpectrum(
+            fd, dev.vendorId, dev.productId, centerFreq, sampleRate, gain, fftSize, fftRate, mode)
+        if (port <= 0) {
+            VibeLocalSDR.setServeOnLan(false)
+            conn.close(); sessionConn = null
+            promise.reject("start_failed", "native startVibeServer failed (see logcat)")
+            return
+        }
+        val ip = getLocalIp() ?: "0.0.0.0"
+        RtlTcpServerService.start(reactContext, name, ip, port, "vibeserver")
+        Log.i(TAG, "VibeServer started $ip:$port as \"$name\" (pin=${pin.isNotEmpty()})")
+        val res = Arguments.createMap()
+        res.putString("ip", ip)
+        res.putInt("port", port)
+        res.putString("name", name)
+        promise.resolve(res)
+    }
+
+    @ReactMethod
+    fun stopVibeServer(promise: Promise) {
+        RtlTcpServerService.stop(reactContext)
+        stopSpectrumInternal()
+        VibeLocalSDR.setServeOnLan(false)
+        VibeLocalSDR.setVibeServerAuth("")   // clear the secret from process memory
+        promise.resolve(null)
+    }
+
+    /** Live toggle: switch compressed audio on/off without restarting the server. */
+    @ReactMethod
+    fun setVibeServerCompressAudio(on: Boolean) { VibeLocalSDR.setVibeServerCompressAudio(on) }
+
+    @ReactMethod
+    fun getVibeServerStatus(promise: Promise) {
+        try {
+            val o = org.json.JSONObject(VibeLocalSDR.getVibeServerStatus())
+            val m = Arguments.createMap()
+            m.putBoolean("running", o.optBoolean("running", false))
+            m.putBoolean("client", o.optBoolean("client", false))
+            m.putString("clientAddr", o.optString("clientAddr", ""))
+            m.putDouble("specBytesPerSec", o.optLong("specBytesPerSec", 0).toDouble())
+            m.putDouble("audioBytesPerSec", o.optLong("audioBytesPerSec", 0).toDouble())
+            m.putBoolean("compressed", o.optBoolean("compressed", true))
+            m.putBoolean("pinEnabled", o.optBoolean("pinEnabled", false))
+            m.putDouble("fftRate", o.optLong("fftRate", 0).toDouble())
+            m.putDouble("bandwidthHz", o.optLong("bandwidthHz", 0).toDouble())
+            m.putInt("port", o.optInt("port", 0))
+            m.putString("ip", if (o.optBoolean("running", false)) (getLocalIp() ?: "") else "")
+            promise.resolve(m)
+        } catch (e: Throwable) {
+            promise.reject("status_failed", e.message)
+        }
+    }
+
     @ReactMethod
     fun stopSpectrum(promise: Promise) {
         stopSpectrumInternal()

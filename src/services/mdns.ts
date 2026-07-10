@@ -12,7 +12,12 @@ import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
 // to rtl_tcp on the UberSDR host) publishes host, port, and an optional `name`
 // TXT record for a friendly label.
 
-export type DiscoveredServer = { name: string; host: string; port: number };
+export type ServerProto = 'rtltcp' | 'vibeserver';
+export type DiscoveredServer = {
+  name: string; host: string; port: number;
+  proto: ServerProto;   // which protocol the advertised server speaks
+  pin: boolean;         // VibeServer only: whether it requires a PIN
+};
 
 const nativeModule: any =
   Platform.OS === 'ios'
@@ -43,8 +48,10 @@ export function startMdnsDiscovery(
     const port = Number(e?.port);
     if (!host || !Number.isFinite(port) || port <= 0) return;
     const name = String(e?.name ?? '').trim() || `${host}:${port}`;
+    const proto: ServerProto = e?.proto === 'vibeserver' ? 'vibeserver' : 'rtltcp';
+    const pin = !!e?.pin;
     const k = key(host, port);
-    byKey.set(k, { name, host, port });
+    byKey.set(k, { name, host, port, proto, pin });
     if (e?.name) nameToKey.set(String(e.name), k);
     push();
   });
@@ -73,9 +80,17 @@ export function startMdnsDiscovery(
 // Uses the Android VibeMDNS module (NsdManager). No-op on iOS (the server
 // feature is Android-only). Call again with a new name to re-advertise.
 export async function advertiseRtlTcp(name: string, port: number): Promise<void> {
+  return advertiseServer(name, port, 'rtltcp', false);
+}
+
+// Advertise a server of either protocol. `pinRequired` publishes a `pin` TXT so
+// clients know a VibeServer needs auth before they connect. Android-only.
+export async function advertiseServer(
+  name: string, port: number, proto: ServerProto, pinRequired: boolean,
+): Promise<void> {
   const m: any = (NativeModules as any).VibeMDNS;
   if (Platform.OS !== 'android' || !m?.advertise) return;
-  try { await m.advertise(name, port); } catch {}
+  try { await m.advertise(name, port, proto, pinRequired); } catch {}
 }
 
 export function stopAdvertiseRtlTcp(): void {
