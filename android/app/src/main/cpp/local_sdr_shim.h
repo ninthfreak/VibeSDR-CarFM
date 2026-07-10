@@ -35,6 +35,20 @@ public:
     static void setServeOnLan(bool on);
     static bool serveOnLan();
 
+    // VibeServer PIN auth. When a non-empty secret is set, incoming LAN clients
+    // must pass an HMAC-SHA256(secret, nonce) challenge-response before the
+    // spectrum/audio WebSockets upgrade — the secret itself never crosses the
+    // wire. Empty secret (default) = open access (no PIN). Set BEFORE start().
+    static void setVibeServerAuth(const std::string& secret);
+    // Server-side compatibility limits, for low-end hosts / slow networks. A
+    // maxBandwidthHz <= 0 means "no cap"; maxFftRate <= 0 means "server default".
+    // The client still interpolates the waterfall, so a throttled fps stays
+    // smooth. Set BEFORE start() (honoured on the serving path only).
+    static void setVibeServerLimits(double maxBandwidthHz, double maxFftRate);
+    // Compressed (IMA-ADPCM) audio on the /ws/audio path (default on). A client
+    // that hits a decode issue can ask the server to fall back to raw int16 PCM.
+    static void setVibeServerCompressAudio(bool on);
+
     // SpyServer-compatible backend. Mirrors startTcp(): network IQ into the same
     // DSP pipeline, so demod/decoders/NR/audio all work unchanged — and, like
     // startTcp, it has no USB dependency and therefore works on iOS too.

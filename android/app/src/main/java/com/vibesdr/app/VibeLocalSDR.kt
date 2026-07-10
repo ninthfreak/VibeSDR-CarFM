@@ -118,6 +118,13 @@ object VibeLocalSDR {
      *  Call before startSpectrum(). */
     fun setServeOnLan(on: Boolean) { ensureLoaded(); nativeSetServeOnLan(on) }
     private external fun nativeSetServeOnLan(on: Boolean)
+    // VibeServer PIN (empty = open access) + compatibility limits + audio codec.
+    fun setVibeServerAuth(secret: String) { ensureLoaded(); nativeSetVibeServerAuth(secret) }
+    fun setVibeServerLimits(maxBwHz: Double, maxFftRate: Double) { ensureLoaded(); nativeSetVibeServerLimits(maxBwHz, maxFftRate) }
+    fun setVibeServerCompressAudio(on: Boolean) { ensureLoaded(); nativeSetVibeServerCompressAudio(on) }
+    private external fun nativeSetVibeServerAuth(secret: String)
+    private external fun nativeSetVibeServerLimits(maxBwHz: Double, maxFftRate: Double)
+    private external fun nativeSetVibeServerCompressAudio(on: Boolean)
 
     private external fun nativeGetNetStatus(): String
     private external fun nativeHello(): String

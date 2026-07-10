@@ -133,6 +133,26 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetServeOnLan(JNIEnv*, jobject, jboolean
     vibe::LocalSdrShim::setServeOnLan(on);
 }
 
+// VibeServer PIN. Empty secret = open access (no PIN). Call BEFORE start().
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerAuth(JNIEnv* env, jobject, jstring secret) {
+    const char* s = secret ? env->GetStringUTFChars(secret, nullptr) : nullptr;
+    vibe::LocalSdrShim::setVibeServerAuth(s ? s : "");
+    if (secret && s) env->ReleaseStringUTFChars(secret, s);
+}
+
+// VibeServer compatibility limits. <=0 = no cap / server default. BEFORE start().
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLimits(JNIEnv*, jobject,
+                                                            jdouble maxBwHz, jdouble maxFftRate) {
+    vibe::LocalSdrShim::setVibeServerLimits(maxBwHz, maxFftRate);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerCompressAudio(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::setVibeServerCompressAudio(on);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeStopSpectrum(JNIEnv* /*env*/, jobject /*thiz*/) {
     // Tear down on a detached thread so the JS/bridge caller never blocks if the
