@@ -356,6 +356,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const LocalHw = (NativeModules as any).VibeLocalSDR;
   const [hwOpen,        setHwOpen]        = useState(false);
   const [hwGains,       setHwGains]       = useState<number[]>([]);
+  const [hwServerRates, setHwServerRates] = useState<number[] | null>(null);  // VibeServer-offered rates
   const [hwGain,        setHwGain]        = useState(0);     // tenths of dB
   const [hwAutoGain,    setHwAutoGain]    = useState(true);
   const [hwPpm,         setHwPpm]         = useState(0);
@@ -1849,6 +1850,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // VibeServer: the serving device's tuner gains → drive the gain slider (a
       // remote client can't query the hardware natively).
       onHwGains: (gains: number[]) => { if (!destroyed.current && gains.length) setHwGains(gains); },
+      onHwRates: (rates: number[]) => { if (!destroyed.current && rates.length) setHwServerRates(rates); },
       onServerLost: () => {
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio
         // engine, and surface the wait-and-reconnect prompt (no auto-reconnect —
@@ -4049,6 +4051,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           sampleRate={hwSampleRate}
           onSampleRate={onHwSampleRate}
           isTcp={!!route.params.isTcp}
+          serverRates={hwServerRates}
           biasTee={hwBiasTee}
           onBiasTee={onHwBiasTee}
           agc={hwAgc}

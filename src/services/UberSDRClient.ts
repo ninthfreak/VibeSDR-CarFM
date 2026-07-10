@@ -58,6 +58,9 @@ export interface SDRCallbacks {
   /** VibeServer: the serving device's supported tuner gains (tenths of dB), so a
    *  remote client can populate its gain slider (it can't query the HW natively). */
   onHwGains?:   (gains: number[]) => void;
+  /** VibeServer: the sample rates (spectrum spans) THIS server offers, so the
+   *  client's rate picker aligns with the server rather than a generic list. */
+  onHwRates?:   (rates: number[]) => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -775,8 +778,9 @@ export class UberSDRClient {
       return;
     }
     if (msg.type === 'hwinfo') {
-      // VibeServer sent the serving device's tuner gains → populate the slider.
+      // VibeServer sent the serving device's tuner gains + offered sample rates.
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);
+      if (Array.isArray(msg.rates)) this.callbacks.onHwRates?.(msg.rates as number[]);
       return;
     }
     if (msg.type === 'config') {

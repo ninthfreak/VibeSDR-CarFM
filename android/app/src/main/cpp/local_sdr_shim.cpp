@@ -1573,7 +1573,10 @@ struct LocalSdrShim::Impl {
         std::vector<int> gains = LocalSdrShim::instance().getTunerGains();
         std::string j = "{\"type\":\"hwinfo\",\"gains\":[";
         for (size_t i = 0; i < gains.size(); i++) { if (i) j += ','; j += std::to_string(gains[i]); }
-        j += "]}";
+        // Capture sample rates this server offers (= the spectrum spans the client
+        // may pick). These are the rates built into THIS server, so the client's
+        // picker aligns with the server rather than a generic RTL-TCP list.
+        j += "],\"rates\":[3200000,2400000,1800000,1200000,960000]}";
         sendText(sock, j);
     }
 
