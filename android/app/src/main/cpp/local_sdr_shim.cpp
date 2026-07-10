@@ -1404,6 +1404,16 @@ struct LocalSdrShim::Impl {
             // VFO leaves the FFT span entirely (handled in the zoom/pan path).
             if (!useSpy()) viewCenter.store(freq);
             tuneHw(freq);
+            // USB/rtl_tcp path: the capture just recentred, but tuneHw only pushes
+            // a fresh config to the spectrum client on the SpyServer path. A LOCAL
+            // client self-tracks the centre natively; a REMOTE VibeServer client
+            // cannot, so without this its waterfall keeps the stale centre and stops
+            // following once the VFO leaves the captured band. Tell it authoritatively.
+            if (!useSpy()) {
+                std::shared_ptr<net::Socket> sc;
+                { std::lock_guard<std::mutex> lk(clientMtx); sc = specClient; }
+                if (sc) sendConfig(sc);
+            }
         }
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
         // New frequency -> drop the cached RDS so a different station doesn't keep

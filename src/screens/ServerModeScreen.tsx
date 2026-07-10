@@ -71,7 +71,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         if (p === 'rtltcp' || p === 'vibeserver') setProto(p);
         if (a != null) setAdvertise(a !== '0');
         if (pm === 'random' || pm === 'custom' || pm === 'off') setPinMode(pm);
-        if (pm === 'custom' && sp) setPin(sp);
+        // Restore the saved PIN for BOTH modes so re-opening the server keeps the
+        // same code — it only changes when the user taps refresh (↻) or edits it.
+        if (sp) setPin(sp);
+        else AsyncStorage.setItem(K.pin, pin);   // first run: persist the generated default
         if (r) setRate(Number(r) || 2_400_000);
         if (fp === 'full' || fp === 'half' || fp === 'quarter') setFps(fp);
         if (cp != null) setCompress(cp !== '0');
@@ -140,7 +143,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     if (runningRef.current) setVibeServerCompressAudio(on);   // live toggle
   }, []);
 
-  const regenPin = useCallback(() => setPin(randomPin(Date.now())), []);
+  const regenPin = useCallback(() => {
+    const p = randomPin(Date.now());
+    setPin(p);
+    AsyncStorage.setItem(K.pin, p);   // persist immediately so it survives re-open
+  }, []);
 
   if (Platform.OS !== 'android' || !vibeServerSupported) {
     return (
