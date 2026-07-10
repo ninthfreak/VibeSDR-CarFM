@@ -67,6 +67,7 @@ import LocalAudioPlayer from '../components/LocalAudioPlayer';
 import LocalHardwarePanel from '../components/LocalHardwarePanel';
 import FreqModal       from '../components/FreqModal';
 import ModeSelector    from '../components/ModeSelector';
+import AudioSheet      from '../components/AudioSheet';
 import StepPicker      from '../components/StepPicker';
 import ChatDrawer,
   { type ChatMessage } from '../components/ChatDrawer';
@@ -925,6 +926,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     }).catch(() => {});
   }, []);
   const [modeSelOpen,   setModeSelOpen]   = useState(false);
+  const [audioSheetOpen, setAudioSheetOpen] = useState(false);
 
   // ── Signal / SNR ──────────────────────────────────────────────────────────
 
@@ -1053,6 +1055,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [isRecording, setIsRecording] = useState(false);
   const [recSeconds,  setRecSeconds]  = useState(0);
   const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // iOS: the native share sheet (UIActivityViewController) must NOT present while
+  // the AudioSheet Modal is up — it presents OVER the modal and RN loses track,
+  // wedging all touch/render on dismiss. So on stop we stash the path, close the
+  // sheet, and fire the share from the sheet's onDismiss (nothing modal up).
+  const pendingRecShare = useRef<string | null>(null);
 
   const toggleRecording = useCallback(() => {
     if (!isRecording) {
@@ -1074,18 +1081,21 @@ export default function SDRScreen({ route, navigation }: Props) {
           // Half-height native share sheet; the file also stays in app storage
           // (iOS Documents / Android filesDir) and is reachable via the
           // Recordings browser. Android needs an Expo content URI to share.
-          if (!path) return;
+          if (!path) { setAudioSheetOpen(false); return; }
           if (Platform.OS === 'android') {
             try {
               const cu = await FileSystem.getContentUriAsync(
                 path.startsWith('file://') ? path : 'file://' + path);
               VibePowerModule?.shareRecording(cu);
             } catch {}
+            setAudioSheetOpen(false);
           } else {
-            VibePowerModule?.shareRecording(path);
+            // Defer the share to AudioSheet's onDismiss (see pendingRecShare).
+            pendingRecShare.current = path;
+            setAudioSheetOpen(false);
           }
         })
-        .catch(() => {});
+        .catch(() => setAudioSheetOpen(false));
     }
   }, [isRecording, status.frequency, status.mode]);
 
@@ -3297,6 +3307,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onMenuOpen  = useCallback(() => setMenuOpen(true), []);
   const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
   const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
+  const onAudioOpen = useCallback(() => setAudioSheetOpen(true), []);
 
   // First-run guided tour (dismissable). Spotlights the drum, step rate, the
   // disabled back-gesture, and the menu — opening it to show the route back to
@@ -3698,7 +3709,6 @@ export default function SDRScreen({ route, navigation }: Props) {
           mode={status.mode}
           step={step}
           connected={connected}
-          onShare={onShareStation}
           bottomInset={0}
           instanceHost={instanceName ?? baseUrl}
           meterBus={meterBus.current}
@@ -3713,6 +3723,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onStep={onStepOpen}
           onMenu={onMenuOpen}
           onChat={openChat}
+          onAudio={onAudioOpen}
           onFreqTap={onFreqOpen}
           onModeTap={onModeOpen}
           freqUnit={freqUnit}
@@ -3921,8 +3932,50 @@ export default function SDRScreen({ route, navigation }: Props) {
         activeDecoder={route.params.serverType === 'owrx'
           ? (activeDecoder === 'sstv' ? 'sstv' : activeDecoder === 'wefax' ? 'fax' : undefined)
           : undefined}
+        filterLow={status.bandwidthLow}
+        filterHigh={status.bandwidthHigh}
+        bwEdgeMax={client.current ? filterEdgeMax(client.current.caps, status.mode) : 6000}
+        onFilterBoth={onFilterBoth}
         onSelect={onMode}
         onClose={() => setModeSelOpen(false)}
+      />
+
+      {/* Audio sheet — NR/NB/squelch/notch/REC + server NR */}
+      <AudioSheet
+        visible={audioSheetOpen}
+        onClose={() => setAudioSheetOpen(false)}
+        onDismiss={() => {
+          const p = pendingRecShare.current;
+          if (p) { pendingRecShare.current = null; VibePowerModule?.shareRecording(p); }
+        }}
+        serverType={route.params.serverType ?? 'ubersdr'}
+        isLocal={isLocal}
+        nr={nrMode !== 'off'}
+        onNr={onNrMode}
+        nb={nb}
+        onNb={onNb}
+        recording={isRecording}
+        recSeconds={recSeconds}
+        onRec={toggleRecording}
+        onRecordings={() => { setAudioSheetOpen(false); setRecordingsOpen(true); }}
+        snrSquelch={snrSquelch}          onSnrSquelch={onSnrSquelch}
+        localSquelch={hwSquelch}         onLocalSquelch={isLocal ? onLocalSquelch : undefined}
+        localNR={hwNrLevel}              onLocalNR={isLocal ? onLocalNR : undefined}
+        kiwiSquelch={kiwiSquelch}        onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
+        fmSquelch={fmSquelch}            onFmSquelch={onFmSquelch}
+        isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
+        notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
+        onOwrxSquelch={(db) => client.current?.setSquelch?.(db)}
+        onOwrxNr={(th) => client.current?.setNr?.(th)}
+        owrxDspDefaults={owrxDspDefaults}
+        serverDspEnabled={serverDspEnabled}
+        serverDspFilter={serverDspFilter}
+        serverDspParams={serverDspParams}
+        dspFilters={dspFilters}
+        dspError={dspError}
+        onServerDsp={onServerDsp}
+        onServerDspFilter={onServerDspFilter}
+        onServerDspParam={onServerDspParam}
       />
 
       {/* v4 local hardware: RTL-SDR controls submenu */}
@@ -4013,6 +4066,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onUnit={setFreqUnit}
         minHz={client.current?.caps.freqRange[0]}
         maxHz={client.current?.caps.freqRange[1]}
+        onShare={isLocal ? undefined : onShareStation}
       />
 
       {/* Chat drawer */}

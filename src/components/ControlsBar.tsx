@@ -161,6 +161,13 @@ const SHARE_LINES = Skia.Path.MakeFromSVGString('M13.3 5L6.7 9M13.3 15L6.7 11')!
 const SHARE_C1    = Skia.Path.MakeFromSVGString('M15 4m-1.8 0a1.8 1.8 0 1 0 3.6 0a1.8 1.8 0 1 0 -3.6 0')!;
 const SHARE_C2    = Skia.Path.MakeFromSVGString('M15 16m-1.8 0a1.8 1.8 0 1 0 3.6 0a1.8 1.8 0 1 0 -3.6 0')!;
 const SHARE_C3    = Skia.Path.MakeFromSVGString('M5 10m-1.8 0a1.8 1.8 0 1 0 3.6 0a1.8 1.8 0 1 0 -3.6 0')!;
+// Speaker: cone body (fill) + two concentric sound-wave arcs (authored 20×20)
+const SPEAKER_BODY = Skia.Path.MakeFromSVGString('M3 8H6L10 4V16L6 12H3Z')!;
+const SPEAKER_W1   = Skia.Path.MakeFromSVGString('M12.5 8a3 3 0 0 1 0 4')!;
+const SPEAKER_W2   = Skia.Path.MakeFromSVGString('M14.5 6a6 6 0 0 1 0 8')!;
+// Record disc: outline ring + solid inner dot (authored 20×20)
+const RECORD_RING  = Skia.Path.MakeFromSVGString('M10 10m-7 0a7 7 0 1 0 14 0a7 7 0 1 0 -14 0')!;
+const RECORD_DOT   = Skia.Path.MakeFromSVGString('M10 10m-4 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0')!;
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -187,6 +194,10 @@ export interface ControlsBarProps {
   onStep:        (s: number)  => void;
   onMenu:        () => void;
   onChat?:       () => void;
+  /** Opens the AUDIO sheet (NR/NB/squelch/notch/REC + server NR). */
+  onAudio?:      () => void;
+  /** FM-DX: the AUDIO sheet is REC-only, so show a record glyph (not a speaker). */
+  audioAsRecord?: boolean;
   /** Deep-link share (instance URL + freq/mode params). Falls back to text. */
   onShare?:      () => void;
   onFreqTap?:    () => void;
@@ -462,6 +473,33 @@ function ChatIcon({ size, color }: { size: number; color: string }) {
   );
 }
 
+function AudioIcon({ size, color }: { size: number; color: string }) {
+  const k = size / 20;
+  return (
+    <Canvas pointerEvents="none" style={{ width: size, height: size }}>
+      <Group transform={[{ scale: k }]}>
+        {/* Speaker cone (filled) + two sound-wave arcs */}
+        <Path path={SPEAKER_BODY} color={color} style="fill" />
+        <Path path={SPEAKER_W1}   color={color} strokeWidth={1.6 / k} style="stroke" strokeCap="round" />
+        <Path path={SPEAKER_W2}   color={color} strokeWidth={1.6 / k} style="stroke" strokeCap="round" />
+      </Group>
+    </Canvas>
+  );
+}
+
+// FM-DX audio button = REC panel; a filled record disc reads clearer than a speaker.
+function RecordIcon({ size, color }: { size: number; color: string }) {
+  const k = size / 20;
+  return (
+    <Canvas pointerEvents="none" style={{ width: size, height: size }}>
+      <Group transform={[{ scale: k }]}>
+        <Path path={RECORD_RING} color={color} strokeWidth={1.6 / k} style="stroke" />
+        <Path path={RECORD_DOT}  color="#e23b3b" style="fill" />
+      </Group>
+    </Canvas>
+  );
+}
+
 // ── PORTRAIT ──────────────────────────────────────────────────────────────────
 
 // Android: exclude the drum band from the system back-edge swipe so a horizontal
@@ -484,7 +522,7 @@ function useDrumSwipeGuard() {
 }
 
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
-  signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
+  signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
   readOnly, sessionLeft }: any) {
 
@@ -594,20 +632,31 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
           </Text>
         </TouchableOpacity>
 
-        {/* MENU */}
+        {/* AUDIO — opens the audio sheet; breathes red↔white while recording
+            (REC lives inside the sheet, so this is the tap target to stop it). */}
         <View style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder, borderWidth: 1 }]}>
           <Animated.View pointerEvents="none"
             style={[StyleSheet.absoluteFill, { borderRadius: 4, borderWidth: 1, borderColor: 'rgba(255,60,60,1)', opacity: recPulse }]} />
           <TouchableOpacity
-            ref={tourRef('menuBtn')}
             style={{ flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' }}
-            onPress={onMenu} activeOpacity={0.75} hitSlop={10}
+            onPress={onAudio} activeOpacity={0.75} hitSlop={10}
           >
-            {menuAsBack
-              ? <Text style={{ color: t.btnText, fontFamily: t.font, fontSize: s.f(t.btnSize) }}>‹ Back</Text>
-              : <Hamburger color={t.btnText} lineW={HBURG_W} />}
+            {audioAsRecord
+              ? <RecordIcon size={ICON_SZ} color={t.btnText} />
+              : <AudioIcon size={ICON_SZ} color={t.btnText} />}
           </TouchableOpacity>
         </View>
+
+        {/* MENU */}
+        <TouchableOpacity
+          ref={tourRef('menuBtn')}
+          style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder, borderWidth: 1 }]}
+          onPress={onMenu} activeOpacity={0.75} hitSlop={10}
+        >
+          {menuAsBack
+            ? <Text style={{ color: t.btnText, fontFamily: t.font, fontSize: s.f(t.btnSize) }}>‹ Back</Text>
+            : <Hamburger color={t.btnText} lineW={HBURG_W} />}
+        </TouchableOpacity>
 
         {/* CHAT */}
         <View style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder, borderWidth: 1, opacity: chatOff ? 0.4 : 1 }]}>
@@ -621,14 +670,6 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
             <ChatIcon size={ICON_SZ} color={t.btnText} />
           </TouchableOpacity>
         </View>
-
-        {/* SHARE */}
-        <TouchableOpacity
-          style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder, opacity: csDisabled ? 0.4 : 1 }]}
-          onPress={csDisabled ? undefined : onShare} disabled={csDisabled} activeOpacity={0.75} hitSlop={10}
-        >
-          <ShareIcon size={ICON_SZ} color={t.btnText} />
-        </TouchableOpacity>
 
       </View>
 
@@ -685,8 +726,8 @@ const por = StyleSheet.create({
 // ── LANDSCAPE ─────────────────────────────────────────────────────────────────
 
 function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
-  signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onShare,
-  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia }: any) {
+  signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
+  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, chatOff, singleDrum, menuAsBack, vfoNoInertia }: any) {
 
   const { theme: t } = useTheme();
   const s = useUiScale();
@@ -747,7 +788,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
         </TouchableOpacity>
         <TouchableOpacity
           ref={tourRef('menuBtn')}
-          style={[lnd.lsBtn, { borderColor: isRecording ? 'rgba(220,40,40,0.90)' : t.btnBorder }]}
+          style={[lnd.lsBtn, { borderColor: t.btnBorder }]}
           onPress={onMenu} activeOpacity={0.75} hitSlop={10}
         >
           {menuAsBack
@@ -774,17 +815,21 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
         </View>
       </View>
 
-      {/* CHAT + SHARE column */}
+      {/* AUDIO + CHAT column */}
       <View style={{ width: BTN_W, gap: GAP }}>
+        <TouchableOpacity
+          style={[lnd.lsBtn, { borderColor: isRecording ? 'rgba(220,40,40,0.90)' : t.btnBorder }]}
+          onPress={onAudio} activeOpacity={0.75} hitSlop={10}
+        >
+          {audioAsRecord
+            ? <RecordIcon size={ICON_SZ} color={t.btnText} />
+            : <AudioIcon size={ICON_SZ} color={t.btnText} />}
+        </TouchableOpacity>
         <TouchableOpacity
           style={[lnd.lsBtn, { borderColor: chatUnread ? 'rgba(40,140,255,0.85)' : t.btnBorder, opacity: chatOff ? 0.4 : 1 }]}
           onPress={chatOff ? undefined : onChat} disabled={chatOff} activeOpacity={0.75} hitSlop={10}
         >
           <ChatIcon size={ICON_SZ} color={t.btnText} />
-        </TouchableOpacity>
-        <TouchableOpacity style={[lnd.lsBtn, { borderColor: t.btnBorder, opacity: csDisabled ? 0.4 : 1 }]}
-          onPress={csDisabled ? undefined : onShare} disabled={csDisabled} activeOpacity={0.75} hitSlop={10}>
-          <ShareIcon size={ICON_SZ} color={t.btnText} />
         </TouchableOpacity>
       </View>
 
@@ -816,7 +861,7 @@ function ControlsBar({
   signalLevel, peakLevel, snrDb = 40, signalActive, meterBus, signalMode = 'snr',
   fmStereo = false,
   onVfoDelta, onBwDelta, onMode, onStep,
-  onMenu, onChat, onFreqTap, onModeTap,
+  onMenu, onChat, onAudio, audioAsRecord = false, onFreqTap, onModeTap,
   instanceHost = 'ubersdr',
   isRecording = false, recSeconds = 0, chatUnread = false,
   freqUnit = 'khz',
@@ -867,7 +912,7 @@ function ControlsBar({
     connected, signalActive, bus: meterBus, meterMode: signalMode,
     signal: signalLevel, peak: peakLevel,
     stepLabel, onFreqTap, onModeTap,
-    onStep: cycleStep, onChat, onMenu, onShare: handleShare,
+    onStep: cycleStep, onChat, onMenu, onAudio, audioAsRecord, onShare: handleShare,
     onVfoDelta, onBwDelta,
     clock, isRecording, recTime, chatUnread,
     csDisabled: chatShareDisabled,
