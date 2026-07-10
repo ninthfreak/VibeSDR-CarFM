@@ -55,6 +55,8 @@ export class UberSDRAdapter implements SDRBackend {
 
   /** Local hardware: thread the live device sample rate for panSpan()'s Fs window. */
   setLocalSampleRate(hz: number) { this.client.localSampleRate = hz; }
+  // VibeServer PIN: the pre-computed "&vs_nonce=&vs_auth=" WS URL suffix.
+  setAuthSuffix(s: string) { this.client.authSuffix = s; }
 
   /** Receiver location from /status.json (same shape as OWRX: receiver.gps.lon)
    *  → ITU region, for custom/default UberSDR hosts not carrying a directory lon. */

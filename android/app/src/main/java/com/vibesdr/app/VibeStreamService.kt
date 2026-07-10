@@ -97,6 +97,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         const val ACTION_START_FMDX = "com.vibesdr.app.START_FMDX"
         const val EXTRA_PORT = "port"
         const val EXTRA_TUNE = "tune"
+        const val EXTRA_HOST = "host"
+        const val EXTRA_AUTH = "auth"
         const val EXTRA_RATE = "rate"
         // External-audio pause behaviour: "release" (OWRX — pause disconnects AND
         // drops the media card; reconnect resets the server profile so play isn't
@@ -115,6 +117,15 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
         var reactContext: ReactApplicationContext? = null
         @Volatile var instance: VibeStreamService? = null
+
+        // IMA-ADPCM tables (VibeServer compressed-audio decode).
+        private val ADPCM_STEP = intArrayOf(
+            7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,
+            88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,
+            544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,
+            2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,
+            10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767)
+        private val ADPCM_INDEX = intArrayOf(-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8)
     }
 
     private var mediaSession: MediaSessionCompat? = null
@@ -282,7 +293,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 startAudioEngine(base, freq, mode, uuid, pw)
             }
             ACTION_START_EXTERNAL -> startExternalAudio(intent.getIntExtra(EXTRA_RATE, 48000), intent.getStringExtra(EXTRA_PAUSE_MODE) ?: "release")
-            ACTION_START_LOCAL -> startLocalAudio(intent.getIntExtra(EXTRA_PORT, 0), intent.getStringExtra(EXTRA_TUNE) ?: "")
+            ACTION_START_LOCAL -> startLocalAudio(
+                intent.getStringExtra(EXTRA_HOST) ?: "127.0.0.1",
+                intent.getIntExtra(EXTRA_PORT, 0),
+                intent.getStringExtra(EXTRA_TUNE) ?: "",
+                intent.getStringExtra(EXTRA_AUTH) ?: "")
             ACTION_START_FMDX -> startFmdxAudio(intent.getStringExtra(EXTRA_BASE_URL) ?: return START_STICKY)
             ACTION_PLAY -> setMutedNative(false)
             ACTION_PAUSE -> setMutedNative(true)
@@ -654,9 +669,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     @Volatile private var localAudioWs: WebSocket? = null
     @Volatile private var lastLocalTune: String? = null
 
-    fun startLocalAudio(port: Int, initialTune: String) {
-        Log.i(TAG, "startLocalAudio port=$port")
+    fun startLocalAudio(host: String, port: Int, initialTune: String, authSuffix: String) {
+        Log.i(TAG, "startLocalAudio $host:$port")
         if (port <= 0) return
+        val h = if (host.isNotEmpty()) host else "127.0.0.1"
         startExternalAudio(48_000, "resume")   // external PCM engine; local pause = mute
         lastLocalTune = if (initialTune.isNotEmpty()) initialTune else null
         val client = httpClient ?: OkHttpClient.Builder()
@@ -664,7 +680,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             .build().also { httpClient = it }
         localAudioWs?.cancel()
         localAudioWs = client.newWebSocket(
-            Request.Builder().url("ws://127.0.0.1:$port/ws/audio").build(),
+            Request.Builder().url("ws://$h:$port/ws/audio$authSuffix").build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     lastLocalTune?.let { webSocket.send(it) }
@@ -673,21 +689,76 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     if (!externalAudio || muted) return
                     val b = bytes.toByteArray()
                     if (b.size <= 6) return
-                    // Frame: [0]=channels, [2..5]=rate (LE u32), [6..]=int16 LE PCM.
-                    val channels = b[0].toInt() and 0xFF
+                    // Frame: [0]=channels, [1]=format (0 raw / 1 ADPCM mono / 2 M/S),
+                    // [2..5]=rate LE, then payload.
                     val rate = ByteBuffer.wrap(b, 2, 4).order(ByteOrder.LITTLE_ENDIAN).int
-                    val n = (b.size - 6) / 2
-                    if (n <= 0 || rate <= 0) return
-                    val shorts = ShortArray(n)
-                    ByteBuffer.wrap(b, 6, n * 2).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts)
+                    if (rate <= 0) return
+                    val format = b[1].toInt() and 0xFF
+                    val out: Triple<Int, Int, ShortArray>? = when (format) {
+                        1, 2 -> {
+                            val count = (b[6].toInt() and 0xFF) or ((b[7].toInt() and 0xFF) shl 8)
+                            if (count <= 0) null else {
+                                val nb = (count + 1) / 2
+                                val mid = adpcmDecodeBlock(b, 8, count)
+                                if (format == 2 && b.size >= 8 + 4 + nb + 4 + nb) {
+                                    val side = adpcmDecodeBlock(b, 8 + 4 + nb, count)
+                                    val s = ShortArray(count * 2)
+                                    for (i in 0 until count) {
+                                        val m = mid[i].toInt(); val sd = side[i].toInt()
+                                        s[i * 2]     = (m + sd).coerceIn(-32768, 32767).toShort()
+                                        s[i * 2 + 1] = (m - sd).coerceIn(-32768, 32767).toShort()
+                                    }
+                                    Triple(rate, 2, s)
+                                } else Triple(rate, 1, mid)
+                            }
+                        }
+                        else -> {
+                            val channels = b[0].toInt() and 0xFF
+                            val n = (b.size - 6) / 2
+                            if (n <= 0) null else {
+                                val shorts = ShortArray(n)
+                                ByteBuffer.wrap(b, 6, n * 2).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts)
+                                Triple(rate, if (channels == 2) 2 else 1, shorts)
+                            }
+                        }
+                    } ?: return
                     lastPacketAt = SystemClock.elapsedRealtime()
                     packetCount++
-                    extQueue.offer(Triple(rate, if (channels == 2) 2 else 1, shorts))  // drop when full
+                    extQueue.offer(out)  // drop when full
                 }
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     Log.w(TAG, "local audio WS failure: ${t.message}")
                 }
             })
+    }
+
+    // IMA-ADPCM ('kiwi' flavour) — decode one self-seeded VibeServer block:
+    // [predictor int16 LE][index u8][pad] + ceil(count/2) nibble bytes (low nibble
+    // first). Matches the shim's adpcmEncodeBlock() and imaAdpcm.ts decoder.
+    private fun adpcmDecodeBlock(b: ByteArray, off: Int, count: Int): ShortArray {
+        var predictor = ((b[off].toInt() and 0xFF) or ((b[off + 1].toInt() and 0xFF) shl 8)).toShort().toInt()
+        var index = (b[off + 2].toInt() and 0xFF).coerceIn(0, 88)
+        val out = ShortArray(count)
+        var bi = off + 4
+        var s = 0
+        while (s < count) {
+            val byte = b[bi].toInt() and 0xFF; bi++
+            var half = 0
+            while (half < 2 && s < count) {
+                val nib = if (half == 0) byte and 0x0F else (byte ushr 4) and 0x0F
+                val step = ADPCM_STEP[index]
+                var diff = step shr 3
+                if (nib and 1 != 0) diff += step shr 2
+                if (nib and 2 != 0) diff += step shr 1
+                if (nib and 4 != 0) diff += step
+                if (nib and 8 != 0) diff = -diff
+                predictor = (predictor + diff).coerceIn(-32768, 32767)
+                index = (index + ADPCM_INDEX[nib]).coerceIn(0, 88)
+                out[s++] = predictor.toShort()
+                half++
+            }
+        }
+        return out
     }
 
     /** Forward a tune/mode/bandwidth change to the shim over the audio WS. Also

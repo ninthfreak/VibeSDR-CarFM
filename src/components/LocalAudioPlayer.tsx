@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { NativeModules, Platform } from 'react-native';
+import { decodeVibeAdpcmFrame } from '../services/imaAdpcm';
 
 // VibeSDR V4 — local-hardware / RTL-TCP audio.
 //
@@ -13,7 +14,7 @@ import { NativeModules, Platform } from 'react-native';
 //    on the WS directly.
 
 const Vibe = NativeModules.VibePowerModule as {
-  startLocalAudio?:   (port: number, initialTune: string) => void;
+  startLocalAudio?:   (host: string, port: number, initialTune: string, authSuffix: string) => void;
   sendLocalTune?:     (json: string) => void;
   stopLocalAudio?:    () => void;
   startExternalAudio?: (rate: number, pauseMode?: string) => void;
@@ -43,6 +44,10 @@ export interface LocalAudioPlayerProps {
   bandwidthLow:  number;
   bandwidthHigh: number;
   instanceName?: string;
+  // VibeServer (remote shim): a LAN host + PIN auth query suffix. Defaults keep
+  // the local-hardware path on loopback with no auth.
+  host?:         string;
+  authSuffix?:   string;
 }
 
 function tuneJson(frequency: number, mode: string, bandwidthLow: number, bandwidthHigh: number) {
@@ -50,7 +55,8 @@ function tuneJson(frequency: number, mode: string, bandwidthLow: number, bandwid
 }
 
 export default function LocalAudioPlayer(
-  { port, frequency, mode, bandwidthLow, bandwidthHigh, instanceName }: LocalAudioPlayerProps,
+  { port, frequency, mode, bandwidthLow, bandwidthHigh, instanceName,
+    host = '127.0.0.1', authSuffix = '' }: LocalAudioPlayerProps,
 ) {
   const started = useRef(false);
   const ws      = useRef<WebSocket | null>(null);
@@ -66,14 +72,15 @@ export default function LocalAudioPlayer(
     Vibe?.setInstanceName?.(instanceName ?? 'Local Hardware');
 
     if (USE_NATIVE_PUMP) {
-      Vibe?.startLocalAudio?.(port, tuneJson(f, m, bl, bh));
+      Vibe?.startLocalAudio?.(host, port, tuneJson(f, m, bl, bh), authSuffix);
       started.current = true;
       return () => { if (started.current) { Vibe?.stopLocalAudio?.(); started.current = false; } };
     }
 
-    // iOS: read /ws/audio in JS, push PCM through the external-PCM engine.
+    // iOS: read /ws/audio in JS, push PCM through the external-PCM engine. For a
+    // VibeServer the URL points at a LAN host and carries the PIN auth suffix.
     let closed = false;
-    const sock = new WebSocket(`ws://127.0.0.1:${port}/ws/audio`);
+    const sock = new WebSocket(`ws://${host}:${port}/ws/audio${authSuffix}`);
     sock.binaryType = 'arraybuffer';
     ws.current = sock;
     started.current = true;
@@ -83,11 +90,20 @@ export default function LocalAudioPlayer(
       const buf = e.data as ArrayBuffer;
       if (buf.byteLength <= 6) return;
       const dv = new DataView(buf);
-      const channels = dv.getUint8(0);
-      const rate     = dv.getUint32(2, true);
-      const pcm      = new Uint8Array(buf, 6);
+      const format = dv.getUint8(1);
+      let rate: number, channels: number, pcmBytes: Uint8Array;
+      if (format === 1 || format === 2) {
+        // VibeServer compressed audio (IMA-ADPCM). Decode to int16 PCM bytes.
+        const d = decodeVibeAdpcmFrame(buf);
+        rate = d.rate; channels = d.channels;
+        pcmBytes = new Uint8Array(d.pcm.buffer, d.pcm.byteOffset, d.pcm.byteLength);
+      } else {
+        rate = dv.getUint32(2, true);
+        channels = dv.getUint8(0);
+        pcmBytes = new Uint8Array(buf, 6);
+      }
       if (!extStarted.current) { Vibe?.startExternalAudio?.(rate, 'resume'); extStarted.current = true; }
-      Vibe?.pushExternalPcm?.(bytesToBase64(pcm), rate, channels === 2 ? 2 : 1);
+      Vibe?.pushExternalPcm?.(bytesToBase64(pcmBytes), rate, channels === 2 ? 2 : 1);
     };
     return () => {
       closed = true;

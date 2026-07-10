@@ -51,6 +51,7 @@ import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import { APP_VERSION } from '../constants/version';
 import { DIRECTORIES, fetchDirectory, type DirectoryId } from '../services/directories';
 import { startMdnsDiscovery, type DiscoveredServer } from '../services/mdns';
+import { resolveVibeAuth } from '../services/vibeAuth';
 import { rtlTcpServerSupported } from '../services/rtlTcpServer';
 
 // Per-backend logo for the directory cards + per-instance type icon (receiverbook
@@ -308,6 +309,43 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       Alert.alert('Local Hardware', e?.message ?? 'Could not start local SDR. Is an RTL-SDR plugged in via USB OTG?');
     }
   }, [navigation, viewMode]);
+
+  // Connect to a remote VibeServer (a shim shared over the LAN). Same client
+  // wiring as Local Hardware (spectrum via /ws/user-spectrum, audio via /ws/audio)
+  // but pointed at a LAN host, with the PIN resolved to an auth suffix. No local
+  // shim is started — the radio lives on the serving phone.
+  const connectVibeServer = useCallback(async (host: string, port: number, name: string, pin: string) => {
+    setConnecting(true);
+    const baseUrl = `http://${host}:${port}`;
+    let authSuffix = '';
+    try {
+      authSuffix = await resolveVibeAuth(baseUrl, pin);
+    } catch {
+      setConnecting(false);
+      Alert.alert('VibeServer', `Could not reach ${host}:${port}. Is it on the same network?`);
+      return;
+    }
+    setConnecting(false);
+    navigation.navigate('SDR', {
+      baseUrl, instanceName: name, viewMode,
+      serverType: 'ubersdr', isLocal: true, localPort: port,
+      localHost: host, authSuffix,
+      localGen: newLocalSession(),
+    });
+  }, [navigation, viewMode]);
+
+  // Tap a discovered/typed VibeServer: prompt for the PIN first if it needs one.
+  const openVibeServer = useCallback((host: string, port: number, name: string, needsPin: boolean) => {
+    if (needsPin && Platform.OS === 'ios' && (Alert as any).prompt) {
+      (Alert as any).prompt(
+        'VibeServer PIN', `Enter the PIN for ${name}`,
+        [{ text: 'Cancel', style: 'cancel' },
+         { text: 'Connect', onPress: (pin?: string) => connectVibeServer(host, port, name, pin ?? '') }],
+        'plain-text', '', 'number-pad');
+    } else {
+      connectVibeServer(host, port, name, '');
+    }
+  }, [connectVibeServer]);
 
   // Route straight into Local Hardware when the app was launched/resumed by
   // plugging in an RTL-SDR (USB_DEVICE_ATTACHED). Returns true if it claimed the
@@ -1087,14 +1125,18 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     {discoveredNew.map((s) => (
                       <TouchableOpacity key={`disc-${s.host}:${s.port}`}
                         style={[styles.row, { borderColor: C.amber }]}
-                        onPress={() => connectTcp(s.host, s.port, s.name)}
+                        onPress={() => s.proto === 'vibeserver'
+                          ? openVibeServer(s.host, s.port, s.name, s.pin)
+                          : connectTcp(s.host, s.port, s.name)}
                       >
                         <Image source={require('../../assets/rtltcp.png')}
                           style={{ width: 26, height: 26, tintColor: C.amber, marginRight: 8 }} resizeMode="contain" />
                         <View style={styles.rowMain}>
                           <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>{s.name}</Text>
                           <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
-                            rtl_tcp · {s.host}:{s.port} · on your network
+                            {s.proto === 'vibeserver'
+                              ? `VibeServer · ${s.host}:${s.port}${s.pin ? ' · 🔒' : ''}`
+                              : `rtl_tcp · ${s.host}:${s.port} · on your network`}
                           </Text>
                         </View>
                         <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}

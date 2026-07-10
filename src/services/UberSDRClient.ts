@@ -128,6 +128,9 @@ export class UberSDRClient {
   // movable Fs pan window in panSpan(). Default = the 2.4 MS/s RTL-SDR rate.
   isLocal = false;
   localSampleRate = 2_400_000;
+  // VibeServer PIN: a pre-computed "&vs_nonce=&vs_auth=" suffix appended to the
+  // spectrum WS URL so a PIN-protected server accepts the upgrade. Empty otherwise.
+  authSuffix = '';
 
   private view = { centerHz: 0, binBandwidth: 0 };
   private pendingView: { frequency: number; binBandwidth: number } | null = null;
@@ -456,7 +459,7 @@ export class UberSDRClient {
   private _openSpectrumWs() {
     if (this.destroyed) return;
 
-    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._pwSuffix()}`);
+    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._pwSuffix()}${this.authSuffix}`);
     const ws  = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     this.spectrumWs = ws;

@@ -37,6 +37,11 @@ export type RootStackParamList = {
     // Audio comes from its /ws/audio (external-PCM engine), not the UberSDR /ws.
     isLocal?:        boolean;
     localPort?:      number;
+    // VibeServer (remote shim): the LAN host serving /ws/audio + /ws/user-spectrum,
+    // and the PIN auth query suffix ("&vs_nonce=&vs_auth="). Absent for a local
+    // (loopback) session, which stays on 127.0.0.1 with no auth.
+    localHost?:      string;
+    authSuffix?:     string;
     // RTL-TCP: same on-device shim but fed IQ from an rtl_tcp server over the
     // network (no USB → works on iOS). Reuses the isLocal wiring; isTcp drives the
     // RTL-TCP icon/labels, tcpHost/tcpPort allow reconnect.

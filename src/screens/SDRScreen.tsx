@@ -2049,6 +2049,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     c.setFollowMode(vfoLockedRef.current);
     // Local hardware: thread the live device sample rate for panSpan()'s window.
     if (route.params.isLocal) (c as { setLocalSampleRate?: (hz: number) => void }).setLocalSampleRate?.(hwSampleRate);
+    // VibeServer PIN: append the auth suffix to the spectrum WS.
+    if (route.params.authSuffix) (c as { setAuthSuffix?: (s: string) => void }).setAuthSuffix?.(route.params.authSuffix);
     // QoL: restore the last frequency/mode used on THIS instance before
     // connecting (the hardcoded default landed on the 20m FT8 squeal every
     // launch). Falls back to the default tune on first visit / bad data.
@@ -4146,6 +4148,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           bandwidthLow={status.bandwidthLow}
           bandwidthHigh={status.bandwidthHigh}
           instanceName={instanceName}
+          host={route.params.localHost}
+          authSuffix={route.params.authSuffix}
         />
       ) : null}
     </View>

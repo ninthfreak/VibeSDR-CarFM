@@ -108,12 +108,14 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     // /ws/audio natively (background-safe), so JS no longer pushes PCM. JS just
     // starts/stops it and forwards tune changes over the same WS.
     @ReactMethod
-    fun startLocalAudio(port: Double, initialTune: String) {
+    fun startLocalAudio(host: String, port: Double, initialTune: String, authSuffix: String) {
         VibeStreamService.reactContext = reactContext
         val intent = Intent(reactContext, VibeStreamService::class.java).apply {
             action = VibeStreamService.ACTION_START_LOCAL
+            putExtra(VibeStreamService.EXTRA_HOST, host)
             putExtra(VibeStreamService.EXTRA_PORT, port.toInt())
             putExtra(VibeStreamService.EXTRA_TUNE, initialTune)
+            putExtra(VibeStreamService.EXTRA_AUTH, authSuffix)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) reactContext.startForegroundService(intent)
         else reactContext.startService(intent)
