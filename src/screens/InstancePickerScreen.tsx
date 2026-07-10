@@ -329,7 +329,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         'How would you like to use this dongle?',
         [
           { text: 'Listen on this device', onPress: () => { connectLocal(modeArg); } },
-          { text: 'Share over network', onPress: () => navigation.navigate('RtlTcpServer', {}) },
+          { text: 'Share over network', onPress: () => navigation.navigate('ServerMode', {}) },
           { text: 'Cancel', style: 'cancel' },
         ],
         { cancelable: true },
@@ -1025,10 +1025,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   {rtlTcpServerSupported && (
                     <TouchableOpacity
                       style={[styles.row, { borderColor: C.goldDim, borderStyle: 'dashed' }]}
-                      onPress={() => navigation.navigate('RtlTcpServer', {})}
+                      onPress={() => navigation.navigate('ServerMode', {})}
                     >
                       <View style={styles.rowMain}>
-                        <Text style={{ fontFamily: F, fontSize: fs(15), color: C.gold }} numberOfLines={1}>⇆ Share over network (RTL-TCP server)</Text>
+                        <Text style={{ fontFamily: F, fontSize: fs(15), color: C.gold }} numberOfLines={1}>⇆ Share over network</Text>
                         <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
                           serve this dongle to other devices on your Wi-Fi
                         </Text>

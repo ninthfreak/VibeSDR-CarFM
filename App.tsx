@@ -12,6 +12,7 @@ LogBox.ignoreAllLogs();
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import SDRScreen            from './src/screens/SDRScreen';
 import RtlTcpServerScreen   from './src/screens/RtlTcpServerScreen';
+import ServerModeScreen     from './src/screens/ServerModeScreen';
 import TunerScreen          from './src/screens/TunerScreen';
 import CrashBoundary        from './src/components/CrashBoundary';
 import { installCrashGuard } from './src/services/crashGuard';
@@ -57,8 +58,13 @@ export type RootStackParamList = {
     initialMode?:    SDRMode;
     initialZoom?:    number;
   };
+  // Server mode (Android): pick a sharing protocol (VibeServer / RTL-TCP) for
+  // this device's USB dongle, with shared PIN + auto-discovery options.
+  ServerMode: { name?: string } | undefined;
   // RTL-TCP server (Android): share this device's USB dongle over the network.
-  RtlTcpServer: { name?: string } | undefined;
+  // `advertise` (default true) lets the Server-mode picker honour the shared
+  // auto-discovery toggle.
+  RtlTcpServer: { name?: string; advertise?: boolean } | undefined;
   // FM-DX Webserver (v7): single shared FM tuner, server-side demod + RDS, MP3
   // audio. Distinct tuner UI (no waterfall) — see TunerScreen.
   Tuner: {
@@ -215,6 +221,7 @@ export default function App() {
           >
             <Stack.Screen name="InstancePicker" component={InstancePickerScreen} options={{ headerShown: false }} />
             <Stack.Screen name="SDR"            component={SDRScreen}            options={{ headerShown: false, gestureEnabled: false }} />
+            <Stack.Screen name="ServerMode"     component={ServerModeScreen}     options={{ headerShown: false }} />
             <Stack.Screen name="RtlTcpServer"   component={RtlTcpServerScreen}   options={{ headerShown: false }} />
             <Stack.Screen name="Tuner"          component={TunerScreen}          options={{ headerShown: false }} />
           </Stack.Navigator>

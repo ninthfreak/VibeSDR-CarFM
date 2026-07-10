@@ -28,6 +28,10 @@ type Props = NativeStackScreenProps<RootStackParamList, 'RtlTcpServer'>;
 // This is what a set-and-forget node needs (phone + dongle at an antenna base).
 export default function RtlTcpServerScreen({ navigation, route }: Props) {
   const { colors: C, font: F } = themeFor();
+  // The Server-mode picker owns the shared "auto-discovery" toggle; honour it
+  // here (default on for a direct entry / legacy callers).
+  const doAdvertise = route.params?.advertise !== false;
+  const adv = useCallback((n: string, p: number) => { if (doAdvertise) advertiseRtlTcp(n, p); }, [doAdvertise]);
   const [name, setName]       = useState(route.params?.name ?? 'VibeSDR RTL-SDR');
   const [info, setInfo]       = useState<ServerInfo | null>(null);
   const [status, setStatus]   = useState<ServerStatus | null>(null);
@@ -66,7 +70,7 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
         setStatus(existing);
         lastDropRef.current = existing.droppedBytes ?? 0;
         setStarting(false);
-        advertiseRtlTcp(adoptedName, existing.port);   // idempotent; IP may have changed
+        adv(adoptedName, existing.port);   // idempotent; IP may have changed
         return;
       }
 
@@ -83,7 +87,7 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
         if (cancelled) return;
         setInfo(res);
         setStarting(false);
-        advertiseRtlTcp(res.name, res.port);
+        adv(res.name, res.port);
       } catch (e: any) {
         if (cancelled) return;
         setStarting(false);
@@ -132,7 +136,7 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
     const n = name.trim() || 'VibeSDR RTL-SDR';
     setName(n);
     saveServerName(n);
-    if (info) advertiseRtlTcp(n, info.port);
+    if (info) adv(n, info.port);
   }, [name, info]);
 
   const stopAndBack = useCallback(() => {
