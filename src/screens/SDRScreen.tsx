@@ -483,21 +483,44 @@ export default function SDRScreen({ route, navigation }: Props) {
     // NB: squelch / nrLevel / notch are intentionally NOT saved (session-scoped).
   }, [isLocal, localHwKey, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo]);
 
+  // VibeServer (remote shim): hardware controls ride the WS to the serving device
+  // instead of the (non-existent) local dongle. localHost set = remote session.
+  const isRemoteShim = isLocal && !!route.params.localHost;
+  const hwClient = useCallback(() => (isRemoteShim
+    ? (client.current as {
+        setHwGain?: (t: number, a: boolean) => void; setHwBiasT?: (on: boolean) => void;
+        setHwAgc?: (on: boolean) => void; setHwPpm?: (n: number) => void;
+      } | null)
+    : null), [isRemoteShim]);
+
   const onHwAuto = useCallback((auto: boolean) => {
     setHwAutoGain(auto);
-    LocalHw?.setGain?.(auto ? -1 : hwGain);
-  }, [LocalHw, hwGain]);
+    const rc = hwClient();
+    if (rc) rc.setHwGain?.(hwGain, auto); else LocalHw?.setGain?.(auto ? -1 : hwGain);
+  }, [LocalHw, hwGain, hwClient]);
   const onHwGain = useCallback((tenthDb: number) => {
-    setHwAutoGain(false); setHwGain(tenthDb); LocalHw?.setGain?.(tenthDb);
-  }, [LocalHw]);
+    setHwAutoGain(false); setHwGain(tenthDb);
+    const rc = hwClient();
+    if (rc) rc.setHwGain?.(tenthDb, false); else LocalHw?.setGain?.(tenthDb);
+  }, [LocalHw, hwClient]);
   const onHwPpm = useCallback((ppm: number) => {
-    const v = Math.max(-200, Math.min(200, ppm)); setHwPpm(v); LocalHw?.setPpm?.(v);
-  }, [LocalHw]);
+    const v = Math.max(-200, Math.min(200, ppm)); setHwPpm(v);
+    const rc = hwClient();
+    if (rc) rc.setHwPpm?.(v); else LocalHw?.setPpm?.(v);
+  }, [LocalHw, hwClient]);
   const onHwSampleRate = useCallback((rate: number) => {
-    setHwSampleRate(rate); LocalHw?.setSampleRate?.(rate);
+    setHwSampleRate(rate); LocalHw?.setSampleRate?.(rate);   // capture rate is server-fixed for VibeServer
   }, [LocalHw]);
-  const onHwBiasTee = useCallback((on: boolean) => { setHwBiasTee(on); LocalHw?.setBiasTee?.(on); }, [LocalHw]);
-  const onHwAgc = useCallback((on: boolean) => { setHwAgc(on); LocalHw?.setAgc?.(on); }, [LocalHw]);
+  const onHwBiasTee = useCallback((on: boolean) => {
+    setHwBiasTee(on);
+    const rc = hwClient();
+    if (rc) rc.setHwBiasT?.(on); else LocalHw?.setBiasTee?.(on);
+  }, [LocalHw, hwClient]);
+  const onHwAgc = useCallback((on: boolean) => {
+    setHwAgc(on);
+    const rc = hwClient();
+    if (rc) rc.setHwAgc?.(on); else LocalHw?.setAgc?.(on);
+  }, [LocalHw, hwClient]);
   const onHwDirectSamp = useCallback((mode: number) => { setHwDirectSamp(mode); LocalHw?.setDirectSampling?.(mode); }, [LocalHw]);
   const onHwDeemph = useCallback((tau: number) => { setHwDeemph(tau); LocalHw?.setDeemphasis?.(tau); }, [LocalHw]);
   const onHwStereo = useCallback((on: boolean) => { setHwStereo(on); LocalHw?.setStereoEnabled?.(on); }, [LocalHw]);
@@ -1818,6 +1841,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       // (callbacks below; bypass password rides every WS URL)
       onConnect:    () => { if (!destroyed.current) { setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
+      // VibeServer: the serving device's tuner gains → drive the gain slider (a
+      // remote client can't query the hardware natively).
+      onHwGains: (gains: number[]) => { if (!destroyed.current && gains.length) setHwGains(gains); },
       onServerLost: () => {
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio
         // engine, and surface the wait-and-reconnect prompt (no auto-reconnect —

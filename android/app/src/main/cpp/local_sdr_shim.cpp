@@ -1542,6 +1542,34 @@ struct LocalSdrShim::Impl {
             else if (jsonNum(msg,"bandwidth",bw)) setBandwidth(bw);
             return;
         }
+        // ── Hardware controls (VibeServer: the client drives the radio) ──────
+        // The serving phone exposes no HW UI; a remote client sends these and the
+        // server applies them via the same setters the on-device JS path uses.
+        if (type == "gain") {
+            if (msg.find("\"auto\":true") != std::string::npos) LocalSdrShim::instance().setGain(-1);
+            else if (jsonNum(msg,"value",v)) LocalSdrShim::instance().setGain((int)v);
+            return;
+        }
+        if (type == "biasT") {
+            LocalSdrShim::instance().setBiasTee(msg.find("\"on\":true") != std::string::npos); return;
+        }
+        if (type == "agc") {
+            LocalSdrShim::instance().setAgc(msg.find("\"on\":true") != std::string::npos); return;
+        }
+        if (type == "ppm") { if (jsonNum(msg,"value",v)) LocalSdrShim::instance().setPpm((int)v); return; }
+        if (type == "directSampling") {
+            if (jsonNum(msg,"value",v)) LocalSdrShim::instance().setDirectSampling((int)v); return;
+        }
+    }
+
+    // VibeServer: advertise the tuner's supported gains to the client so its gain
+    // slider has real dB steps (it can't query the remote device natively).
+    void sendHwInfo(const std::shared_ptr<net::Socket>& sock) {
+        std::vector<int> gains = LocalSdrShim::instance().getTunerGains();
+        std::string j = "{\"type\":\"hwinfo\",\"gains\":[";
+        for (size_t i = 0; i < gains.size(); i++) { if (i) j += ','; j += std::to_string(gains[i]); }
+        j += "]}";
+        sendText(sock, j);
     }
 
     void setBandwidth(double bw) {
@@ -1663,7 +1691,7 @@ struct LocalSdrShim::Impl {
                       "Sec-WebSocket-Accept: " + base64(digest, 20) + "\r\n\r\n");
 
         if (isAudio) { std::lock_guard<std::mutex> lk(clientMtx); audioClient = sock; LOGI("audio WS connected"); }
-        else { std::lock_guard<std::mutex> lk(clientMtx); specClient = sock; sendConfig(sock); LOGI("spectrum WS connected"); }
+        else { std::lock_guard<std::mutex> lk(clientMtx); specClient = sock; sendConfig(sock); sendHwInfo(sock); LOGI("spectrum WS connected"); }
 
         while (serverRunning.load() && sock->isOpen()) {
             std::string payload;

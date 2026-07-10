@@ -55,6 +55,9 @@ export interface SDRCallbacks {
    *  Derived from frame inter-arrival jitter, stalls, ping RTT, reconnects. */
   onLink?:      (q: 0 | 1 | 2 | 3) => void;
   onDbg?:       (msg: string) => void;
+  /** VibeServer: the serving device's supported tuner gains (tenths of dB), so a
+   *  remote client can populate its gain slider (it can't query the HW natively). */
+  onHwGains?:   (gains: number[]) => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -291,6 +294,19 @@ export class UberSDRClient {
     this.view.centerHz = f;
     this._sendView(f, this.view.binBandwidth || this.status.binBandwidth);
   }
+
+  // ── VibeServer hardware controls (client drives the remote radio) ─────────
+  // Sent over the spectrum WS control channel; the shim applies them server-side.
+  private _sendCtl(obj: Record<string, unknown>) {
+    const ws = this.spectrumWs;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  }
+  setHwGain(tenthDb: number, auto: boolean) {
+    this._sendCtl(auto ? { type: 'gain', auto: true } : { type: 'gain', value: tenthDb });
+  }
+  setHwBiasT(on: boolean) { this._sendCtl({ type: 'biasT', on }); }
+  setHwAgc(on: boolean)   { this._sendCtl({ type: 'agc', on }); }
+  setHwPpm(ppm: number)   { this._sendCtl({ type: 'ppm', value: Math.round(ppm) }); }
 
   /** Coalesced view sender — keeps only the latest target, sends ≤1/VIEW_SEND_MS
    *  with the final state always delivered (trailing edge). */
@@ -748,6 +764,11 @@ export class UberSDRClient {
         pi,
         countryIso: eccPiToIso(ecc, pi) || undefined,
       });
+      return;
+    }
+    if (msg.type === 'hwinfo') {
+      // VibeServer sent the serving device's tuner gains → populate the slider.
+      if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);
       return;
     }
     if (msg.type === 'config') {
