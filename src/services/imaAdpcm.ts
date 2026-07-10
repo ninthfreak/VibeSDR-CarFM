@@ -110,6 +110,54 @@ export function createKiwiAudioDecoder(): ImaAdpcmDecoder {
 }
 
 /**
+ * Decode a VibeServer compressed-audio frame (IMA-ADPCM, 'kiwi' flavour). The
+ * shim's sendAudioPcm() emits, after the [0]=channels [1]=format [2..5]=rate
+ * header: a u16 LE sample-count/channel, then one self-contained ADPCM block per
+ * channel — [predictor int16 LE][index u8][pad] + ceil(count/2) nibble bytes.
+ *   format 1 = mono (one block)
+ *   format 2 = M/S stereo (mid then side blocks) → L=M+S, R=M−S
+ * Returns interleaved int16 PCM. Each block is self-seeded, so no cross-frame
+ * state — robust over the wire.
+ */
+export function decodeVibeAdpcmFrame(
+  buf: ArrayBuffer,
+): { channels: number; rate: number; pcm: Int16Array } {
+  const dv = new DataView(buf);
+  const u8 = new Uint8Array(buf);
+  const format = dv.getUint8(1);
+  const rate   = dv.getUint32(2, true);
+  const count  = dv.getUint16(6, true);
+  const nb     = Math.ceil(count / 2);
+  let off = 8;
+
+  const decodeBlock = (): Int16Array => {
+    const predictor = dv.getInt16(off, true);
+    const index     = dv.getUint8(off + 2);
+    const dec = new ImaAdpcmDecoder('kiwi', -32768, 32767);
+    dec.setState(index, predictor);
+    const all = dec.decode(u8.subarray(off + 4, off + 4 + nb));   // nb*2 samples
+    off += 4 + nb;
+    return all;
+  };
+
+  const clamp = (v: number) => (v < -32768 ? -32768 : v > 32767 ? 32767 : v);
+  const mid = decodeBlock();
+  if (format === 2) {
+    const side = decodeBlock();
+    const pcm = new Int16Array(count * 2);
+    for (let i = 0; i < count; i++) {
+      const m = mid[i], s = side[i];
+      pcm[i * 2]     = clamp(m + s);
+      pcm[i * 2 + 1] = clamp(m - s);
+    }
+    return { channels: 2, rate, pcm };
+  }
+  const pcm = new Int16Array(count);
+  for (let i = 0; i < count; i++) pcm[i] = mid[i];
+  return { channels: 1, rate, pcm };
+}
+
+/**
  * Kiwi waterfall frame → u8 bins (dBm = bin − 255 + wf_cal happens upstream).
  * Fresh state per frame; the FIRST 10 samples are the ADPCM settling pad
  * (reference: `decomp_data.subarray(ADPCM_PAD)` in openwebrx.js waterfall_recv).
