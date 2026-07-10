@@ -334,16 +334,28 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     });
   }, [navigation, viewMode]);
 
-  // Tap a discovered/typed VibeServer: prompt for the PIN first if it needs one.
-  const openVibeServer = useCallback((host: string, port: number, name: string, needsPin: boolean) => {
-    if (needsPin && Platform.OS === 'ios' && (Alert as any).prompt) {
+  // Tap a discovered/typed VibeServer: prompt for the PIN if it needs one, with a
+  // saved PIN pre-filled (per host:port) so the user need not retype it. "Save &
+  // Connect" persists the entered PIN; "Connect" uses it just this once.
+  const openVibeServer = useCallback(async (host: string, port: number, name: string, needsPin: boolean) => {
+    if (!needsPin) { connectVibeServer(host, port, name, ''); return; }
+    const key = `vs_pin:${host}:${port}`;
+    let saved = '';
+    try { saved = (await AsyncStorage.getItem(key)) ?? ''; } catch {}
+    if (Platform.OS === 'ios' && (Alert as any).prompt) {
       (Alert as any).prompt(
         'VibeServer PIN', `Enter the PIN for ${name}`,
         [{ text: 'Cancel', style: 'cancel' },
-         { text: 'Connect', onPress: (pin?: string) => connectVibeServer(host, port, name, pin ?? '') }],
-        'plain-text', '', 'number-pad');
+         { text: 'Connect', onPress: (pin?: string) => connectVibeServer(host, port, name, pin || saved) },
+         { text: 'Save & Connect', onPress: (pin?: string) => {
+             const p = pin || saved;
+             AsyncStorage.setItem(key, p).catch(() => {});
+             connectVibeServer(host, port, name, p);
+           } }],
+        'plain-text', saved, 'number-pad');
     } else {
-      connectVibeServer(host, port, name, '');
+      // Android has no Alert.prompt — use the saved PIN if we have one.
+      connectVibeServer(host, port, name, saved);
     }
   }, [connectVibeServer]);
 

@@ -3,6 +3,7 @@ import {
   Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
 import type { DspFilterDesc, DspParamDesc } from './MenuSheet';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
@@ -141,6 +142,7 @@ export default function AudioSheet({
   dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam,
 }: AudioSheetProps) {
   const { theme: t } = useTheme();
+  const insets = useSafeAreaInsets();
   const isOwrx = serverType === 'owrx';
   const isKiwi = serverType === 'kiwi';
   const uberDsp = !recordingOnly && !isOwrx && !isLocal && !isKiwi;
@@ -177,7 +179,14 @@ export default function AudioSheet({
            onDismiss={onDismiss}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <Pressable style={st.backdrop} onPress={onClose} />
-      <View style={[st.sheet, { borderTopColor: t.barBorder }]}>
+      <View style={[st.sheet, {
+        borderTopColor: t.barBorder,
+        // Landscape: keep clear of the Dynamic Island and don't sprawl the full
+        // (very wide) width — cap it and centre it.
+        paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,
+        paddingBottom: 40 + insets.bottom,
+        alignSelf: 'center', width: '100%', maxWidth: 640,
+      }]}>
         <View style={st.titleRow}>
           <SectionIcon name="audio" size={15} color={t.sectionColor} />
           <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font, marginBottom: 0 }]}>

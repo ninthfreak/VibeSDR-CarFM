@@ -86,11 +86,15 @@ function Seg<T>({ options, value, onChange, fmt }: {
 export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const insets = useSafeAreaInsets();
   return (
-    <Modal visible={p.visible} transparent animationType="slide" onRequestClose={p.onClose}>
+    <Modal visible={p.visible} transparent animationType="slide" onRequestClose={p.onClose}
+           supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <TouchableWithoutFeedback onPress={p.onClose}>
         <View style={styles.backdrop} />
       </TouchableWithoutFeedback>
-      <View style={[styles.sheet, { paddingBottom: insets.bottom + 12 }]}>
+      <View style={[styles.sheet, {
+        paddingBottom: insets.bottom + 12,
+        paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,  // clear the notch in landscape
+      }]}>
         <View style={styles.handleBar}>
           <Text style={styles.title}>{p.isSpy ? 'SpyServer Controls' : 'RTL-SDR Controls'}</Text>
           <TouchableOpacity onPress={p.onClose} hitSlop={10}><Text style={styles.close}>✕</Text></TouchableOpacity>
