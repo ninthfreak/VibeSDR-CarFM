@@ -80,7 +80,10 @@ export default function LocalAudioPlayer(
     // iOS: read /ws/audio in JS, push PCM through the external-PCM engine. For a
     // VibeServer the URL points at a LAN host and carries the PIN auth suffix.
     let closed = false;
-    const sock = new WebSocket(`ws://${host}:${port}/ws/audio${authSuffix}`);
+    // authSuffix is "&vs_nonce=…&vs_auth=…" (built to append to an existing
+    // query). /ws/audio has no query, so it needs a leading "?" instead of "&".
+    const authQ = authSuffix ? '?' + authSuffix.replace(/^&/, '') : '';
+    const sock = new WebSocket(`ws://${host}:${port}/ws/audio${authQ}`);
     sock.binaryType = 'arraybuffer';
     ws.current = sock;
     started.current = true;

@@ -679,8 +679,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             .pingInterval(20, TimeUnit.SECONDS)
             .build().also { httpClient = it }
         localAudioWs?.cancel()
+        // authSuffix is "&vs_nonce=…&vs_auth=…"; /ws/audio has no query so it needs
+        // a leading "?" rather than "&".
+        val authQ = if (authSuffix.isNotEmpty()) "?" + authSuffix.removePrefix("&") else ""
         localAudioWs = client.newWebSocket(
-            Request.Builder().url("ws://$h:$port/ws/audio$authSuffix").build(),
+            Request.Builder().url("ws://$h:$port/ws/audio$authQ").build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     lastLocalTune?.let { webSocket.send(it) }
