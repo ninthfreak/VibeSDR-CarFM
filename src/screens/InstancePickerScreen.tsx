@@ -40,6 +40,7 @@ import {
   setDefaultInstance,
 } from '../services/defaultInstance';
 import { isDeepLinkActive, whenInitialLinkChecked } from '../linking/deepLinkState';
+import { parseSdrUrl } from '../linking/SdrLinkHandler';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
          TcpFav, getTcpFavs, saveTcpFavs } from '../services/favourites';
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
@@ -77,7 +78,7 @@ type ListItem =
   | { kind: 'instance'; data: SDRInstance }
   | { kind: 'custom';   fav: Favourite };
 
-export default function InstancePickerScreen({ navigation }: Props) {
+export default function InstancePickerScreen({ navigation, route }: Props) {
   const [instances,   setInstances]     = useState<SDRInstance[]>([]);
   const [loading,     setLoading]       = useState(true);
   const [error,       setError]         = useState<string | null>(null);
@@ -230,6 +231,13 @@ export default function InstancePickerScreen({ navigation }: Props) {
     if (u && !u.startsWith('http://') && !u.startsWith('https://')) u = 'http://' + u;
     return u;
   }, [customUrl]);
+  // A pasted sdr:// / spyserver:// link connects but isn't an http receiver — the
+  // http favourite/default stars don't apply; it favourites into the SpyServer
+  // list (tcpFavs) instead. Non-null = the custom box holds a valid spy link.
+  const customSpyTarget = useMemo(
+    () => parseSdrUrl(customUrl.trim().replace(/^spyserver:\/\//i, 'sdr://')),
+    [customUrl],
+  );
   const fs = (base: number) => Math.round(base * scale);
 
   const isFav = useCallback((url: string) => favourites.some(f => f.url === url), [favourites]);
@@ -383,14 +391,40 @@ export default function InstancePickerScreen({ navigation }: Props) {
     }
   }, [navigation, viewMode]);
 
-  // Parse the add-RTL-TCP modal: accept "host", "host:port", or separate fields.
-  const parseTcpEntry = useCallback((): { host: string; port: number } | null => {
+  // sdr:// deep link → auto-connect once. Guard with a ref + clear the param so a
+  // failed connect leaves the user on the picker (connectSpy's own Alert is the
+  // error UX) instead of a retry loop. markDeepLinkActive() (set by useDeepLinks)
+  // already suppresses the default-instance auto-connect.
+  const autoSpyFired = useRef(false);
+  const autoSpy = route.params?.autoSpy;
+  useEffect(() => {
+    if (!autoSpy) { autoSpyFired.current = false; return; }
+    if (autoSpyFired.current || connecting) return;
+    autoSpyFired.current = true;
+    navigation.setParams({ autoSpy: undefined });
+    connectSpy(autoSpy.host, autoSpy.port, `${autoSpy.host}:${autoSpy.port}`);
+  }, [autoSpy, connecting, connectSpy, navigation]);
+
+  // Parse the add-RTL-TCP modal: accept "host", "host:port", separate fields, or a
+  // pasted "sdr://host:port" / "spyserver://host:port" (strips the scheme + flips
+  // to the SpyServer proto — Airspy's map hands out copy-text, so paste must work
+  // where tapping can't). Returns the detected proto so the connect routing below
+  // doesn't depend on the async setTcpProto having landed yet.
+  const parseTcpEntry = useCallback((): { host: string; port: number; proto: 'rtltcp' | 'spyserver' } | null => {
     let h = tcpHost.trim();
+    let forcedSpy = false;
+    const schemeM = /^(sdr|spyserver):\/\//i.exec(h);
+    if (schemeM) {
+      h = h.slice(schemeM[0].length).replace(/[/?#].*$/, '');   // drop scheme + any path/query junk
+      forcedSpy = true;
+      if (tcpProto !== 'spyserver') setTcpProto('spyserver');   // flip the toggle for feedback
+    }
     let p = parseInt(tcpPort.trim(), 10);
     if (h.includes(':')) { const [hh, pp] = h.split(':'); h = hh.trim(); if (pp) p = parseInt(pp.trim(), 10); }
     if (!h) return null;
-    if (!Number.isFinite(p) || p <= 0 || p > 65535) p = tcpProto === 'spyserver' ? 5555 : 1234;
-    return { host: h, port: p };
+    const spy = forcedSpy || tcpProto === 'spyserver';
+    if (!Number.isFinite(p) || p <= 0 || p > 65535) p = spy ? 5555 : 1234;
+    return { host: h, port: p, proto: spy ? 'spyserver' : 'rtltcp' };
   }, [tcpHost, tcpPort, tcpProto]);
 
   const tcpModalConnect = useCallback((save: boolean) => {
@@ -399,18 +433,40 @@ export default function InstancePickerScreen({ navigation }: Props) {
     const name = tcpName.trim() || `${parsed.host}:${parsed.port}`;
     if (save) {
       const next = [...tcpFavs.filter(f => !(f.host === parsed.host && f.port === parsed.port)),
-                    { name, host: parsed.host, port: parsed.port, proto: tcpProto }];
+                    { name, host: parsed.host, port: parsed.port, proto: parsed.proto }];
       setTcpFavs(next); saveTcpFavs(next).catch(() => {});
     }
-    const proto = tcpProto;
     setTcpModal(false); setTcpName(''); setTcpHost(''); setTcpPort('1234');
-    if (proto === 'spyserver') connectSpy(parsed.host, parsed.port, name);
+    if (parsed.proto === 'spyserver') connectSpy(parsed.host, parsed.port, name);
     else connectTcp(parsed.host, parsed.port, name);
-  }, [parseTcpEntry, tcpName, tcpFavs, connectTcp, connectSpy, tcpProto]);
+  }, [parseTcpEntry, tcpName, tcpFavs, connectTcp, connectSpy]);
 
   const removeTcpFav = useCallback((fav: TcpFav) => {
     const next = tcpFavs.filter(f => !(f.host === fav.host && f.port === fav.port));
     setTcpFavs(next); saveTcpFavs(next).catch(() => {});
+  }, [tcpFavs]);
+
+  // Favourite a pasted SpyServer link into the SpyServer/RTL-TCP fav list (where
+  // it becomes reconnectable), asking for a name on iOS. Toggles off if present.
+  const toggleSpyFav = useCallback((host: string, port: number) => {
+    const exists = tcpFavs.some(f => f.proto === 'spyserver' && f.host === host && f.port === port);
+    if (exists) {
+      const next = tcpFavs.filter(f => !(f.proto === 'spyserver' && f.host === host && f.port === port));
+      setTcpFavs(next); saveTcpFavs(next).catch(() => {});
+      return;
+    }
+    const fallback = `${host}:${port}`;
+    const add = (name: string) => {
+      const next = [...tcpFavs.filter(f => !(f.host === host && f.port === port)),
+                    { name, host, port, proto: 'spyserver' as const }];
+      setTcpFavs(next); saveTcpFavs(next).catch(() => {});
+    };
+    if (Platform.OS === 'ios' && (Alert as any).prompt) {
+      (Alert as any).prompt('Name this SpyServer', fallback,
+        [{ text: 'Cancel', style: 'cancel' },
+         { text: 'Save', onPress: (t?: string) => add((t && t.trim()) || fallback) }],
+        'plain-text', fallback);
+    } else add(fallback);
   }, [tcpFavs]);
 
   // Pin a discovered (mDNS) server into the RTL-TCP favourites so it survives
@@ -453,6 +509,11 @@ export default function InstancePickerScreen({ navigation }: Props) {
   const connectCustom = useCallback(async () => {
     if (!customUrl.trim()) return;
     let url = customUrl.trim();
+    // A pasted SpyServer link (Airspy's directory only offers copy, no tappable
+    // anchor) — this single-field box is where people naturally paste it. Route
+    // it to the SpyServer path instead of treating it as an http(s) receiver.
+    const spy = parseSdrUrl(url.replace(/^spyserver:\/\//i, 'sdr://'));
+    if (spy) { setCustomUrl(''); connectSpy(spy.host, spy.port, `${spy.host}:${spy.port}`); return; }
     // Accept ws://, wss://, http(s)://, or a bare host. Normalise ws→http so the
     // host parses correctly (typing "ws://192.168.x.x" used to become
     // "http://ws://…", parsing the host as "ws" → bogus "not local" rejection).
@@ -464,7 +525,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
     // v3: sniff the backend type (OpenWebRX / KiwiSDR / UberSDR) for manual adds.
     const type = (await detectServerType(url)) ?? 'ubersdr';
     connect(url, url, undefined, null, type);
-  }, [customUrl, connect]);
+  }, [customUrl, connect, connectSpy]);
 
   const handleSetDefault = useCallback((inst: DefaultInstance) => {
     Alert.alert('Set Default', `Auto-connect to "${inst.name}" on startup?`, [
@@ -801,7 +862,20 @@ export default function InstancePickerScreen({ navigation }: Props) {
             returnKeyType="go"
             onSubmitEditing={connectCustom}
           />
-          {normalisedCustomUrl ? (
+          {customSpyTarget ? (
+            /* SpyServer link pasted — favourite into the SpyServer list (no http
+               default-star; SpyServer isn't a default-instance auto-connect). */
+            <TouchableOpacity
+              style={[styles.connectBtn, { borderColor: C.border, paddingHorizontal: 10 }]}
+              onPress={() => toggleSpyFav(customSpyTarget.host, customSpyTarget.port)}
+            >
+              {(() => {
+                const fav = tcpFavs.some(f => f.proto === 'spyserver'
+                  && f.host === customSpyTarget.host && f.port === customSpyTarget.port);
+                return <Text style={{ fontSize: fs(18), color: fav ? C.red : C.textDim }}>{fav ? '♥' : '♡'}</Text>;
+              })()}
+            </TouchableOpacity>
+          ) : normalisedCustomUrl ? (
             <>
               {/* Heart — favourite this custom URL */}
               <TouchableOpacity
@@ -978,7 +1052,7 @@ export default function InstancePickerScreen({ navigation }: Props) {
                       <View style={styles.rowMain}>
                         <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>{f.name}</Text>
                         <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
-                          rtl_tcp · {f.host}:{f.port}
+                          {f.proto === 'spyserver' ? 'SpyServer' : 'rtl_tcp'} · {f.host}:{f.port}
                         </Text>
                       </View>
                       <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}

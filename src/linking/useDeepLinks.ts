@@ -18,11 +18,28 @@ import { CommonActions } from '@react-navigation/native';
 import { navigationRef } from '../../App';
 import { getViewMode } from '../services/viewMode';
 import { parseVibeSdrUrl, resolveRequest, type ResolvedTarget } from './DeepLinkHandler';
+import { parseSdrUrl } from './SdrLinkHandler';
 import { markDeepLinkActive, markInitialLinkChecked } from './deepLinkState';
 
 function toast(msg: string) {
   if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.LONG);
   else Alert.alert('VibeSDR', msg);
+}
+
+/**
+ * Reset the stack to the picker with an `autoSpy` param — the picker's effect
+ * runs connectSpy() (which pushes the SDR screen itself once the native shim
+ * answers). We deliberately do NOT synthesise a ResolvedTarget: the resolve
+ * pipeline rejects non-URL backends, and the SpyServer nav params only exist
+ * after the shim starts. Single-route reset so a failed connect leaves the user
+ * cleanly on the picker.
+ */
+function goToSpy(host: string, port: number) {
+  if (!navigationRef.isReady()) return;
+  navigationRef.dispatch(CommonActions.reset({
+    index: 0,
+    routes: [{ name: 'InstancePicker', params: { autoSpy: { host, port } } }],
+  }));
 }
 
 /** Reset the stack to the SDR screen for a resolved target (fresh mount). */
@@ -59,6 +76,24 @@ export function useDeepLinks(ready: boolean) {
 
   // Parse → resolve → (confirm if needed) → navigate.
   const process = async (url: string) => {
+    // sdr:// SpyServer links — arbitrary third-party host, opens a raw TCP
+    // socket, so ALWAYS confirm (stricter than vibesdr://, which auto-connects).
+    if (/^sdr:\/\//i.test(url)) {
+      const t = parseSdrUrl(url);
+      if (!t) { toast('Invalid SpyServer link'); return; }
+      const onSDR = navigationRef.getCurrentRoute?.()?.name === 'SDR';
+      Alert.alert(
+        'Connect to SpyServer?',
+        `${t.host}:${t.port}\n\nSpyServer links come from third-party sources — only connect to servers you trust.`
+          + (onSDR ? '\nThis will disconnect your current session.' : ''),
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Connect', onPress: () => goToSpy(t.host, t.port) },
+        ],
+      );
+      return;
+    }
+
     const req = parseVibeSdrUrl(url);
     if (!req) { toast('Invalid VibeSDR link'); return; }
     const res = await resolveRequest(req);
@@ -82,7 +117,7 @@ export function useDeepLinks(ready: boolean) {
   };
 
   const handle = (url: string | null) => {
-    if (!url || !/^vibesdr:\/\//i.test(url)) return;
+    if (!url || !/^(vibesdr|sdr):\/\//i.test(url)) return;
     const now = Date.now();
     if (url === lastUrl.current && now - lastAt.current < 2000) return; // dedup
     lastUrl.current = url;

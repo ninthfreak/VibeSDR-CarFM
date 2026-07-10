@@ -3,7 +3,7 @@
     "name": "VibeSDR",
     "slug": "VibeSDR",
     "version": "7.0.1",
-    "scheme": "vibesdr",
+    "scheme": ["vibesdr", "sdr"],
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",

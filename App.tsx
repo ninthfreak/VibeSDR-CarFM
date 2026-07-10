@@ -21,7 +21,9 @@ import type { SDRMode }     from './src/services/UberSDRClient';
 import { useDeepLinks }     from './src/linking/useDeepLinks';
 
 export type RootStackParamList = {
-  InstancePicker: undefined;
+  // autoSpy: set by an `sdr://host:port` deep link → the picker auto-runs
+  // connectSpy() once, then clears the param (see InstancePickerScreen).
+  InstancePicker: { autoSpy?: { host: string; port: number } } | undefined;
   SDR: {
     baseUrl:         string;
     password?:       string;
