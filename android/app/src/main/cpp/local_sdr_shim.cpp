@@ -378,9 +378,14 @@ struct VsAuth {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
     }
-    void prune(int64_t now) {                            // drop nonces >30 s old
+    // A nonce is a REUSABLE session credential (not single-use): the client
+    // presents the same nonce+token on BOTH the spectrum and audio WebSockets and
+    // on reconnects. Valid for 1 hour, then it must be re-fetched. HMAC still
+    // proves PIN knowledge without the secret crossing the wire; the (bounded)
+    // replay window is acceptable on a LAN — confidentiality is the VPN's job.
+    void prune(int64_t now) {                            // drop nonces >1 h old
         for (auto it = issued.begin(); it != issued.end();)
-            it = (now - it->second > 30000) ? issued.erase(it) : std::next(it);
+            it = (now - it->second > 3600000) ? issued.erase(it) : std::next(it);
     }
     std::string issue() {
         std::lock_guard<std::mutex> lk(mtx);
@@ -414,8 +419,8 @@ struct VsAuth {
         std::lock_guard<std::mutex> lk(mtx);
         int64_t now = nowMs(); prune(now);
         auto it = issued.find(nonce);
-        if (it == issued.end()) return false;            // unknown/expired/replayed
-        issued.erase(it);
+        if (it == issued.end()) return false;            // unknown/expired
+        // NB: reusable within TTL (shared by both WS + reconnects) — do NOT erase.
         uint8_t mac[32];
         hmacSha256((const uint8_t*)secret.data(), secret.size(),
                    (const uint8_t*)nonce.data(), nonce.size(), mac);
