@@ -5,6 +5,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -159,7 +160,7 @@ std::shared_ptr<Listener> listen(const std::string& host, int port) {
     return std::make_shared<Listener>(fd);
 }
 
-std::shared_ptr<Socket> connect(const std::string& host, int port) {
+std::shared_ptr<Socket> connect(const std::string& host, int port, int timeoutMs) {
     struct addrinfo hints {}, *res = nullptr;
     hints.ai_family   = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -167,7 +168,33 @@ std::shared_ptr<Socket> connect(const std::string& host, int port) {
         throw std::runtime_error("getaddrinfo() failed for " + host);
     int fd = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) { ::freeaddrinfo(res); throw std::runtime_error("socket() failed"); }
-    if (::connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
+
+    if (timeoutMs > 0) {
+        // Non-blocking connect + poll, so an unreachable host fails in `timeoutMs`
+        // instead of after the kernel's ~75 s. Restore blocking mode afterwards —
+        // the rest of Socket assumes it.
+        const int flags = ::fcntl(fd, F_GETFL, 0);
+        ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        int r = ::connect(fd, res->ai_addr, res->ai_addrlen);
+        if (r < 0 && errno == EINPROGRESS) {
+            struct pollfd pfd { fd, POLLOUT, 0 };
+            const int pr = ::poll(&pfd, 1, timeoutMs);
+            if (pr <= 0) {
+                ::close(fd); ::freeaddrinfo(res);
+                throw std::runtime_error("connect() timed out to " + host + ":" + std::to_string(port));
+            }
+            int soErr = 0; socklen_t len = sizeof(soErr);
+            ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soErr, &len);
+            if (soErr != 0) {
+                ::close(fd); ::freeaddrinfo(res);
+                throw std::runtime_error("connect() failed to " + host + ":" + std::to_string(port));
+            }
+        } else if (r < 0) {
+            ::close(fd); ::freeaddrinfo(res);
+            throw std::runtime_error("connect() failed to " + host + ":" + std::to_string(port));
+        }
+        ::fcntl(fd, F_SETFL, flags);
+    } else if (::connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
         ::close(fd); ::freeaddrinfo(res);
         throw std::runtime_error("connect() failed to " + host + ":" + std::to_string(port));
     }

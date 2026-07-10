@@ -2,7 +2,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const KEY = 'vsdr_favourites';
 
-export type Favourite = { name: string; url: string; serverType?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx' };
+// SpyServer favourites carry url = spyserver://host:port (the protocol has no
+// web UI to point a browser at); the picker routes on serverType.
+export type Favourite = { name: string; url: string; serverType?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx' | 'spyserver' };
 
 export async function getFavourites(): Promise<Favourite[]> {
   try {
@@ -29,7 +31,9 @@ export async function toggleFavourite(fav: Favourite, current: Favourite[]): Pro
 // ── RTL-TCP named favourites (host:port + friendly name) ──────────────────────
 const TCP_KEY = 'vsdr_rtltcp_favs';
 
-export type TcpFav = { name: string; host: string; port: number };
+// `proto` is optional for backwards compatibility: favourites saved before
+// SpyServer support existed have no field and must keep resolving to rtl_tcp.
+export type TcpFav = { name: string; host: string; port: number; proto?: 'rtltcp' | 'spyserver' };
 
 export async function getTcpFavs(): Promise<TcpFav[]> {
   try {

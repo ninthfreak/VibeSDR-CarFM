@@ -35,6 +35,7 @@ import { type UserBookmark } from '../services/userBookmarks';
 import { APP_VERSION } from '../constants/version';
 import UsbSdrIcon from './UsbSdrIcon';
 import VfoLockIcon from './VfoLockIcon';
+import SectionIcon, { type SectionIconName } from './SectionIcon';
 import { tourRef } from './Coachmark';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -68,6 +69,10 @@ export interface MenuSheetProps {
   onZoomMax?:   () => void;   // full zoom in
   onSetDefault?: () => void;
   isDefaultInstance?: boolean;
+  /** Favourite the current instance (network receivers only — hidden for local
+   *  USB / RTL-TCP / SpyServer, which favourite via the picker instead). */
+  isFavourite?: boolean;
+  onToggleFavourite?: () => void;
   /** Client decoders — skin semantics: toggle start/stop, menu stays open. */
   decMode?:        'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|null;
   decOn?:          boolean;
@@ -348,10 +353,13 @@ function StepSlider({
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
-function SectionLabel({ label, first }: { label: string; first?: boolean }) {
+function SectionLabel({ label, icon, first }: { label: string; icon?: SectionIconName; first?: boolean }) {
   return (
     <View style={[styles.sectionBar, first && styles.sectionBarFirst]}>
-      <Text style={styles.sectionLabel}>{label}</Text>
+      <View style={styles.sectionRow}>
+        {icon && <SectionIcon name={icon} size={16} color={C.sectionC} />}
+        <Text style={styles.sectionLabel}>{label}</Text>
+      </View>
     </View>
   );
 }
@@ -360,15 +368,17 @@ function BtnRow({ children, col }: { children: React.ReactNode; col?: boolean })
   return <View style={[styles.btnRow, col && styles.btnRowCol]}>{children}</View>;
 }
 
-function Btn({ label, active, danger, onPress, full, style }: {
+function Btn({ label, active, danger, onPress, full, style, icon }: {
   label: string; active?: boolean; danger?: boolean;
-  onPress?: () => void; full?: boolean; style?: object;
+  onPress?: () => void; full?: boolean; style?: object; icon?: SectionIconName;
 }) {
   return (
     <TouchableOpacity
-      style={[styles.btn, active && styles.btnActive, danger && styles.btnDanger, full && styles.btnFull, style]}
+      style={[styles.btn, active && styles.btnActive, danger && styles.btnDanger, full && styles.btnFull,
+              icon && { flexDirection: 'row', gap: 7 }, style]}
       onPress={onPress} hitSlop={4} activeOpacity={0.7}
     >
+      {icon && <SectionIcon name={icon} size={15} color={active ? C.gold : C.muted} />}
       <Text style={[styles.btnText, active && styles.btnTextActive, danger && styles.btnTextDanger]}>
         {label}
       </Text>
@@ -479,6 +489,7 @@ export default function MenuSheet({
   onClose, onBack, onLocalHardware, isTcp, onAdminLink, onResetSettings, onReplayTour, onDisplaySettings,
   serverVersion = null, onAbout, onRecordings,
   onZoomIn, onZoomOut, onZoomMin, onZoomMax, onSetDefault, isDefaultInstance = false,
+  isFavourite = false, onToggleFavourite,
   decMode = null, decOn = false, onDecToggle,
   spotsKind = null, onSpotsToggle, onServerMap, onSpotsMap,
   rttySettings, onRttySettings,
@@ -531,18 +542,6 @@ export default function MenuSheet({
   const backdropOp = useRef(new Animated.Value(0)).current;
   const [profileOpen, setProfileOpen] = useState(false);   // OWRX profile dropdown
   const [dabOpen, setDabOpen] = useState(false);           // OWRX DAB programme dropdown
-  const [owrxSql, setOwrxSql] = useState(-150);            // OWRX squelch dB (-150 = off)
-  const [owrxNr,  setOwrxNr]  = useState(0);               // OWRX NR threshold dB (0 = off)
-  // Seed the sliders from the server/profile preset (the adapter has already pushed
-  // these to the demod). Keyed on seq so a profile switch re-syncs even when the new
-  // preset equals the old. Fields are independent — a profile may preset only one.
-  useEffect(() => {
-    if (!owrxDspDefaults) return;
-    if (owrxDspDefaults.squelchDb !== undefined) setOwrxSql(owrxDspDefaults.squelchDb);
-    if (owrxDspDefaults.nrThreshold !== undefined) {
-      setOwrxNr(owrxDspDefaults.nrEnabled ? owrxDspDefaults.nrThreshold : 0);
-    }
-  }, [owrxDspDefaults?.seq]);   // eslint-disable-line react-hooks/exhaustive-deps
   const isOwrx = serverType === 'owrx';
   const isKiwi = serverType === 'kiwi';
   // Local hardware: no server-side maps/admin/CW-skimmer/STT (those are network
@@ -622,9 +621,7 @@ export default function MenuSheet({
       setProfileOpen(false); setDabOpen(false); setCmapOpen(false);
     }
   }, [visible]);
-  const [bwSync,           setBwSync]           = useState(false);
 
-  // NR cycle state — off→nr→nr2. SERV is locked by server DSP section.
   // Search bookmarks & band plan (skin lsv-mp-bm-input)
   const [searchQuery, setSearchQuery] = useState('');
   const searchResults = useMemo(
@@ -632,31 +629,6 @@ export default function MenuSheet({
     [searchBookmarks, searchBands, searchQuery],
   );
   useEffect(() => { if (!visible) setSearchQuery(''); }, [visible]);
-
-  const [nrMode, setNrMode] = useState<'off'|'nr'|'nr2'|'serv'>(
-    serverDspEnabled ? 'serv' : nr ? 'nr' : 'off'
-  );
-  const cycleNr = useCallback(() => {
-    if (nrMode === 'serv') return; // locked — server DSP section controls this
-    const next = nrMode === 'off' ? 'nr' : nrMode === 'nr' ? 'nr2' : 'off';
-    setNrMode(next);
-    onNr?.(next);
-  }, [nrMode, onNr]);
-  // Sync when server DSP toggled externally
-  useEffect(() => {
-    if (serverDspEnabled) setNrMode('serv');
-    else if (nrMode === 'serv') setNrMode('off');
-  }, [serverDspEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const filterBw   = filterHigh - filterLow;
-  // Coarser step for wideband ranges (e.g. OWRX broadcast FM ±96 kHz) so the
-  // slider thumb travels in usable increments; 50 Hz for narrow modes.
-  const bwStep     = bwEdgeMax > 20000 ? 1000 : 50;
-  const setFilterBw = useCallback((bw: number) => {
-    const half = bw / 2;
-    onFilterLow(-half);
-    onFilterHigh(half);
-  }, [onFilterLow, onFilterHigh]);
 
   useEffect(() => {
     if (visible) {
@@ -702,13 +674,13 @@ export default function MenuSheet({
 
             {/* ── LOCAL HARDWARE (V4 Android — RTL-SDR controls submenu) ── */}
             {onLocalHardware && (<>
-              <SectionLabel label="LOCAL HARDWARE" first />
+              <SectionLabel label="LOCAL HARDWARE" icon="hardware" first />
               <Btn label="RTL-SDR Controls  ›" full onPress={onLocalHardware} />
             </>)}
 
             {/* ── PROFILE (OWRX only — hidden unless the backend reports profiles) ── */}
             {profiles.length > 0 && (<>
-              <SectionLabel label="PROFILE" first />
+              <SectionLabel label="PROFILE" icon="profile" first />
               {sdrGroups.some((g) => g.inUse) && (
                 <View style={styles.etiquette}>
                   <Text style={styles.etiquetteText}>
@@ -766,7 +738,7 @@ export default function MenuSheet({
 
             {/* ── DAB PROGRAMME (OWRX — only when a DAB ensemble is tuned) ── */}
             {dabProgrammes.length > 0 && (<>
-              <SectionLabel label="DAB PROGRAMME" />
+              <SectionLabel label="DAB PROGRAMME" icon="dab" />
               <View style={styles.profileDrop}>
                 <TouchableOpacity style={styles.profileDropHead} onPress={() => setDabOpen((o) => !o)} activeOpacity={0.7}>
                   <Text style={styles.profileDropHeadText} numberOfLines={1}>
@@ -822,7 +794,7 @@ export default function MenuSheet({
             </>)}
 
             {/* ── NEARBY STATION ─────────────────────────────────── */}
-            <SectionLabel label="NEARBY STATION" first={profiles.length === 0 && dabProgrammes.length === 0} />
+            <SectionLabel label="NEARBY STATION" icon="station" first={profiles.length === 0 && dabProgrammes.length === 0} />
             <View style={styles.vtsRow}>
               <TouchableOpacity style={styles.vtsArrow} onPress={onVtsPrev} hitSlop={8}>
                 <Text style={styles.vtsArrowText}>◂</Text>
@@ -918,7 +890,7 @@ export default function MenuSheet({
             </BtnRow>
 
             {/* ── SPECTRUM / WATERFALL ───────────────────────────── */}
-            <SectionLabel label="SPECTRUM / WATERFALL" />
+            <SectionLabel label="SPECTRUM / WATERFALL" icon="spectrum" />
             {/* Zoom row — flex:1 buttons so they share the width evenly and the
                 MAX button never wraps to its own row (the VFO-lock label width
                 used to push it over). MIN = full span out, MAX = full zoom in. */}
@@ -932,7 +904,7 @@ export default function MenuSheet({
               <VfoLockBtn locked={vfoLocked} onPress={onToggleVfoLock} full />
             </BtnRow>
             <BtnRow>
-              <Btn label="☀ DISPLAY SETTINGS" full active={dispSettingsOpen}
+              <Btn label="DISPLAY SETTINGS" icon="monitor" full active={dispSettingsOpen}
                 onPress={() => setDispSettingsOpen((p: boolean) => !p)} />
             </BtnRow>
             <BtnRow>
@@ -1280,256 +1252,12 @@ export default function MenuSheet({
 
             {!dispSettingsOpen && !bookmarksOpen && (<>
 
-            {/* ── AUDIO ──────────────────────────────────────────── */}
-            <SectionLabel label="AUDIO" />
-            {/* Bandwidth — mirrored sliders around the carrier: slide the LEFT
-                one LEFT to widen the lower sideband, the RIGHT one RIGHT to
-                widen the upper. SYNC mirrors both edges (AM/FM symmetric). */}
-            <View style={styles.bwMirrorRow}>
-              <Text style={styles.bwEdgeVal}>{filterLow >= 0 ? '+' : '−'}{fmtHz(Math.abs(filterLow))}</Text>
-              <Slider style={styles.bwHalfSlider}
-                minimumValue={-bwEdgeMax} maximumValue={0} step={bwStep}
-                value={Math.max(-bwEdgeMax, Math.min(0, filterLow))}
-                onValueChange={(v: number) => {
-                  if (bwSync) onFilterBoth?.(v, -v);
-                  else        onFilterBoth?.(v, filterHigh);
-                }}
-                minimumTrackTintColor={C.muted} maximumTrackTintColor={C.gold}
-                thumbTintColor={C.gold} />
-              <TouchableOpacity hitSlop={6}
-                style={[styles.btn, bwSync && styles.btnActive]}
-                onPress={() => setBwSync((p: boolean) => !p)} activeOpacity={0.7}>
-                <Text style={[styles.btnText, bwSync && styles.btnTextActive]}>SYNC</Text>
-              </TouchableOpacity>
-              <Slider style={styles.bwHalfSlider}
-                minimumValue={0} maximumValue={bwEdgeMax} step={bwStep}
-                value={Math.min(bwEdgeMax, Math.max(0, filterHigh))}
-                onValueChange={(v: number) => {
-                  if (bwSync) onFilterBoth?.(-v, v);
-                  else        onFilterBoth?.(filterLow, v);
-                }}
-                minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted}
-                thumbTintColor={C.gold} />
-              <Text style={styles.bwEdgeVal}>{filterHigh < 0 ? '−' : '+'}{fmtHz(Math.abs(filterHigh))}</Text>
-            </View>
-
-            {/* NR/NB are UberSDR client-side DSP only — OWRX has its own server NR
-                slider (below), local has its own NR slider, and Kiwi uses the
-                server-side DSP filters. REC stays for all. */}
-            {(() => { const uberDsp = !isOwrx && !isLocal && !isKiwi; return (
-            <BtnRow>
-              {uberDsp && (
-                <Btn
-                  label={nrMode === 'serv' ? 'SERV' : nrMode === 'nr2' ? 'NR2' : 'NR'}
-                  active={nrMode !== 'off'}
-                  style={nrMode === 'serv' ? { borderColor: 'rgba(50,210,100,0.60)', backgroundColor: 'rgba(50,210,100,0.10)' } : undefined}
-                  onPress={cycleNr}
-                />
-              )}
-              {uberDsp && <Btn label="NB" active={nb} onPress={() => onNb?.(!nb)} />}
-              <Btn label="⏺ REC"  active={recording} onPress={onRec} />
-            </BtnRow>
-            ); })()}
-            {recording && (
-              <View style={styles.recTimer}>
-                <View style={styles.recDot} />
-                <Text style={styles.recTime}>{fmtRecTime(recSeconds)}</Text>
-              </View>
-            )}
-
-            {/* OWRX squelch (dB) + NR (threshold dB) — server-side. Squelch left =
-                Off (open); NR left = Off, slides up for more reduction. */}
-            {isOwrx && (<>
-              <View style={styles.bwRow}>
-                <Text style={styles.bwLabel}>SQUELCH</Text>
-                <Slider style={styles.bwSlider}
-                  minimumValue={-130} maximumValue={-20} step={1}
-                  value={owrxSql <= -130 ? -130 : owrxSql}
-                  onValueChange={(v: number) => { const db = v <= -130 ? -150 : v; setOwrxSql(db); onOwrxSquelch?.(db); }}
-                  minimumTrackTintColor={owrxSql > -130 ? C.gold : C.muted}
-                  maximumTrackTintColor={C.muted}
-                  thumbTintColor={C.gold} />
-                <Text style={styles.bwVal}>{owrxSql <= -130 ? 'Off' : `${owrxSql}dB`}</Text>
-              </View>
-              <View style={styles.bwRow}>
-                <Text style={styles.bwLabel}>NR</Text>
-                <Slider style={styles.bwSlider}
-                  minimumValue={0} maximumValue={30} step={1}
-                  value={owrxNr}
-                  onValueChange={(v: number) => { setOwrxNr(v); onOwrxNr?.(v); }}
-                  minimumTrackTintColor={owrxNr > 0 ? C.gold : C.muted}
-                  maximumTrackTintColor={C.muted}
-                  thumbTintColor={C.gold} />
-                <Text style={styles.bwVal}>{owrxNr <= 0 ? 'Off' : `${owrxNr}dB`}</Text>
-              </View>
-            </>)}
-
-            {/* Local SDR: power-based squelch (dBFS). Reuses this slot since the
-                SNR squelch doesn't apply to local hardware. */}
-            {onLocalSquelch ? (
-            <View style={styles.bwRow}>
-              <Text style={styles.bwLabel}>SQUELCH</Text>
-              <Slider style={styles.bwSlider}
-                minimumValue={-100} maximumValue={-20} step={1}
-                value={localSquelch}
-                onValueChange={(v: number) => onLocalSquelch?.(v <= -100 ? -100 : v)}
-                minimumTrackTintColor={localSquelch > -100 ? C.gold : C.muted}
-                maximumTrackTintColor={C.muted}
-                thumbTintColor={C.gold} />
-              <Text style={styles.bwVal}>{localSquelch <= -100 ? 'Off' : `${localSquelch.toFixed(0)}dB`}</Text>
-            </View>
-            ) : null}
-
-            {/* Local SDR audio noise reduction — strength slider (0=off..20).
-                0..15 = standard depth; 16..20 push extra over-subtraction. */}
-            {onLocalNR && (
-              <View style={styles.bwRow}>
-                <Text style={styles.bwLabel}>NR</Text>
-                <Slider style={styles.bwSlider}
-                  minimumValue={0} maximumValue={20} step={1}
-                  value={localNR}
-                  onValueChange={(v: number) => onLocalNR?.(v)}
-                  minimumTrackTintColor={localNR > 0 ? C.gold : C.muted}
-                  maximumTrackTintColor={C.muted}
-                  thumbTintColor={C.gold} />
-                <Text style={styles.bwVal}>{localNR <= 0 ? 'Off' : String(localNR)}</Text>
-              </View>
-            )}
-
-            {/* Automatic notch (adaptive line enhancer) — on/off, all backends. */}
-            {onNotch && (
-              <View style={styles.bwRow}>
-                <Text style={[styles.bwLabel, { width: 78 }]}>AUTO NOTCH</Text>
-                <View style={{ flex: 1 }} />
-                <TouchableOpacity onPress={() => onNotch?.(!notchOn)} hitSlop={8}
-                  style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
-                           backgroundColor: notchOn ? C.gold : 'transparent',
-                           borderWidth: 1, borderColor: notchOn ? C.gold : C.muted }}>
-                  <Text style={{ color: notchOn ? C.bg : C.muted,
-                                 fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
-                    {notchOn ? 'ON' : 'OFF'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {/* Kiwi squelch — client-side dBFS gate (dBm threshold, −130 = Off). */}
-            {onKiwiSquelch && (
-              <View style={styles.bwRow}>
-                <Text style={styles.bwLabel}>SQUELCH</Text>
-                <Slider style={styles.bwSlider}
-                  minimumValue={-130} maximumValue={-20} step={1}
-                  value={kiwiSquelch <= -130 ? -130 : kiwiSquelch}
-                  onValueChange={(v: number) => onKiwiSquelch?.(v <= -130 ? -130 : v)}
-                  minimumTrackTintColor={kiwiSquelch > -130 ? C.gold : C.muted}
-                  maximumTrackTintColor={C.muted}
-                  thumbTintColor={C.gold} />
-                <Text style={styles.bwVal}>{kiwiSquelch <= -130 ? 'Off' : `${kiwiSquelch}dBm`}</Text>
-              </View>
-            )}
-
-            {!onLocalSquelch && !onKiwiSquelch && !isOwrx && (
-            /* SNR Squelch — UberSDR audio gate. Slider 0–50 dB in OUR meter's
-               units (SDRScreen shifts +30 for the server's raw SNR scale). */
-            <View style={styles.bwRow}>
-              <Text style={styles.bwLabel}>SNR SQL</Text>
-              <Slider style={styles.bwSlider}
-                minimumValue={0} maximumValue={50} step={0.5}
-                value={Math.max(0, snrSquelch === -999 ? 0 : snrSquelch)}
-                onValueChange={(v: number) => onSnrSquelch?.(v <= 0.1 ? -999 : v)}
-                minimumTrackTintColor={snrSquelch > 0 ? C.gold : C.muted}
-                maximumTrackTintColor={C.muted}
-                thumbTintColor={C.gold} />
-              <Text style={styles.bwVal}>{snrSquelch <= -999 ? 'Off' : `≥${snrSquelch.toFixed(0)}`}</Text>
-            </View>
-            )}
-
-            {/* FM Squelch — only shown for fm/nfm. Currently feature-flagged off in UberSDR. */}
-            {!isOwrx && isFmMode && (
-              <View style={styles.bwRow}>
-                <Text style={styles.bwLabel}>FM SQL</Text>
-                <Slider style={styles.bwSlider}
-                  minimumValue={0} maximumValue={100} step={1}
-                  value={fmSquelch <= -999 ? 0 : Math.round((fmSquelch + 48) * 99 / 68 + 1)}
-                  onValueChange={(v: number) => {
-                    const db = v === 0 ? -999 : -48 + (v - 1) * (68 / 99);
-                    onFmSquelch?.(db);
-                  }}
-                  minimumTrackTintColor={fmSquelch > -999 ? C.gold : C.muted}
-                  maximumTrackTintColor={C.muted}
-                  thumbTintColor={C.gold} />
-                <Text style={styles.bwVal}>{fmSquelch <= -999 ? 'Open' : `${fmSquelch.toFixed(1)}dB`}</Text>
-              </View>
-            )}
-
-            {/* ── SERVER SIDE NR (DSP insert) — section appears only when the
-                   server advertises filters (get_dsp_filters → dsp_filters);
-                   type selector + per-filter param sliders only while active,
-                   to keep the menu clutter-free. ── */}
-            {dspFilters.length > 0 && (<>
-            <SectionLabel label="SERVER SIDE NR" />
-            <BtnRow>
-              <Btn
-                label={serverDspEnabled ? 'DISABLE SERVER NR' : 'ENABLE SERVER NR'}
-                active={serverDspEnabled}
-                full
-                style={serverDspEnabled ? { borderColor: 'rgba(50,210,100,0.50)', backgroundColor: 'rgba(50,210,100,0.10)' } : undefined}
-                onPress={() => onServerDsp?.(!serverDspEnabled)}
-              />
-            </BtnRow>
-            {dspError != null && (
-              <Text style={styles.dspError}>{dspError}</Text>
-            )}
-            {serverDspEnabled && (
-              <View style={styles.subPanel}>
-                <SubLabel label="DSP TYPE" />
-                <OptRow>
-                  {dspFilters.map((f: DspFilterDesc) => (
-                    <SegBtn key={f.name} label={f.name.toUpperCase()}
-                            active={serverDspFilter === f.name}
-                            onPress={() => onServerDspFilter?.(f.name)} />
-                  ))}
-                </OptRow>
-                {(dspFilters.find((f: DspFilterDesc) => f.name === serverDspFilter)?.params ?? [])
-                  .filter((p: DspParamDesc) => p.runtime_safe !== false)
-                  .map((p: DspParamDesc) => {
-                    const val = serverDspParams[p.name] ?? p.default ?? '';
-                    if ((p.type ?? 'float').toLowerCase() === 'bool') {
-                      return (
-                        <BtnRow key={p.name}>
-                          <Btn label={fmtParamName(p.name)} active={val === 'true'} full
-                               onPress={() => onServerDspParam?.(p.name, val === 'true' ? 'false' : 'true')} />
-                        </BtnRow>
-                      );
-                    }
-                    const min = parseFloat(p.min ?? ''), max = parseFloat(p.max ?? '');
-                    if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
-                      return null;  // free-text params: not editable on mobile
-                    }
-                    const step = dspStep(min, max);
-                    const num  = Number.isFinite(parseFloat(val)) ? parseFloat(val) : min;
-                    return (
-                      <View key={p.name} style={styles.bwRow}>
-                        <Text style={styles.bwLabel} numberOfLines={1}>{fmtParamName(p.name)}</Text>
-                        <Slider style={styles.bwSlider}
-                          minimumValue={min} maximumValue={max} step={step}
-                          value={Math.max(min, Math.min(max, num))}
-                          onValueChange={(v: number) => onServerDspParam?.(p.name, fmtDspVal(v, step))}
-                          minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted}
-                          thumbTintColor={C.gold} />
-                        <Text style={styles.bwVal}>{fmtDspVal(num, step)}</Text>
-                      </View>
-                    );
-                  })}
-              </View>
-            )}
-            </>)}
 
             {/* ── SERVER MAPS — UberSDR's per-feed Leaflet overlays (skin parity).
                    OWRX has its own combined map (opened from the OPENWEBRX section
                    below), so these UberSDR-specific feeds are hidden for it. ── */}
             {serverType !== 'owrx' && !isLocal && !isKiwi && (<>
-              <SectionLabel label="SERVER MAPS" />
+              <SectionLabel label="SERVER MAPS" icon="maps" />
               <BtnRow>
                 <Btn label="✈ HFDL"     onPress={() => onServerMap?.('hfdl')} />
                 <Btn label="📡 DIGITAL"  onPress={() => onServerMap?.('digi')} />
@@ -1546,7 +1274,7 @@ export default function MenuSheet({
                    client-side decoders + UberSDR spot feeds are hidden for it —
                    replaced by the OPENWEBRX map/files/admin below (Phase 1). ── */}
             {(!isLandscape || isTablet) && serverType !== 'owrx' && (<>
-            <SectionLabel label="CLIENT DECODERS" />
+            <SectionLabel label="CLIENT DECODERS" icon="decoder" />
             <BtnRow>
               {(['rtty','navtex','wefax','sstv','morse'] as const).filter(k => !(isLocal && k === 'morse')).map(k => (
                 <Btn key={k} label={k.toUpperCase()}
@@ -1580,7 +1308,7 @@ export default function MenuSheet({
                    hardware AND Kiwi, which has no server feed). CW SPOTS (server CW
                    skimmer) and STT (server speech-to-text) are real server features,
                    so they're hidden for local hardware and Kiwi. ── */}
-            <SectionLabel label={(isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS'} />
+            <SectionLabel label={(isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS'} icon="spots" />
             <BtnRow>
               <Btn label="DIGITAL SPOTS" active={spotsKind === 'digi'}
                    onPress={() => onSpotsToggle?.('digi')} />
@@ -1607,7 +1335,7 @@ export default function MenuSheet({
             </>)}
 
             {/* ── CONTROLS ───────────────────────────────────────── */}
-            <SectionLabel label="CONTROLS" />
+            <SectionLabel label="CONTROLS" icon="controls" />
             <View style={styles.ctrlRow}>
               <Text style={styles.ctrlLabel}>SIGNAL</Text>
               <BtnRow>
@@ -1645,7 +1373,7 @@ export default function MenuSheet({
                    gallery (SSTV/WEFAX/Navtex images) + settings, so we link those
                    rather than UberSDR's noise/conditions/listeners pages. ──── */}
             {serverType === 'owrx' ? (<>
-              <SectionLabel label="OPENWEBRX" />
+              <SectionLabel label="OPENWEBRX" icon="server" />
               <BtnRow>
                 <Btn label="🗺 MAP"   onPress={() => onAdminLink?.('/map', 'Map')} />
                 <Btn label="🖼 FILES" onPress={() => onAdminLink?.('/files', 'Files')} />
@@ -1654,7 +1382,7 @@ export default function MenuSheet({
                 <Btn label="⚙ ADMIN" full onPress={() => onAdminLink?.('/settings', 'Settings')} />
               </BtnRow>
             </>) : isLocal || isKiwi ? null : (<>
-              <SectionLabel label="INSTANCE ADMIN" />
+              <SectionLabel label="INSTANCE ADMIN" icon="admin" />
               <BtnRow>
                 <Btn label="ADMIN"      onPress={() => onAdminLink?.('/admin.html', 'Admin')} />
                 <Btn label="NOISE"      onPress={() => onAdminLink?.('/noisefloor.html', 'Noise Floor')} />
@@ -1666,9 +1394,13 @@ export default function MenuSheet({
             </>)}
 
             {/* ── INSTANCE ───────────────────────────────────────── */}
-            <SectionLabel label="INSTANCE" />
+            <SectionLabel label="INSTANCE" icon="instance" />
             <Text style={styles.instanceUrl} numberOfLines={1}>{serverName || serverUrl}</Text>
             <BtnRow>
+              {onToggleFavourite && (
+                <Btn label={isFavourite ? '♥ FAVOURITED' : '♡ FAVOURITE'}
+                     active={isFavourite} onPress={onToggleFavourite} />
+              )}
               <Btn label={isDefaultInstance ? '★ CLEAR DEFAULT' : '☆ SET DEFAULT'}
                    active={isDefaultInstance} onPress={onSetDefault} />
             </BtnRow>
@@ -1763,6 +1495,7 @@ const styles = StyleSheet.create({
     paddingTop: 12, paddingBottom: 6, marginTop: 6,
   },
   sectionBarFirst: { borderTopWidth: 0, marginTop: 2 },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sectionLabel: {
     color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 12,
     fontWeight: 'bold', letterSpacing: 2,

@@ -23,6 +23,9 @@ interface FreqModalProps {
   maxHz?:    number;
   /** Lock to MHz (FM-DX broadcast) — grey out the Hz/kHz options. */
   lockUnit?: boolean;
+  /** Share the current station (moved here from the controls bar). Hidden when
+   *  sharing isn't available (undefined). */
+  onShare?:  () => void;
 }
 
 function toDisplay(hz: number, unit: Unit): string {
@@ -43,6 +46,7 @@ export default function FreqModal({
   visible, currentHz, onConfirm, onClose,
   unit: unitProp, onUnit,
   minHz = MIN_FREQ_HZ, maxHz = MAX_FREQ_HZ, lockUnit = false,
+  onShare,
 }: FreqModalProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
@@ -50,6 +54,11 @@ export default function FreqModal({
   const unit = unitProp ?? unitState;
   const [value, setValue] = useState('');
   const inputRef          = useRef<TextInput>(null);
+  // Share presents the native iOS share sheet (UIActivityViewController). Doing
+  // that while this Modal is on screen (or mid-dismiss) wedges iOS touch
+  // handling, so on iOS we close first and fire the share from the Modal's
+  // onDismiss (fires after full dismissal). Android has no such conflict.
+  const pendingShare = useRef(false);
   // Android Modals are a separate window that adjustResize doesn't shrink, so
   // KeyboardAvoidingView can't see the keyboard — track its height ourselves and
   // pad the box up by it so it floats just above the keypad.
@@ -98,6 +107,7 @@ export default function FreqModal({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}
+           onDismiss={() => { if (pendingShare.current) { pendingShare.current = false; onShare?.(); } }}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <Pressable style={st.backdrop} onPress={onClose} />
       <KeyboardAvoidingView
@@ -160,6 +170,19 @@ export default function FreqModal({
                 CANCEL
               </Text>
             </TouchableOpacity>
+            {onShare && (
+              <TouchableOpacity
+                style={[st.cancelBtn, { borderColor: bdrDim, paddingVertical: btnPadY }]}
+                onPress={() => {
+                  if (Platform.OS === 'ios') { pendingShare.current = true; onClose(); }
+                  else { onShare(); onClose(); }
+                }}
+              >
+                <Text style={{ fontFamily: t.font, fontSize: isWhite ? 13 : 12, color: dimText }}>
+                  SHARE
+                </Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               style={[st.tuneBtn, { borderColor: bdrBrt, paddingVertical: btnPadY }]}
               onPress={confirm}

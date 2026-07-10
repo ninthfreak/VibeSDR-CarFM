@@ -29,6 +29,7 @@
 			<array>
 				<string>com.vibesdr.app</string>
 				<string>vibesdr</string>
+				<string>sdr</string>
 			</array>
 		</dict>
 	</array>

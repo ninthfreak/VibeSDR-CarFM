@@ -21,6 +21,28 @@ public:
 
     // RTL-TCP source (rtl_tcp protocol over the network — no USB/librtlsdr, so it
     // works on iOS too). Same pipeline as start(), IQ from a TCP socket.
+    // ── VibeServer (share this device's radio, server-side DSP) ──────────────
+    //
+    // The shim ALREADY is an UberSDR-compatible server: it owns the dongle, runs
+    // the FFT and the demodulator, and serves SPEC frames + PCM audio over a
+    // WebSocket. It has simply never listened anywhere but loopback. Bind it to
+    // 0.0.0.0 and a remote VibeSDR connects to it exactly as it would to any
+    // UberSDR instance — no new client code, and the wire carries pictures and
+    // sound (tens of KB/s) instead of raw IQ (4.8 MB/s).
+    //
+    // Call BEFORE start(). Off by default: this WebSocket carries tuning control
+    // and has no authentication, so it must never leave loopback by accident.
+    static void setServeOnLan(bool on);
+    static bool serveOnLan();
+
+    // SpyServer-compatible backend. Mirrors startTcp(): network IQ into the same
+    // DSP pipeline, so demod/decoders/NR/audio all work unchanged — and, like
+    // startTcp, it has no USB dependency and therefore works on iOS too.
+    int startSpyServer(const std::string& host, int port,
+                       double centerFreq, double sampleRate, int gainTenthDb,
+                       int fftSize, double fftRate, const std::string& mode,
+                       std::string& err);
+
     int startTcp(const std::string& host, int port,
                  double centerFreq, double sampleRate, int gainTenthDb,
                  int fftSize, double fftRate, const std::string& mode, std::string& err);
@@ -65,6 +87,14 @@ public:
         uint64_t stalls     = 0;   // socket delivered nothing for >120ms
         uint64_t droppedSamples = 0;
         uint32_t bufferedMs = 0;   // current standing backlog
+        // SpyServer only. `spy` distinguishes the backend; `canControl` is false
+        // when another client owns the tuner (a read-only server), and `closed`
+        // means the server hung up — session time limit, or it handed the tuner
+        // to someone else. Both must be surfaced, not reported as a generic
+        // "connection lost".
+        bool     spy        = false;
+        bool     canControl = true;
+        bool     closed     = false;
     };
     NetStatus getNetStatus();
 

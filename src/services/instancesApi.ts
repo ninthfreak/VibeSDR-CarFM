@@ -15,7 +15,13 @@ export interface SDRInstance {
   countryCode:   string | null;  // ISO 3166-1 alpha-2 (directory country_code)
   distance:      number | null;   // km, populated when user location is known
   bestSnr:       number | null;   // best band-condition SNR across all bands
-  serverType?:   'ubersdr' | 'owrx' | 'kiwi' | 'fmdx';  // directory-tagged backend (skips re-detect)
+  serverType?:   'ubersdr' | 'owrx' | 'kiwi' | 'fmdx' | 'spyserver';  // directory-tagged backend (skips re-detect)
+  // SpyServer only: the protocol is host:port, not a URL. `url` carries
+  // spyserver://host:port so the rest of the list plumbing (keys, favourites)
+  // keeps working unchanged.
+  deviceType?:   string;   // 'RTL-SDR' | 'AirspyHF+' | 'AirspyOne'
+  full?:         boolean;  // every client slot taken right now
+  sessionLimitMins?: number;  // 0/undefined = no limit; else the server kicks you after this
 }
 
 const BASE_URL = 'https://instances.ubersdr.org/api/instances?conditions=true';

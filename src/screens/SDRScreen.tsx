@@ -55,6 +55,7 @@ import { v4 as uuidv4 }                                from 'uuid';
 import AsyncStorage                                    from '@react-native-async-storage/async-storage';
 import { setDefaultInstance, getDefaultInstance,
          clearDefaultInstance }                        from '../services/defaultInstance';
+import { getFavourites, toggleFavourite }              from '../services/favourites';
 import { useTheme }                                     from '../contexts/ThemeContext';
 
 import WaterfallView   from '../components/WaterfallView';
@@ -67,6 +68,7 @@ import LocalAudioPlayer from '../components/LocalAudioPlayer';
 import LocalHardwarePanel from '../components/LocalHardwarePanel';
 import FreqModal       from '../components/FreqModal';
 import ModeSelector    from '../components/ModeSelector';
+import AudioSheet      from '../components/AudioSheet';
 import StepPicker      from '../components/StepPicker';
 import ChatDrawer,
   { type ChatMessage } from '../components/ChatDrawer';
@@ -329,6 +331,18 @@ export default function SDRScreen({ route, navigation }: Props) {
   // rtl_tcp network health, polled from the shim's jitter buffer. 3 = good (also the
   // resting value on the USB path, where it never clamps anything).
   const netLinkRef = useRef<0|1|2|3>(3);
+  // SpyServer with canControl=0: another client holds the tuner, so tuning would
+  // silently do nothing. Show it rather than letting the user fight a dead dial.
+  const [readOnly, setReadOnly] = useState(false);
+  // True when the local session's IQ comes from a SpyServer: most RTL-specific
+  // hardware controls then belong to the server operator, not us.
+  const [isSpy, setIsSpy] = useState(false);
+  // Session limit (minutes) from the directory. The server enforces it; we just
+  // warn up front and count down, rather than letting it look like a crash.
+  const sessionLimitMins: number = route.params.sessionLimitMins ?? 0;
+  const [sessionEndsAt, setSessionEndsAt] = useState<number | null>(null);
+  const [sessionLeftMs, setSessionLeftMs] = useState<number | null>(null);
+  const noticeShownRef = useRef(false);
   // Per-device persistence suffix so each local source keeps its OWN remembered
   // setup (frequency/mode/step + hardware config). RTL-TCP is keyed by host:port,
   // so UberSDR-over-RTL-TCP and a real-hardware RTL-TCP server never share state;
@@ -913,6 +927,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     }).catch(() => {});
   }, []);
   const [modeSelOpen,   setModeSelOpen]   = useState(false);
+  const [audioSheetOpen, setAudioSheetOpen] = useState(false);
 
   // ── Signal / SNR ──────────────────────────────────────────────────────────
 
@@ -1041,6 +1056,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [isRecording, setIsRecording] = useState(false);
   const [recSeconds,  setRecSeconds]  = useState(0);
   const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // iOS: the native share sheet (UIActivityViewController) must NOT present while
+  // the AudioSheet Modal is up — it presents OVER the modal and RN loses track,
+  // wedging all touch/render on dismiss. So on stop we stash the path, close the
+  // sheet, and fire the share from the sheet's onDismiss (nothing modal up).
+  const pendingRecShare = useRef<string | null>(null);
 
   const toggleRecording = useCallback(() => {
     if (!isRecording) {
@@ -1062,18 +1082,21 @@ export default function SDRScreen({ route, navigation }: Props) {
           // Half-height native share sheet; the file also stays in app storage
           // (iOS Documents / Android filesDir) and is reachable via the
           // Recordings browser. Android needs an Expo content URI to share.
-          if (!path) return;
+          if (!path) { setAudioSheetOpen(false); return; }
           if (Platform.OS === 'android') {
             try {
               const cu = await FileSystem.getContentUriAsync(
                 path.startsWith('file://') ? path : 'file://' + path);
               VibePowerModule?.shareRecording(cu);
             } catch {}
+            setAudioSheetOpen(false);
           } else {
-            VibePowerModule?.shareRecording(path);
+            // Defer the share to AudioSheet's onDismiss (see pendingRecShare).
+            pendingRecShare.current = path;
+            setAudioSheetOpen(false);
           }
         })
-        .catch(() => {});
+        .catch(() => setAudioSheetOpen(false));
     }
   }, [isRecording, status.frequency, status.mode]);
 
@@ -2095,6 +2118,38 @@ export default function SDRScreen({ route, navigation }: Props) {
   const lastTuneLoaded = useRef(false);
   // One-shot: a deep-link initial tune is applied on the first connect only.
   const deepLinkTuneApplied = useRef(false);
+  // Start the session countdown once we're actually connected.
+  useEffect(() => {
+    if (!connected || !sessionLimitMins || sessionEndsAt) return;
+    setSessionEndsAt(Date.now() + sessionLimitMins * 60_000);
+  }, [connected, sessionLimitMins, sessionEndsAt]);
+
+  useEffect(() => {
+    if (!sessionEndsAt) return;
+    const tick = () => setSessionLeftMs(Math.max(0, sessionEndsAt - Date.now()));
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [sessionEndsAt]);
+
+  // One combined notice covering BOTH constraints — a read-only, time-limited
+  // receiver should not produce two popups in a row.
+  useEffect(() => {
+    if (noticeShownRef.current || !connected) return;
+    if (!readOnly && !sessionLimitMins) return;
+    noticeShownRef.current = true;
+    const parts: string[] = [];
+    if (readOnly) parts.push(
+      'This receiver is listen-only — another user is controlling it, so tuning ' +
+      'and mode controls are disabled.');
+    if (sessionLimitMins) parts.push(
+      `This receiver limits each listener to ${sessionLimitMins} minutes. ` +
+      'A countdown is shown next to the clock, and it will disconnect you when the time is up.');
+    Alert.alert(readOnly && sessionLimitMins ? 'Listen-only, and time limited'
+                : readOnly ? 'Listen-only receiver' : 'Time-limited receiver',
+                parts.join('\n\n'));
+  }, [connected, readOnly, sessionLimitMins]);
+
   // rtl_tcp link meter: poll the shim's network-stall counter — periods where the
   // socket delivered nothing for >120 ms. That is the honest client-side view of
   // the link; the backend's own quality reading is FFT-frame timing measured after
@@ -2102,10 +2157,30 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!isLocal) return;
     let last = -1;
+    let toldClosed = false;
     const t = setInterval(async () => {
       try {
         const s = await LocalHw?.getNetStatus?.();
         if (!s?.tcp) { netLinkRef.current = 3; return; }   // USB path: nothing to clamp
+
+        // The SpyServer hung up. It is NOT a generic connection loss: public
+        // servers enforce session limits (30 min – 24 h) and hand the single
+        // tuner to whoever asks next. Say so, once.
+        if (s.spy && s.closed && !toldClosed) {
+          toldClosed = true;
+          Alert.alert(
+            'Receiver disconnected',
+            'The SpyServer closed the connection. Public receivers often limit how ' +
+            'long one listener can stay, and many allow only one at a time — someone ' +
+            'else may now have the tuner.',
+            [{ text: 'OK', onPress: () => navigation.goBack() }],
+          );
+          return;
+        }
+        // Another client owns the tuner: the dial would silently do nothing.
+        setIsSpy(!!s.spy);
+        if (s.spy) setReadOnly(!s.canControl);
+
         const n = s.stalls ?? 0;
         if (last < 0) { last = n; return; }                // first sample: no delta yet
         const delta = n - last;
@@ -2114,7 +2189,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       } catch {}
     }, 2000);
     return () => clearInterval(t);
-  }, [isLocal]);
+  }, [isLocal, navigation]);
 
   // Bypass-password prompt — rate-limited/blocked connections show this
   // directly (the instance password gets around per-IP limits); submitting
@@ -2466,6 +2541,25 @@ export default function SDRScreen({ route, navigation }: Props) {
         .catch(() => {});
     }
   }, [baseUrl, instanceName, isDefault]);
+
+  // Favourite the current instance from the menu — so a good receiver you found
+  // mid-session lands in the picker's favourites without hunting for it again.
+  // Network receivers only (local USB / RTL-TCP / SpyServer wrap localhost and
+  // favourite via the picker, so isLocal instances don't get the button).
+  const [isFavourite, setIsFavourite] = useState(false);
+  useEffect(() => {
+    getFavourites()
+      .then((favs) => setIsFavourite(favs.some((f) => f.url === baseUrl)))
+      .catch(() => {});
+  }, [baseUrl]);
+
+  const onToggleFavourite = useCallback(() => {
+    const st = route.params.serverType ?? 'ubersdr';
+    getFavourites()
+      .then((favs) => toggleFavourite({ name: instanceName ?? baseUrl, url: baseUrl, serverType: st }, favs))
+      .then((next) => setIsFavourite(next.some((f) => f.url === baseUrl)))
+      .catch(() => {});
+  }, [baseUrl, instanceName, route.params.serverType]);
 
   // ── Waterfall gestures ────────────────────────────────────────────────────
 
@@ -3233,6 +3327,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onMenuOpen  = useCallback(() => setMenuOpen(true), []);
   const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
   const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
+  const onAudioOpen = useCallback(() => setAudioSheetOpen(true), []);
 
   // First-run guided tour (dismissable). Spotlights the drum, step rate, the
   // disabled back-gesture, and the menu — opening it to show the route back to
@@ -3461,6 +3556,24 @@ export default function SDRScreen({ route, navigation }: Props) {
       })()}
 
       {/* Kiwi receiver full (too_busy) — all channels in use. */}
+      {/* Read-only: another client owns the tuner (public SpyServers are usually
+          single-tuner). Passive strip, not a blocking card — you can still listen
+          to whatever they have it tuned to. */}
+      {readOnly && (
+        <View pointerEvents="none" style={{
+          position: 'absolute', top: 0, left: 0, right: 0, alignItems: 'center', zIndex: 40,
+        }}>
+          <View style={{
+            marginTop: 6, paddingHorizontal: 12, paddingVertical: 5, borderRadius: 6,
+            backgroundColor: 'rgba(0,0,0,0.75)', borderWidth: 1, borderColor: '#ffb84d',
+          }}>
+            <Text style={{ color: '#ffb84d', fontSize: 12, textAlign: 'center' }}>
+              Listen-only — another user is controlling this receiver
+            </Text>
+          </View>
+        </View>
+      )}
+
       {serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
@@ -3607,11 +3720,15 @@ export default function SDRScreen({ route, navigation }: Props) {
         }}
       >
         <ControlsBar
+          readOnly={readOnly}
+          sessionLeft={sessionLeftMs == null ? null : {
+            text: `${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`,
+            urgent: sessionLeftMs < 120_000,
+          }}
           frequency={status.frequency}
           mode={status.mode}
           step={step}
           connected={connected}
-          onShare={onShareStation}
           bottomInset={0}
           instanceHost={instanceName ?? baseUrl}
           meterBus={meterBus.current}
@@ -3626,6 +3743,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onStep={onStepOpen}
           onMenu={onMenuOpen}
           onChat={openChat}
+          onAudio={onAudioOpen}
           onFreqTap={onFreqOpen}
           onModeTap={onModeOpen}
           freqUnit={freqUnit}
@@ -3699,6 +3817,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         onZoomMax={onZoomMax}
         onSetDefault={onSetDefault}
         isDefaultInstance={isDefault}
+        isFavourite={isFavourite}
+        onToggleFavourite={isLocal ? undefined : onToggleFavourite}
         decMode={selDecoder}
         decOn={activeDecoder !== null && activeDecoder === selDecoder}
         onDecToggle={onDecToggle}
@@ -3834,13 +3954,56 @@ export default function SDRScreen({ route, navigation }: Props) {
         activeDecoder={route.params.serverType === 'owrx'
           ? (activeDecoder === 'sstv' ? 'sstv' : activeDecoder === 'wefax' ? 'fax' : undefined)
           : undefined}
+        filterLow={status.bandwidthLow}
+        filterHigh={status.bandwidthHigh}
+        bwEdgeMax={client.current ? filterEdgeMax(client.current.caps, status.mode) : 6000}
+        onFilterBoth={onFilterBoth}
         onSelect={onMode}
         onClose={() => setModeSelOpen(false)}
+      />
+
+      {/* Audio sheet — NR/NB/squelch/notch/REC + server NR */}
+      <AudioSheet
+        visible={audioSheetOpen}
+        onClose={() => setAudioSheetOpen(false)}
+        onDismiss={() => {
+          const p = pendingRecShare.current;
+          if (p) { pendingRecShare.current = null; VibePowerModule?.shareRecording(p); }
+        }}
+        serverType={route.params.serverType ?? 'ubersdr'}
+        isLocal={isLocal}
+        nr={nrMode !== 'off'}
+        onNr={onNrMode}
+        nb={nb}
+        onNb={onNb}
+        recording={isRecording}
+        recSeconds={recSeconds}
+        onRec={toggleRecording}
+        onRecordings={() => { setAudioSheetOpen(false); setRecordingsOpen(true); }}
+        snrSquelch={snrSquelch}          onSnrSquelch={onSnrSquelch}
+        localSquelch={hwSquelch}         onLocalSquelch={isLocal ? onLocalSquelch : undefined}
+        localNR={hwNrLevel}              onLocalNR={isLocal ? onLocalNR : undefined}
+        kiwiSquelch={kiwiSquelch}        onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
+        fmSquelch={fmSquelch}            onFmSquelch={onFmSquelch}
+        isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
+        notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
+        onOwrxSquelch={(db) => client.current?.setSquelch?.(db)}
+        onOwrxNr={(th) => client.current?.setNr?.(th)}
+        owrxDspDefaults={owrxDspDefaults}
+        serverDspEnabled={serverDspEnabled}
+        serverDspFilter={serverDspFilter}
+        serverDspParams={serverDspParams}
+        dspFilters={dspFilters}
+        dspError={dspError}
+        onServerDsp={onServerDsp}
+        onServerDspFilter={onServerDspFilter}
+        onServerDspParam={onServerDspParam}
       />
 
       {/* v4 local hardware: RTL-SDR controls submenu */}
       {isLocal ? (
         <LocalHardwarePanel
+          isSpy={isSpy}
           visible={hwOpen}
           onClose={() => setHwOpen(false)}
           gains={hwGains}
@@ -3925,6 +4088,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onUnit={setFreqUnit}
         minHz={client.current?.caps.freqRange[0]}
         maxHz={client.current?.caps.freqRange[1]}
+        onShare={isLocal ? undefined : onShareStation}
       />
 
       {/* Chat drawer */}

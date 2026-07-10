@@ -41,6 +41,12 @@ export interface LocalHardwarePanelProps {
   sampleRate: number;
   onSampleRate: (rate: number) => void;
   isTcp?: boolean;           // RTL-TCP allows low rates (UberSDR sends ~192k); USB doesn't
+  /** SpyServer: the server owns the radio, so most RTL-specific controls do not
+   *  apply. Gain does (it is in the protocol); sample rate, PPM, bias-T, digital
+   *  AGC and direct sampling do not — some have no wire representation at all,
+   *  and the rest belong to whoever runs the server. De-emphasis and stereo are
+   *  ours (they act on our own demodulator), so they stay. */
+  isSpy?: boolean;
   biasTee: boolean;
   onBiasTee: (on: boolean) => void;
   agc: boolean;
@@ -83,14 +89,19 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
       </TouchableWithoutFeedback>
       <View style={[styles.sheet, { paddingBottom: insets.bottom + 12 }]}>
         <View style={styles.handleBar}>
-          <Text style={styles.title}>RTL-SDR Controls</Text>
+          <Text style={styles.title}>{p.isSpy ? 'SpyServer Controls' : 'RTL-SDR Controls'}</Text>
           <TouchableOpacity onPress={p.onClose} hitSlop={10}><Text style={styles.close}>✕</Text></TouchableOpacity>
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
           <Text style={styles.section}>GAIN</Text>
           <GainSlider gains={p.gains} gainTenthDb={p.gainTenthDb} auto={p.autoGain}
                       onAuto={p.onAuto} onGain={p.onGain} />
+          {p.isSpy && <Text style={styles.note}>
+            The SpyServer protocol sends a gain step, not a dB value — the labels are
+            this receiver's nearest published gains. There is no auto-gain over the wire.
+          </Text>}
 
+          {!p.isSpy && <>
           <Text style={styles.section}>SAMPLE RATE</Text>
           {/* A real USB dongle runs sluggish/underfiltered below ~1 MHz, so only
               offer >=1 MHz for local hardware; RTL-TCP keeps the low rates (a
@@ -98,6 +109,12 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           <Seg options={p.isTcp ? SAMPLE_RATES : SAMPLE_RATES.filter(r => r >= 1_000_000)}
                value={p.sampleRate} onChange={p.onSampleRate}
                fmt={(r) => `${(r / 1e6).toFixed(r % 1e6 === 0 ? 1 : 3).replace(/0+$/, '').replace(/\.$/, '.0')}M`} />
+          </>}
+          {p.isSpy && <Text style={styles.note}>
+            Sample rate is chosen automatically from the mode: the server decimates
+            before sending, which is what keeps a SpyServer usable over a hotspot or
+            mobile data.
+          </Text>}
 
           <Text style={styles.section}>FM DE-EMPHASIS</Text>
           <Seg options={DEEMPH_OPTS.map(d => d.value)} value={p.deemph} onChange={p.onDeemph}
@@ -110,6 +127,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           </View>
           <Text style={styles.note}>Off forces mono — cleaner on weak/noisy signals.</Text>
 
+          {!p.isSpy && <>
           <Text style={styles.section}>FREQUENCY CORRECTION (PPM)</Text>
           <View style={styles.stepperRow}>
             <TouchableOpacity style={styles.stepBtn} onPress={() => p.onPpm(p.ppm - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
@@ -130,6 +148,11 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           <Seg options={DS_MODES.map(d => d.value)} value={p.directSampling} onChange={p.onDirectSampling}
                fmt={(v) => DS_MODES.find(d => d.value === v)?.label ?? String(v)} />
           <Text style={styles.note}>Not needed on RTL-SDR Blog V4 (HF is covered directly).</Text>
+          </>}
+          {p.isSpy && <Text style={[styles.note, { marginTop: 16 }]}>
+            Frequency correction, bias-T, digital AGC and direct sampling are not part
+            of the SpyServer protocol — they belong to whoever runs this receiver.
+          </Text>}
         </ScrollView>
       </View>
     </Modal>

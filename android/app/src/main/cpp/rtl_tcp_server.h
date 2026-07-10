@@ -47,6 +47,7 @@ public:
         uint32_t sampleRate    = 0;     // rate currently applied to the dongle
         uint32_t overrideRate  = 0;     // 0 = client-controlled
         uint64_t droppedBytes  = 0;     // IQ dropped since this client connected
+        int      port          = 0;     // bound listen port (for re-adopting a running server)
     };
     Status getStatus() const;
 

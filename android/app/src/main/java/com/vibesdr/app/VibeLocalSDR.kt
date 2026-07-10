@@ -105,6 +105,20 @@ object VibeLocalSDR {
     fun getServerStatus(): String { return if (loaded) nativeGetServerStatus() else "{\"running\":false}" }
     fun getNetStatus(): String { return if (loaded) nativeGetNetStatus() else "{\"tcp\":false}" }
 
+    fun startSpyServer(host: String, port: Int, centerFreq: Double, sampleRate: Double,
+                       gainTenthDb: Int, fftSize: Int, fftRate: Double, mode: String): Int {
+        ensureLoaded()
+        return nativeStartSpyServer(host, port, centerFreq, sampleRate, gainTenthDb, fftSize, fftRate, mode)
+    }
+    private external fun nativeStartSpyServer(
+        host: String, port: Int, centerFreq: Double, sampleRate: Double,
+        gainTenthDb: Int, fftSize: Int, fftRate: Double, mode: String): Int
+
+    /** VibeServer: serve the shim's spectrum/audio WS on the LAN, not just loopback.
+     *  Call before startSpectrum(). */
+    fun setServeOnLan(on: Boolean) { ensureLoaded(); nativeSetServeOnLan(on) }
+    private external fun nativeSetServeOnLan(on: Boolean)
+
     private external fun nativeGetNetStatus(): String
     private external fun nativeHello(): String
     private external fun nativeProbeRtl(fd: Int, vid: Int, pid: Int): String

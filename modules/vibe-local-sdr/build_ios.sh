@@ -32,7 +32,7 @@ LIBTOOL="$(xcrun --sdk iphoneos --find libtool)"
 echo "iphoneos SDK: $SDK"
 
 ARCH="-arch arm64 -isysroot $SDK -mios-version-min=$MIN_IOS"
-INC="-I$CPP -I$CPP/vibedsp -I$CPP/ft8_lib"
+INC="-I$CPP -I$CPP/vibedsp -I$CPP/ft8_lib -I$CPP/spyserver"
 CXXFLAGS="-std=c++17 -O3 -ffp-contract=fast -fvisibility=hidden"
 CFLAGS="-O3 -ffp-contract=fast"
 # vibedsp's vendored KissFFT is prefixed vibe_* to avoid clashing with ft8_lib's.
@@ -54,6 +54,8 @@ cc "$CPP/vibedsp/third_party/kissfft/kiss_fftr.c" "$KISSPFX"
 echo "== shim + net + decoders =="
 cxx "$CPP/local_sdr_shim.cpp"
 cxx "$CPP/net_shim.cpp"
+cxx "$CPP/spyserver/spyserver_messages.cpp"
+cxx "$CPP/spyserver/spyserver_client.cpp"
 for d in fsk_decoder wefax_decoder ft8_decoder sstv_decoder audio_nr auto_notch; do cxx "$CPP/decoders/$d.cpp"; done
 
 echo "== ft8_lib (plain KissFFT) =="

@@ -7,14 +7,14 @@
 import { SDRInstance, fetchInstances } from './instancesApi';
 import { fetchFmdxServers } from './fmdxDirectory';
 
-export type DirectoryId = 'ubersdr' | 'receiverbook' | 'kiwisdr' | 'fmdx';
+export type DirectoryId = 'ubersdr' | 'receiverbook' | 'kiwisdr' | 'fmdx' | 'spyserver';
 
 export interface DirectoryMeta {
   id:    DirectoryId;
   name:  string;
   desc:  string;
   /** which backends this directory yields — drives the footer logo/labels. */
-  kinds: ('ubersdr' | 'owrx' | 'kiwi' | 'fmdx')[];
+  kinds: ('ubersdr' | 'owrx' | 'kiwi' | 'fmdx' | 'spyserver')[];
 }
 
 export const DIRECTORIES: DirectoryMeta[] = [
@@ -22,7 +22,14 @@ export const DIRECTORIES: DirectoryMeta[] = [
   { id: 'receiverbook', name: 'Receiverbook', desc: 'OpenWebRX + KiwiSDR (receiverbook.de)',     kinds: ['owrx', 'kiwi'] },
   { id: 'kiwisdr',     name: 'KiwiSDR',     desc: 'Public KiwiSDR network (kiwisdr.com)',        kinds: ['kiwi'] },
   { id: 'fmdx',        name: 'FM-DX',       desc: 'FM-DX Webserver network (servers.fmdx.org)',  kinds: ['fmdx'] },
+  // SpyServer directory listing DELIBERATELY NOT shown (2026-07-09). The public
+  // directory is 219 random hobbyist servers, most full/unreachable/session-
+  // limited, so browsing it is a wall of try-and-fail. fetchSpyServers + the
+  // 'spyserver' dispatch below stay (dead but trivially revived). Connecting to a
+  // SPECIFIC known SpyServer is still available via the manual add-server modal.
 ];
+
+const SPYSERVER_DIR_URL = 'https://airspy.com/directory/status.json';
 
 const RECEIVERBOOK_URL = 'https://www.receiverbook.de/map';
 const KIWI_LIST_URL    = 'http://rx.linkfanel.net/kiwisdr_com.js';
@@ -150,11 +157,59 @@ async function fetchFmdx(lat?: number, lon?: number): Promise<SDRInstance[]> {
 }
 
 /** Fetch a directory's instances, normalised + distance-sorted when located. */
+/**
+ * Public SpyServer-compatible receivers, from Airspy's own directory.
+ *
+ * status.json carries the full capability set for every server, so we never have
+ * to connect to one to describe it. Three device families appear (RTL-SDR 8-bit,
+ * AirspyHF+ 16-bit, AirspyOne 12-bit) and a server that is full closes the socket
+ * right after the hello — indistinguishable from one with no radio — so surfacing
+ * `full` here saves the user a confusing failed connect.
+ */
+async function fetchSpyServers(lat?: number, lon?: number): Promise<SDRInstance[]> {
+  const res = await fetch(SPYSERVER_DIR_URL);
+  if (!res.ok) throw new Error(`SpyServer directory: HTTP ${res.status}`);
+  const json = await res.json();
+  const rows: any[] = Array.isArray(json?.servers) ? json.servers : [];
+  return rows
+    .filter(r => r?.online && r?.streamingHost && r?.streamingPort)
+    .map((r): SDRInstance => {
+      const la = typeof r?.antennaLocation?.lat === 'number' ? r.antennaLocation.lat : null;
+      const lo = typeof r?.antennaLocation?.long === 'number' ? r.antennaLocation.long : null;
+      // 0,0 is the "operator never set a location" default, not the Gulf of Guinea.
+      const hasLoc = la != null && lo != null && !(la === 0 && lo === 0);
+      const users = r.currentClientCount ?? 0;
+      const maxUsers = r.maxClients ?? 1;
+      return {
+        uuid: null,
+        name: r.ownerName || r.generalDescription || `${r.streamingHost}:${r.streamingPort}`,
+        url: `spyserver://${r.streamingHost}:${r.streamingPort}`,
+        location: r.antennaType || r.generalDescription || '',
+        callsign: '',
+        users,
+        maxUsers,
+        online: true,
+        version: r.serverVersion ?? null,
+        latitude:  hasLoc ? la : null,
+        longitude: hasLoc ? lo : null,
+        countryCode: null,
+        distance: hasLoc && lat != null && lon != null ? haversineKm(lat, lon, la!, lo!) : null,
+        bestSnr: null,
+        serverType: 'spyserver',
+        deviceType: r.deviceType ?? undefined,
+        full: users >= maxUsers,
+        sessionLimitMins: typeof r.maxSessionDuration === 'number' && r.maxSessionDuration > 0
+          ? r.maxSessionDuration : undefined,
+      };
+    });
+}
+
 export async function fetchDirectory(id: DirectoryId, lat?: number, lon?: number): Promise<SDRInstance[]> {
   let list: SDRInstance[];
   if (id === 'ubersdr')      list = await fetchInstances(lat, lon);
   else if (id === 'receiverbook') list = await fetchReceiverbook(lat, lon);
   else if (id === 'fmdx')    list = await fetchFmdx(lat, lon);
+  else if (id === 'spyserver') list = await fetchSpyServers(lat, lon);
   else                       list = await fetchKiwiList(lat, lon);
   // distance ascending when we have it, else leave source order
   if (lat != null && lon != null) {

@@ -2,9 +2,16 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
+import Slider from '@react-native-community/slider';
 import { Mode, MODES } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
 import GainSlider from './GainSlider';
+
+const BW_GOLD  = '#ffe566';
+const BW_MUTED = 'rgba(255,255,255,0.92)';
+function fmtHz(hz: number) {
+  return hz >= 1000 ? (hz / 1000).toFixed(1) + ' kHz' : hz + ' Hz';
+}
 
 // Common analog/voice demodulators shown as buttons; everything else the server
 // offers (digital, decoders, sondes…) goes into the in-popup dropdown.
@@ -27,12 +34,22 @@ interface ModeSelectorProps {
     gains: number[]; gainTenthDb: number; auto: boolean;
     onAuto: (auto: boolean) => void; onGain: (tenthDb: number) => void;
   };
+  /** Bandwidth (passband) — a demodulator control, so it lives here under the
+   *  mode grid. Mirrored sliders around the carrier; SYNC mirrors both edges. */
+  filterLow?:    number;
+  filterHigh?:   number;
+  bwEdgeMax?:    number;   // per-edge half-width cap (Hz) for the active mode
+  onFilterBoth?: (low: number, high: number) => void;
 }
 
-export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose, gainControl }: ModeSelectorProps) {
+export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose, gainControl,
+  filterLow = 0, filterHigh = 0, bwEdgeMax = 6000, onFilterBoth }: ModeSelectorProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   const [moreOpen, setMoreOpen] = useState(false);
+  const [bwSync, setBwSync] = useState(false);
+  const bwStep = bwEdgeMax > 20000 ? 1000 : 50;
+  const showBw = onFilterBoth != null;
   // Collapse the decoder dropdown when the sheet closes, so reopening it lands on
   // the current decoder (the scroll-to-active effect only fires on open) instead
   // of staying open scrolled to the top.
@@ -113,6 +130,39 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           ))}
         </View>
 
+        {/* Bandwidth — mirrored sliders around the carrier: slide the LEFT one
+            LEFT to widen the lower sideband, the RIGHT one RIGHT to widen the
+            upper. SYNC mirrors both edges (AM/FM symmetric). */}
+        {showBw && (
+          <View style={st.bwMirrorRow}>
+            <Text style={st.bwEdgeVal}>{filterLow >= 0 ? '+' : '−'}{fmtHz(Math.abs(filterLow))}</Text>
+            <Slider style={st.bwHalfSlider}
+              minimumValue={-bwEdgeMax} maximumValue={0} step={bwStep}
+              value={Math.max(-bwEdgeMax, Math.min(0, filterLow))}
+              onValueChange={(v: number) => {
+                if (bwSync) onFilterBoth?.(v, -v);
+                else        onFilterBoth?.(v, filterHigh);
+              }}
+              minimumTrackTintColor={BW_MUTED} maximumTrackTintColor={BW_GOLD}
+              thumbTintColor={BW_GOLD} />
+            <TouchableOpacity hitSlop={6}
+              style={[st.bwSyncBtn, bwSync && { borderColor: BW_GOLD, backgroundColor: 'rgba(255,200,0,0.12)' }]}
+              onPress={() => setBwSync(p => !p)} activeOpacity={0.7}>
+              <Text style={[st.bwSyncTxt, bwSync && { color: BW_GOLD }]}>SYNC</Text>
+            </TouchableOpacity>
+            <Slider style={st.bwHalfSlider}
+              minimumValue={0} maximumValue={bwEdgeMax} step={bwStep}
+              value={Math.min(bwEdgeMax, Math.max(0, filterHigh))}
+              onValueChange={(v: number) => {
+                if (bwSync) onFilterBoth?.(-v, v);
+                else        onFilterBoth?.(filterLow, v);
+              }}
+              minimumTrackTintColor={BW_GOLD} maximumTrackTintColor={BW_MUTED}
+              thumbTintColor={BW_GOLD} />
+            <Text style={st.bwEdgeVal}>{filterHigh < 0 ? '−' : '+'}{fmtHz(Math.abs(filterHigh))}</Text>
+          </View>
+        )}
+
         {/* Combo dropdown: all the digital / decoder modes the server offers */}
         {others.length > 0 && (
           <View style={st.moreWrap}>
@@ -180,6 +230,11 @@ const st = StyleSheet.create({
   sheetLabel:   { textAlign: 'center', fontSize: 10, letterSpacing: 3, marginBottom: 14 },
   grid:         { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   gainWrap:     { marginBottom: 12, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.15)' },
+  bwMirrorRow:  { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 12 },
+  bwHalfSlider: { flex: 1, height: 32 },
+  bwEdgeVal:    { color: BW_GOLD, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, minWidth: 44, textAlign: 'center' },
+  bwSyncBtn:    { borderWidth: 1, borderColor: 'rgba(255,255,255,0.30)', borderRadius: 5, paddingHorizontal: 12, paddingVertical: 8, alignItems: 'center', justifyContent: 'center' },
+  bwSyncTxt:    { color: BW_MUTED, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, fontWeight: 'bold', letterSpacing: 0.5 },
   btn: {
     flex: 1, minWidth: '22%', backgroundColor: 'transparent',
     borderWidth: 1, borderRadius: 3, paddingHorizontal: 4, alignItems: 'center',
