@@ -490,6 +490,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     ? (client.current as {
         setHwGain?: (t: number, a: boolean) => void; setHwBiasT?: (on: boolean) => void;
         setHwAgc?: (on: boolean) => void; setHwPpm?: (n: number) => void;
+        setHwSampleRate?: (r: number) => void;
       } | null)
     : null), [isRemoteShim]);
 
@@ -509,8 +510,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (rc) rc.setHwPpm?.(v); else LocalHw?.setPpm?.(v);
   }, [LocalHw, hwClient]);
   const onHwSampleRate = useCallback((rate: number) => {
-    setHwSampleRate(rate); LocalHw?.setSampleRate?.(rate);   // capture rate is server-fixed for VibeServer
-  }, [LocalHw]);
+    setHwSampleRate(rate);
+    const rc = hwClient();
+    // VibeServer: ask the server to change its capture rate (= the spectrum span
+    // it sends). Useful to ease a struggling remote link without touching the host.
+    if (rc) rc.setHwSampleRate?.(rate); else LocalHw?.setSampleRate?.(rate);
+  }, [LocalHw, hwClient]);
   const onHwBiasTee = useCallback((on: boolean) => {
     setHwBiasTee(on);
     const rc = hwClient();

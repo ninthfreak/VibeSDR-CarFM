@@ -62,6 +62,7 @@ export class UberSDRAdapter implements SDRBackend {
   setHwBiasT(on: boolean) { this.client.setHwBiasT(on); }
   setHwAgc(on: boolean)   { this.client.setHwAgc(on); }
   setHwPpm(ppm: number)   { this.client.setHwPpm(ppm); }
+  setHwSampleRate(rate: number) { this.client.setHwSampleRate(rate); }
 
   /** Receiver location from /status.json (same shape as OWRX: receiver.gps.lon)
    *  → ITU region, for custom/default UberSDR hosts not carrying a directory lon. */

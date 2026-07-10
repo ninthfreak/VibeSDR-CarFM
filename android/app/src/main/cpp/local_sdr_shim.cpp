@@ -1557,6 +1557,11 @@ struct LocalSdrShim::Impl {
             LocalSdrShim::instance().setAgc(msg.find("\"on\":true") != std::string::npos); return;
         }
         if (type == "ppm") { if (jsonNum(msg,"value",v)) LocalSdrShim::instance().setPpm((int)v); return; }
+        // Capture sample rate = the spectrum span the server sends. A remote client
+        // can widen/narrow it (e.g. drop the rate to ease a struggling link) without
+        // touching the server. setSampleRate restarts the IQ stream and pushes a
+        // fresh config, so the client's waterfall span updates itself.
+        if (type == "sampleRate") { if (jsonNum(msg,"value",v) && v > 0) LocalSdrShim::instance().setSampleRate(v); return; }
         if (type == "directSampling") {
             if (jsonNum(msg,"value",v)) LocalSdrShim::instance().setDirectSampling((int)v); return;
         }

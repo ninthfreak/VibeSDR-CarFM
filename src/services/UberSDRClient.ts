@@ -267,7 +267,12 @@ export class UberSDRClient {
   setBandwidth(low: number, high: number) {
     this.status.bandwidthLow  = low;
     this.status.bandwidthHigh = high;
-    VibePowerModule?.sendBandwidth(low, high);
+    // Local shim (on-device or a remote VibeServer): the demod runs server-side
+    // and its audio WS is NOT owned by VibePowerModule, so sendBandwidth() is a
+    // no-op there. Send over the spectrum WS control channel — handleControl's
+    // 'bandwidth' case applies it. UberSDR keeps the native audio-WS path.
+    if (this.isLocal) this._sendCtl({ type: 'bandwidth', bandwidthLow: low, bandwidthHigh: high });
+    else VibePowerModule?.sendBandwidth(low, high);
   }
 
   // Frequency MUST be an integer — server unmarshals into uint64 and rejects
@@ -307,6 +312,9 @@ export class UberSDRClient {
   setHwBiasT(on: boolean) { this._sendCtl({ type: 'biasT', on }); }
   setHwAgc(on: boolean)   { this._sendCtl({ type: 'agc', on }); }
   setHwPpm(ppm: number)   { this._sendCtl({ type: 'ppm', value: Math.round(ppm) }); }
+  // Capture sample rate = the spectrum span the server sends. The shim restarts
+  // the IQ stream and pushes a fresh config, so the waterfall span self-updates.
+  setHwSampleRate(rate: number) { this._sendCtl({ type: 'sampleRate', value: Math.round(rate) }); }
 
   /** Coalesced view sender — keeps only the latest target, sends ≤1/VIEW_SEND_MS
    *  with the final state always delivered (trailing edge). */
