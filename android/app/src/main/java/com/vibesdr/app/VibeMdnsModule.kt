@@ -27,6 +27,15 @@ class VibeMdnsModule(private val reactCtx: ReactApplicationContext) :
     companion object {
         private const val TAG = "VibeMDNS"
         private const val SERVICE_TYPE = "_rtl_tcp._tcp."
+        // VibeServer advertises its own service type so a discovered server is
+        // known to speak the compressed VibeServer protocol (and whether it needs
+        // a PIN) before the client connects.
+        private const val VIBE_SERVICE_TYPE = "_vibesdr._tcp."
+
+        private fun typeFor(proto: String) =
+            if (proto == "vibeserver") VIBE_SERVICE_TYPE else SERVICE_TYPE
+        private fun protoFor(serviceType: String) =
+            if (serviceType.contains("vibesdr")) "vibeserver" else "rtltcp"
     }
 
     override fun getName() = "VibeMDNS"
@@ -34,7 +43,9 @@ class VibeMdnsModule(private val reactCtx: ReactApplicationContext) :
     private val nsd: NsdManager? by lazy {
         reactCtx.getSystemService(Context.NSD_SERVICE) as? NsdManager
     }
-    private var discoveryListener: NsdManager.DiscoveryListener? = null
+    // One discovery listener per service type (NsdManager browses a single type
+    // per listener), so we surface both RTL-TCP and VibeServer hosts at once.
+    private val discoveryListeners = mutableListOf<NsdManager.DiscoveryListener>()
 
     // NsdManager.resolveService allows only one in-flight resolve at a time on
     // older APIs, so serialise them through a queue.
@@ -45,34 +56,36 @@ class VibeMdnsModule(private val reactCtx: ReactApplicationContext) :
     fun startDiscovery() {
         val manager = nsd ?: return
         stopDiscovery()
-        val listener = object : NsdManager.DiscoveryListener {
-            override fun onDiscoveryStarted(serviceType: String) {}
-            override fun onDiscoveryStopped(serviceType: String) {}
-            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-                Log.w(TAG, "start discovery failed: $errorCode")
+        for (type in listOf(SERVICE_TYPE, VIBE_SERVICE_TYPE)) {
+            val listener = object : NsdManager.DiscoveryListener {
+                override fun onDiscoveryStarted(serviceType: String) {}
+                override fun onDiscoveryStopped(serviceType: String) {}
+                override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                    Log.w(TAG, "start discovery failed ($type): $errorCode")
+                }
+                override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+                override fun onServiceFound(info: NsdServiceInfo) {
+                    enqueueResolve(info)
+                }
+                override fun onServiceLost(info: NsdServiceInfo) {
+                    emit("VibeMdnsLost") { it.putString("name", info.serviceName) }
+                }
             }
-            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
-            override fun onServiceFound(info: NsdServiceInfo) {
-                enqueueResolve(info)
+            try {
+                manager.discoverServices(type, NsdManager.PROTOCOL_DNS_SD, listener)
+                discoveryListeners.add(listener)
+            } catch (e: Exception) {
+                Log.w(TAG, "discoverServices($type) threw: ${e.message}")
             }
-            override fun onServiceLost(info: NsdServiceInfo) {
-                emit("VibeMdnsLost") { it.putString("name", info.serviceName) }
-            }
-        }
-        discoveryListener = listener
-        try {
-            manager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
-        } catch (e: Exception) {
-            Log.w(TAG, "discoverServices threw: ${e.message}")
-            discoveryListener = null
         }
     }
 
     @ReactMethod
     fun stopDiscovery() {
-        val listener = discoveryListener ?: return
-        discoveryListener = null
-        try { nsd?.stopServiceDiscovery(listener) } catch (_: Exception) {}
+        for (listener in discoveryListeners) {
+            try { nsd?.stopServiceDiscovery(listener) } catch (_: Exception) {}
+        }
+        discoveryListeners.clear()
         resolveQueue.clear()
         resolving = false
     }
@@ -101,6 +114,8 @@ class VibeMdnsModule(private val reactCtx: ReactApplicationContext) :
                         it.putString("name", friendlyName(info))
                         it.putString("host", host)
                         it.putInt("port", port)
+                        it.putString("proto", protoFor(info.serviceType ?: ""))
+                        it.putBoolean("pin", txt(info, "pin") == "1")
                     }
                 }
                 resolving = false
@@ -118,14 +133,15 @@ class VibeMdnsModule(private val reactCtx: ReactApplicationContext) :
 
     /** Prefer the `name` TXT attribute; fall back to the service name. */
     private fun friendlyName(info: NsdServiceInfo): String {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            val attrs = info.attributes
-            val raw = attrs?.get("name")
-            if (raw != null && raw.isNotEmpty()) {
-                return try { String(raw, Charsets.UTF_8) } catch (_: Exception) { info.serviceName }
-            }
-        }
-        return info.serviceName
+        val n = txt(info, "name")
+        return if (!n.isNullOrEmpty()) n else info.serviceName
+    }
+
+    /** Read a TXT attribute as UTF-8, or null. */
+    private fun txt(info: NsdServiceInfo, key: String): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return null
+        val raw = info.attributes?.get(key) ?: return null
+        return try { String(raw, Charsets.UTF_8) } catch (_: Exception) { null }
     }
 
     // ── Advertise (register) THIS device's RTL-TCP server via mDNS ───────────
@@ -135,15 +151,17 @@ class VibeMdnsModule(private val reactCtx: ReactApplicationContext) :
      *  TXT `name` carries the friendly label. Re-registers if already advertising
      *  (e.g. the user edited the name). */
     @ReactMethod
-    fun advertise(name: String, port: Int, promise: Promise) {
+    fun advertise(name: String, port: Int, proto: String, pinRequired: Boolean, promise: Promise) {
         val manager = nsd ?: run { promise.reject("no_nsd", "NSD unavailable"); return }
         stopAdvertiseInternal()
         val info = NsdServiceInfo().apply {
             serviceName = name
-            serviceType = SERVICE_TYPE
+            serviceType = typeFor(proto)
             this.port = port
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 setAttribute("name", name)
+                setAttribute("proto", proto)
+                setAttribute("pin", if (pinRequired) "1" else "0")
             }
         }
         val listener = object : NsdManager.RegistrationListener {

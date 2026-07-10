@@ -34,12 +34,14 @@ class RtlTcpServerService : Service() {
         const val EXTRA_NAME = "name"
         const val EXTRA_IP   = "ip"
         const val EXTRA_PORT = "port"
+        const val EXTRA_MODE = "mode"          // "rtltcp" (default) | "vibeserver"
         private const val CHANNEL_ID = "vibesdr_rtltcp_server"
         private const val NOTIF_ID = 4711
 
-        fun start(ctx: Context, name: String, ip: String, port: Int) {
+        fun start(ctx: Context, name: String, ip: String, port: Int, mode: String = "rtltcp") {
             val i = Intent(ctx, RtlTcpServerService::class.java)
-                .putExtra(EXTRA_NAME, name).putExtra(EXTRA_IP, ip).putExtra(EXTRA_PORT, port)
+                .putExtra(EXTRA_NAME, name).putExtra(EXTRA_IP, ip)
+                .putExtra(EXTRA_PORT, port).putExtra(EXTRA_MODE, mode)
             ContextCompat_startForegroundService(ctx, i)
         }
 
@@ -59,6 +61,7 @@ class RtlTcpServerService : Service() {
     private var name = "VibeSDR RTL-SDR"
     private var ip = ""
     private var port = 1234
+    private var mode = "rtltcp"
 
     private val ticker = object : Runnable {
         override fun run() {
@@ -74,6 +77,7 @@ class RtlTcpServerService : Service() {
             name = it.getStringExtra(EXTRA_NAME) ?: name
             ip   = it.getStringExtra(EXTRA_IP) ?: ip
             port = it.getIntExtra(EXTRA_PORT, port)
+            mode = it.getStringExtra(EXTRA_MODE) ?: mode
         }
         ensureChannel()
         startForegroundInternal()
@@ -126,7 +130,27 @@ class RtlTcpServerService : Service() {
         return if (overrideRate > 0) "$clean (capped)" else clean
     }
 
+    private fun rate(bytesPerSec: Long): String {
+        if (bytesPerSec <= 0) return "0"
+        val kb = bytesPerSec / 1024.0
+        return if (kb >= 1000) String.format("%.1f MB/s", kb / 1024.0)
+               else String.format("%.0f KB/s", kb)
+    }
+
     private fun statusText(): String {
+        if (mode == "vibeserver") {
+            return try {
+                val j = JSONObject(VibeLocalSDR.getVibeServerStatus())
+                val client = j.optBoolean("client", false)
+                val addr = j.optString("clientAddr", "")
+                val spec = j.optLong("specBytesPerSec", 0)
+                val aud = j.optLong("audioBytesPerSec", 0)
+                if (client) {
+                    val who = if (addr.isNotEmpty()) addr else "client"
+                    "$ip:$port · $who · spec ${rate(spec)} · audio ${rate(aud)}"
+                } else "$ip:$port · waiting for client"
+            } catch (_: Throwable) { "$ip:$port" }
+        }
         return try {
             val j = JSONObject(VibeLocalSDR.getServerStatus())
             val sr = j.optLong("sampleRate", 0)
