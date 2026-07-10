@@ -303,6 +303,94 @@ vibedsp::RxPipeline::Mode rxModeFor(ModeParams::Kind k) {
 
 } // namespace
 
+// ── VibeServer server-side state (declared here so Impl members can see it) ──
+// LAN bind flag + PIN secret + compatibility limits + audio-codec toggle. The
+// public setter methods that write these live after the Impl struct.
+static std::atomic<bool>   g_serveOnLan{false};
+static std::mutex          g_vsMtx;
+static std::string         g_vsSecret;                 // empty = no PIN (open)
+static std::atomic<double> g_vsMaxBandwidth{0.0};      // <=0 = no cap
+static std::atomic<double> g_vsMaxFftRate{0.0};        // <=0 = server default (20 fps)
+static std::atomic<bool>   g_vsCompressAudio{true};
+
+// Nonce ledger (single-use, 30 s TTL) + per-IP failure backoff. Small maps: a
+// single-client server, so lock contention is trivial.
+namespace {
+struct VsAuth {
+    std::mutex mtx;
+    std::mt19937_64 rng{ (uint64_t)std::chrono::steady_clock::now().time_since_epoch().count() };
+    std::unordered_map<std::string, int64_t> issued;    // nonce hex -> issue ms
+    struct Fail { int count = 0; int64_t until = 0; };  // lockout epoch ms
+    std::unordered_map<std::string, Fail> fails;
+
+    static int64_t nowMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+    void prune(int64_t now) {                            // drop nonces >30 s old
+        for (auto it = issued.begin(); it != issued.end();)
+            it = (now - it->second > 30000) ? issued.erase(it) : std::next(it);
+    }
+    std::string issue() {
+        std::lock_guard<std::mutex> lk(mtx);
+        int64_t now = nowMs(); prune(now);
+        uint8_t raw[16];
+        uint64_t a = rng(), b = rng();
+        memcpy(raw, &a, 8); memcpy(raw + 8, &b, 8);
+        std::string hex = toHex(raw, 16);
+        issued[hex] = now;
+        return hex;
+    }
+    bool blocked(const std::string& ip) {
+        std::lock_guard<std::mutex> lk(mtx);
+        auto it = fails.find(ip);
+        return it != fails.end() && nowMs() < it->second.until;
+    }
+    void recordFail(const std::string& ip) {
+        std::lock_guard<std::mutex> lk(mtx);
+        auto& f = fails[ip];
+        f.count++;
+        if (f.count >= 3) {                              // backoff: 2s,4s,8s… ≤60s
+            int64_t wait = (int64_t)2000 << std::min(f.count - 3, 5);
+            f.until = nowMs() + std::min(wait, (int64_t)60000);
+        }
+    }
+    void recordOk(const std::string& ip) {
+        std::lock_guard<std::mutex> lk(mtx); fails.erase(ip);
+    }
+    // Consume the nonce (single-use) and confirm HMAC(secret, nonce)==token.
+    bool verify(const std::string& secret, const std::string& nonce, const std::string& token) {
+        std::lock_guard<std::mutex> lk(mtx);
+        int64_t now = nowMs(); prune(now);
+        auto it = issued.find(nonce);
+        if (it == issued.end()) return false;            // unknown/expired/replayed
+        issued.erase(it);
+        uint8_t mac[32];
+        hmacSha256((const uint8_t*)secret.data(), secret.size(),
+                   (const uint8_t*)nonce.data(), nonce.size(), mac);
+        return ctEqual(toHex(mac, 32), token);
+    }
+};
+VsAuth g_vsAuthState;
+
+// Extract a query-string value (?a=1&key=val) from a full HTTP request line.
+std::string queryParam(const std::string& reqLine, const char* key) {
+    auto q = reqLine.find('?'); if (q == std::string::npos) return "";
+    auto sp = reqLine.find(' ', q);
+    std::string qs = reqLine.substr(q + 1, sp == std::string::npos ? std::string::npos : sp - q - 1);
+    std::string pat = std::string(key) + "=";
+    size_t p = 0;
+    while (p < qs.size()) {
+        size_t amp = qs.find('&', p);
+        std::string kv = qs.substr(p, amp == std::string::npos ? std::string::npos : amp - p);
+        if (kv.rfind(pat, 0) == 0) return kv.substr(pat.size());
+        if (amp == std::string::npos) break;
+        p = amp + 1;
+    }
+    return "";
+}
+} // namespace
+
 // ── Impl ────────────────────────────────────────────────────────────────────
 struct LocalSdrShim::Impl {
     bool decoderOnly = false;             // sidecar mode: decoders only, no RTL
@@ -1342,6 +1430,10 @@ struct LocalSdrShim::Impl {
 
     void setBandwidth(double bw) {
         if (bw <= 0) return;
+        // VibeServer bandwidth cap: a serving host may limit demod bandwidth to
+        // save CPU / wire data; the client's wider request is clamped server-side.
+        { double cap = g_vsMaxBandwidth.load();
+          if (g_serveOnLan.load() && cap > 0 && bw > cap) bw = cap; }
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
         rxBwHz = std::min(bw, sampleRate * 0.8);
         vfoBwHz.store(rxBwHz);
@@ -1814,22 +1906,14 @@ struct LocalSdrShim::Impl {
 // Serialises start()/stop() so concurrent app-teardown calls can't double-free.
 static std::mutex g_lifecycle;
 
-// VibeServer: bind the shim's own WS server to the LAN rather than loopback.
-// Deliberately a separate opt-in rather than a start() parameter — this exposes a
-// tuning-control channel, so it must be an explicit act, not a defaulted argument
-// somebody forgets to pass.
-static std::atomic<bool> g_serveOnLan{false};
+// VibeServer LAN-bind opt-in (g_serveOnLan is declared above the Impl struct so
+// its members can read it). A separate act rather than a start() parameter: it
+// exposes a tuning-control channel, so it must never be a defaulted argument.
 void LocalSdrShim::setServeOnLan(bool on) { g_serveOnLan.store(on); }
 bool LocalSdrShim::serveOnLan() { return g_serveOnLan.load(); }
 static const char* bindHost() { return g_serveOnLan.load() ? "0.0.0.0" : "127.0.0.1"; }
 
-// ── VibeServer server-side config: PIN auth, limits, audio compression ───────
-static std::mutex               g_vsMtx;
-static std::string              g_vsSecret;                 // empty = no PIN
-static std::atomic<double>      g_vsMaxBandwidth{0.0};      // <=0 = no cap
-static std::atomic<double>      g_vsMaxFftRate{0.0};        // <=0 = server default
-static std::atomic<bool>        g_vsCompressAudio{true};
-
+// VibeServer server-side config setter definitions (state declared above Impl).
 void LocalSdrShim::setVibeServerAuth(const std::string& secret) {
     std::lock_guard<std::mutex> lk(g_vsMtx); g_vsSecret = secret;
 }
@@ -1837,87 +1921,6 @@ void LocalSdrShim::setVibeServerLimits(double maxBandwidthHz, double maxFftRate)
     g_vsMaxBandwidth.store(maxBandwidthHz); g_vsMaxFftRate.store(maxFftRate);
 }
 void LocalSdrShim::setVibeServerCompressAudio(bool on) { g_vsCompressAudio.store(on); }
-
-// Nonce ledger (single-use, TTL) + per-IP failure backoff. Small maps: this is a
-// single-client server, so contention is trivial.
-namespace {
-struct VsAuth {
-    std::mutex mtx;
-    std::mt19937_64 rng{ (uint64_t)std::chrono::steady_clock::now().time_since_epoch().count() };
-    std::unordered_map<std::string, int64_t> issued;   // nonce hex -> issue ms (unused)
-    struct Fail { int count = 0; int64_t until = 0; };  // lockout epoch ms
-    std::unordered_map<std::string, Fail> fails;
-
-    static int64_t nowMs() {
-        return std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-    }
-    // Prune anything older than 30 s from the issued ledger.
-    void prune(int64_t now) {
-        for (auto it = issued.begin(); it != issued.end();)
-            it = (now - it->second > 30000) ? issued.erase(it) : std::next(it);
-    }
-    std::string issue() {
-        std::lock_guard<std::mutex> lk(mtx);
-        int64_t now = nowMs(); prune(now);
-        uint8_t raw[16];
-        uint64_t a = rng(), b = rng();
-        memcpy(raw, &a, 8); memcpy(raw + 8, &b, 8);
-        std::string hex = toHex(raw, 16);
-        issued[hex] = now;
-        return hex;
-    }
-    bool blocked(const std::string& ip) {
-        std::lock_guard<std::mutex> lk(mtx);
-        auto it = fails.find(ip);
-        return it != fails.end() && nowMs() < it->second.until;
-    }
-    void recordFail(const std::string& ip) {
-        std::lock_guard<std::mutex> lk(mtx);
-        auto& f = fails[ip];
-        f.count++;
-        // Exponential-ish backoff after 3 strikes: 2s,4s,8s… capped at 60s.
-        if (f.count >= 3) {
-            int64_t wait = (int64_t)2000 << std::min(f.count - 3, 5);
-            f.until = nowMs() + std::min(wait, (int64_t)60000);
-        }
-    }
-    void recordOk(const std::string& ip) {
-        std::lock_guard<std::mutex> lk(mtx);
-        fails.erase(ip);
-    }
-    // Consume the nonce (single-use) and confirm HMAC(secret, nonce)==token.
-    bool verify(const std::string& secret, const std::string& nonce, const std::string& token) {
-        std::lock_guard<std::mutex> lk(mtx);
-        int64_t now = nowMs(); prune(now);
-        auto it = issued.find(nonce);
-        if (it == issued.end()) return false;           // unknown/expired/replayed
-        issued.erase(it);                                // single use
-        uint8_t mac[32];
-        hmacSha256((const uint8_t*)secret.data(), secret.size(),
-                   (const uint8_t*)nonce.data(), nonce.size(), mac);
-        return ctEqual(toHex(mac, 32), token);
-    }
-};
-VsAuth g_vsAuthState;
-
-// Extract a query-string value (?a=1&key=val) from a full request line.
-std::string queryParam(const std::string& reqLine, const char* key) {
-    auto q = reqLine.find('?'); if (q == std::string::npos) return "";
-    auto sp = reqLine.find(' ', q);
-    std::string qs = reqLine.substr(q + 1, sp == std::string::npos ? std::string::npos : sp - q - 1);
-    std::string pat = std::string(key) + "=";
-    size_t p = 0;
-    while (p < qs.size()) {
-        size_t amp = qs.find('&', p);
-        std::string kv = qs.substr(p, amp == std::string::npos ? std::string::npos : amp - p);
-        if (kv.rfind(pat, 0) == 0) return kv.substr(pat.size());
-        if (amp == std::string::npos) break;
-        p = amp + 1;
-    }
-    return "";
-}
-} // namespace
 
 LocalSdrShim& LocalSdrShim::instance() { static LocalSdrShim inst; return inst; }
 
@@ -1933,6 +1936,13 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     impl->sampleRate = sampleRate;
     impl->fftSize = fftSize;
     impl->fftRate = fftRate;
+    // VibeServer waterfall frame-rate throttle: a serving host can cap fps (Full
+    // 20 / Half 10 / Quarter 5) to save CPU and wire data. The client interpolates
+    // the waterfall, so a lower rate still scrolls smoothly.
+    if (g_serveOnLan.load()) {
+        double mr = g_vsMaxFftRate.load();
+        if (mr > 0 && mr < impl->fftRate) impl->fftRate = mr;
+    }
     impl->rtlCenter.store(centerFreq);
     impl->viewCenter.store(centerFreq);
     impl->audioFreq.store(centerFreq);
