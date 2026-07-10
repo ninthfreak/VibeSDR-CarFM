@@ -112,6 +112,22 @@ public:
     };
     NetStatus getNetStatus();
 
+    // VibeServer live status for the sharing screen: whether a remote client is
+    // connected, and SEPARATE real-time byte rates for the spectrum vs the audio
+    // stream (so the user sees exactly what the server is pushing).
+    struct VibeServerStatus {
+        bool     running          = false;
+        bool     clientConnected  = false;
+        std::string clientAddr;
+        double   specBytesPerSec  = 0.0;
+        double   audioBytesPerSec = 0.0;
+        bool     compressed       = true;
+        bool     pinEnabled       = false;
+        double   fftRate          = 0.0;
+        double   bandwidthHz      = 0.0;
+    };
+    VibeServerStatus getVibeServerStatus();
+
 private:
     LocalSdrShim() = default;
     void stopLocked();      // teardown; caller must hold g_lifecycle

@@ -298,6 +298,24 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
     return env->NewStringUTF(j.c_str());
 }
 
+// VibeServer live status: client presence + SEPARATE spectrum/audio byte rates.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeGetVibeServerStatus(JNIEnv* env, jobject) {
+    auto s = vibe::LocalSdrShim::instance().getVibeServerStatus();
+    std::string j = "{";
+    j += "\"running\":"          + std::string(s.running ? "true" : "false");
+    j += ",\"client\":"          + std::string(s.clientConnected ? "true" : "false");
+    j += ",\"clientAddr\":\""    + s.clientAddr + "\"";
+    j += ",\"specBytesPerSec\":" + std::to_string((long long)(s.specBytesPerSec + 0.5));
+    j += ",\"audioBytesPerSec\":"+ std::to_string((long long)(s.audioBytesPerSec + 0.5));
+    j += ",\"compressed\":"      + std::string(s.compressed ? "true" : "false");
+    j += ",\"pinEnabled\":"      + std::string(s.pinEnabled ? "true" : "false");
+    j += ",\"fftRate\":"         + std::to_string((long long)(s.fftRate + 0.5));
+    j += ",\"bandwidthHz\":"     + std::to_string((long long)(s.bandwidthHz + 0.5));
+    j += "}";
+    return env->NewStringUTF(j.c_str());
+}
+
 // rtl_tcp CLIENT link health (jitter buffer). JSON, like the server status above.
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeGetNetStatus(JNIEnv* env, jobject) {

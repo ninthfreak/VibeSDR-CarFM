@@ -103,6 +103,7 @@ object VibeLocalSDR {
     fun stopServer() { if (loaded) nativeStopServer() }
     fun setServerSampleRate(rate: Double) { if (loaded) nativeSetServerSampleRate(rate) }
     fun getServerStatus(): String { return if (loaded) nativeGetServerStatus() else "{\"running\":false}" }
+    fun getVibeServerStatus(): String { return if (loaded) nativeGetVibeServerStatus() else "{\"running\":false}" }
     fun getNetStatus(): String { return if (loaded) nativeGetNetStatus() else "{\"tcp\":false}" }
 
     fun startSpyServer(host: String, port: Int, centerFreq: Double, sampleRate: Double,
@@ -165,4 +166,5 @@ object VibeLocalSDR {
     private external fun nativeStopServer()
     private external fun nativeSetServerSampleRate(rate: Double)
     private external fun nativeGetServerStatus(): String
+    private external fun nativeGetVibeServerStatus(): String
 }

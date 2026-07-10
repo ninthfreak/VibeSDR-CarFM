@@ -718,6 +718,13 @@ struct LocalSdrShim::Impl {
     // mono<->stereo transitions (mono also feeds it (L+R)/2), so the mid channel
     // never resets; S = (L-R)/2 is only sent when a stereo pilot is locked.
     AdpcmState adpcmM, adpcmS;
+    // VibeServer wire-byte counters (cumulative), split spectrum vs audio, for the
+    // sharing screen's live "what the server is pushing" readout. The rate is
+    // computed as a delta between successive getVibeServerStatus() polls.
+    std::atomic<uint64_t> vsSpecBytes{0}, vsAudioBytes{0};
+    std::mutex vsRateMtx;
+    uint64_t vsRateLastSpec = 0, vsRateLastAudio = 0;
+    int64_t  vsRateLastMs = 0;
     std::atomic<float> spectrumSnr{0.0f};   // peak−floor (dB), centre vs edges
 
     // Audio-extension decoder (RTTY etc.) on /ws/dxcluster — fed the demod audio.
@@ -856,6 +863,7 @@ struct LocalSdrShim::Impl {
                 if (eN) iqFloorDb.store((float)(eSum / eN));
             }
             sendWs(sock, 0x2, frame.data(), frame.size());
+            vsSpecBytes.fetch_add(frame.size(), std::memory_order_relaxed);
             if (n % 10 == 0) sendFmMeta(sock);   // RDS + stereo ~1/sec
         }
         // Tuned-channel power for squelch (peak dB in the demod passband).
@@ -998,6 +1006,7 @@ struct LocalSdrShim::Impl {
             frame[22+i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
         sendWs(sock, 0x2, frame.data(), frame.size());
+        vsSpecBytes.fetch_add(frame.size(), std::memory_order_relaxed);
         if (frameNo % 10 == 0) sendFmMeta(sock);
     }
 
@@ -1049,6 +1058,7 @@ struct LocalSdrShim::Impl {
             uint32_t sr = (uint32_t)AUDIO_SR; std::memcpy(&frame[2], &sr, 4);
             std::memcpy(frame.data() + 6, pcm, (size_t)count * ch * 2);
             sendWs(sock, 0x2, frame.data(), frame.size());
+            vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
             return;
         }
         bool stereo = (ch == 2 && stereoDetected.load());
@@ -1074,6 +1084,7 @@ struct LocalSdrShim::Impl {
             adpcmEncodeBlock(frame, side.data(), count, adpcmS);
         }
         sendWs(sock, 0x2, frame.data(), frame.size());
+        vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
     }
 
     void onAudio(stereo_t* data, int count, int ch) {
@@ -2542,6 +2553,34 @@ LocalSdrShim::NetStatus LocalSdrShim::getNetStatus() {
     double rate = p->sampleRate > 0 ? p->sampleRate : 1.0;
     std::lock_guard<std::mutex> lk(p->iqMtx);
     s.bufferedMs = (uint32_t)(p->iqQueuedSamples * 1000.0 / rate);
+    return s;
+}
+
+LocalSdrShim::VibeServerStatus LocalSdrShim::getVibeServerStatus() {
+    VibeServerStatus s;
+    s.compressed = g_vsCompressAudio.load();
+    { std::lock_guard<std::mutex> lk(g_vsMtx); s.pinEnabled = !g_vsSecret.empty(); }
+    if (!p) return s;
+    s.running   = g_serveOnLan.load();
+    s.fftRate   = p->fftRate;
+    s.bandwidthHz = p->vfoBwHz.load();
+    { std::lock_guard<std::mutex> lk(p->clientMtx);
+      auto sp = p->specClient, au = p->audioClient;
+      s.clientConnected = (sp && sp->isOpen()) || (au && au->isOpen());
+      if (au && au->isOpen()) s.clientAddr = au->peerAddress();
+      else if (sp && sp->isOpen()) s.clientAddr = sp->peerAddress(); }
+    // Byte rates = delta since the previous poll (the sharing screen polls ~1-2 s).
+    uint64_t spec = p->vsSpecBytes.load(std::memory_order_relaxed);
+    uint64_t aud  = p->vsAudioBytes.load(std::memory_order_relaxed);
+    int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> lk(p->vsRateMtx);
+    if (p->vsRateLastMs > 0 && now > p->vsRateLastMs) {
+        double dt = (now - p->vsRateLastMs) / 1000.0;
+        s.specBytesPerSec  = (spec - p->vsRateLastSpec) / dt;
+        s.audioBytesPerSec = (aud  - p->vsRateLastAudio) / dt;
+    }
+    p->vsRateLastSpec = spec; p->vsRateLastAudio = aud; p->vsRateLastMs = now;
     return s;
 }
 
