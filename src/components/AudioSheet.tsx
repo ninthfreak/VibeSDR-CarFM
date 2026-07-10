@@ -5,6 +5,7 @@ import {
 import Slider from '@react-native-community/slider';
 import { useTheme } from '../contexts/ThemeContext';
 import type { DspFilterDesc, DspParamDesc } from './MenuSheet';
+import SectionIcon, { type SectionIconName } from './SectionIcon';
 
 // Local copy of the menu's accessibility palette so this sheet is self-contained
 // (no shared-internals refactor of MenuSheet). Values mirror MenuSheet's `C`.
@@ -37,10 +38,13 @@ function fmtDspVal(v: number, step: number) {
 }
 
 // ── Small primitives (local copies of MenuSheet's) ───────────────────────────
-function SectionLabel({ label }: { label: string }) {
+function SectionLabel({ label, icon }: { label: string; icon?: SectionIconName }) {
   return (
     <View style={st.sectionBar}>
-      <Text style={st.sectionLabel}>{label}</Text>
+      <View style={st.sectionRow}>
+        {icon && <SectionIcon name={icon} size={16} color={C.sectionC} />}
+        <Text style={st.sectionLabel}>{label}</Text>
+      </View>
     </View>
   );
 }
@@ -174,9 +178,12 @@ export default function AudioSheet({
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <Pressable style={st.backdrop} onPress={onClose} />
       <View style={[st.sheet, { borderTopColor: t.barBorder }]}>
-        <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font }]}>
-          AUDIO
-        </Text>
+        <View style={st.titleRow}>
+          <SectionIcon name="audio" size={15} color={t.sectionColor} />
+          <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font, marginBottom: 0 }]}>
+            AUDIO
+          </Text>
+        </View>
 
         <ScrollView style={st.scroll} keyboardShouldPersistTaps="handled">
 
@@ -323,7 +330,7 @@ export default function AudioSheet({
           {/* ── SERVER SIDE NR (DSP insert) — only when the server advertises
                  filters (UberSDR). Type selector + per-filter params. ── */}
           {dspFilters.length > 0 && (<>
-            <SectionLabel label="SERVER SIDE NR" />
+            <SectionLabel label="SERVER SIDE NR" icon="nr" />
             <BtnRow>
               <Btn
                 label={serverDspEnabled ? 'DISABLE SERVER NR' : 'ENABLE SERVER NR'}
@@ -395,6 +402,8 @@ const st = StyleSheet.create({
     padding: 16, paddingBottom: 40,
   },
   sheetLabel: { textAlign: 'center', fontSize: 10, letterSpacing: 3, marginBottom: 12 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, marginBottom: 12 },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   scroll:     { maxHeight: 420 },
 
   sectionBar: {

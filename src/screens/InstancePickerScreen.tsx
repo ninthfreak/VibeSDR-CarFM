@@ -206,9 +206,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const firstFocusRef = useRef(true);
   useFocusEffect(useCallback(() => {
     getViewMode().then(mode => { if (mode) setViewModeState(mode); });
-    // Re-read the default on every focus — the SDR menu can set/clear it,
-    // and returning here doesn't remount (stale star otherwise).
+    // Re-read the default AND favourites on every focus — the SDR menu can
+    // set/clear both, and returning here doesn't remount (stale star / missing
+    // favourite otherwise).
     getDefaultInstance().then(d => setDefaultInst(d)).catch(() => {});
+    getFavourites().then(f => setFavourites(f)).catch(() => {});
+    getTcpFavs().then(f => setTcpFavs(f)).catch(() => {});
     // Skip the initial focus (loadAndInit owns the launch-time USB check — running
     // it here too would race the read-and-clear flag). On LATER focuses (returning
     // from an SDR session), pick up an RTL-SDR that was plugged in while away.

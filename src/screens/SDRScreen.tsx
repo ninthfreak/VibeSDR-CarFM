@@ -55,6 +55,7 @@ import { v4 as uuidv4 }                                from 'uuid';
 import AsyncStorage                                    from '@react-native-async-storage/async-storage';
 import { setDefaultInstance, getDefaultInstance,
          clearDefaultInstance }                        from '../services/defaultInstance';
+import { getFavourites, toggleFavourite }              from '../services/favourites';
 import { useTheme }                                     from '../contexts/ThemeContext';
 
 import WaterfallView   from '../components/WaterfallView';
@@ -2541,6 +2542,25 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
   }, [baseUrl, instanceName, isDefault]);
 
+  // Favourite the current instance from the menu — so a good receiver you found
+  // mid-session lands in the picker's favourites without hunting for it again.
+  // Network receivers only (local USB / RTL-TCP / SpyServer wrap localhost and
+  // favourite via the picker, so isLocal instances don't get the button).
+  const [isFavourite, setIsFavourite] = useState(false);
+  useEffect(() => {
+    getFavourites()
+      .then((favs) => setIsFavourite(favs.some((f) => f.url === baseUrl)))
+      .catch(() => {});
+  }, [baseUrl]);
+
+  const onToggleFavourite = useCallback(() => {
+    const st = route.params.serverType ?? 'ubersdr';
+    getFavourites()
+      .then((favs) => toggleFavourite({ name: instanceName ?? baseUrl, url: baseUrl, serverType: st }, favs))
+      .then((next) => setIsFavourite(next.some((f) => f.url === baseUrl)))
+      .catch(() => {});
+  }, [baseUrl, instanceName, route.params.serverType]);
+
   // ── Waterfall gestures ────────────────────────────────────────────────────
 
   const onWfPanDelta = useCallback((dxPx: number) => {
@@ -3797,6 +3817,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         onZoomMax={onZoomMax}
         onSetDefault={onSetDefault}
         isDefaultInstance={isDefault}
+        isFavourite={isFavourite}
+        onToggleFavourite={isLocal ? undefined : onToggleFavourite}
         decMode={selDecoder}
         decOn={activeDecoder !== null && activeDecoder === selDecoder}
         onDecToggle={onDecToggle}

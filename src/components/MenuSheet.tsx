@@ -35,6 +35,7 @@ import { type UserBookmark } from '../services/userBookmarks';
 import { APP_VERSION } from '../constants/version';
 import UsbSdrIcon from './UsbSdrIcon';
 import VfoLockIcon from './VfoLockIcon';
+import SectionIcon, { type SectionIconName } from './SectionIcon';
 import { tourRef } from './Coachmark';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -68,6 +69,10 @@ export interface MenuSheetProps {
   onZoomMax?:   () => void;   // full zoom in
   onSetDefault?: () => void;
   isDefaultInstance?: boolean;
+  /** Favourite the current instance (network receivers only — hidden for local
+   *  USB / RTL-TCP / SpyServer, which favourite via the picker instead). */
+  isFavourite?: boolean;
+  onToggleFavourite?: () => void;
   /** Client decoders — skin semantics: toggle start/stop, menu stays open. */
   decMode?:        'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|null;
   decOn?:          boolean;
@@ -348,10 +353,13 @@ function StepSlider({
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
-function SectionLabel({ label, first }: { label: string; first?: boolean }) {
+function SectionLabel({ label, icon, first }: { label: string; icon?: SectionIconName; first?: boolean }) {
   return (
     <View style={[styles.sectionBar, first && styles.sectionBarFirst]}>
-      <Text style={styles.sectionLabel}>{label}</Text>
+      <View style={styles.sectionRow}>
+        {icon && <SectionIcon name={icon} size={16} color={C.sectionC} />}
+        <Text style={styles.sectionLabel}>{label}</Text>
+      </View>
     </View>
   );
 }
@@ -360,15 +368,17 @@ function BtnRow({ children, col }: { children: React.ReactNode; col?: boolean })
   return <View style={[styles.btnRow, col && styles.btnRowCol]}>{children}</View>;
 }
 
-function Btn({ label, active, danger, onPress, full, style }: {
+function Btn({ label, active, danger, onPress, full, style, icon }: {
   label: string; active?: boolean; danger?: boolean;
-  onPress?: () => void; full?: boolean; style?: object;
+  onPress?: () => void; full?: boolean; style?: object; icon?: SectionIconName;
 }) {
   return (
     <TouchableOpacity
-      style={[styles.btn, active && styles.btnActive, danger && styles.btnDanger, full && styles.btnFull, style]}
+      style={[styles.btn, active && styles.btnActive, danger && styles.btnDanger, full && styles.btnFull,
+              icon && { flexDirection: 'row', gap: 7 }, style]}
       onPress={onPress} hitSlop={4} activeOpacity={0.7}
     >
+      {icon && <SectionIcon name={icon} size={15} color={active ? C.gold : C.muted} />}
       <Text style={[styles.btnText, active && styles.btnTextActive, danger && styles.btnTextDanger]}>
         {label}
       </Text>
@@ -479,6 +489,7 @@ export default function MenuSheet({
   onClose, onBack, onLocalHardware, isTcp, onAdminLink, onResetSettings, onReplayTour, onDisplaySettings,
   serverVersion = null, onAbout, onRecordings,
   onZoomIn, onZoomOut, onZoomMin, onZoomMax, onSetDefault, isDefaultInstance = false,
+  isFavourite = false, onToggleFavourite,
   decMode = null, decOn = false, onDecToggle,
   spotsKind = null, onSpotsToggle, onServerMap, onSpotsMap,
   rttySettings, onRttySettings,
@@ -663,13 +674,13 @@ export default function MenuSheet({
 
             {/* ── LOCAL HARDWARE (V4 Android — RTL-SDR controls submenu) ── */}
             {onLocalHardware && (<>
-              <SectionLabel label="LOCAL HARDWARE" first />
+              <SectionLabel label="LOCAL HARDWARE" icon="hardware" first />
               <Btn label="RTL-SDR Controls  ›" full onPress={onLocalHardware} />
             </>)}
 
             {/* ── PROFILE (OWRX only — hidden unless the backend reports profiles) ── */}
             {profiles.length > 0 && (<>
-              <SectionLabel label="PROFILE" first />
+              <SectionLabel label="PROFILE" icon="profile" first />
               {sdrGroups.some((g) => g.inUse) && (
                 <View style={styles.etiquette}>
                   <Text style={styles.etiquetteText}>
@@ -727,7 +738,7 @@ export default function MenuSheet({
 
             {/* ── DAB PROGRAMME (OWRX — only when a DAB ensemble is tuned) ── */}
             {dabProgrammes.length > 0 && (<>
-              <SectionLabel label="DAB PROGRAMME" />
+              <SectionLabel label="DAB PROGRAMME" icon="dab" />
               <View style={styles.profileDrop}>
                 <TouchableOpacity style={styles.profileDropHead} onPress={() => setDabOpen((o) => !o)} activeOpacity={0.7}>
                   <Text style={styles.profileDropHeadText} numberOfLines={1}>
@@ -783,7 +794,7 @@ export default function MenuSheet({
             </>)}
 
             {/* ── NEARBY STATION ─────────────────────────────────── */}
-            <SectionLabel label="NEARBY STATION" first={profiles.length === 0 && dabProgrammes.length === 0} />
+            <SectionLabel label="NEARBY STATION" icon="station" first={profiles.length === 0 && dabProgrammes.length === 0} />
             <View style={styles.vtsRow}>
               <TouchableOpacity style={styles.vtsArrow} onPress={onVtsPrev} hitSlop={8}>
                 <Text style={styles.vtsArrowText}>◂</Text>
@@ -879,7 +890,7 @@ export default function MenuSheet({
             </BtnRow>
 
             {/* ── SPECTRUM / WATERFALL ───────────────────────────── */}
-            <SectionLabel label="SPECTRUM / WATERFALL" />
+            <SectionLabel label="SPECTRUM / WATERFALL" icon="spectrum" />
             {/* Zoom row — flex:1 buttons so they share the width evenly and the
                 MAX button never wraps to its own row (the VFO-lock label width
                 used to push it over). MIN = full span out, MAX = full zoom in. */}
@@ -893,7 +904,7 @@ export default function MenuSheet({
               <VfoLockBtn locked={vfoLocked} onPress={onToggleVfoLock} full />
             </BtnRow>
             <BtnRow>
-              <Btn label="☀ DISPLAY SETTINGS" full active={dispSettingsOpen}
+              <Btn label="DISPLAY SETTINGS" icon="monitor" full active={dispSettingsOpen}
                 onPress={() => setDispSettingsOpen((p: boolean) => !p)} />
             </BtnRow>
             <BtnRow>
@@ -1246,7 +1257,7 @@ export default function MenuSheet({
                    OWRX has its own combined map (opened from the OPENWEBRX section
                    below), so these UberSDR-specific feeds are hidden for it. ── */}
             {serverType !== 'owrx' && !isLocal && !isKiwi && (<>
-              <SectionLabel label="SERVER MAPS" />
+              <SectionLabel label="SERVER MAPS" icon="maps" />
               <BtnRow>
                 <Btn label="✈ HFDL"     onPress={() => onServerMap?.('hfdl')} />
                 <Btn label="📡 DIGITAL"  onPress={() => onServerMap?.('digi')} />
@@ -1263,7 +1274,7 @@ export default function MenuSheet({
                    client-side decoders + UberSDR spot feeds are hidden for it —
                    replaced by the OPENWEBRX map/files/admin below (Phase 1). ── */}
             {(!isLandscape || isTablet) && serverType !== 'owrx' && (<>
-            <SectionLabel label="CLIENT DECODERS" />
+            <SectionLabel label="CLIENT DECODERS" icon="decoder" />
             <BtnRow>
               {(['rtty','navtex','wefax','sstv','morse'] as const).filter(k => !(isLocal && k === 'morse')).map(k => (
                 <Btn key={k} label={k.toUpperCase()}
@@ -1297,7 +1308,7 @@ export default function MenuSheet({
                    hardware AND Kiwi, which has no server feed). CW SPOTS (server CW
                    skimmer) and STT (server speech-to-text) are real server features,
                    so they're hidden for local hardware and Kiwi. ── */}
-            <SectionLabel label={(isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS'} />
+            <SectionLabel label={(isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS'} icon="spots" />
             <BtnRow>
               <Btn label="DIGITAL SPOTS" active={spotsKind === 'digi'}
                    onPress={() => onSpotsToggle?.('digi')} />
@@ -1324,7 +1335,7 @@ export default function MenuSheet({
             </>)}
 
             {/* ── CONTROLS ───────────────────────────────────────── */}
-            <SectionLabel label="CONTROLS" />
+            <SectionLabel label="CONTROLS" icon="controls" />
             <View style={styles.ctrlRow}>
               <Text style={styles.ctrlLabel}>SIGNAL</Text>
               <BtnRow>
@@ -1362,7 +1373,7 @@ export default function MenuSheet({
                    gallery (SSTV/WEFAX/Navtex images) + settings, so we link those
                    rather than UberSDR's noise/conditions/listeners pages. ──── */}
             {serverType === 'owrx' ? (<>
-              <SectionLabel label="OPENWEBRX" />
+              <SectionLabel label="OPENWEBRX" icon="server" />
               <BtnRow>
                 <Btn label="🗺 MAP"   onPress={() => onAdminLink?.('/map', 'Map')} />
                 <Btn label="🖼 FILES" onPress={() => onAdminLink?.('/files', 'Files')} />
@@ -1371,7 +1382,7 @@ export default function MenuSheet({
                 <Btn label="⚙ ADMIN" full onPress={() => onAdminLink?.('/settings', 'Settings')} />
               </BtnRow>
             </>) : isLocal || isKiwi ? null : (<>
-              <SectionLabel label="INSTANCE ADMIN" />
+              <SectionLabel label="INSTANCE ADMIN" icon="admin" />
               <BtnRow>
                 <Btn label="ADMIN"      onPress={() => onAdminLink?.('/admin.html', 'Admin')} />
                 <Btn label="NOISE"      onPress={() => onAdminLink?.('/noisefloor.html', 'Noise Floor')} />
@@ -1383,9 +1394,13 @@ export default function MenuSheet({
             </>)}
 
             {/* ── INSTANCE ───────────────────────────────────────── */}
-            <SectionLabel label="INSTANCE" />
+            <SectionLabel label="INSTANCE" icon="instance" />
             <Text style={styles.instanceUrl} numberOfLines={1}>{serverName || serverUrl}</Text>
             <BtnRow>
+              {onToggleFavourite && (
+                <Btn label={isFavourite ? '♥ FAVOURITED' : '♡ FAVOURITE'}
+                     active={isFavourite} onPress={onToggleFavourite} />
+              )}
               <Btn label={isDefaultInstance ? '★ CLEAR DEFAULT' : '☆ SET DEFAULT'}
                    active={isDefaultInstance} onPress={onSetDefault} />
             </BtnRow>
@@ -1480,6 +1495,7 @@ const styles = StyleSheet.create({
     paddingTop: 12, paddingBottom: 6, marginTop: 6,
   },
   sectionBarFirst: { borderTopWidth: 0, marginTop: 2 },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sectionLabel: {
     color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 12,
     fontWeight: 'bold', letterSpacing: 2,
