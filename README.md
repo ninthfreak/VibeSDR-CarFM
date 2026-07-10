@@ -10,7 +10,7 @@ A mobile-first SDR receiver app for iOS and Android — and far more than a sing
 > Built by Stuart Carr (Stuey3D) with AI assistance from Claude (Anthropic).
 > Free software under the GNU GPL-3.0.
 
-**Latest release: [v7.0.0](https://github.com/Stuey3D/VibeSDR/releases/latest)** — iOS `.ipa` and Android `.apk`. Adds **FM-DX Webserver** support: a vintage tuning dial, full RDS, station logos and country flags, shared-tuner chat, and recording.
+**Latest release: [v7.1.0](https://github.com/Stuey3D/VibeSDR/releases/latest)** — iOS `.ipa` and Android `.apk`. Adds **SpyServer** compatibility via `sdr://` links, a reorganised audio menu with section icons, favouriting the receiver you are listening to, plus recording and deep-link fixes. Builds on **v7.0.0**'s FM-DX Webserver support.
 
 > **📱 iOS App Store approval is in progress.** Apple review is taking a while at the moment, but a **TestFlight link is coming soon** so you'll be able to install on iPhone without re-signing anything. In the meantime, iPhone users can sign and sideload the `.ipa` — see [Installing on iPhone](#installing-on-iphone-signing-the-ipa-with-xcode) below.
 

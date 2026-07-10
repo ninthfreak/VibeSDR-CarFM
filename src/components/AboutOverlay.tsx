@@ -70,12 +70,23 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   { v: 'V5.2.1', detail: 'Privacy: the optional location used to sort the instance list by distance is now taken and shared at approximate (coarse, ~1 km) accuracy only, instead of a precise fix. Location stays entirely optional and every other feature works without it.' },
   { v: 'V5.2.2', detail: 'iPad and tablet polish. The signal meter now frames the frequency correctly on tablets (the coloured level showed above and below the readout on phones but not on larger screens), and the on-screen decoders (RTTY, NAVTEX, WEFAX, SSTV, Morse) now work in landscape on tablets, which have the room a phone doesn’t. The HAPTICS toggle is now hidden on devices with no haptic motor (all iPads, and any Android tablet without one) so it’s no longer a dead button.' },
   { v: 'V6.1.0', detail: 'Networked RTL-SDR. VibeSDR now auto-discovers rtl_tcp servers on your Wi-Fi (via Bonjour/mDNS) and lists them under a new “Discovered” section — no IP typing needed (iOS and Android). And on Android you can now share a plugged-in RTL-SDR over the network as an RTL-TCP server, so an iPhone or any rtl_tcp client can use the dongle remotely — handy for a good antenna location or an always-on phone. Includes an optional bandwidth cap, an editable name shown to other devices, and a live status notification. Plugging in an RTL-SDR on Android now asks whether to listen on the device or share it. The location and local-network permission prompts also now explain exactly what they’re for.' },
+  { v: 'V7.1.0', detail: 'SpyServer compatibility, a reorganised audio menu, and today’s fixes. VibeSDR now connects to SpyServer receivers via sdr:// links (tap one anywhere, or paste sdr://host:port into the Custom URL box) and can save them as favourites — low-bandwidth, so good over mobile data. All audio controls (noise reduction, noise blanker, squelch, auto-notch, recording + playback) moved into a new Audio button to declutter the main menu; the demodulator popup gained the bandwidth sliders and Share moved next to the frequency keypad. You can now favourite the receiver you’re listening to straight from the menu. Every menu section gained a small icon for easier scanning. On FM-DX, recording/library moved into the same Audio button. Fixes: sharing a recording no longer freezes the controls; the waterfall no longer blanks on USB/RTL-TCP at full zoom-out; and iOS cold-start deep links open the linked instance.' },
+  { v: 'V7.0.1', detail: 'Networked-radio stability and two iOS fixes. Sharing an RTL-SDR over a phone hotspot or busy Wi-Fi is far more reliable: the sharing phone now holds a Wi-Fi lock so its radio can’t drop into power-save mid-stream, the receiving side keeps a short buffer so a brief Wi-Fi stall no longer breaks the audio, and the sharing screen shows a live link-health indicator. iOS: FM stereo now actually plays in stereo on local hardware and RTL-TCP (it was quietly downmixed to mono), and scanning a QR code or opening a vibesdr:// link with the app closed now goes to the correct receiver instead of your default one.' },
   { v: 'V7.0.0', detail: 'FM-DX Webserver support — a whole new kind of receiver. VibeSDR now connects to the worldwide network of FM-DX Webserver tuners (from servers.fmdx.org): real, remote FM broadcast tuners you share with other listeners. New vintage-radio tuning dial that learns and pins every station name as you tune across the band, full RDS (station name, RadioText, PI code, PTY, TP/TA, stereo), a dBf signal meter, transmitter details (site, power, distance and bearing from the receiver), tap-to-tune alternative frequencies, station logos and country flags. Because the tuner is shared, there’s built-in chat, a listener counter, and the lock-screen skip buttons are disabled so you can’t accidentally retune it for everyone. The demodulator button opens mono/stereo, cEQ, iMS and an antenna switch (when the server offers one). Station logos and country flags now also appear on local RTL-SDR and networked WFM using the RDS PI code, with an on-device logo cache so they persist even offline. Pausing from the lock screen disconnects to save battery and reconnects on play.' },
   { v: 'V6.0.0', detail: 'A major under-the-hood upgrade for iOS 27. VibeSDR now builds on React Native’s New Architecture (required for iOS 27 / Xcode 27 support, since Apple no longer accepts the older toolchain). Alongside that: RTL-SDR local hardware and RTL-TCP tuning is fixed — typing a frequency now retunes cleanly first time (it previously needed a nudge of the tuning drum), a race in the on-device tuner has been eliminated. Local Hardware and each RTL-TCP source now remember their own last frequency, mode and hardware settings independently (including VHF/UHF stations, which used to reset). Plugging an RTL-SDR into an Android phone and choosing “Open in VibeSDR” now goes straight to Local Hardware instead of your default instance. On Android, background audio now correctly holds up on devices that aggressively restrict apps — if your phone is throttling VibeSDR in the background, the app now detects it and shows you how to allow background usage. Plus the first-launch tutorial no longer appears on top of the welcome screen.' },
 ];
 
 const FUTURE_PLANS: string[] = [
   'There’s no fixed roadmap from here — V4 delivered the big one (local SDR hardware) and V5 replaced its engine with VibeSDR’s own GPL-free DSP. Ongoing work is polish, more decoders and more backends as they come. If general USB SDR access ever lands on iOS, the on-device engine is already cross-platform (it powers RTL-TCP on iPhone today), so Local Hardware would follow.',
+];
+
+const V7_1_CHANGES: string[] = [
+  'SpyServer receivers: connect to a SpyServer by tapping or pasting an sdr://host:port link — the kind shared on the Airspy directory, forums and Discord. Paste it into the Custom URL box (or tap a link anywhere), confirm, and you’re listening; tap the heart to save it as a favourite. Low-bandwidth, so it works well over mobile data and hotspots.',
+  'Reorganised audio controls: a new Audio button (the speaker) gathers everything audio in one place — noise reduction, noise blanker, squelch, auto-notch, recording and playback. The demodulator popup now holds the bandwidth sliders, and Share has moved next to the frequency keypad. The main menu is much less cluttered as a result.',
+  'Favourite an instance from the menu: found a good receiver while listening? Open the menu and tap Favourite — it’s saved to your list so you don’t have to remember which one it was.',
+  'Clearer menu: every menu section now carries a small icon, so the settings are easier to scan at a glance whatever language you read. The Display Settings button now shows a monitor.',
+  'FM-DX tidy-up: recording and the recordings library now live behind the same Audio button as every other backend (they used to sit in the FM-DX header), and the button pulses while recording.',
+  'Fixes: sharing a finished recording no longer freezes the controls (an iOS pop-over could get stuck over the sheet); the waterfall no longer blanks on USB and RTL-TCP at full zoom-out; and a QR/deep link opened from a cold start on iOS now lands on the linked instance instead of your default.',
 ];
 
 const V7_CHANGES: string[] = [
@@ -245,7 +256,15 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
             <Text style={styles.link}>Visit my UberSDR instance: stuey3d.tunnel.ubersdr.org</Text>
           </TouchableOpacity>
 
-          <Text style={styles.section}>WHAT'S NEW IN V7.0.0</Text>
+          <Text style={styles.section}>WHAT'S NEW IN V7.1.0</Text>
+          {V7_1_CHANGES.map((c) => (
+            <View key={c} style={styles.bulletRow}>
+              <Text style={styles.bulletDot}>•</Text>
+              <Text style={styles.bulletText}>{c}</Text>
+            </View>
+          ))}
+
+          <Text style={styles.section}>V7.0.0 CHANGES</Text>
           {V7_CHANGES.map((c) => (
             <View key={c} style={styles.bulletRow}>
               <Text style={styles.bulletDot}>•</Text>
