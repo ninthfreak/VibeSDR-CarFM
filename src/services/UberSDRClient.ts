@@ -786,6 +786,20 @@ export class UberSDRClient {
       // view (idempotent if the server already has it). The settle timer then
       // adopts whatever the server finally acks.
       const v = this.view;
+      // A remote local shim (VibeServer) recentres its capture when the VFO tunes
+      // out of the captured band and pushes a fresh config — same span, new
+      // centre. That is a LEGITIMATE follow, not a session reset, so adopt it
+      // rather than re-asserting our stale centre (which would snap the waterfall
+      // back). Distinguish it by binBandwidth being unchanged (a reset reverts to
+      // full-span defaults, changing binBandwidth).
+      const sameSpan = v.binBandwidth > 0 &&
+        Math.abs(this.status.binBandwidth - v.binBandwidth) <= v.binBandwidth * 1e-6;
+      if (this.isLocal && sameSpan && Math.abs(this.status.centerHz - v.centerHz) > 1) {
+        this.view.centerHz     = this.status.centerHz;
+        this.view.binBandwidth = this.status.binBandwidth;
+        this.callbacks.onStatus({ ...this.status });
+        return;
+      }
       const unsolicitedChange = v.binBandwidth > 0 &&
         (Math.abs(this.status.centerHz - v.centerHz) > 1 ||
          Math.abs(this.status.binBandwidth - v.binBandwidth) > v.binBandwidth * 1e-6);
