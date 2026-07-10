@@ -19,7 +19,8 @@
         "NSBonjourServices": [
           "_http._tcp",
           "_https._tcp",
-          "_rtl_tcp._tcp"
+          "_rtl_tcp._tcp",
+          "_vibesdr._tcp"
         ],
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true

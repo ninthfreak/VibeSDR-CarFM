@@ -51,6 +51,7 @@
 		<string>_http._tcp</string>
 		<string>_https._tcp</string>
 		<string>_rtl_tcp._tcp</string>
+		<string>_vibesdr._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>VibeSDR uses local network access to scan for and connect to SDR servers on your network, such as RTL-TCP servers and local KiwiSDR, UberSDR or OpenWebRX receivers.</string>
