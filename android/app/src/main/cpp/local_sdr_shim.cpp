@@ -446,12 +446,27 @@ struct LearnedBm {
     long long   lastHeard = 0;   // unix seconds — drives expiry
     bool        manual = false;  // saved by hand: never expires
 };
+/** A name we've seen but don't trust yet. */
+struct PendingBm {
+    std::string name;
+    int         hits = 0;
+    long long   firstSeen = 0;   // when this EXACT name first appeared
+};
 static std::mutex g_bmMtx;
-static std::map<long long, LearnedBm> g_bookmarks;                    // key: Hz (rounded)
-static std::map<long long, std::pair<std::string,int>> g_bmPending;   // awaiting confirmation
+static std::map<long long, LearnedBm> g_bookmarks;    // key: Hz (rounded)
+static std::map<long long, PendingBm> g_bmPending;    // awaiting confirmation
 
+// A name must be seen kConfirmHits times AND hold steady for kStableSecs.
+//
+// The two tests catch different things, and the second is the stronger. A CORRECT PS
+// is stable by definition — it's the same eight characters every repetition. A GARBLED
+// one is garbled DIFFERENTLY each time, because the errors follow the fading: "H%art",
+// "He%rt", "H**r%". So any corruption RESETS the clock (the name changed), and only a
+// name that survives unaltered for kStableSecs gets written down. A hit count alone
+// could be satisfied by a lucky run of three clean decodes in five seconds.
 static const int       kConfirmHits = 3;
-static const long long kExpirySecs  = 30LL * 24 * 3600;   // 30 days
+static const long long kStableSecs  = 20;                 // must hold this long
+static const long long kExpirySecs  = 30LL * 24 * 3600;   // 30 days unheard
 
 /** Round so a few Hz of VFO difference can't create a second entry for one station. */
 static long long bmKey(double hz) { return (long long)(llround(hz / 10000.0) * 10000LL); }
@@ -485,8 +500,15 @@ static void bmLearn(double hz, int pi, const std::string& psRaw) {
         return;
     }
     auto& p = g_bmPending[key];
-    if (p.first == ps) p.second++; else { p.first = ps; p.second = 1; }
-    if (p.second < kConfirmHits) return;
+    if (p.name == ps) {
+        p.hits++;
+    } else {
+        // Changed — either a genuinely different station, or the same one arriving
+        // garbled. Either way we know nothing yet: start again, clock and all.
+        p.name = ps; p.hits = 1; p.firstSeen = now;
+    }
+    if (p.hits < kConfirmHits) return;
+    if (now - p.firstSeen < kStableSecs) return;   // seen enough, but not for long enough
 
     LearnedBm b;
     b.name = ps; b.pi = pi; b.lastHeard = now;
