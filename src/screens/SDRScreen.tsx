@@ -500,11 +500,31 @@ export default function SDRScreen({ route, navigation }: Props) {
     const rc = hwClient();
     if (rc) rc.setHwGain?.(hwGain, auto); else LocalHw?.setGain?.(auto ? -1 : hwGain);
   }, [LocalHw, hwGain, hwClient]);
-  const onHwGain = useCallback((tenthDb: number) => {
-    setHwAutoGain(false); setHwGain(tenthDb);
+  // Gain reaches the dongle as a USB CONTROL TRANSFER, on the same bus carrying the
+  // bulk IQ stream — so a slider drag firing one per step (~10 in 200ms) elbows the
+  // sample flow aside, and you hear it as breakup while you drag. Coalesce to one
+  // per 120ms, trailing edge always delivered so the gain you release on is the gain
+  // the radio ends up at.
+  const gainSendAt = useRef(0);
+  const gainTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gainPending = useRef<number | null>(null);
+  const flushGain = useCallback(() => {
+    const tenthDb = gainPending.current;
+    if (tenthDb == null) return;
+    gainPending.current = null;
+    gainSendAt.current = Date.now();
     const rc = hwClient();
     if (rc) rc.setHwGain?.(tenthDb, false); else LocalHw?.setGain?.(tenthDb);
   }, [LocalHw, hwClient]);
+  const onHwGain = useCallback((tenthDb: number) => {
+    setHwAutoGain(false); setHwGain(tenthDb);
+    gainPending.current = tenthDb;
+    const wait = gainSendAt.current + 120 - Date.now();
+    if (wait <= 0) { flushGain(); return; }
+    if (!gainTimer.current) {
+      gainTimer.current = setTimeout(() => { gainTimer.current = null; flushGain(); }, wait);
+    }
+  }, [flushGain]);
   const onHwPpm = useCallback((ppm: number) => {
     const v = Math.max(-200, Math.min(200, ppm)); setHwPpm(v);
     const rc = hwClient();

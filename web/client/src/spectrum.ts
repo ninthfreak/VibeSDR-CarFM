@@ -35,6 +35,9 @@ const U8_DBFS_OFFSET = -256;      // dBFS = u8 - 256
 
 const VIEW_SEND_MS   = 33;
 const VIEW_SETTLE_MS = 300;
+// Gain is a USB CONTROL TRANSFER on the same bus as the IQ stream, so it is far
+// more expensive than a view change — throttle it much harder. See setHwGain().
+const GAIN_SEND_MS   = 120;
 const MIN_SPAN_HZ    = 6_000;     // max-zoom floor; deeper looks frozen/artefacted
 
 export interface Config {
@@ -92,6 +95,9 @@ export class SpectrumClient {
   private lastSendAt = 0;
   private pingTimer: number | null = null;
   private lastPingAt = 0;
+  private pendingGain: { tenthDb: number; auto: boolean } | null = null;
+  private gainTimer: number | null = null;
+  private lastGainAt = 0;
   private reconnectTimer: number | null = null;
 
   // Scratch buffers, resized on bin-count change.
@@ -381,8 +387,35 @@ export class SpectrumClient {
   setFftRate(fps: number) { this._send({ type: 'fftRate', value: fps }); }
 
   // Hardware controls — the client drives the remote radio.
+
+  /**
+   * Set tuner gain — COALESCED, like the view sender, and for a harder reason.
+   *
+   * Every gain message becomes a synchronous USB control transfer to the dongle,
+   * on the same bus that is carrying the bulk IQ stream. Dragging the slider fired
+   * one per step (~10 in 200ms), and each one elbows the sample flow aside — which
+   * is audible as breakup while you drag. Rate-limit to one per GAIN_SEND_MS, with
+   * the trailing edge always delivered so the gain you release on is the gain the
+   * radio actually ends up at.
+   */
   setHwGain(tenthDb: number, auto: boolean) {
-    this._send(auto ? { type: 'gain', auto: true } : { type: 'gain', value: Math.round(tenthDb) });
+    this.pendingGain = { tenthDb, auto };
+    const wait = this.lastGainAt + GAIN_SEND_MS - Date.now();
+    if (wait <= 0) { this._flushGain(); return; }
+    if (!this.gainTimer) {
+      this.gainTimer = window.setTimeout(() => {
+        this.gainTimer = null;
+        this._flushGain();
+      }, wait);
+    }
+  }
+
+  private _flushGain() {
+    const p = this.pendingGain;
+    if (!p) return;
+    this.pendingGain = null;
+    this.lastGainAt = Date.now();
+    this._send(p.auto ? { type: 'gain', auto: true } : { type: 'gain', value: Math.round(p.tenthDb) });
   }
   setHwBiasT(on: boolean)  { this._send({ type: 'biasT', on }); }
   setHwAgc(on: boolean)    { this._send({ type: 'agc', on }); }
