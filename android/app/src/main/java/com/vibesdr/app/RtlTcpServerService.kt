@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import org.json.JSONObject
@@ -37,6 +38,7 @@ class RtlTcpServerService : Service() {
         const val EXTRA_MODE = "mode"          // "rtltcp" (default) | "vibeserver"
         private const val CHANNEL_ID = "vibesdr_rtltcp_server"
         private const val NOTIF_ID = 4711
+        private const val TAG = "RtlTcpServerService"
 
         fun start(ctx: Context, name: String, ip: String, port: Int, mode: String = "rtltcp") {
             val i = Intent(ctx, RtlTcpServerService::class.java)
@@ -73,6 +75,20 @@ class RtlTcpServerService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // A NULL intent means Android RECREATED us after the process died (START_STICKY),
+        // rather than someone starting us. The service is back but the native shim went
+        // down with the old process — so rebuild it, or we'd sit here showing a
+        // "server running" notification with no radio behind it.
+        //
+        // Don't test `mode` here: this is a FRESH process, so the field is back to its
+        // default and would never match. VibeServerRestore's armed flag is the only
+        // thing that survived, and it is the actual source of truth.
+        if (intent == null) {
+            Thread {
+                val err = VibeServerRestore.restore(applicationContext)
+                if (err != null) Log.w(TAG, "could not rebuild VibeServer: $err")
+            }.start()
+        }
         intent?.let {
             name = it.getStringExtra(EXTRA_NAME) ?: name
             ip   = it.getStringExtra(EXTRA_IP) ?: ip

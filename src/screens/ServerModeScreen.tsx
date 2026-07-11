@@ -43,7 +43,7 @@ const RATE_OPTIONS = [
 const K = {
   proto: 'vs_proto', advertise: 'vs_advertise', pinMode: 'vs_pinmode',
   pin: 'vs_pin', rate: 'vs_rate', fps: 'vs_fps', compress: 'vs_compress',
-  webServer: 'vs_webserver',
+  webServer: 'vs_webserver', autoRestore: 'vs_autorestore',
 };
 
 export default function ServerModeScreen({ navigation, route }: Props) {
@@ -58,6 +58,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [fps, setFps]             = useState<FpsTier>('full');
   const [compress, setCompress]   = useState(true);
   const [webServer, setWebServer] = useState(true);
+  const [autoRestore, setAutoRestore] = useState(true);
   const [locMode, setLocMode]     = useState<LocationMode>('off');
   const [locCity, setLocCity]     = useState('');
 
@@ -73,15 +74,17 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       const n = await getServerName(route.params?.name ?? 'VibeSDR');
       setName(n);
       try {
-        const [p, a, pm, sp, r, fp, cp, ws] = await Promise.all([
+        const [p, a, pm, sp, r, fp, cp, ws, ar] = await Promise.all([
           AsyncStorage.getItem(K.proto), AsyncStorage.getItem(K.advertise),
           AsyncStorage.getItem(K.pinMode), AsyncStorage.getItem(K.pin),
           AsyncStorage.getItem(K.rate), AsyncStorage.getItem(K.fps),
           AsyncStorage.getItem(K.compress), AsyncStorage.getItem(K.webServer),
+          AsyncStorage.getItem(K.autoRestore),
         ]);
         if (p === 'rtltcp' || p === 'vibeserver') setProto(p);
         if (a != null) setAdvertise(a !== '0');
         if (ws != null) setWebServer(ws !== '0');
+        if (ar != null) setAutoRestore(ar !== '0');
         setLocMode(await getServerLocationMode());
         setLocCity((await getManualServerLocation())?.label ?? '');
         if (pm === 'random' || pm === 'custom' || pm === 'off') setPinMode(pm);
@@ -126,6 +129,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.pinMode, pinMode], [K.pin, pin], [K.rate, String(rate)],
       [K.fps, fps], [K.compress, compress ? '1' : '0'],
       [K.webServer, webServer ? '1' : '0'],
+      [K.autoRestore, autoRestore ? '1' : '0'],
     ]);
     if (Platform.OS === 'android' && Platform.Version >= 33) {
       try { await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS); } catch {}
@@ -159,6 +163,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         maxFftRate: fpsForTier(fps),
         compressAudio: compress,
         webServer,
+        advertise,
+        autoRestore,
       });
       setRunning(info);
       runningRef.current = true;
@@ -169,7 +175,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       setError(e?.message ?? 'Could not start VibeServer. Is an RTL-SDR plugged in via USB OTG?');
     }
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
-      webServer, locMode, locCity]);
+      webServer, autoRestore, locMode, locCity]);
 
   const stopAndBack = useCallback(() => {
     stopAdvertiseRtlTcp();
@@ -336,6 +342,31 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 ? 'Anyone on the network can connect and tune. Use only on a trusted LAN.'
                 : 'Clients enter this PIN once. It authenticates control without ever crossing the wire (HMAC challenge-response).'}
             </Text>
+
+            {/* Crash recovery. The foreground service is already START_STICKY, so Android
+                brings the SERVICE back by itself — but the radio died with the process,
+                so without rebuilding it you'd be left with a notification claiming the
+                server is up and nothing behind it. Switchable, because a shim that
+                crashes REPEATEDLY would otherwise crash-loop. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>RECOVERY</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                  Restart if it crashes
+                </Text>
+                <Switch value={autoRestore} onValueChange={setAutoRestore}
+                  trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+              </View>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                {autoRestore
+                  ? 'If the app is killed while serving, the server rebuilds itself and carries on. The dongle is never unplugged, so nothing is lost.'
+                  : 'A crash stops the server for good until you start it again. Turn this on for a receiver left running unattended.'}
+              </Text>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                This does not survive a REBOOT — Android will not detect a dongle that was
+                plugged in while the phone was off, and no app can change that. Replug it.
+              </Text>
+            </View>
 
             {/* Web server. Turning this OFF means a browser gets nothing — only the
                 VibeSDR app can connect. It's the blunt lock for a server you don't

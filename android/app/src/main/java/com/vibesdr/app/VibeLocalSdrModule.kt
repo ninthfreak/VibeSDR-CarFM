@@ -277,6 +277,11 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // Web client on/off, and a pinned capture rate (0 = client-controlled).
         val webSrv     = if (opts.hasKey("webServer")) opts.getBoolean("webServer") else true
         val lockedRate = if (opts.hasKey("lockedRate")) opts.getDouble("lockedRate") else 0.0
+        // Only needed so a CRASH-restored server re-advertises as the app would have.
+        val advertiseOnStart = if (opts.hasKey("advertise")) opts.getBoolean("advertise") else true
+        // Rebuild the server if the process dies under it? Owner's choice: a shim that
+        // crashes REPEATEDLY would otherwise crash-loop, re-opening the dongle each time.
+        val autoRestore = if (opts.hasKey("autoRestore")) opts.getBoolean("autoRestore") else true
 
         VibeLocalSDR.setVibeServerAuth(pin)
         VibeLocalSDR.setVibeServerLimits(maxBw, maxFps)
@@ -295,6 +300,14 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         }
         val ip = getLocalIp() ?: "0.0.0.0"
         RtlTcpServerService.start(reactContext, name, ip, port, "vibeserver")
+        // Remember the live config so the service can rebuild the shim if the process
+        // dies under it (START_STICKY brings the service back, but not the radio).
+        if (autoRestore) {
+            VibeServerRestore.arm(reactContext, name, pin, sampleRate, lockedRate, maxFps,
+                                  compress, webSrv, advertiseOnStart)
+        } else {
+            VibeServerRestore.disarm(reactContext)
+        }
         Log.i(TAG, "VibeServer started $ip:$port as \"$name\" (pin=${pin.isNotEmpty()})")
         val res = Arguments.createMap()
         res.putString("ip", ip)
@@ -305,6 +318,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun stopVibeServer(promise: Promise) {
+        // DISARM FIRST. A deliberate stop must not be undone: without this the crash-
+        // recovery path would happily resurrect a server the user had just switched off.
+        VibeServerRestore.disarm(reactContext)
         RtlTcpServerService.stop(reactContext)
         stopSpectrumInternal()
         VibeLocalSDR.setServeOnLan(false)
@@ -321,13 +337,19 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      *  fetch eibispace.de itself (no CORS headers there), and this also means the
      *  search still works with no internet — the allotment case. */
     @ReactMethod
-    fun setStationsJson(json: String) { VibeLocalSDR.setStationsJson(json) }
+    fun setStationsJson(json: String) {
+        VibeLocalSDR.setStationsJson(json)
+        VibeServerRestore.cacheStations(reactContext, json)
+    }
 
     /** Publish the RECEIVER's coarse location (GET /location). Clients compute
      *  spot distances, map centring and the ITU region from the ANTENNA's
      *  position — not from wherever the listener happens to be. */
     @ReactMethod
-    fun setLocationJson(json: String) { VibeLocalSDR.setLocationJson(json) }
+    fun setLocationJson(json: String) {
+        VibeLocalSDR.setLocationJson(json)
+        VibeServerRestore.cacheLocation(reactContext, json)
+    }
 
     @ReactMethod
     fun getVibeServerStatus(promise: Promise) {
@@ -642,7 +664,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
 
     companion object {
         // RTL-SDR VID/PID allowlist (from SDR++ Brown), packed as (vid<<16)|pid.
-        private val RTL_SDR_VIDPIDS: Set<Int> = listOf(
+        // internal, not private: VibeServerRestore matches on the SAME list — a copy
+        // would drift and quietly stop recognising a dongle on the restore path only.
+        internal val RTL_SDR_VIDPIDS: Set<Int> = listOf(
             0x0bda to 0x2832, 0x0bda to 0x2838, 0x0413 to 0x6680, 0x0413 to 0x6f0f,
             0x0458 to 0x707f, 0x0ccd to 0x00a9, 0x0ccd to 0x00b3, 0x0ccd to 0x00b4,
             0x0ccd to 0x00b5, 0x0ccd to 0x00b7, 0x0ccd to 0x00b8, 0x0ccd to 0x00b9,

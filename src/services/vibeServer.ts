@@ -44,6 +44,10 @@ export type VibeServerConfig = {
   /** Pin the capture rate: clients cannot change it, and their picker is hidden.
    *  0 (the default) = client-controlled, as on the RTL-TCP server. */
   lockedRate?: number;
+  /** mDNS advertise. Passed to native only so a crash-restored server re-advertises. */
+  advertise?: boolean;
+  /** Rebuild the server if the app process dies under it. Default true. */
+  autoRestore?: boolean;
 };
 
 export type VibeServerInfo = { ip: string; port: number; name: string };
@@ -77,6 +81,8 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     compressAudio: cfg.compressAudio ?? true,
     webServer: cfg.webServer ?? true,
     lockedRate: cfg.lockedRate ?? 0,
+    advertise: cfg.advertise ?? true,
+    autoRestore: cfg.autoRestore ?? true,
   });
   // Hand the web client's search its station list. Fire-and-forget: the server is
   // already up and useful without it, and this can involve a network fetch.
