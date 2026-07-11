@@ -3,6 +3,8 @@ import { loadActiveEibi } from './eibi';
 import { getUserLocation } from './instancesApi';
 import { getServerName } from './rtlTcpServer';
 import { latLonToGrid, gridToLatLon } from './grid';
+import type { ServerBookmark } from './stations';
+import { parseBookmarksAny } from './userBookmarks';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // VibeServer: share this device's USB dongle with server-side DSP (compressed
@@ -88,6 +90,7 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
   // already up and useful without it, and this can involve a network fetch.
   void publishStations();
   void publishLocation();
+  startBookmarkAutosave();
   return info;
 }
 
@@ -114,6 +117,93 @@ export async function publishStations(): Promise<void> {
     // plan, which are both local. Not worth surfacing.
   }
 }
+
+// ── Learned station bookmarks (RDS) ─────────────────────────────────────────
+//
+// The SHIM learns these — it is the only place that sees both the tuned frequency
+// and the decoded RDS name. It has no storage of its own, so the app persists them,
+// exactly as it does the station list.
+
+const BM_KEY = 'vs_learned_bookmarks';
+
+/**
+ * Bookmark persistence now lives in the SHIM (setBookmarksPath), not here.
+ *
+ * The app used to pull the list out on a 60s JS timer and write it to AsyncStorage. It
+ * did not work: while the server is serving, the app is BACKGROUNDED, and JS timers are
+ * throttled or suspended there — so the save often never ran, and an import of 145
+ * bookmarks appeared in the list, lived in memory, and vanished at the next restart.
+ * Worse, on start-up the JS pushed its stale copy back INTO the shim, which would now
+ * clobber whatever the shim had correctly loaded from its own file.
+ *
+ * The shim owns the bookmarks, so the shim saves them — on every change, atomically,
+ * with no JS runtime in the path. These no-ops remain so callers need not change.
+ */
+export function startBookmarkAutosave(): void {}
+export function stopBookmarkAutosave(): void {}
+
+/** Empty the server's bookmark list — learned AND saved. An auto-learning list needs a
+ *  way to be wiped: a wrong station would otherwise sit there for its 30-day expiry, and
+ *  a manually saved one never expires at all. */
+export async function clearServerBookmarks(): Promise<void> {
+  try { await Local?.clearBookmarks?.(); } catch {}
+}
+
+/**
+ * Import a bookmark file straight into the SERVER, from the phone.
+ *
+ * Goes through parseBookmarksAny, so it takes an UberSDR YAML export as happily as JSON —
+ * that is the file people actually have.
+ *
+ * Written as ONE setBookmarksJson call rather than a POST per row: the web client has to
+ * write them one at a time over HTTP, but here we are in-process and can hand the shim
+ * the whole list at once. Returns how many landed.
+ */
+export async function importServerBookmarks(text: string): Promise<number> {
+  if (!Local?.setBookmarksJson || !Local?.getBookmarksJson) return 0;
+  const rows = parseBookmarksAny(text, '');
+  if (!rows.length) throw new Error('No bookmarks found in that file');
+
+  // Merge with what's already there, keyed by frequency, so an import ADDS rather than
+  // replaces — and so re-importing the same file can't pile up duplicates.
+  const existing = JSON.parse((await Local.getBookmarksJson()) || '[]') as any[];
+  const byFreq = new Map<number, any>();
+  for (const b of existing) byFreq.set(Math.round(b.frequency / 1000), b);
+  const now = Math.floor(Date.now() / 1000);
+  for (const b of rows) {
+    if (!b?.name || !b?.frequency) continue;
+    byFreq.set(Math.round(b.frequency / 1000), {
+      frequency: Math.round(b.frequency),
+      name: String(b.name),
+      pi: -1,
+      lastHeard: now,
+      manual: true,                 // imported: never expires
+      mode: b.mode || 'am',
+      source: 'server',
+    });
+  }
+  Local.setBookmarksJson(JSON.stringify([...byFreq.values()]));
+  return rows.length;
+}
+
+/** The shim's learned list, right now — for the app's own search + VTS. */
+export async function getLearnedBookmarksNow(): Promise<ServerBookmark[]> {
+  if (!Local?.getBookmarksJson) return [];
+  try {
+    const json = await Local.getBookmarksJson();
+    const arr = JSON.parse(json || '[]');
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((b: any) => b?.name && b?.frequency)
+      .map((b: any) => ({
+        name: String(b.name),
+        frequency: Number(b.frequency),
+        mode: b.mode ?? 'wfm',
+        source: 'server' as const,
+      })) as ServerBookmark[];
+  } catch { return []; }
+}
+
 
 /** Where the host has manually said the receiver is (city picker fallback). */
 const LOC_KEY = 'lsv_server_location';
@@ -184,8 +274,13 @@ export async function geocodeCity(name: string): Promise<ServerLocation | null> 
   }
 }
 
-/** Cache of coarse lat/lon → place name, so the reverse lookup happens once ever. */
-const RGEO_KEY = 'vs_rgeo';
+/** Cache of coarse lat/lon → place, so the reverse lookup happens once ever.
+ *
+ *  _v2: the value used to be a bare NAME STRING and is now { name, country, iso }.
+ *  Reading the old shape back gave `undefined` for every field — the receiver silently
+ *  lost its town, its country AND the ISO that validates a station's PI country nibble.
+ *  Versioning the key retires the old entries instead of misreading them. */
+const RGEO_KEY = 'vs_rgeo_v2';
 
 /**
  * Name the place we're at ("Moulton"), from a coarse position.
@@ -196,11 +291,13 @@ const RGEO_KEY = 'vs_rgeo';
  * never repeats. With no internet we keep the bare coordinates: ugly but honest, and
  * the grid square is there regardless.
  */
-export async function reverseGeocode(lat: number, lon: number): Promise<string | null> {
+export async function reverseGeocode(
+  lat: number, lon: number,
+): Promise<{ name: string; country?: string; iso?: string } | null> {
   const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
   try {
     const raw = await AsyncStorage.getItem(RGEO_KEY);
-    const cache: Record<string, string> = raw ? JSON.parse(raw) : {};
+    const cache: Record<string, { name: string; country?: string; iso?: string }> = raw ? JSON.parse(raw) : {};
     if (cache[key]) return cache[key];
 
     const r = await fetch(
@@ -216,9 +313,19 @@ export async function reverseGeocode(lat: number, lon: number): Promise<string |
               || a.county || a.state || null;
     if (!name) return null;
 
-    cache[key] = name;
+    // The COUNTRY is the valuable half. Station-logo lookup needs it to anchor a name
+    // match (without one it demands a near-exact name and so almost always fails), and
+    // the RDS country code that would otherwise supply it rides in group 1A, which many
+    // stations never transmit. FM is line-of-sight, so a station this receiver can hear
+    // is essentially always in the receiver's own country — a very good default.
+    const out = {
+      name,
+      country: a.country || undefined,
+      iso: (a.country_code || '').toUpperCase() || undefined,
+    };
+    cache[key] = out;
     await AsyncStorage.setItem(RGEO_KEY, JSON.stringify(cache));
-    return name;
+    return out;
   } catch {
     return null;   // offline — coordinates + grid still work
   }
@@ -295,11 +402,16 @@ export async function publishLocation(): Promise<void> {
     // A bare "52.29, -0.85" means nothing to a human. On the DEVICE path there's no
     // label to show, so name the place — once, here, and cached — rather than make
     // every client reverse-geocode the same point for itself.
+    const rev = await reverseGeocode(lat, lon);
     let label = mode === 'manual' ? manual?.label ?? undefined : undefined;
-    if (!label) label = (await reverseGeocode(lat, lon)) ?? undefined;
+    if (!label) label = rev?.name ?? undefined;
 
     emit({
       lat, lon, label,
+      // Receiver country — clients use it to anchor station-logo lookups and to
+      // VALIDATE a station's PI country nibble, and they show it beside the town.
+      country: rev?.country,
+      iso: rev?.iso,
       // The grid is DERIVED here, so no client ever has to ask a human for it —
       // a locator is a property of the antenna, not something the listener knows.
       grid: latLonToGrid(lat, lon),
@@ -312,6 +424,7 @@ export async function publishLocation(): Promise<void> {
 }
 
 export async function stopVibeServer(): Promise<void> {
+  stopBookmarkAutosave();
   try { await Local?.stopVibeServer?.(); } catch {}
 }
 

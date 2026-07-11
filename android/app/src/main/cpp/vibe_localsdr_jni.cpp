@@ -163,6 +163,57 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLockedRate(JNIEnv*, jobject
     vibe::LocalSdrShim::setVibeServerLockedRate(rate);
 }
 
+// Learned RDS station bookmarks. The shim LEARNS them (it is the only place that sees
+// both the tuned frequency and the decoded name); the app PERSISTS them.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetBookmarksJson(JNIEnv* env, jobject, jstring json) {
+    const char* c = env->GetStringUTFChars(json, nullptr);
+    vibe::LocalSdrShim::setBookmarksJson(c ? c : "");
+    if (c) env->ReleaseStringUTFChars(json, c);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeGetBookmarksJson(JNIEnv* env, jobject) {
+    return env->NewStringUTF(vibe::LocalSdrShim::getBookmarksJson().c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeClearBookmarks(JNIEnv*, jobject) {
+    vibe::LocalSdrShim::clearBookmarks();
+}
+
+// The shim OWNS the bookmarks, so it persists them itself. The app's JS could not: it is
+// backgrounded whenever the server is actually serving, and its timers are suspended
+// there, so an import lived in memory and died at the next restart.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetBookmarksPath(JNIEnv* env, jobject, jstring path) {
+    const char* c = env->GetStringUTFChars(path, nullptr);
+    vibe::LocalSdrShim::setBookmarksPath(c ? c : "");
+    if (c) env->ReleaseStringUTFChars(path, c);
+}
+
+// mDNS hostname responder: "vibesdr.local" in a browser. NsdManager publishes a SERVICE
+// (what the app's Discovered list uses) but cannot publish a hostname A record, which is
+// what resolving a name in a browser actually needs.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeStartMdns(JNIEnv* env, jobject, jstring host, jstring ip) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* i = env->GetStringUTFChars(ip, nullptr);
+    vibe::LocalSdrShim::startMdns(h ? h : "", i ? i : "");
+    if (h) env->ReleaseStringUTFChars(host, h);
+    if (i) env->ReleaseStringUTFChars(ip, i);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeStopMdns(JNIEnv*, jobject) {
+    vibe::LocalSdrShim::stopMdns();
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeMdnsHostname(JNIEnv* env, jobject) {
+    return env->NewStringUTF(vibe::LocalSdrShim::mdnsHostname().c_str());
+}
+
 // Station list (JSON array) for the web client's search, served at GET /stations.
 // The APP supplies it because it already downloads + caches EiBi — and a browser
 // cannot fetch eibispace.de itself (no CORS headers), unlike React Native.

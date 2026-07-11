@@ -52,6 +52,20 @@ public:
     static void setVibeServerWebEnabled(bool on);
     /** Pin the capture rate (Hz). 0 = client-controlled. */
     static void setVibeServerLockedRate(double rate);
+    /** Learned RDS station bookmarks. The APP persists them; the shim learns them. */
+    static void setBookmarksJson(const std::string& json);
+    /** File the shim persists bookmarks to. It owns them, so it saves them — the app's
+     *  JS timer could not, being suspended whenever the server was actually serving. */
+    static void setBookmarksPath(const std::string& path);
+    /** mDNS hostname responder: answer "<host>.local" with this IPv4. Renames itself
+     *  (vibesdr-2, …) if the name is already taken on the network — RFC 6762 probing. */
+    static void startMdns(const std::string& host, const std::string& ipv4);
+    static void stopMdns();
+    /** The name actually taken — may differ from the one requested. */
+    static std::string mdnsHostname();
+    static std::string getBookmarksJson();
+    /** Empty the learned + saved bookmark list (and the file). */
+    static void clearBookmarks();
     /** Station list (JSON array) served at GET /stations for the web client's
      *  search. Supplied by the app, which already downloads + caches EiBi — a
      *  browser can't fetch eibispace.de itself (it sends no CORS headers). */

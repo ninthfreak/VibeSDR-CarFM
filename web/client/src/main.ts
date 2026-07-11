@@ -16,7 +16,7 @@ import {
   BAND_PLAN, getBandsAtRegion, bandTuneDefaults, type Band,
 } from '../../../src/constants/bandPlan';
 import { deriveItuRegion } from '../../../src/services/stations';
-import { eccPiToIso, isoToFlag } from '../../../src/services/rdsCountry';
+import { resolveStationIso, isoToFlag, ituToIso } from '../../../src/services/rdsCountry';
 import { countryForCallsign } from '../../../src/services/callsignCountry';
 import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
@@ -24,7 +24,9 @@ import { lookupStationLogo } from '../../../src/services/stationLogo';
 import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
   exportBookmarks, importBookmarks, search, type SearchResult,
+  loadServerBookmarks, getServerBookmarks, saveToServer, removeFromServer,
 } from './search';
+import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { DecoderClient, type Spot } from './decoders';
 import {
   saveRecording, listRecordings, deleteRecording, formatSize, formatDuration,
@@ -195,6 +197,7 @@ async function connect(host: string, pin: string) {
 // ── App ──────────────────────────────────────────────────────────────────────
 
 function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthState) {
+  authState = auth;
   $('splash').classList.add('hidden');
   $('app').classList.add('live');
 
@@ -252,7 +255,13 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (!rdsName && rt) rdsName = rt;   // some stations send only RadioText
       // Transmitter country from the RDS Extended Country Code + PI, as the app
       // does (rdsCountry.eccPiToIso) — that's what the flag comes from.
-      rdsIso = m.pi > 0 ? eccPiToIso(m.ecc || undefined, m.pi.toString(16)) : '';
+      // ECC + PI when the station sends an ECC (unambiguous); otherwise the PI's
+      // country nibble CHECKED against the receiver's own country — a validation, not
+      // an assumption. A Spanish station on sporadic-E has a nibble inconsistent with a
+      // British receiver, so it resolves to nothing rather than to a wrong flag.
+      rdsIso = m.pi > 0
+        ? resolveStationIso(m.ecc || undefined, m.pi.toString(16), serverIso || undefined)
+        : '';
       if (rdsName) void resolveRdsLogo(rdsName, rdsIso);
       updateVts();
     },
@@ -308,6 +317,8 @@ let hwGains: number[] = [];
 let hwRates: number[] = [];
 /** >0 = the SERVER pinned the capture rate; the picker is hidden. */
 let hwLockedRate = 0;
+/** The resolved PIN credentials, kept so bookmark WRITES can carry them. */
+let authState: AuthState | null = null;
 
 function loop() {
   if (!wf || !spec) return;
@@ -507,6 +518,18 @@ let rdsName = '';
 let rdsText = '';   // RDS RadioText — the message, distinct from the PS name
 let rdsIso = '';        // transmitter country, from RDS ECC + PI
 let rdsLogoUrl = '';    // resolved station logo (radio-browser)
+
+/**
+ * Logos for the bookmark LIST, resolved lazily and remembered.
+ *
+ * Deliberately logo-only: the RDS name is what the transmitter itself broadcasts, so
+ * it is authoritative, and letting a crowd-sourced database overrule it risks turning
+ * a correct "Heart" into "Heart 96.6 (Northampton)". The logo is the part the internet
+ * can add that RDS never could, and it can't corrupt anything.
+ *
+ * null = looked up, nothing found — cached so we don't ask again on every render.
+ */
+const bmLogos = new Map<string, string | null>();
 let logoQuery = '';     // guards against a stale async logo landing late
 
 function updateVts() {
@@ -523,7 +546,7 @@ function updateVts() {
   let name = rdsName;
   let flag = rdsName ? isoToFlag(rdsIso) : '';
   let src = '';
-  const logo = rdsName ? rdsLogoUrl : '';
+  let logo = rdsName ? rdsLogoUrl : '';
 
   // RDS is always genuine — the station is naming itself. A bookmark only counts
   // when we're actually sitting on it.
@@ -533,7 +556,13 @@ function updateVts() {
       name = near.name;
       flag = near.flag || '';
       // Source mark, as in the app: EiBi schedule vs the user's own bookmark.
-      src = near.source === 'user' ? 'MY' : near.source === 'eibi' ? 'EiBi' : 'SRV';
+      src = SRC_LABEL[near.source] ?? '';
+      // A logo for a BOOKMARK-identified station too, not only an RDS one. The logo
+      // was gated on rdsName, so an AM or shortwave station recognised from a bookmark
+      // showed its name and its source glyph but never its logo — even though the same
+      // station carried one perfectly well in the bookmark list two panels away.
+      logo = bmLogos.get(`${near.name}|`) ?? '';
+      if (!bmLogos.has(`${near.name}|`)) void primeStationLogo(near.name);
     }
   }
 
@@ -556,12 +585,19 @@ function updateVts() {
   const showRt = !!rt && rt !== name;
   if (rtInner.textContent !== rt) rtInner.textContent = rt;
   rtEl.classList.toggle('show', showRt);
+  // Pin the bar's width while RadioText is on show. Without this the bar is
+  // content-sized under a max-width, so it simply GREW to fit each message — which
+  // meant the text never overflowed, never scrolled, and the whole bar visibly
+  // expanded and contracted on every RadioText update instead.
+  vts.classList.toggle('rt', showRt);
   if (showRt) requestAnimationFrame(() => fitRadioText(rtEl, rtInner));
 
   // RDS mark only when the data really IS RDS — not for a bookmark guess.
   $('vtsRds').classList.toggle('show', !!rdsName);
   const srcEl = $('vtsSrc');
-  srcEl.textContent = src;
+  // innerHTML, not textContent: the source mark is an inline SVG glyph now, and
+  // textContent would print the markup as literal text.
+  srcEl.innerHTML = src;
   srcEl.classList.toggle('show', !!src && !rdsName);
 
   const logoEl = $<HTMLImageElement>('vtsLogo');
@@ -588,7 +624,7 @@ async function resolveRdsLogo(name: string, iso: string) {
   logoQuery = key;
   rdsLogoUrl = '';
   try {
-    const url = await lookupStationLogo(name, iso || undefined);
+    const url = await lookupStationLogo(name, iso || undefined, serverIso || undefined);
     // A slow lookup must not overwrite a station we've since tuned away from.
     if (logoQuery !== key) return;
     rdsLogoUrl = url || '';
@@ -855,6 +891,12 @@ function buildControls() {
   void loadStations(currentHost).then((n) => {
     if (n) console.info(`stations: ${n} from server`);
   });
+  // Stations this receiver has actually HEARD (learned from RDS by the shim). The
+  // auth suffix goes with it so the SAVE path can write back — the shim gates
+  // POST/DELETE on the same PIN that guards the stream.
+  void loadServerBookmarks(currentHost, authState?.query ?? '').then((n) => {
+    if (n) console.info(`server bookmarks: ${n} heard by this receiver`);
+  });
   initWaterfallInput();
   initKeyboard();
 }
@@ -1071,8 +1113,27 @@ function initIdleThrottle() {
 
 // ── Search + bookmarks ───────────────────────────────────────────────────────
 
+/**
+ * Source marks. "MY" and "SRV" were opaque — you can't tell what they mean without
+ * being told. A MONITOR means "saved in this browser, on this computer"; a SERVER
+ * RACK means "saved on the receiver itself, shared with everyone who connects".
+ *
+ * Inline SVG, not emoji: emoji render differently on every platform (and in colour),
+ * while these inherit the amber and stay crisp at 12px.
+ */
+const ICON_LOCAL =
+  '<svg class="srcIcon" viewBox="0 0 16 16" aria-label="Saved in this browser">' +
+  '<rect x="1" y="2" width="14" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/>' +
+  '<path d="M5 14h6M8 11v3" stroke="currentColor" stroke-width="1.3" fill="none"/></svg>';
+const ICON_SERVER =
+  '<svg class="srcIcon" viewBox="0 0 16 16" aria-label="Saved on the receiver">' +
+  '<rect x="2" y="2" width="12" height="4.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/>' +
+  '<rect x="2" y="9.6" width="12" height="4.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/>' +
+  '<circle cx="4.6" cy="4.2" r="0.8" fill="currentColor"/>' +
+  '<circle cx="4.6" cy="11.8" r="0.8" fill="currentColor"/></svg>';
+
 const SRC_LABEL: Record<string, string> = {
-  user: '★', server: 'SRV', eibi: 'EiBi', band: 'BAND',
+  user: ICON_LOCAL, server: ICON_SERVER, eibi: 'EiBi', band: 'BAND',
 };
 
 function initSearch() {
@@ -1095,6 +1156,9 @@ function initSearch() {
         (r.detail ? ` <span class="src">${escapeHtml(r.detail)}</span>` : '') +
         `</span>` +
         `<span class="src">${SRC_LABEL[r.source] ?? ''}</span>`;
+      // A logo makes a long result list scannable at a glance. EiBi rows carry their
+      // transmitter country, so those resolve without any guesswork at all.
+      if (r.source !== 'band') void attachBookmarkLogo(row, r.name, r.itu);
       row.onclick = () => { tuneTo(r); close(); };
       list.appendChild(row);
     });
@@ -1186,6 +1250,19 @@ function initBookmarks() {
   $('bmAdd').onclick = addNow;
   nameEl.onkeydown = (e) => { if (e.key === 'Enter') { void addNow(); e.preventDefault(); } };
 
+  // Save on the RECEIVER — shared with every client, and it survives this browser.
+  // The shim gates the write on the PIN, which is what becomes the admin credential
+  // when public servers arrive.
+  $('bmAddServer').onclick = async () => {
+    if (!spec) return;
+    const name = nameEl.value.trim() || rdsName || `${(spec.frequency / 1e6).toFixed(3)} MHz`;
+    const ok = await saveToServer(spec.frequency, name, spec.mode);
+    $('bmMsg').textContent = ok
+      ? `Saved "${name}" on the receiver`
+      : 'Could not save on the receiver (is the PIN right?)';
+    if (ok) { nameEl.value = ''; renderBookmarks(); }
+  };
+
   // Export: the same UberSDR-importable JSON the phone app writes, so bookmarks
   // move between browser, phone and desktop UberSDR.
   $('bmExport').onclick = () => {
@@ -1197,12 +1274,37 @@ function initBookmarks() {
     setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
   };
 
-  $('bmImport').onclick = () => $('bmFile').click();
+  // Where an import LANDS matters, so the button says which: this browser, or the
+  // receiver. bmImportTarget is read by the file handler below.
+  let bmImportTarget: 'local' | 'server' = 'local';
+  $('bmImport').onclick = () => { bmImportTarget = 'local'; $('bmFile').click(); };
+  $('bmImportServer').onclick = () => { bmImportTarget = 'server'; $('bmFile').click(); };
   $<HTMLInputElement>('bmFile').onchange = async (e) => {
     const f = (e.target as HTMLInputElement).files?.[0];
     if (!f) return;
     try {
-      const n = await importBookmarks(await f.text());
+      const text = await f.text();
+      if (bmImportTarget === 'server') {
+        // parseBookmarksAny, NOT JSON.parse. UberSDR exports YAML, and the app already
+        // has a parser that handles both — calling JSON.parse here threw on every real
+        // UberSDR export, which is exactly the file people have to import.
+        const rows = parseBookmarksAny(text, '');
+        // Push each one to the receiver. Sequential on purpose: the shim answers with
+        // the whole list every time, and firing 145 concurrent writes at a phone is a
+        // good way to make a working server look broken.
+        let n = 0;
+        for (const b of rows) {
+          if (!b?.name || !b?.frequency) continue;
+          if (await saveToServer(Number(b.frequency), String(b.name), b.mode || undefined)) n++;
+        }
+        renderBookmarks();
+        $('bmMsg').textContent = n
+          ? `Imported ${n} bookmark${n === 1 ? '' : 's'} to the receiver`
+          : 'Nothing imported (is the PIN right?)';
+        (e.target as HTMLInputElement).value = '';
+        return;
+      }
+      const n = await importBookmarks(text);
       renderBookmarks();
       $('bmMsg').textContent = `Imported ${n} bookmark${n === 1 ? '' : 's'}`;
     } catch (err) {
@@ -1214,23 +1316,48 @@ function initBookmarks() {
 
 function renderBookmarks() {
   const host = $('bmList');
-  const list = getBookmarks();
   host.innerHTML = '';
-  if (!list.length) {
-    host.innerHTML = '<div class="sres"><span class="n">No bookmarks yet — tune something and press ADD.</span></div>';
+
+  // Two lists in one, distinguished by their glyph: a MONITOR for the ones saved in
+  // this browser, a SERVER RACK for the ones on the receiver (learned from RDS, or
+  // saved by hand, and shared with every client).
+  type Row = {
+    name: string; frequency: number; mode?: string;
+    local: boolean; heard?: boolean;
+    bwLo?: number | null; bwHi?: number | null;
+  };
+  const rows: Row[] = [
+    ...getBookmarks().map(b => ({
+      name: b.name, frequency: b.frequency, mode: b.mode, local: true,
+      bwLo: b.bandwidth_low, bwHi: b.bandwidth_high,
+    })),
+    ...getServerBookmarks().map(b => ({
+      name: b.name, frequency: b.frequency, mode: b.mode ?? 'wfm', local: false,
+      heard: !(b as any).manual,
+    })),
+  ];
+
+  if (!rows.length) {
+    host.innerHTML = '<div class="sres"><span class="n">No bookmarks yet — tune something and press ADD. Stations heard over RDS are added here automatically.</span></div>';
     return;
   }
-  for (const b of [...list].sort((a, z) => a.frequency - z.frequency)) {
+
+  for (const b of rows.sort((a, z) => a.frequency - z.frequency)) {
     const row = document.createElement('div');
     row.className = 'sres';
+    row.title = b.local ? 'Saved in this browser'
+              : b.heard ? 'Heard by this receiver (expires if it stops being heard)'
+              : 'Saved on the receiver';
     row.innerHTML =
+      `<span class="src">${b.local ? ICON_LOCAL : ICON_SERVER}</span>` +
       `<span class="f">${(b.frequency / 1e6).toFixed(3)}</span>` +
       `<span class="n">${escapeHtml(b.name)}</span>` +
       `<span class="src">${(b.mode || '').toUpperCase()}</span>`;
     row.onclick = () => {
       tuneTo({
-        name: b.name, frequency: b.frequency, mode: b.mode, source: 'user',
-        bandwidthLow: b.bandwidth_low, bandwidthHigh: b.bandwidth_high,
+        name: b.name, frequency: b.frequency, mode: b.mode,
+        source: b.local ? 'user' : 'server',
+        bandwidthLow: b.bwLo, bandwidthHigh: b.bwHi,
       });
       $('bookmarksPanel').classList.remove('open');
     };
@@ -1239,12 +1366,60 @@ function renderBookmarks() {
     del.textContent = '✕';
     del.onclick = async (e) => {
       e.stopPropagation();
-      await removeBookmark(b.name, b.frequency);
+      if (b.local) await removeBookmark(b.name, b.frequency);
+      else await removeFromServer(b.frequency);
       renderBookmarks();
     };
     row.appendChild(del);
     host.appendChild(row);
+
+    // Logo, lazily — for BOTH kinds. Local bookmarks were skipped on the theory that
+    // "a local bookmark is whatever the user called it", but importing an UberSDR list
+    // disproves that: it is full of real station names that match perfectly well, and
+    // showing logos on one list and not the other just looks broken.
+    void attachBookmarkLogo(row, b.name);
   }
+}
+
+/**
+ * Resolve (and cache) a station logo, then slot it into the row.
+ *
+ * `itu` is EiBi's transmitter-country code, and it is AUTHORITATIVE — the schedule
+ * states the country outright, so it is used as a hard FILTER rather than the
+ * receiver's country as a mere preference. No guessing at all for EiBi rows.
+ */
+/**
+ * Warm the logo cache for a station we've just identified, so the VTS can paint it.
+ *
+ * The cache is claimed IMMEDIATELY (set to null before the fetch) because the VTS runs
+ * on every frame: without that, one un-cached station fires a lookup per frame until
+ * the first reply lands.
+ */
+async function primeStationLogo(name: string) {
+  const key = `${name}|`;
+  if (bmLogos.has(key)) return;
+  bmLogos.set(key, null);
+  const url = await lookupStationLogo(name, undefined, serverIso || undefined)
+    .catch(() => null);
+  bmLogos.set(key, url ?? null);
+}
+
+async function attachBookmarkLogo(row: HTMLElement, name: string, itu?: string) {
+  const iso = itu ? ituToIso(itu) : '';
+  const key = `${name}|${iso}`;
+  let url = bmLogos.get(key);
+  if (url === undefined) {
+    url = await lookupStationLogo(
+      name, iso || undefined, iso ? undefined : (serverIso || undefined),
+    ).catch(() => null);
+    bmLogos.set(key, url ?? null);
+  }
+  if (!url || !row.isConnected) return;
+  const img = document.createElement('img');
+  img.className = 'bmLogo';
+  img.src = url;
+  img.alt = '';
+  row.insertBefore(img, row.firstChild);
 }
 
 
@@ -1334,7 +1509,17 @@ function filteredSpots(): Spot[] {
  * ANTENNA, so asking the listener for one can only produce a wrong answer — if the
  * server publishes no position, we show that plainly and do without distances.
  */
-let serverLoc: { lat: number; lon: number; label?: string; grid?: string } | null = null;
+let serverLoc: { lat: number; lon: number; label?: string; country?: string; grid?: string } | null = null;
+/**
+ * The RECEIVER's country — a TIE-BREAK ONLY, never a filter and never a flag.
+ *
+ * It is tempting to assume a station you can hear is in your own country, and for the
+ * ordinary case it is. But sporadic-E drops a Spanish station into a Northampton
+ * receiver, and people living near a border hear three countries routinely — so using
+ * this as truth would put a Union Jack on a Spanish station, which is worse than
+ * showing nothing. It only breaks ties between otherwise equally good name matches.
+ */
+let serverIso = '';
 let serverName = '';
 
 function myPos(): { lat: number; lon: number } | null { return serverLoc; }
@@ -1342,12 +1527,15 @@ function myPos(): { lat: number; lon: number } | null { return serverLoc; }
 /** "Northampton IO92nh", or "52.24, -0.90" / "IO92nh" if only one is known. */
 function locLine(): string {
   if (!serverLoc) return '';
-  const { lat, lon, label, grid } = serverLoc;
+  const { lat, lon, label, country, grid } = serverLoc;
   const place = label || `${lat.toFixed(2)}, ${lon.toFixed(2)}`;
   // The host may have named the receiver BY its locator, in which case place and
   // grid are the same thing — don't print "IO92nh IO92nh".
   const isGrid = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/i.test(place);
-  return grid && !isGrid ? `${place} ${grid}` : place;
+  // "Moulton, United Kingdom IO92ng" — the country is skipped when the place IS the
+  // grid (nothing to qualify) or when it would just repeat the place name.
+  const where = (country && !isGrid && country !== place) ? `${place}, ${country}` : place;
+  return grid && !isGrid ? `${where} ${grid}` : where;
 }
 
 async function loadServerLocation(host: string) {
@@ -1355,8 +1543,9 @@ async function loadServerLocation(host: string) {
     const r = await fetch(`http://${host}/location`, { cache: 'no-store' });
     const j = await r.json();
     serverName = typeof j.name === 'string' ? j.name : '';
+    serverIso = typeof j.iso === 'string' ? j.iso : '';
     if (typeof j.lat === 'number' && typeof j.lon === 'number') {
-      serverLoc = { lat: j.lat, lon: j.lon, label: j.label, grid: j.grid };
+      serverLoc = { lat: j.lat, lon: j.lon, label: j.label, country: j.country, grid: j.grid };
     }
     // Menu row.
     const el = $('rxLoc');
@@ -1944,6 +2133,15 @@ function nearestStation(hz: number): NearStation | null {
     if (off < bestOff) {
       bestOff = off;
       best = { name: b.name, frequency: b.frequency, source: 'user' };
+    }
+  }
+  // Stations the receiver has HEARD outrank the EiBi schedule: EiBi says what
+  // exists, this says what actually comes in here.
+  for (const b of getServerBookmarks()) {
+    const off = Math.abs(b.frequency - hz);
+    if (off < bestOff) {
+      bestOff = off;
+      best = { name: b.name, frequency: b.frequency, source: 'server' };
     }
   }
   for (const st of getStations()) {

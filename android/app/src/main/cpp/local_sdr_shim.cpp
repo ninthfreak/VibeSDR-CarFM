@@ -54,6 +54,7 @@
 #include <cstring>
 #include <deque>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <random>
 #include <unordered_map>
@@ -421,6 +422,329 @@ static std::atomic<double> g_vsLockedRate{0.0};
 static std::mutex  g_stationsMtx;
 static std::string g_stationsJson;
 
+// ── Learned station bookmarks (RDS) ──────────────────────────────────────────
+//
+// When a WFM station announces its name over RDS we remember it against the
+// frequency it was heard on, so the search bar fills itself in with the stations
+// this receiver can ACTUALLY hear. Learned here in the shim, because this is the
+// only place that sees both the tuned frequency AND the decoded name — when
+// VibeServer is serving, the app isn't tuned to anything; the client is.
+//
+// Three rules keep the list honest, and each exists for a concrete failure:
+//
+//   1. CONFIRM before trusting. A marginal signal happily emits one garbled PS
+//      ("H?a?t F"), so a name must be seen kConfirmHits times before it is written.
+//   2. REPLACE on a new name. Move from Northampton to Manchester and 96.6 carries
+//      somebody else — the new name overwrites the old.
+//   3. EXPIRE when unheard. That is the case rule 2 CANNOT catch: 96.6 in Manchester
+//      might carry NOTHING, so nothing ever contradicts the old bookmark and it would
+//      sit on top of static forever. Anything unheard for kExpirySecs is dropped.
+//
+struct LearnedBm {
+    std::string name;            // RDS programme-service name, trimmed
+    int         pi = -1;         // RDS PI code (station identity)
+    long long   hz = 0;          // the EXACT frequency — the map key is only a rounding
+    std::string mode = "wfm";    // RDS learning is FM-only, but an IMPORT carries any mode
+    long long   lastHeard = 0;   // unix seconds — drives expiry
+    bool        manual = false;  // saved by hand: never expires
+};
+/**
+ * A station we've seen but don't trust yet.
+ *
+ * The PS is EIGHT characters, sent over and over, and the corruption is RANDOM PER
+ * REPETITION — the errors follow the fading, so they land in different places each
+ * time. That is exploitable: tally which character turned up at each of the eight
+ * positions, and the TRUE character wins every position on sheer frequency.
+ * "H%art", "He%rt" and "H**r%" all vote for "Heart".
+ *
+ * The payoff is that we can reconstruct a name NO SINGLE REPETITION EVER DELIVERED
+ * CLEANLY — and it needs no internet, which is the whole point for a receiver on an
+ * aerial in a shed.
+ */
+struct PendingBm {
+    int         pi = -1;         // station IDENTITY — the thing we lock on to
+    long long   piSince = 0;     // when this PI first appeared
+    int         samples = 0;     // PS repetitions tallied
+    // votes[position][character] — 8 chars of PS, printable ASCII only.
+    unsigned short votes[8][128] = {};
+    std::string lastBest;        // last reconstruction, to spot when it settles
+    long long   settledSince = 0;
+};
+static std::mutex g_bmMtx;
+static std::map<long long, LearnedBm> g_bookmarks;    // key: Hz (rounded)
+/**
+ * Where to persist. The shim OWNS these bookmarks, so the shim must SAVE them.
+ *
+ * They were previously written by the app's JavaScript on a timer — but while the
+ * server is serving, the app is BACKGROUNDED, and JS timers there are throttled or
+ * suspended outright. So the save frequently never ran at all: an import of 145
+ * bookmarks appeared in the list, lived only in memory, and vanished the instant the
+ * server restarted. Shortening the timer would not have helped; the timer was the bug.
+ * Writing from here, on every change, takes the JS runtime out of the path entirely.
+ */
+static std::string g_bmPath;
+static std::map<long long, PendingBm> g_bmPending;    // awaiting confirmation
+
+// THE PI CODE IS THE STATION'S IDENTITY — the name is only its label.
+//
+// PI travels in block A of EVERY RDS group, is 16 bits, and is error-protected. The PS
+// name is assembled 2 characters at a time across FOUR separate 0A groups, so it is
+// both slower to arrive and far more fragile — which is exactly why it garbles. Keying
+// on the name would mean treating the flimsy thing as the source of truth.
+//
+// So we lock on to the PI first, then trust a name only while the PI holds steady:
+//
+//   * PI CHANGES  -> a different station is on this frequency. That is the Manchester
+//                    case, and it is detected IMMEDIATELY, long before a legible name
+//                    could ever assemble.
+//   * PI STEADY, NAME CHANGING -> same station, corrupted text ("H%art", "He%rt",
+//                    "H**r%"). The errors follow the fading, so a garbled name is
+//                    garbled DIFFERENTLY each time and can never hold still.
+//   * PI STEADY, NAME STEADY for kStableSecs -> believe it.
+//
+// Tuned against simulated corruption (scripts checked 5-60% character error):
+// a 1/2 majority with 6 samples confidently produced "H%art F*" — a corrupt character
+// only needs 3 of 6 votes to win. A 2/3 majority over >=10 samples reconstructs
+// correctly through 30% corruption and REFUSES TO GUESS beyond ~45%, which is the
+// behaviour we want: a wrong name in the list is worse than no name.
+static const int       kMinSamples  = 10;                 // PS repetitions before voting
+static const long long kPiLockSecs  = 5;                  // PI must be steady this long
+static const long long kStableSecs  = 15;                 // reconstruction must hold
+static const long long kExpirySecs  = 30LL * 24 * 3600;   // 30 days unheard
+
+/**
+ * Round so a few Hz of VFO drift can't create a second entry for one station.
+ *
+ * 1 kHz, NOT 10 kHz. 10 kHz was chosen for FM, where stations sit on a 100 kHz grid —
+ * but shortwave is a 5 kHz grid and medium wave a 9 kHz one, so two genuinely different
+ * stations rounded into the same bucket and the second silently destroyed the first.
+ * Importing a real UberSDR bookmark list lost 25 entries this way: CB10 (27.075) and
+ * CB11 (27.085) both landed on 27.080.
+ */
+static long long bmKey(double hz) { return (long long)(llround(hz / 1000.0) * 1000LL); }
+
+static void bmSaveLocked();          // defined below; callers hold g_bmMtx
+
+static std::string bmTrim(const std::string& s) {
+    size_t a = s.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos) return "";
+    size_t b = s.find_last_not_of(" \t\r\n");
+    return s.substr(a, b - a + 1);
+}
+
+static std::string bmEsc(const std::string& n) {
+    std::string e;
+    for (char c : n) { if (c == '"' || c == '\\') e += '\\'; e += c; }
+    return e;
+}
+
+/** Called from the RDS PS callback. */
+static void bmLearn(double hz, int pi, const std::string& psRaw) {
+    const std::string ps = bmTrim(psRaw);
+    if (hz <= 0 || pi <= 0) return;          // no PI = not locked on to anything
+    const long long key = bmKey(hz);
+    const long long now = (long long)time(nullptr);
+
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    auto it = g_bookmarks.find(key);
+
+    // Already know this station (same PI) — just keep it alive. Note we do NOT require
+    // the name to match: the PI says it's the same station even if this particular PS
+    // arrived corrupted, and refusing to refresh on a garbled repetition would let a
+    // perfectly audible station quietly expire.
+    if (it != g_bookmarks.end() && it->second.pi == pi) {
+        it->second.lastHeard = now;
+        g_bmPending.erase(key);
+        return;
+    }
+
+    auto& p = g_bmPending[key];
+
+    // Lock on to the IDENTITY first. A new PI means a different station is here —
+    // this is the "moved to Manchester" case, and the PI reveals it immediately.
+    if (p.pi != pi) {
+        // A different station: every vote we've gathered belongs to the OLD one and
+        // is now worse than useless. Wipe the tallies, don't just reset the counter.
+        p = PendingBm{};
+        p.pi = pi; p.piSince = now;
+        // A station change invalidates whatever was bookmarked here. Drop it now
+        // rather than let a stale name sit on top of a different broadcaster for
+        // however long it takes the new one's text to assemble.
+        if (it != g_bookmarks.end() && !it->second.manual) g_bookmarks.erase(it);
+        return;
+    }
+    if (now - p.piSince < kPiLockSecs) return;   // identity not settled yet
+    if (ps.empty()) return;                      // locked on, but no text yet
+
+    // Tally this repetition, character by character.
+    //
+    // NB positions BEYOND the name's length vote for a SPACE, they don't abstain.
+    // The PS is eight characters on the air but the engine hands it to us trimmed, so
+    // "Heart" arrives as five. Letting positions 5-7 abstain meant they could never
+    // reach a majority and the name was NEVER accepted — a station called "Heart"
+    // was unlearnable, while an 8-character one worked. Voting a space makes the
+    // LENGTH a majority decision too, and the trim below turns it back into "Heart".
+    for (int i = 0; i < 8; ++i) {
+        unsigned char c = (i < (int)ps.size()) ? (unsigned char)ps[i] : (unsigned char)' ';
+        if (c >= 32 && c < 127) p.votes[i][c]++;
+    }
+    p.samples++;
+    if (p.samples < kMinSamples) return;
+
+    // Reconstruct: the winner at each position. A position with no clear winner
+    // (under half the samples) is still in dispute — we simply have not heard enough.
+    std::string best;
+    for (int i = 0; i < 8; ++i) {
+        int topC = 0, topN = 0;
+        for (int c = 32; c < 127; ++c) {
+            if (p.votes[i][c] > topN) { topN = p.votes[i][c]; topC = c; }
+        }
+        if (topN * 3 < p.samples * 2) return;    // needs a 2/3 majority to win
+        best += (char)topC;
+    }
+    best = bmTrim(best);
+    if (best.empty()) return;
+
+    // The reconstruction must then SETTLE — stop changing as more votes arrive.
+    if (best != p.lastBest) { p.lastBest = best; p.settledSince = now; return; }
+    if (now - p.settledSince < kStableSecs) return;
+
+    LearnedBm b;
+    b.name = best; b.pi = pi; b.lastHeard = now;
+    b.manual = (it != g_bookmarks.end()) ? it->second.manual : false;
+    g_bookmarks[key] = b;
+    g_bmPending.erase(key);
+}
+
+/**
+ * Manual "save to server" / import. Never expires.
+ *
+ * The MODE matters. RDS learning is FM-only so "wfm" is right for a LEARNED station, but
+ * an imported list is full of AM, USB, CW and fax — defaulting those to WFM makes every
+ * one of them unlistenable. And the EXACT hz is kept: the map key is a rounding, used to
+ * group a station despite VFO drift, and emitting it as the frequency put bookmarks up
+ * to 500 Hz out — far enough that the VTS (which matches within 99 Hz) never saw them.
+ */
+static void bmAddManual(double hz, const std::string& name, const std::string& mode) {
+    const std::string n = bmTrim(name);
+    if (n.empty() || hz <= 0) return;
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    LearnedBm b;
+    b.name = n;
+    b.pi = -1;
+    b.hz = (long long)llround(hz);
+    b.mode = mode.empty() ? "am" : mode;
+    b.lastHeard = (long long)time(nullptr);
+    b.manual = true;
+    g_bookmarks[bmKey(hz)] = b;
+    bmSaveLocked();
+}
+
+/** Wipe the lot. An auto-learning list needs a way to be emptied — a wrong or unwanted
+ *  station would otherwise sit there for its full 30-day expiry, and a MANUAL entry
+ *  never expires at all. */
+static void bmClear() {
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    g_bookmarks.clear();
+    g_bmPending.clear();
+    bmSaveLocked();
+}
+
+static void bmRemove(double hz) {
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    g_bookmarks.erase(bmKey(hz));
+    bmSaveLocked();
+}
+
+/** Drop anything unheard for kExpirySecs. Manual entries are exempt. */
+static void bmPrune() {
+    const long long cutoff = (long long)time(nullptr) - kExpirySecs;
+    for (auto it = g_bookmarks.begin(); it != g_bookmarks.end(); ) {
+        if (!it->second.manual && it->second.lastHeard < cutoff) it = g_bookmarks.erase(it);
+        else ++it;
+    }
+}
+
+/** Restore the saved list at start-up. The APP owns persistence — the shim has no
+ *  storage of its own, and this mirrors how the station list already works. */
+static void bmLoadJson(const std::string& json) {
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    g_bookmarks.clear();
+    // Deliberately minimal parsing: this is our OWN serialisation coming back, not
+    // arbitrary input, so scan for the fields rather than pull in a JSON library.
+    size_t p = 0;
+    while ((p = json.find("\"frequency\":", p)) != std::string::npos) {
+        long long freq = atoll(json.c_str() + p + 12);
+        size_t np  = json.find("\"name\":\"", p);
+        size_t lp  = json.find("\"lastHeard\":", p);
+        size_t mp  = json.find("\"manual\":", p);
+        size_t mdp = json.find("\"mode\":\"", p);
+        size_t pip = json.find("\"pi\":", p);
+        if (np == std::string::npos || lp == std::string::npos) break;
+        size_t ns = np + 8, ne = json.find('"', ns);
+        LearnedBm b;
+        b.name = json.substr(ns, ne - ns);
+        b.pi = (pip != std::string::npos) ? atoi(json.c_str() + pip + 5) : -1;
+        b.lastHeard = atoll(json.c_str() + lp + 12);
+        b.manual = (mp != std::string::npos) && json.compare(mp + 9, 4, "true") == 0;
+        b.hz = freq;                              // the saved value IS the exact frequency
+        if (mdp != std::string::npos) {
+            size_t ms = mdp + 8, me = json.find('"', ms);
+            if (me != std::string::npos) b.mode = json.substr(ms, me - ms);
+        }
+        if (freq > 0 && !b.name.empty()) g_bookmarks[bmKey((double)freq)] = b;
+        p = ne;
+    }
+    bmPrune();     // a long gap since the last run may have aged some out
+    // PERSIST. Without this, a list handed in from the app (an import) replaced the
+    // in-memory set but never reached the file, so it evaporated at the next restart —
+    // exactly the bug we just finished fixing for the web client's import path.
+    bmSaveLocked();
+}
+
+/** Serialise WITHOUT taking the lock — callers that already hold it use this. */
+static std::string bmJsonLocked() {
+    bmPrune();
+    std::string j = "[";
+    bool first = true;
+    for (auto& kv : g_bookmarks) {
+        if (!first) j += ",";
+        first = false;
+        // The EXACT frequency, never the rounded key. The key only groups a station
+        // despite VFO drift; emitting it as the frequency shifted every bookmark by
+        // up to 500 Hz, and the VTS only recognises a station within 99 Hz — so a
+        // bookmark like 17.428100 MHz simply never showed up when tuned to it.
+        j += "{\"frequency\":" + std::to_string(kv.second.hz ? kv.second.hz : kv.first)
+           + ",\"name\":\"" + bmEsc(kv.second.name) + "\""
+           + ",\"pi\":" + std::to_string(kv.second.pi)
+           + ",\"lastHeard\":" + std::to_string(kv.second.lastHeard)
+           + ",\"manual\":" + (kv.second.manual ? "true" : "false")
+           + ",\"mode\":\"" + bmEsc(kv.second.mode) + "\""
+           + ",\"source\":\"server\"}";
+    }
+    return j + "]";
+}
+
+static std::string bmJson() {
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    return bmJsonLocked();
+}
+
+/** Write the list out. Called on EVERY change — a bookmark the user saved and then
+ *  lost to a restart is worse than one that was never saved. Caller holds g_bmMtx. */
+static void bmSaveLocked() {
+    if (g_bmPath.empty()) return;
+    const std::string body = bmJsonLocked();
+    // Write-and-rename, so a kill mid-write can't leave a truncated file behind and
+    // destroy the whole list.
+    const std::string tmp = g_bmPath + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "wb");
+    if (!f) return;
+    fwrite(body.data(), 1, body.size(), f);
+    fclose(f);
+    rename(tmp.c_str(), g_bmPath.c_str());
+}
+
 // RECEIVER location, served at GET /location. It is the SERVER's location, not the
 // client's — a VibeServer might be left at a relative's house, or (once public) be
 // listened to from anywhere in the world. Distances, map centring and the ITU
@@ -469,6 +793,16 @@ struct VsAuth {
         auto it = fails.find(ip);
         return it != fails.end() && nowMs() < it->second.until;
     }
+    /** Seconds left on this IP's lockout, 0 if none. The CLIENT needs this: a WebSocket
+     *  error carries no status code, so without being told, a locked-out browser reports
+     *  "wrong PIN" and the user retypes a perfectly correct one forever. */
+    int blockedFor(const std::string& ip) {
+        std::lock_guard<std::mutex> lk(mtx);
+        auto it = fails.find(ip);
+        if (it == fails.end()) return 0;
+        int64_t left = it->second.until - nowMs();
+        return left > 0 ? (int)((left + 999) / 1000) : 0;
+    }
     void recordFail(const std::string& ip) {
         std::lock_guard<std::mutex> lk(mtx);
         auto& f = fails[ip];
@@ -497,6 +831,22 @@ struct VsAuth {
 VsAuth g_vsAuthState;
 
 // Extract a query-string value (?a=1&key=val) from a full HTTP request line.
+/** Percent-decode a query value. queryParam() returns it RAW, so a station name
+ *  ("Heart FM") arrives as "Heart%20FM" and would be stored with the escape in it. */
+std::string urlDecode(const std::string& in) {
+    std::string out;
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+        if (in[i] == '+') { out += ' '; }
+        else if (in[i] == '%' && i + 2 < in.size() &&
+                 isxdigit((unsigned char)in[i+1]) && isxdigit((unsigned char)in[i+2])) {
+            out += (char)strtol(in.substr(i + 1, 2).c_str(), nullptr, 16);
+            i += 2;
+        } else out += in[i];
+    }
+    return out;
+}
+
 std::string queryParam(const std::string& reqLine, const char* key) {
     auto q = reqLine.find('?'); if (q == std::string::npos) return "";
     auto sp = reqLine.find(' ', q);
@@ -1147,8 +1497,14 @@ struct LocalSdrShim::Impl {
     }
     // RDS programme-service name / RadioText / stereo-pilot lock from the engine.
     static void rdsPsCb(void* ctx, uint16_t pi, const char* ps8) {
-        Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
-        t->rdsPi = pi; t->rdsPsName = ps8 ? ps8 : "";
+        Impl* t = (Impl*)ctx;
+        {
+            std::lock_guard<std::mutex> lk(t->rdsMtx);
+            t->rdsPi = pi; t->rdsPsName = ps8 ? ps8 : "";
+        }
+        // Learn the station against the frequency it was heard on. audioFreq is the
+        // VFO — the thing actually being listened to — not the dongle centre.
+        if (ps8) bmLearn(t->audioFreq.load(), (int)pi, ps8);
     }
     static void rdsTextCb(void* ctx, const char* rt64) {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
@@ -1841,7 +2197,15 @@ struct LocalSdrShim::Impl {
             std::string secret; { std::lock_guard<std::mutex> lk(g_vsMtx); secret = g_vsSecret; }
             std::string body;
             if (secret.empty()) body = "{\"required\":false}";
-            else body = "{\"required\":true,\"nonce\":\"" + g_vsAuthState.issue() + "\"}";
+            else {
+                // Report a lockout HERE. The WS upgrade answers 429, but a WebSocket
+                // error gives the browser no status code at all — so a locked-out client
+                // could only guess, and it guessed "wrong PIN", leaving the user retyping
+                // a perfectly correct one until the backoff expired.
+                int wait = g_vsAuthState.blockedFor(sock->peerAddress());
+                body = "{\"required\":true,\"nonce\":\"" + g_vsAuthState.issue() + "\""
+                     + ",\"lockedFor\":" + std::to_string(wait) + "}";
+            }
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
@@ -1889,6 +2253,52 @@ struct LocalSdrShim::Impl {
             std::string body;
             { std::lock_guard<std::mutex> lk(g_stationsMtx); body = g_stationsJson; }
             if (body.empty()) body = "[]";
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Access-Control-Allow-Origin: *\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
+        } else if (reqLine.rfind("GET /favicon", 0) == 0) {
+            // A REAL file, not the data: URI in the page. Safari refuses data: URI
+            // favicons outright and silently shows its own default arrow instead, so
+            // the icon has to come from a URL. ~1 KB, compiled in beside the page.
+            std::string body((const char*)kVibeFavicon, kVibeFaviconLen);
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n"
+                          "Access-Control-Allow-Origin: *\r\n"
+                          "Cache-Control: max-age=86400\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
+        } else if (reqLine.rfind("GET /bookmarks", 0) == 0) {
+            // Stations this receiver has actually HEARD, learned from RDS, plus any
+            // saved by hand. Expired entries are pruned on the way out (see bmPrune).
+            std::string body = bmJson();
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Access-Control-Allow-Origin: *\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
+        } else if (reqLine.rfind("POST /bookmarks", 0) == 0 ||
+                   reqLine.rfind("DELETE /bookmarks", 0) == 0) {
+            // WRITE path — "save to server" / "remove from server".
+            //
+            // Gated on the SAME PIN that guards the stream today. When public servers
+            // arrive this becomes the admin credential instead: the gate moves, the
+            // shape does not, and the client already hides its write buttons unless
+            // this call would succeed.
+            if (!vsAuthOk(sock, reqLine)) return;        // vsAuthOk already sent 401
+
+            const bool remove = (reqLine.rfind("DELETE", 0) == 0);
+            double hz = atof(queryParam(reqLine, "frequency").c_str());
+            std::string name = urlDecode(queryParam(reqLine, "name"));
+            if (hz <= 0) {
+                sock->sendstr("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+                sock->close();
+                return;
+            }
+            if (remove) bmRemove(hz);
+            else bmAddManual(hz, name, urlDecode(queryParam(reqLine, "mode")));
+
+            std::string body = bmJson();
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
@@ -2298,6 +2708,21 @@ static std::mutex g_lifecycle;
 // its members can read it). A separate act rather than a start() parameter: it
 // exposes a tuning-control channel, so it must never be a defaulted argument.
 void LocalSdrShim::setServeOnLan(bool on) { g_serveOnLan.store(on); }
+
+// mDNS hostname responder — "vibesdr.local". NsdManager publishes a SERVICE, which is
+// what the app's Discovered list uses, but a browser resolving a hostname needs an A
+// record and NsdManager cannot publish one. See mdns_responder.cpp.
+// NB: this file is ALREADY inside `namespace vibe`, so these are declared bare —
+// wrapping them in `namespace vibe { }` here would nest to vibe::vibe and fail to link.
+void mdnsStart(const std::string& host, const std::string& ipv4);
+void mdnsStop();
+std::string mdnsHost();
+
+void LocalSdrShim::startMdns(const std::string& host, const std::string& ipv4) {
+    mdnsStart(host, ipv4);
+}
+void LocalSdrShim::stopMdns() { mdnsStop(); }
+std::string LocalSdrShim::mdnsHostname() { return mdnsHost(); }
 bool LocalSdrShim::serveOnLan() { return g_serveOnLan.load(); }
 static const char* bindHost() { return g_serveOnLan.load() ? "0.0.0.0" : "127.0.0.1"; }
 
@@ -2311,6 +2736,26 @@ void LocalSdrShim::setVibeServerLimits(double maxBandwidthHz, double maxFftRate)
 void LocalSdrShim::setVibeServerCompressAudio(bool on) { g_vsCompressAudio.store(on); }
 void LocalSdrShim::setVibeServerWebEnabled(bool on) { g_vsWebEnabled.store(on); }
 void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(rate > 0 ? rate : 0.0); }
+void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }
+void LocalSdrShim::clearBookmarks() { bmClear(); }
+
+/** Give the shim a file to own. It loads immediately and saves on every change. */
+void LocalSdrShim::setBookmarksPath(const std::string& path) {
+    std::string body;
+    {
+        std::lock_guard<std::mutex> lk(g_bmMtx);
+        g_bmPath = path;
+    }
+    if (path.empty()) return;
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return;                       // nothing saved yet — that's fine
+    char buf[8192];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) body.append(buf, n);
+    fclose(f);
+    if (!body.empty()) bmLoadJson(body);
+}
+std::string LocalSdrShim::getBookmarksJson() { return bmJson(); }
 void LocalSdrShim::setStationsJson(const std::string& json) {
     std::lock_guard<std::mutex> lk(g_stationsMtx);
     g_stationsJson = json;

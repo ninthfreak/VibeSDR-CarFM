@@ -18,10 +18,12 @@ function norm(s: string): string {
 
 /** Resolve a station favicon URL by name (+ optional ISO country). Returns null
  *  when there's no confident match or on any error. HTTPS only. */
-export async function lookupStationLogo(name: string, iso?: string): Promise<string | null> {
+export async function lookupStationLogo(
+  name: string, iso?: string, preferIso?: string,
+): Promise<string | null> {
   const q = norm(name);
   if (!q || q.length < 3) return null;
-  const key = `${q}|${iso ?? ''}`;
+  const key = `${q}|${iso ?? ''}|${preferIso ?? ''}`;
   if (cache.has(key)) return cache.get(key)!;
   if (inflight.has(key)) return inflight.get(key)!;
 
@@ -29,7 +31,9 @@ export async function lookupStationLogo(name: string, iso?: string): Promise<str
     try {
       // byname/ is a substring match (search?name= over-filters and returns []).
       // Ordered by votes so the popular station wins a common-name query.
-      const url = `${HOST}/json/stations/byname/${encodeURIComponent(name)}?limit=10&order=votes&reverse=true&hidebroken=true`;
+      // 40, not 10: the right station is often outside the top 10 by votes — widening
+      // the pool is what turned "Absolute" from a miss into a hit.
+      const url = `${HOST}/json/stations/byname/${encodeURIComponent(name)}?limit=40&order=votes&reverse=true&hidebroken=true`;
       const res = await fetch(url, { headers: { 'User-Agent': 'VibeSDR/7 (FM-DX tuner)' } });
       const rows: any[] = await res.json();
       const list = Array.isArray(rows) ? rows : [];
@@ -44,14 +48,35 @@ export async function lookupStationLogo(name: string, iso?: string): Promise<str
         if (!fav.startsWith('https://')) continue;
         if (iso && String(r?.countrycode ?? '').toUpperCase() !== iso.toUpperCase()) continue;
         const rTokens = norm(String(r?.name ?? '')).split(' ').filter((t) => t.length > 1);
-        const shared = rTokens.filter((t) => qTokens.includes(t)).length;
+        // Count DISTINCT QUERY tokens accounted for — not database tokens matched.
+        // Counting the other way let a repeated word inflate the score past 1.0:
+        // "Kiss" against "Radio Kiss Kiss Italia" counted "kiss" twice and scored 1.84,
+        // which then beat every legitimate match, including the right country's.
+        const shared = qTokens.filter((t) => rTokens.includes(t)).length;
         if (shared === 0) continue;                       // need at least one real word in common
-        // Overlap ratio; light penalty for extra words so the closest name wins.
-        const score = shared / Math.max(qTokens.length, rTokens.length);
+
+        // CONTAINMENT, not symmetric overlap. The question is "is the name I have fully
+        // accounted for?", because the database routinely carries extra words the RDS
+        // name doesn't ("FM", "Radio", a city). Scoring symmetrically —
+        // shared / max(q, r) — meant "Heart" vs "Heart FM" scored 1/2 = 0.5 and was
+        // then REJECTED by the 0.8 floor below, so a single-word station could
+        // essentially never be matched without a country to anchor on. Since the RDS
+        // country code rides in group 1A and many stations never send it, that is the
+        // usual case: the lookup was quietly failing nearly always.
+        let score = shared / qTokens.length;
+        // Light penalty for a database name padded with words we didn't ask for, so
+        // "Heart" prefers "Heart FM" over "Heart Dance Radio Network".
+        const extra = Math.max(0, rTokens.length - shared);
+        score -= extra * 0.08;
+        // Same country as the receiver? A TIE-BREAK only — never a filter. Sporadic-E
+        // and border reception mean a foreign station is perfectly legitimate.
+        if (preferIso && String(r?.countrycode ?? '').toUpperCase() === preferIso.toUpperCase()) {
+          score += 0.05;
+        }
         if (score > bestScore) { bestScore = score; bestFav = fav; }
       }
-      // Exact match (or strong overlap) required when NO country to anchor on.
-      if (!iso && bestScore < 0.8) return null;
+      // Every query token has to be accounted for; padding is what the penalty trims.
+      if (bestScore < 0.8) return null;
       return bestFav;
     } catch {
       return null;

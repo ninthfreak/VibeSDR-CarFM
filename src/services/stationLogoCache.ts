@@ -8,6 +8,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { lookupStationLogo } from './stationLogo';
+import { receiverIso } from './rdsCountry';
 
 const DIR = FileSystem.documentDirectory + 'stationlogos/';
 const INDEX_KEY = 'lsv_logo_cache_v1';
@@ -48,7 +49,11 @@ async function download(url: string, key: string): Promise<string | null> {
 }
 
 async function refresh(key: string, name: string, iso?: string): Promise<void> {
-  const url = await lookupStationLogo(name, iso);   // no-op offline (returns null)
+  // receiverIso() is a PREFERENCE, not a filter: it searches the receiver's own
+  // country first (a global name search buries the local station — "Kiss" found a
+  // Greek one because the UK one was nowhere near the top by votes) but still falls
+  // back worldwide, so a sporadic-E catch from abroad is not excluded.
+  const url = await lookupStationLogo(name, iso, receiverIso() || undefined);   // no-op offline (returns null)
   if (!url) return;
   const path = await download(url, key);
   if (path) { (await loadIndex())[key] = { path, url, ts: Date.now() }; await saveIndex(); }
@@ -77,7 +82,7 @@ export async function resolveStationLogo(opts: { pi?: string; name: string; iso?
     delete idx[key];   // file vanished — fall through to re-fetch
   }
 
-  const url = await lookupStationLogo(name, iso);
+  const url = await lookupStationLogo(name, iso, receiverIso() || undefined);
   if (!url) return null;
   if (key) {
     const path = await download(url, key);

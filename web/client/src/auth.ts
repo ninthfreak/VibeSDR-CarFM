@@ -21,6 +21,10 @@ export interface AuthState {
   /** Query suffix to append to WS paths, e.g. "vs_nonce=..&vs_auth=..", or ''. */
   query: string;
   required: boolean;
+  /** Seconds remaining on a brute-force lockout for THIS client, 0 if none. The server
+   *  tells us, because a WebSocket error carries no status code — without it a locked-out
+   *  browser can only report "wrong PIN", and the user retypes a correct one forever. */
+  lockedFor?: number;
 }
 
 // HMAC-SHA256(pin, nonce) — the app's implementation, shared verbatim. The nonce
@@ -31,11 +35,15 @@ export { vibeAuthToken };
 /** Ask the server whether a PIN is needed, and for the session nonce. */
 export async function fetchAuthChallenge(
   base: string,
-): Promise<{ required: boolean; nonce: string }> {
+): Promise<{ required: boolean; nonce: string; lockedFor: number }> {
   const r = await fetch(`${base}/vibeserver/auth`, { cache: 'no-store' });
   if (!r.ok) throw new Error(`auth probe failed: HTTP ${r.status}`);
   const j = await r.json();
-  return { required: !!j.required, nonce: j.nonce ?? '' };
+  return {
+    required: !!j.required,
+    nonce: j.nonce ?? '',
+    lockedFor: Number(j.lockedFor) || 0,
+  };
 }
 
 /**
@@ -44,11 +52,18 @@ export async function fetchAuthChallenge(
  * only rejects at WS-upgrade time (401), so a wrong PIN surfaces there, not here.
  */
 export async function resolveAuth(base: string, pin: string): Promise<AuthState> {
-  const { required, nonce } = await fetchAuthChallenge(base);
+  const { required, nonce, lockedFor } = await fetchAuthChallenge(base);
   if (!required) return { query: '', required: false };
+  // Say so plainly. The WS upgrade would answer 429, but a WebSocket error carries no
+  // status code — so the client used to report "wrong PIN" and leave the user retyping
+  // a correct one until the backoff quietly expired.
+  if (lockedFor > 0) {
+    throw new Error(
+      `Too many failed attempts — locked out for ${lockedFor}s. The PIN may well be right.`);
+  }
   if (!pin) throw new Error('PIN required');
   const token = vibeAuthToken(pin, nonce);
-  return { query: `vs_nonce=${nonce}&vs_auth=${token}`, required: true };
+  return { query: `vs_nonce=${nonce}&vs_auth=${token}`, required: true, lockedFor: 0 };
 }
 
 /** Append the auth suffix to a WS path, picking '?' or '&' correctly. */

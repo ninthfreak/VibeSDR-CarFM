@@ -44,6 +44,9 @@ import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { localSessionGen } from '../services/localSession';
+import { startBookmarkAutosave, stopBookmarkAutosave,
+         getLearnedBookmarksNow } from '../services/vibeServer';
+import { setReceiverIso } from '../services/rdsCountry';
 import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
@@ -487,6 +490,47 @@ export default function SDRScreen({ route, navigation }: Props) {
   // VibeServer (remote shim): hardware controls ride the WS to the serving device
   // instead of the (non-existent) local dongle. localHost set = remote session.
   const isRemoteShim = isLocal && !!route.params.localHost;
+
+  // Tell the RDS decoder where the RECEIVER is, so it can VALIDATE a station's PI
+  // country nibble instead of the app inventing a country. It has to be the ANTENNA's
+  // country: a phone in London listening to a German UberSDR hears German stations, so
+  // the phone's own locale would be actively wrong. Blank when we don't know, which
+  // just falls back to ECC-only (i.e. the old behaviour) rather than to a bad guess.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (isRemoteShim && route.params.localHost) {
+        // A remote VibeServer publishes its own location, including the country.
+        try {
+          const r = await fetch(`http://${route.params.localHost}:${route.params.localPort}/location`);
+          const j = await r.json();
+          if (!cancelled) setReceiverIso(typeof j?.iso === 'string' ? j.iso : '');
+        } catch { if (!cancelled) setReceiverIso(''); }
+        return;
+      }
+      if (isLocal) {
+        // The dongle is on THIS device, so this device's region is the aerial's region.
+        try {
+          const loc = Intl.DateTimeFormat().resolvedOptions().locale || '';
+          const region = loc.split('-')[1] || '';
+          if (!cancelled) setReceiverIso(/^[A-Za-z]{2}$/.test(region) ? region : '');
+        } catch { if (!cancelled) setReceiverIso(''); }
+        return;
+      }
+      if (!cancelled) setReceiverIso('');   // network instance: we don't know where it is
+    })();
+    return () => { cancelled = true; setReceiverIso(''); };
+  }, [isLocal, isRemoteShim]);
+
+  // The shim learns station names from RDS whenever it runs — serving OR listening —
+  // but it has no storage, so something has to write the list down. On a REMOTE shim
+  // (VibeServer) the SERVING phone owns that; here we only do it for a shim running
+  // on THIS device.
+  useEffect(() => {
+    if (!isLocal || isRemoteShim) return;
+    startBookmarkAutosave();
+    return () => stopBookmarkAutosave();
+  }, [isLocal, isRemoteShim]);
   const hwClient = useCallback(() => (isRemoteShim
     ? (client.current as {
         setHwGain?: (t: number, a: boolean) => void; setHwBiasT?: (on: boolean) => void;
@@ -2968,10 +3012,26 @@ export default function SDRScreen({ route, navigation }: Props) {
     setSearchBands(BAND_PLAN.map((b: Band) => ({
       label: b.bandLabel ?? b.name, start: b.lo, end: b.hi, group: b.type, mode: b.mode,
     })));
+    // LOCAL / VibeServer: the shim learns stations from RDS as you tune, so local
+    // hardware is no longer bookmark-less — it builds its own list of what this
+    // aerial can actually hear. Poll it (the shim keeps it in memory; the autosave
+    // effect above is what writes it down).
+    if (isLocal) {
+      const load = () => {
+        getLearnedBookmarksNow()
+          .then((b) => { if (!cancelled && b.length) setServerBookmarks(b); })
+          .catch(() => {});
+      };
+      load();
+      const iv = setInterval(load, 30_000);
+      loadUserBookmarks().then((b: UserBookmark[]) => { if (!cancelled) setUserBookmarks(b); }).catch(() => {});
+      return () => { cancelled = true; clearInterval(iv); };
+    }
+
     // Server bookmarks: UberSDR via REST; OWRX/Kiwi arrive over the WS
-    // (onBookmarks, tagged source='server' there); local hardware has none.
+    // (onBookmarks, tagged source='server' there).
     // Whatever a backend yields is preferred; if it yields nothing, the EiBi
-    // fallback below fills in — that's how Kiwi/local get a searchable list.
+    // fallback below fills in — that's how Kiwi gets a searchable list.
     if (!isLocal && st === 'ubersdr') {
       const load = () => {
         fetchBookmarks(baseUrl)
@@ -3259,20 +3319,24 @@ export default function SDRScreen({ route, navigation }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveStation.name, liveStation.text, liveStation.countryIso, liveLogo, status.mode]);
 
-  // ── WFM RDS station logo (radio-browser favicon, country-filtered) ──────────
+  // ── Station logo (radio-browser favicon) ────────────────────────────────────
+  // NOT gated on WFM any more. The gate existed because a station name only ever
+  // arrived via RDS, which is FM-only — but a name now also comes from a bookmark or
+  // the EiBi schedule, so an AM or shortwave station has one too, and EiBi even states
+  // the transmitter's country outright. Refusing to look it up outside WFM meant the
+  // browser client showed logos for stations the app wouldn't.
   useEffect(() => {
     const name = liveStation.name?.trim();
     const iso = validIso(liveStation.countryIso) ? liveStation.countryIso!.toUpperCase() : '';
-    const wfm = status.mode === 'wfm';
-    const key = `${wfm ? 1 : 0}|${name ?? ''}|${iso}`;
+    const key = `${name ?? ''}|${iso}`;
     if (key === lastLiveLogoKey.current) return;
     lastLiveLogoKey.current = key;
-    if (!wfm || !name) { setLiveLogo(null); return; }
+    if (!name) { setLiveLogo(null); return; }
     setLiveLogo(null);
     resolveStationLogo({ pi: liveStation.pi, name, iso: iso || undefined }).then((url) => {
       if (!destroyed.current && lastLiveLogoKey.current === key) setLiveLogo(url);
     });
-  }, [liveStation.name, liveStation.countryIso, liveStation.pi, status.mode]);
+  }, [liveStation.name, liveStation.countryIso, liveStation.pi]);
 
   // ── VTS-aware media session ────────────────────────────────────────────────
   // Track  = freq (user's unit) + demod + tune step ("648 kHz AM · 9 kHz step")

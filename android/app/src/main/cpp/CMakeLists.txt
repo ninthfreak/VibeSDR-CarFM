@@ -55,6 +55,7 @@ file(GLOB FT8_LIB_SRC
 
 add_library(vibelocalsdr SHARED
     vibe_localsdr_jni.cpp local_sdr_shim.cpp net_shim.cpp rtl_tcp_server.cpp
+    mdns_responder.cpp
     spyserver/spyserver_messages.cpp spyserver/spyserver_client.cpp
     decoders/fsk_decoder.cpp
     decoders/wefax_decoder.cpp

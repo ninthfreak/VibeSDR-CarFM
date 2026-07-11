@@ -14,9 +14,12 @@ import {
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
   getServerLocationMode, setServerLocationMode, getManualServerLocation,
   setManualServerLocation, resolveLocation,
+  getLearnedBookmarksNow, importServerBookmarks, clearServerBookmarks,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
 import { advertiseServer, stopAdvertiseRtlTcp } from '../services/mdns';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ServerMode'>;
 
@@ -59,6 +62,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [compress, setCompress]   = useState(true);
   const [webServer, setWebServer] = useState(true);
   const [autoRestore, setAutoRestore] = useState(true);
+  const [bmCount, setBmCount] = useState<number | null>(null);
+  const [bmMsg, setBmMsg]     = useState('');
   const [locMode, setLocMode]     = useState<LocationMode>('off');
   const [locCity, setLocCity]     = useState('');
 
@@ -116,6 +121,42 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     }, 1500);
     return () => clearInterval(t);
   }, [running]);
+
+  // The bookmark count grows on its own as clients tune, so refresh it rather than
+  // compute it once.
+  const refreshBmCount = useCallback(async () => {
+    const list = await getLearnedBookmarksNow();
+    setBmCount(list.length);
+  }, []);
+  useEffect(() => { void refreshBmCount(); }, [refreshBmCount, running]);
+
+  const onImportBookmarks = useCallback(async () => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
+      if (res.canceled || !res.assets?.length) return;
+      const text = await FileSystem.readAsStringAsync(res.assets[0].uri);
+      const n = await importServerBookmarks(text);
+      setBmMsg(`Imported ${n} bookmark${n === 1 ? '' : 's'}`);
+      void refreshBmCount();
+    } catch (e: any) {
+      setBmMsg(e?.message ?? 'Could not read that file');
+    }
+  }, [refreshBmCount]);
+
+  const onResetBookmarks = useCallback(() => {
+    Alert.alert(
+      'Reset bookmarks',
+      'Delete every station this server has learned or had imported? Clients will see an empty list. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Reset', style: 'destructive', onPress: async () => {
+            await clearServerBookmarks();
+            setBmMsg('Bookmarks cleared');
+            void refreshBmCount();
+          } },
+      ],
+    );
+  }, [refreshBmCount]);
 
   const effectivePin = pinMode === 'off' ? '' : pin;
 
@@ -378,6 +419,31 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 ? 'Anyone on the network can connect and tune. Use only on a trusted LAN.'
                 : 'Clients enter this PIN once. It authenticates control without ever crossing the wire (HMAC challenge-response).'}
             </Text>
+
+            {/* Bookmarks. The server LEARNS stations from RDS as clients tune, so the
+                list grows on its own — which means it also needs a way to be emptied,
+                and a way to be seeded from a list you already have. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>BOOKMARKS</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                {bmCount === null
+                  ? 'Stations this receiver hears are added automatically and shared with every client.'
+                  : `${bmCount} station${bmCount === 1 ? '' : 's'} — learned from RDS as clients tune, plus anything imported. Shared with every client.`}
+              </Text>
+              <View style={[styles.rowBetween, { marginTop: 10 }]}>
+                <TouchableOpacity onPress={onImportBookmarks}
+                  style={[styles.regen, { borderColor: C.border, flex: 1, marginRight: 8, alignItems: 'center' }]}>
+                  <Text style={{ color: C.gold, fontFamily: F, fontSize: 13 }}>IMPORT LIST</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={onResetBookmarks}
+                  style={[styles.regen, { borderColor: C.border, flex: 1, alignItems: 'center' }]}>
+                  <Text style={{ color: C.amber, fontFamily: F, fontSize: 13 }}>RESET</Text>
+                </TouchableOpacity>
+              </View>
+              {bmMsg ? (
+                <Text style={[styles.hint, { color: C.amber, fontFamily: F, marginTop: 8 }]}>{bmMsg}</Text>
+              ) : null}
+            </View>
 
             {/* Crash recovery. The foreground service is already START_STICKY, so Android
                 brings the SERVICE back by itself — but the radio died with the process,
