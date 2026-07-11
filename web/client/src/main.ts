@@ -12,10 +12,17 @@ import { Waterfall } from './waterfall';
 import { resolveAuth, withAuth, type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
+import { BAND_PLAN, getPrimaryBandAt, type Band } from '../../../src/constants/bandPlan';
+import { eccPiToIso, isoToFlag } from '../../../src/services/rdsCountry';
+import { lookupStationLogo } from '../../../src/services/stationLogo';
 import {
-  loadStations, loadBookmarks, getBookmarks, addBookmark, removeBookmark,
+  loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
   exportBookmarks, importBookmarks, search, type SearchResult,
 } from './search';
+import { DecoderClient, type Spot } from './decoders';
+import {
+  saveRecording, listRecordings, deleteRecording, formatSize, formatDuration,
+} from './recordings';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -70,15 +77,20 @@ function initSplash() {
   const pinEl  = $<HTMLInputElement>('pin');
   const msg    = $('splashMsg');
 
-  // When the shim serves this page the server IS this origin, so pre-fill it.
-  // Port 8080 is the dev server on the Mac, which is NOT a VibeServer — there
-  // the box starts from whatever was last used.
-  const servedByShim = location.protocol.startsWith('http') && !!location.host
-    && location.port !== '8080';
+  // When the shim serves this page, the VibeServer IS this origin — there is
+  // nothing for the user to type, so the address field doesn't exist. It only
+  // appears on the dev server (port 8080), which is served from the Mac and has
+  // to be told which radio to talk to.
+  const isDev = location.port === '8080' || !location.host;
   const saved = savedServers();
-  const last = servedByShim ? location.host : ((prefs().lastHost as string) || '');
-  hostEl.value = last;
-  if (last && saved[last]) pinEl.value = saved[last];
+
+  if (isDev) {
+    $('hostRow').hidden = false;
+    hostEl.value = (prefs().lastHost as string) || 'localhost:48000';
+  } else {
+    hostEl.value = location.host;
+  }
+  if (saved[hostEl.value]) pinEl.value = saved[hostEl.value];
 
   const go = async (remember: boolean) => {
     const host = hostEl.value.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
@@ -102,6 +114,26 @@ function initSplash() {
 
   $<HTMLFormElement>('connForm').addEventListener('submit', (e) => { e.preventDefault(); go(false); });
   $('btnSaveConnect').addEventListener('click', () => go(true));
+
+  // Ask the server whether it even wants a PIN, and shape the splash to the
+  // answer: no PIN => a single START button, nothing to fill in. Don't
+  // auto-connect — the click is also the user gesture the browser wants before
+  // it will start audio.
+  if (!isDev) void shapeSplash(hostEl.value);
+}
+
+/** No PIN on this server? Then there is nothing to ask — just START. */
+async function shapeSplash(host: string) {
+  try {
+    const r = await fetch(`http://${host}/vibeserver/auth`, { cache: 'no-store' });
+    const j = await r.json();
+    if (j.required) return;                      // PIN needed: leave the form as-is
+    $('pinRow').hidden = true;
+    $<HTMLButtonElement>('btnSaveConnect').hidden = true;
+    $('btnConnect').textContent = 'START';
+  } catch {
+    // Unreachable — leave the form up so the error is visible.
+  }
 }
 
 // ── Connect ──────────────────────────────────────────────────────────────────
@@ -149,12 +181,12 @@ async function connect(host: string, pin: string) {
     probe.onerror = () => { clearTimeout(t); reject(new Error(auth.required ? 'Wrong PIN, or server refused the connection' : 'Server refused the connection')); };
   });
 
-  startApp(specUrl, audioUrl);
+  startApp(specUrl, audioUrl, host, auth);
 }
 
 // ── App ──────────────────────────────────────────────────────────────────────
 
-function startApp(specUrl: string, audioUrl: string) {
+function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthState) {
   $('splash').classList.add('hidden');
   $('app').classList.add('live');
 
@@ -166,6 +198,8 @@ function startApp(specUrl: string, audioUrl: string) {
     specRatio: typeof p.specRatio === 'number' ? p.specRatio / 100 : 0.25,
   });
 
+  wf.onDrawAxis = (ctx, w, h) => drawDbAxis(ctx, w, h);
+
   spec = new SpectrumClient(specUrl, {
     onBins: (bins, centerHz, bwHz) => {
       noteFrame();
@@ -174,6 +208,8 @@ function startApp(specUrl: string, audioUrl: string) {
     },
     onConfig: (cfg) => {
       if (!spec!.frequency) {
+        // A shared link's frequency wins over the remembered dial.
+        if (applyShareParams()) return;
         // First config. Resume where this server was left, if we've been here
         // before; otherwise park the VFO at the view centre.
         const last = lastTuned();
@@ -186,10 +222,19 @@ function startApp(specUrl: string, audioUrl: string) {
     onHwInfo: (gains, rates) => { hwGains = gains; hwRates = rates; populateHw(); },
     onRds: (m) => {
       $('stereo').classList.toggle('on', m.stereo);
+      // RDS is the station naming itself — it outranks any bookmark guess.
       const ps = m.ps.trim();
       const rt = m.radiotext.trim();
-      $('rds').innerHTML = ps || rt
-        ? `${escapeHtml(ps)} <span class="rt">${escapeHtml(rt)}</span>` : '';
+      const name = ps || rt;
+      if (name !== rdsName) {
+        rdsName = name;
+        rdsLogoUrl = '';
+      }
+      // Transmitter country from the RDS Extended Country Code + PI, as the app
+      // does (rdsCountry.eccPiToIso) — that's what the flag comes from.
+      rdsIso = m.pi > 0 ? eccPiToIso(m.ecc || undefined, m.pi.toString(16)) : '';
+      if (rdsName) void resolveRdsLogo(rdsName, rdsIso);
+      updateVts();
     },
     onStatus: (s, detail) => {
       setStatus(s, detail);
@@ -221,6 +266,7 @@ function startApp(specUrl: string, audioUrl: string) {
   window.addEventListener('keydown', kick);
 
   buildControls();
+  initDecoders(host, auth);
   initIdleThrottle();
   window.addEventListener('resize', () => { wf!.resize(); });
   window.addEventListener('beforeunload', saveTuned);
@@ -239,6 +285,7 @@ let hwRates: number[] = [];
 function loop() {
   if (!wf || !spec) return;
   wf.vfoHz = spec.frequency;
+  updateViewOverlays();
   // Passband drives the acrylic sidebands — so bandwidth is something you SEE
   // sitting on the signal, not a number you read.
   wf.filterLow = spec.bandwidthLow;
@@ -246,6 +293,7 @@ function loop() {
   wf.tick();      // synthesise any waterfall lines now due (see Waterfall.tick)
   wf.draw();
   drawScale();
+  drawBands();
 
   const now = performance.now();
   if (now - lastBytesAt > 1000) {
@@ -325,21 +373,227 @@ function drawScale() {
   }
 }
 
+
+// ── Band-plan strip ──────────────────────────────────────────────────────────
+// The coloured bar above the ticker: which bands the current span crosses. The
+// app draws the same thing (WaterfallView BAND_H) — without it the spectrum is
+// just numbers, and you can't see that you're sitting in the middle of 40m.
+
+const BAND_COL: Record<Band['type'], string> = {
+  ham:       'rgba(255,184,51,0.55)',
+  broadcast: 'rgba(251,191,36,0.45)',
+  utility:   'rgba(150,130,90,0.40)',
+};
+
+function drawBands() {
+  const c = $<HTMLCanvasElement>('bands');
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = Math.round(c.clientWidth * dpr);
+  const h = Math.round(c.clientHeight * dpr);
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, w, h);
+  if (!wf || !wf.spanHz) return;
+
+  const span = wf.spanHz;
+  const lo = wf.centerHz - span / 2;
+  const hi = lo + span;
+  const xOf = (hz: number) => ((hz - lo) / span) * w;
+
+  ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
+  ctx.textBaseline = 'middle';
+
+  for (const b of BAND_PLAN) {
+    if (b.hi < lo || b.lo > hi) continue;              // not in view
+    const x0 = Math.max(0, xOf(b.lo));
+    const x1 = Math.min(w, xOf(b.hi));
+    if (x1 - x0 < 1) continue;
+    ctx.fillStyle = BAND_COL[b.type];
+    ctx.fillRect(x0, 0, x1 - x0, h);
+
+    // Label only when the segment can actually hold it.
+    const label = b.bandLabel || b.name;
+    const tw = ctx.measureText(label).width;
+    if (x1 - x0 > tw + 8 * dpr) {
+      ctx.fillStyle = 'rgba(0,0,0,0.75)';
+      ctx.fillText(label, (x0 + x1) / 2 - tw / 2 + dpr, h / 2 + dpr);
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.fillText(label, (x0 + x1) / 2 - tw / 2, h / 2);
+    }
+  }
+}
+
+// ── VTS — station steward ────────────────────────────────────────────────────
+// Station identity: RDS when we have it, otherwise the nearest bookmark/EiBi
+// station within 150 kHz. Green when dead on it (±99 Hz) — the app's thresholds
+// (stations.ts VTS_ON_HZ / VTS_MAX_KHZ), so the two behave the same.
+
+const VTS_ON_HZ = 99;
+const VTS_MAX_HZ = 150_000;
+
+let rdsName = '';
+let rdsIso = '';        // transmitter country, from RDS ECC + PI
+let rdsLogoUrl = '';    // resolved station logo (radio-browser)
+let logoQuery = '';     // guards against a stale async logo landing late
+
+function updateVts() {
+  if (!spec) return;
+  const hz = spec.frequency;
+  const band = getPrimaryBandAt(hz);
+  const vts = $('vts');
+
+  // RDS wins — it's the station telling you who it is, rather than us guessing
+  // from a bookmark that happens to be nearby.
+  let name = rdsName;
+  let onTune = !!rdsName;
+  let flag = rdsName ? isoToFlag(rdsIso) : '';
+  let src = '';
+  let offset = '';
+  let logo = rdsName ? rdsLogoUrl : '';
+
+  if (!name) {
+    const near = nearestStation(hz);
+    if (near) {
+      name = near.name;
+      const off = near.frequency - hz;
+      onTune = Math.abs(off) <= VTS_ON_HZ;
+      flag = near.flag || '';
+      // Source mark, as in the app: EiBi schedule vs the user's own bookmark.
+      src = near.source === 'user' ? 'MY' : near.source === 'eibi' ? 'EiBi' : 'SRV';
+      if (!onTune) {
+        // Which way to tune, and how far — the app shows the same.
+        const dir = off > 0 ? '▶' : '◀';
+        offset = `${dir} ${fmtHz(Math.abs(off))}Hz`;
+      }
+    }
+  }
+
+  // Nothing known here — hide it rather than show an empty bar.
+  if (!name) {
+    vts.classList.remove('show', 'on');
+    setDecBoxOffset();
+    return;
+  }
+
+  $('vtsName').textContent = name;
+  $('vtsBand').textContent = band ? (band.bandLabel || band.name) : '';
+  $('vtsFlag').textContent = flag;
+  $('vtsOffset').textContent = offset;
+
+  // RDS mark only when the data really IS RDS — not for a bookmark guess.
+  $('vtsRds').classList.toggle('show', !!rdsName);
+  const srcEl = $('vtsSrc');
+  srcEl.textContent = src;
+  srcEl.classList.toggle('show', !!src && !rdsName);
+
+  const logoEl = $<HTMLImageElement>('vtsLogo');
+  if (logo) {
+    if (logoEl.src !== logo) logoEl.src = logo;
+    logoEl.classList.add('show');
+  } else {
+    logoEl.classList.remove('show');
+  }
+
+  vts.classList.add('show');
+  vts.classList.toggle('on', onTune);
+  setDecBoxOffset();
+}
+
+/**
+ * Station logo for the RDS station (radio-browser, the same source the app's
+ * FM-DX tuner uses). Needs internet ON THIS MACHINE, which a desktop has even
+ * when the phone is on a hotspot — and it degrades to no logo if not.
+ */
+async function resolveRdsLogo(name: string, iso: string) {
+  const key = `${name}|${iso}`;
+  if (logoQuery === key) return;
+  logoQuery = key;
+  rdsLogoUrl = '';
+  try {
+    const url = await lookupStationLogo(name, iso || undefined);
+    // A slow lookup must not overwrite a station we've since tuned away from.
+    if (logoQuery !== key) return;
+    rdsLogoUrl = url || '';
+    updateVts();
+  } catch {
+    /* no logo — the monogram-less bar is fine */
+  }
+}
+
+/** Keep the decoder box clear of the VTS bar — same idea as the app's
+ *  DecoderPanel bottomOffset (it rides above the pill). */
+function setDecBoxOffset() {
+  const vts = $('vts');
+  const showing = vts.classList.contains('show');
+  const h = showing ? vts.offsetHeight + 10 : 0;
+  document.documentElement.style.setProperty('--decBoxBottom', `${14 + h}px`);
+}
+
+// ── dB axis ──────────────────────────────────────────────────────────────────
+// Five stops down the left of the spectrum, with faint reference lines — same as
+// the app. Without it the trace has no scale at all.
+
+function drawDbAxis(ctx: CanvasRenderingContext2D, W: number, H: number) {
+  if (H < 30 || !wf) return;
+  const { dbMin, dbMax } = wf.getRange();
+  if (!isFinite(dbMin) || !isFinite(dbMax) || dbMax <= dbMin) return;
+
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+
+  const STOPS = 5;
+  for (let i = 0; i < STOPS; i++) {
+    const t = i / (STOPS - 1);
+    const y = t * H;
+    const db = dbMax - t * (dbMax - dbMin);
+
+    ctx.strokeStyle = 'rgba(255,180,60,0.10)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, y + 0.5);
+    ctx.lineTo(W, y + 0.5);
+    ctx.stroke();
+
+    const label = `${db.toFixed(0)}`;
+    const ly = Math.max(6 * dpr, Math.min(H - 6 * dpr, y));
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    ctx.fillText(label, 4 * dpr + dpr, ly + dpr);
+    ctx.fillStyle = 'rgba(255,180,60,0.90)';
+    ctx.fillText(label, 4 * dpr, ly);
+  }
+}
+
 // ── Signal meter (derived from the SPEC bins — the shim sends no S-meter) ────
 
 let sigSmooth = 0, sigPeak = 0;
 
+let snrSmooth = 0;
+
 function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   if (!spec) return;
-  // Power in the demod passband, vs the noise floor (median of the frame).
   const n = bins.length;
   const hzPerBin = bwHz / n;
   const lo = centerHz - bwHz / 2;
   const b0 = Math.max(0, Math.floor((spec.frequency + spec.bandwidthLow - lo) / hzPerBin));
   const b1 = Math.min(n - 1, Math.ceil((spec.frequency + spec.bandwidthHigh - lo) / hzPerBin));
 
+  // Signal = strongest bin in the demod passband.
   let sigDb = -160;
   for (let i = b0; i <= b1; i++) if (bins[i] > sigDb) sigDb = bins[i];
+
+  // Noise floor = a low percentile of the WHOLE frame. Not the mean: a strong
+  // carrier drags a mean upward and the SNR reads low exactly when the signal is
+  // strongest. Sampled every 8th bin — this runs per frame.
+  const sample: number[] = [];
+  for (let i = 0; i < n; i += 8) sample.push(bins[i]);
+  sample.sort((a, b) => a - b);
+  const noiseDb = sample[Math.floor(sample.length * 0.25)] ?? -120;
+
+  const snr = Math.max(0, sigDb - noiseDb);
+  snrSmooth += (snr - snrSmooth) * 0.2;
 
   const { dbMin, dbMax } = wf!.getRange();
   const norm = Math.max(0, Math.min(1, (sigDb - dbMin) / Math.max(1, dbMax - dbMin)));
@@ -350,7 +604,8 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
 
   $('sigFill').style.width = `${(sigSmooth * 100).toFixed(1)}%`;
   $('sigPeak').style.left = `${(sigPeak * 100).toFixed(1)}%`;
-  $('sigLabel').textContent = `${sigDb.toFixed(0)} dBFS  ·  ${toSUnit(sigDb)}`;
+  $('sigLabel').textContent =
+    `${sigDb.toFixed(0)} dBFS · ${toSUnit(sigDb)} · SNR ${snrSmooth.toFixed(0)} dB`;
 }
 
 /** dBFS -> S-unit, 6 dB per unit (lifted from the skin's _toSUnit ladder). */
@@ -458,6 +713,16 @@ function buildControls() {
     spec!.followVfo = !spec!.followVfo;
     lock.classList.toggle('on', spec!.followVfo);
     lock.textContent = spec!.followVfo ? 'LOCK' : 'FREE';
+    // Walls, the RF-centre marker and CENTRE only mean anything once the view is
+    // free to wander away from the VFO.
+    $('centreBtn').hidden = spec!.followVfo;
+    updateViewOverlays();
+  };
+
+  // Snap the view back onto the VFO without re-locking it.
+  $('centreBtn').onclick = () => {
+    spec!.pan(spec!.frequency);
+    updateViewOverlays();
   };
 
   const vol = $<HTMLInputElement>('vol');
@@ -473,8 +738,9 @@ function buildControls() {
     mute.classList.toggle('on', audio!.muted);
   };
 
-  $('pill').onclick = promptFrequency;
+  initFreqEntry();
   initBw();
+  initPanels();
   initRecorder();
   initSearch();
   initBookmarks();
@@ -489,6 +755,28 @@ function buildControls() {
   });
   initWaterfallInput();
   initKeyboard();
+}
+
+/**
+ * Unlocked-view overlays: the capture walls and the RF-centre marker.
+ *
+ * Neither is in the protocol — the client REPRODUCES the shim's own arithmetic
+ * (SpectrumClient.rfCenterHz / panSpan). The dongle follows the view only until
+ * the VFO would fall out of the captured band, then it locks; past that the
+ * shim just crops further into the capture. So once you pan far enough, where
+ * the HARDWARE is (dashed marker) and where you are LOOKING part company — and
+ * the walls are where the capture runs out entirely.
+ */
+function updateViewOverlays() {
+  if (!wf || !spec) return;
+  if (spec.followVfo) {
+    wf.wallLoHz = wf.wallHiHz = wf.rfCenterHz = null;   // locked: nothing to show
+    return;
+  }
+  const pan = spec.panSpan();
+  wf.wallLoHz = pan ? pan.loHz : null;
+  wf.wallHiHz = pan ? pan.hiHz : null;
+  wf.rfCenterHz = spec.rfCenterHz();
 }
 
 // ── Idle power saving ────────────────────────────────────────────────────────
@@ -608,7 +896,7 @@ function tuneTo(r: SearchResult) {
 
 function initBookmarks() {
   $('bookmarksBtn').onclick = () => {
-    $('bookmarksPanel').classList.toggle('open');
+    togglePanel('bookmarksPanel');
     renderBookmarks();
   };
   $('bmClose').onclick = () => $('bookmarksPanel').classList.remove('open');
@@ -690,34 +978,466 @@ function renderBookmarks() {
   }
 }
 
+
+// ── Panels ───────────────────────────────────────────────────────────────────
+// Centred pop-ups, one at a time. Click-outside and Escape close them — a modal
+// you can only dismiss with its own CLOSE button is a modal that traps people.
+
+const PANELS = ['menu', 'audioPanel', 'decodersPanel', 'recordingsPanel',
+                'bookmarksPanel', 'freqPanel'];
+
+function closePanels() {
+  for (const id of PANELS) $(id).classList.remove('open');
+}
+
+function togglePanel(id: string) {
+  const open = $(id).classList.contains('open');
+  closePanels();
+  if (!open) $(id).classList.add('open');
+}
+
+function initPanels() {
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closePanels();
+  });
+  // Click outside a panel closes it. The panels are centred pop-ups whose dim is
+  // a box-shadow, so there is no backdrop element to hang this on.
+  window.addEventListener('pointerdown', (e) => {
+    const t = e.target as HTMLElement;
+    if (!PANELS.some(id => $(id).contains(t)) && !t.closest('#bar')) closePanels();
+  });
+}
+
+// ── Decoders ─────────────────────────────────────────────────────────────────
+//
+// All of these run SERVER-SIDE in the shim (RTTY/NAVTEX/WEFAX/SSTV over
+// /ws/dxcluster, FT8/FT4 via subscribe_digital_spots). The browser attaches and
+// draws — no WASM, no DSP here. See decoders.ts for the wire formats.
+
+let decoders: DecoderClient | null = null;
+let decCtx: CanvasRenderingContext2D | null = null;
+let decImgWidth = 0;
+const spots: Spot[] = [];
+
+interface RttySettings { shift: number; baud: number; encoding: string; inverted: boolean }
+
+// Verbatim from the app (DecoderClient RTTY_PRESETS).
+const RTTY_PRESETS: Record<string, RttySettings> = {
+  ham:       { shift: 170, baud: 45.45, encoding: 'ITA2',    inverted: false },
+  weather:   { shift: 450, baud: 50,    encoding: 'ITA2',    inverted: true  },
+  'sitor-b': { shift: 170, baud: 100,   encoding: 'CCIR476', inverted: false },
+};
+
+let rtty: RttySettings = { ...RTTY_PRESETS.ham };
+let wefaxLpm = 120;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | null = null;
+
+/** Params for the current mode — the shim's startDecoder reads these. */
+function decParams(mode: string): Record<string, unknown> {
+  if (mode === 'rtty') {
+    return {
+      center_frequency: 1000, shift: rtty.shift, baud_rate: rtty.baud,
+      encoding: rtty.encoding, inverted: rtty.inverted, framing: '5N1.5',
+    };
+  }
+  if (mode === 'wefax') {
+    return { lpm: wefaxLpm, carrier: 1900, deviation: 400, image_width: 1809 };
+  }
+  return {};
+}
+
+function initDecoders(host: string, auth: AuthState) {
+  decoders = new DecoderClient(host, auth, {
+    onText: (t) => {
+      const el = $('decText');
+      el.textContent = (el.textContent + t).slice(-8000);
+      el.scrollTop = el.scrollHeight;
+      setDecLive(true);
+    },
+    onState: (st) => {
+      $('decStatus').textContent = st ? 'decoding…' : 'listening…';
+      setDecLive(!!st);
+    },
+    onImageStart: (w, h) => startDecImage(w, h),
+    onImageLine: (y, w, px, rgb) => { drawDecLine(y, w, px, rgb); setDecLive(true); },
+    onImageDone: () => { $('decStatus').textContent = 'image complete'; },
+    onSstvMode: (name) => { $('decStatus').textContent = name; },
+    onStatus: (t) => { $('decStatus').textContent = t; },
+    onSpot: (sp) => {
+      spots.unshift(sp);
+      if (spots.length > 500) spots.pop();
+      renderSpots();
+      setDecLive(true);
+    },
+  });
+  decoders.connect();
+
+  $('decodersBtn').onclick = () => togglePanel('decodersPanel');
+  $('decClose').onclick = () => closePanels();
+
+  // ── Decoder selection: toggles start/stop, and the MENU STAYS OPEN (skin
+  //    semantics, same as the app). Selecting one opens the output box.
+  for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
+    b.onclick = () => {
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv';
+      if (activeDec === mode) { stopDecoder(); return; }
+      activeDec = mode;
+      decoders!.attach(mode, decParams(mode));
+      showDecBox(mode);
+      syncDecButtons();
+    };
+  }
+
+  // RTTY settings — presets fill the individual controls, as in the app.
+  segButtons('rttyPreset', 'preset', (v) => {
+    rtty = { ...RTTY_PRESETS[v as string] };
+    syncRttyControls();
+    reattachIf('rtty');
+  });
+  segButtons('rttyShift', 'shift', (v) => { rtty.shift = Number(v); reattachIf('rtty'); });
+  segButtons('rttyBaud', 'baud', (v) => { rtty.baud = Number(v); reattachIf('rtty'); });
+  segButtons('rttyEnc', 'enc', (v) => { rtty.encoding = String(v); reattachIf('rtty'); });
+  const inv = $<HTMLButtonElement>('rttyInv');
+  inv.onclick = () => {
+    rtty.inverted = !rtty.inverted;
+    inv.classList.toggle('on', rtty.inverted);
+    inv.textContent = rtty.inverted ? 'ON' : 'OFF';
+    reattachIf('rtty');
+  };
+  segButtons('wefaxLpm', 'lpm', (v) => { wefaxLpm = Number(v); reattachIf('wefax'); });
+
+  // Spots + map.
+  const spotsBtn = $<HTMLButtonElement>('spotsBtn');
+  spotsBtn.onclick = () => {
+    const on = !decoders!.spotsEnabled;
+    decoders!.setSpots(on);
+    spotsBtn.classList.toggle('on', on);
+    if (on) showDecBox('spots'); else if (!activeDec) hideDecBox();
+  };
+  $('mapBtn').onclick = openSpotsMap;
+
+  // Output box chrome.
+  $('decClr').onclick = () => { $('decText').textContent = ''; };
+  $('decMin').onclick = () => $('decBox').classList.toggle('min');
+  $('decHide').onclick = () => { stopDecoder(); decoders!.setSpots(false);
+    $<HTMLButtonElement>('spotsBtn').classList.remove('on'); hideDecBox(); };
+}
+
+/** Wire a segmented control; `on` marks the selected button. */
+function segButtons(id: string, attr: string, apply: (v: string) => void) {
+  const host = $(id);
+  const btns = Array.from(host.children) as HTMLButtonElement[];
+  for (const b of btns) {
+    b.onclick = () => {
+      for (const x of btns) x.classList.remove('on');
+      b.classList.add('on');
+      apply(b.dataset[attr]!);
+    };
+  }
+}
+
+/** Reflect the current RTTY settings back into the buttons (after a preset). */
+function syncRttyControls() {
+  const mark = (id: string, attr: string, val: string) => {
+    for (const b of Array.from($(id).children) as HTMLButtonElement[]) {
+      b.classList.toggle('on', b.dataset[attr] === val);
+    }
+  };
+  mark('rttyShift', 'shift', String(rtty.shift));
+  mark('rttyBaud', 'baud', String(rtty.baud));
+  mark('rttyEnc', 'enc', rtty.encoding);
+  const inv = $<HTMLButtonElement>('rttyInv');
+  inv.classList.toggle('on', rtty.inverted);
+  inv.textContent = rtty.inverted ? 'ON' : 'OFF';
+}
+
+/** A settings change while running must re-attach — the shim builds the decoder
+ *  from the attach params, so it can't be tweaked in place. */
+function reattachIf(mode: string) {
+  if (activeDec === mode) decoders?.attach(mode as 'rtty' | 'wefax', decParams(mode));
+}
+
+function stopDecoder() {
+  decoders?.detach();
+  activeDec = null;
+  syncDecButtons();
+  if (!decoders?.spotsEnabled) hideDecBox();
+  else showDecBox('spots');
+}
+
+function syncDecButtons() {
+  for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
+    b.classList.toggle('on', b.dataset.dec === activeDec);
+  }
+  $('rttySettings').hidden = activeDec !== 'rtty';
+  $('wefaxSettings').hidden = activeDec !== 'wefax';
+}
+
+function showDecBox(what: string) {
+  const image = what === 'wefax' || what === 'sstv';
+  const isSpots = what === 'spots';
+  $('decBox').classList.add('open');
+  $('decBox').classList.remove('min');
+  $('decTitle').textContent = what === 'spots' ? 'FT8 / FT4 SPOTS' : what.toUpperCase();
+  $('decStatus').textContent = 'listening…';
+  $('decImage').classList.toggle('on', image);
+  $('decText').classList.toggle('off', image || isSpots);
+  $('spotList').classList.toggle('on', isSpots);
+  setDecLive(false);
+}
+
+function hideDecBox() { $('decBox').classList.remove('open'); }
+
+let decLiveTimer = 0;
+function setDecLive(on: boolean) {
+  const dot = $('decDot');
+  dot.classList.toggle('live', on);
+  // Fall back to idle if nothing decodes for a couple of seconds.
+  if (on) {
+    clearTimeout(decLiveTimer);
+    decLiveTimer = window.setTimeout(() => dot.classList.remove('live'), 2500);
+  }
+}
+
+function startDecImage(w: number, h: number) {
+  const c = $<HTMLCanvasElement>('decImage');
+  // WEFAX declares no height — the image grows until the transmission stops.
+  c.width = w || decImgWidth || 800;
+  c.height = h || 600;
+  decImgWidth = c.width;
+  decCtx = c.getContext('2d');
+  decCtx?.clearRect(0, 0, c.width, c.height);
+}
+
+function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
+  const c = $<HTMLCanvasElement>('decImage');
+  if (!decCtx || c.width !== w) startDecImage(w, 0);
+  if (!decCtx) return;
+
+  if (y >= c.height) {                     // grow downward rather than clip
+    const keep = decCtx.getImageData(0, 0, c.width, c.height);
+    c.height = y + 200;
+    decCtx = c.getContext('2d');
+    decCtx?.putImageData(keep, 0, 0);
+    if (!decCtx) return;
+  }
+
+  const img = decCtx.createImageData(w, 1);
+  for (let x = 0; x < w; x++) {
+    const o = x << 2;
+    if (rgb) {
+      img.data[o] = px[x * 3];
+      img.data[o + 1] = px[x * 3 + 1];
+      img.data[o + 2] = px[x * 3 + 2];
+    } else {
+      const v = px[x];                     // WEFAX is greyscale
+      img.data[o] = img.data[o + 1] = img.data[o + 2] = v;
+    }
+    img.data[o + 3] = 255;
+  }
+  decCtx.putImageData(img, 0, y);
+}
+
+function renderSpots() {
+  const host = $('spotList');
+  host.innerHTML = '';
+  for (const sp of spots.slice(0, 60)) {
+    const row = document.createElement('div');
+    row.className = 'sres';
+    row.innerHTML =
+      `<span class="f">${(sp.frequency / 1e6).toFixed(3)}</span>` +
+      `<span class="n">${escapeHtml(sp.callsign)}${sp.grid ? ' · ' + escapeHtml(sp.grid) : ''}</span>` +
+      `<span class="src">${sp.mode} ${sp.snr > 0 ? '+' : ''}${sp.snr} ${escapeHtml(sp.band)}</span>`;
+    row.onclick = () => {
+      spec?.tune(clampTune(sp.frequency), 'usb', { recenter: true });
+      renderFreq();
+    };
+    host.appendChild(row);
+  }
+}
+
+/**
+ * FT8 map — opens in a NEW TAB. Leaflet + tiles need the internet, which would
+ * break this page's "self-contained, no external requests" property; a separate
+ * tab keeps that intact and gives the map real screen space. Spots are baked into
+ * the page as data, so it needs no connection back to the server.
+ */
+function openSpotsMap() {
+  if (!spots.length) {
+    $('decStatus').textContent = 'no spots yet';
+    return;
+  }
+  const pts = spots
+    .filter(s => s.grid && s.grid.length >= 4)
+    .map(s => ({ ...s, ...gridToLatLon(s.grid) }));
+
+  // NB: the closing script tag is assembled at runtime. A literal "</script>"
+  // inside this string would terminate the page's OWN inline <script> when the
+  // bundle is inlined into the served HTML — which silently breaks everything.
+  const ES = '<' + '/script>';
+  const html = `<!doctype html><meta charset="utf-8"><title>VibeSDR — FT8 map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">${ES}
+<style>html,body,#m{height:100%;margin:0;background:#080601}
+.lbl{font:12px ui-monospace,monospace;color:#ffb833}</style>
+<div id="m"></div>
+<script>
+const spots = ${JSON.stringify(pts)};
+const m = L.map('m').setView([20, 0], 2);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  { attribution: '&copy; OpenStreetMap, &copy; CARTO', maxZoom: 12 }).addTo(m);
+for (const s of spots) {
+  L.circleMarker([s.lat, s.lon], {
+    radius: 5, color: '#ffb833', fillColor: '#ffb833', fillOpacity: 0.7, weight: 1,
+  }).addTo(m).bindPopup(
+    '<div class="lbl"><b>' + s.callsign + '</b><br>' + s.grid + '<br>' +
+    (s.frequency/1e6).toFixed(3) + ' MHz · ' + s.mode + ' · ' + s.snr + ' dB</div>');
+}
+if (spots.length) m.fitBounds(spots.map(s => [s.lat, s.lon]), { padding: [40, 40] });
+${ES}`;
+
+  const w = window.open('', '_blank');
+  if (!w) { $('decStatus').textContent = 'popup blocked'; return; }
+  w.document.write(html);
+  w.document.close();
+}
+
+/** Maidenhead locator -> lat/lon (centre of the square). */
+function gridToLatLon(grid: string): { lat: number; lon: number } {
+  const g = grid.toUpperCase();
+  let lon = (g.charCodeAt(0) - 65) * 20 - 180;
+  let lat = (g.charCodeAt(1) - 65) * 10 - 90;
+  lon += (g.charCodeAt(2) - 48) * 2;
+  lat += (g.charCodeAt(3) - 48) * 1;
+  if (g.length >= 6) {
+    lon += (g.charCodeAt(4) - 65) * (2 / 24);
+    lat += (g.charCodeAt(5) - 65) * (1 / 24);
+    lon += 1 / 24;
+    lat += 0.5 / 24;
+  } else {
+    lon += 1;
+    lat += 0.5;
+  }
+  return { lat, lon };
+}
+
+interface NearStation {
+  name: string; frequency: number; flag?: string;
+  source: 'user' | 'eibi' | 'server';
+}
+
+/** Nearest station (user bookmark, then server/EiBi) within VTS_MAX_HZ. */
+function nearestStation(hz: number): NearStation | null {
+  let best: NearStation | null = null;
+  let bestOff = VTS_MAX_HZ;
+  for (const b of getBookmarks()) {
+    const off = Math.abs(b.frequency - hz);
+    if (off < bestOff) {
+      bestOff = off;
+      best = { name: b.name, frequency: b.frequency, source: 'user' };
+    }
+  }
+  for (const st of getStations()) {
+    const off = Math.abs(st.frequency - hz);
+    if (off < bestOff) {
+      bestOff = off;
+      best = {
+        name: st.name, frequency: st.frequency, flag: st.flag,
+        source: st.source === 'server' ? 'server' : 'eibi',
+      };
+    }
+  }
+  return best;
+}
+
 // ── Recorder ─────────────────────────────────────────────────────────────────
+
+function recordingName(hz: number, mode: string, at: Date): string {
+  const stamp = at.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  return `VibeSDR_${(hz / 1e6).toFixed(3)}MHz_${mode.toUpperCase()}_${stamp}.wav`;
+}
 
 function initRecorder() {
   const btn = $<HTMLButtonElement>('recBtn');
-  btn.onclick = () => {
-    if (!audio) return;
+  btn.onclick = async () => {
+    if (!audio || !spec) return;
     if (!audio.recording) {
       audio.startRecording();
       btn.classList.add('rec');
       btn.textContent = '■ STOP';
       return;
     }
+    const seconds = audio.recordedSeconds;
     const blob = audio.stopRecording();
     btn.classList.remove('rec');
     btn.textContent = '● REC';
     $('recTime').textContent = '';
     if (!blob) return;
 
-    // Name it the way the app does: frequency + mode + timestamp, so a folder of
-    // recordings is self-describing.
-    const f = (spec!.frequency / 1e6).toFixed(3);
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `VibeSDR_${f}MHz_${spec!.mode.toUpperCase()}_${stamp}.wav`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+    // Kept, not just downloaded — a recording you can't find again isn't a feature.
+    // The RECORDINGS panel plays, downloads and deletes them.
+    const at = new Date();
+    await saveRecording({
+      name: recordingName(spec.frequency, spec.mode, at),
+      frequency: Math.round(spec.frequency),
+      mode: spec.mode,
+      createdAt: at.getTime(),
+      seconds,
+      bytes: blob.size,
+      blob,
+    });
+    $('recordingsBtn').classList.add('on');
+    setTimeout(() => $('recordingsBtn').classList.remove('on'), 1500);
   };
+
+  $('recordingsBtn').onclick = () => {
+    togglePanel('recordingsPanel');
+    void renderRecordings();
+  };
+  $('recsClose').onclick = () => $('recordingsPanel').classList.remove('open');
+}
+
+async function renderRecordings() {
+  const host = $('recsList');
+  const list = await listRecordings();
+  host.innerHTML = '';
+  if (!list.length) {
+    host.innerHTML = '<div class="sres"><span class="n">No recordings yet — press ● REC.</span></div>';
+    return;
+  }
+  for (const r of list) {
+    const row = document.createElement('div');
+    row.className = 'sres';
+    row.style.cursor = 'default';
+    row.innerHTML =
+      `<span class="f">${(r.frequency / 1e6).toFixed(3)}</span>` +
+      `<span class="n">${escapeHtml(r.mode.toUpperCase())} · ${formatDuration(r.seconds)} · ${formatSize(r.bytes)}` +
+      `<br><span class="src">${new Date(r.createdAt).toLocaleString()}</span></span>`;
+
+    const dl = document.createElement('button');
+    dl.className = 'btn';
+    dl.textContent = 'SAVE';
+    dl.onclick = () => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(r.blob);
+      a.download = r.name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+    };
+
+    const del = document.createElement('button');
+    del.className = 'btn';
+    del.textContent = '✕';
+    del.onclick = async () => { await deleteRecording(r.id); void renderRecordings(); };
+
+    const player = document.createElement('audio');
+    player.controls = true;
+    player.preload = 'none';
+    player.src = URL.createObjectURL(r.blob);
+
+    row.append(dl, del, player);
+    host.appendChild(row);
+  }
 }
 
 function updateRecTime() {
@@ -783,8 +1503,12 @@ function segment(id: string, attr: string, apply: (v: number) => void, prefKey?:
 }
 
 function buildMenu() {
-  $('menuBtn').onclick   = () => $('menu').classList.toggle('open');
+  $('menuBtn').onclick   = () => togglePanel('menu');
   $('menuClose').onclick = () => $('menu').classList.remove('open');
+  // Audio DSP lives in its own drawer (as the app's AudioSheet does) — these are
+  // controls you use WHILE listening, not settings you configure once.
+  $('audioBtn').onclick   = () => togglePanel('audioPanel');
+  $('audioClose').onclick = () => $('audioPanel').classList.remove('open');
 
   // ── Radio (server-side hardware; ranges filled in from hwinfo) ────────────
   $<HTMLInputElement>('ppm').oninput = () => {
@@ -946,62 +1670,100 @@ function setMode(m: SDRMode, send: boolean) {
   for (const b of Array.from($('modes').children) as HTMLButtonElement[]) {
     b.classList.toggle('on', b.dataset.mode === m);
   }
-  if (m !== 'wfm') { $('stereo').classList.remove('on'); $('rds').innerHTML = ''; }
+  if (m !== 'wfm') {
+    $('stereo').classList.remove('on');
+    rdsName = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = '';
+  }
+  updateVts();
   syncBw();
 }
 
 // ── Demodulator bandwidth ────────────────────────────────────────────────────
 //
-// The slider is a single WIDTH, but the passband isn't symmetric in every mode:
-// SSB sits entirely on one side of the carrier. So width is mapped to a low/high
-// pair per mode rather than assumed to be ±width/2.
+// Mirrored edge sliders, as in the app (ModeSelector): the LEFT slider runs
+// -max..0 and sets the lower edge, the RIGHT runs 0..+max and sets the upper.
+// SYNC mirrors them. A single "width" slider can't express SSB, where the
+// passband sits entirely on one side of the carrier.
 
-/** Sensible width range per mode, Hz. */
-const BW_RANGE: Record<SDRMode, [number, number]> = {
-  usb: [500, 6000],   lsb: [500, 6000],
-  am:  [2000, 20000], sam: [2000, 20000],
-  cwu: [100, 2000],   cwl: [100, 2000],
-  fm:  [5000, 30000], nfm: [5000, 30000],
-  wfm: [50000, 250000],
+/** Per-edge cap (Hz) for each mode — drives the slider ranges. */
+const BW_EDGE_MAX: Record<SDRMode, number> = {
+  usb: 6000,    lsb: 6000,
+  am: 20000,    sam: 20000,
+  cwu: 2000,    cwl: 2000,
+  fm: 30000,    nfm: 30000,
+  wfm: 250000,
 };
 
-/** Width -> (low, high) about the carrier, per mode. */
-function bwPair(mode: SDRMode, width: number): [number, number] {
-  switch (mode) {
-    case 'usb': return [50, 50 + width];        // entirely above the carrier
-    case 'lsb': return [-(50 + width), -50];    // entirely below
-    default:    return [-width / 2, width / 2]; // symmetric
-  }
+let bwSync = false;
+
+function fmtHz(hz: number): string {
+  const a = Math.abs(hz);
+  return a >= 1000 ? `${(a / 1000).toFixed(a >= 100_000 ? 0 : 1)}k` : `${Math.round(a)}`;
 }
 
-function fmtBw(hz: number): string {
-  return hz >= 1000 ? `${(hz / 1000).toFixed(hz >= 100_000 ? 0 : 1)}k` : `${hz}`;
+function edgeLabel(hz: number): string {
+  return `${hz < 0 ? '−' : '+'}${fmtHz(hz)}`;
 }
 
-/** Point the slider at the current mode's range, seeded from the mode default. */
+/** Push the current edges to the server and redraw the labels. */
+function applyBw(low: number, high: number) {
+  if (!spec) return;
+  spec.setBandwidth(Math.round(low), Math.round(high));
+  $('bwLoVal').textContent = edgeLabel(low);
+  $('bwHiVal').textContent = edgeLabel(high);
+  $<HTMLInputElement>('bwLo').value = String(Math.round(low));
+  $<HTMLInputElement>('bwHi').value = String(Math.round(high));
+}
+
+/** Re-range the sliders for the current mode and load its current passband. */
 function syncBw() {
   if (!spec) return;
-  const el = $<HTMLInputElement>('bw');
-  const [min, max] = BW_RANGE[spec.mode];
-  const width = Math.abs(spec.bandwidthHigh - spec.bandwidthLow);
-  el.min = String(min);
-  el.max = String(max);
-  el.step = String(Math.max(50, Math.round((max - min) / 100)));
-  el.value = String(Math.max(min, Math.min(max, Math.round(width))));
-  $('bwVal').textContent = fmtBw(Number(el.value));
+  const max = BW_EDGE_MAX[spec.mode] ?? 6000;
+  const step = max > 50_000 ? 1000 : max > 10_000 ? 100 : 10;
+  const lo = $<HTMLInputElement>('bwLo');
+  const hi = $<HTMLInputElement>('bwHi');
+  lo.min = String(-max); lo.max = '0'; lo.step = String(step);
+  hi.min = '0'; hi.max = String(max); hi.step = String(step);
+  lo.value = String(Math.max(-max, Math.min(0, spec.bandwidthLow)));
+  hi.value = String(Math.min(max, Math.max(0, spec.bandwidthHigh)));
+  $('bwLoVal').textContent = edgeLabel(spec.bandwidthLow);
+  $('bwHiVal').textContent = edgeLabel(spec.bandwidthHigh);
 }
 
 function initBw() {
-  const el = $<HTMLInputElement>('bw');
-  el.oninput = () => {
-    if (!spec) return;
-    const width = Number(el.value);
-    $('bwVal').textContent = fmtBw(width);
-    const [lo, hi] = bwPair(spec.mode, width);
-    spec.setBandwidth(Math.round(lo), Math.round(hi));
+  const lo = $<HTMLInputElement>('bwLo');
+  const hi = $<HTMLInputElement>('bwHi');
+
+  lo.oninput = () => {
+    const v = Number(lo.value);
+    if (bwSync) applyBw(v, -v);
+    else applyBw(v, spec!.bandwidthHigh);
   };
+  hi.oninput = () => {
+    const v = Number(hi.value);
+    if (bwSync) applyBw(-v, v);
+    else applyBw(spec!.bandwidthLow, v);
+  };
+
+  const sync = $<HTMLButtonElement>('bwSync');
+  const savedSync = prefs().bwSync;
+  bwSync = typeof savedSync === 'boolean' ? savedSync : false;
+  sync.classList.toggle('on', bwSync);
+  sync.onclick = () => {
+    bwSync = !bwSync;
+    sync.classList.toggle('on', bwSync);
+    savePref('bwSync', bwSync);
+    // Mirror immediately off the wider edge, so turning SYNC on does something
+    // predictable rather than silently waiting for the next drag.
+    if (bwSync && spec) {
+      const w = Math.max(Math.abs(spec.bandwidthLow), Math.abs(spec.bandwidthHigh));
+      applyBw(-w, w);
+    }
+  };
+
   syncBw();
 }
+
 
 /** The step ladder is band-aware — the app switches to VHF steps above 30 MHz,
  *  where 10 Hz is uselessly small for broadcast FM and repeaters. */
@@ -1066,19 +1828,130 @@ function nudge(hz: number) {
   renderFreq();
 }
 
+// ── Frequency display + entry ────────────────────────────────────────────────
+//
+// The unit chosen in the entry popup also drives the tuning block's readout, so
+// the two always agree — a dial reading MHz while you type kHz is how people
+// mis-tune by a factor of a thousand.
+
+type FreqUnit = 'hz' | 'khz' | 'mhz';
+const UNIT_DIV: Record<FreqUnit, number> = { hz: 1, khz: 1e3, mhz: 1e6 };
+const UNIT_DP:  Record<FreqUnit, number> = { hz: 0, khz: 3, mhz: 3 };
+const UNIT_LBL: Record<FreqUnit, string> = { hz: 'Hz', khz: 'kHz', mhz: 'MHz' };
+
+let freqUnit: FreqUnit = 'mhz';
+
 function renderFreq() {
   if (!spec) return;
-  $('freq').textContent = (Math.round(spec.frequency) / 1e6).toFixed(3);
+  updateVts();
+  const hz = Math.round(spec.frequency);
+  $('freq').textContent = (hz / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
+  $('freqUnit').textContent = UNIT_LBL[freqUnit];
 }
 
-function promptFrequency() {
-  if (!spec) return;
-  const v = prompt('Frequency (MHz)', (spec.frequency / 1e6).toFixed(4));
-  if (!v) return;
-  const mhz = parseFloat(v.replace(/[^\d.]/g, ''));
-  if (!isFinite(mhz) || mhz <= 0) return;
-  spec.tune(clampTune(mhz * 1e6), undefined, { recenter: true });
+function setFreqUnit(u: FreqUnit) {
+  freqUnit = u;
+  savePref('freqUnit', u);
+  for (const b of Array.from($('freqUnitSeg').children) as HTMLButtonElement[]) {
+    b.classList.toggle('on', b.dataset.unit === u);
+  }
   renderFreq();
+}
+
+function initFreqEntry() {
+  const saved = prefs().freqUnit;
+  if (saved === 'hz' || saved === 'khz' || saved === 'mhz') freqUnit = saved;
+
+  $('pill').onclick = () => {
+    togglePanel('freqPanel');
+    const el = $<HTMLInputElement>('freqInput');
+    el.value = (spec!.frequency / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
+    $('freqMsg').textContent = '';
+    setTimeout(() => { el.focus(); el.select(); }, 60);
+  };
+  $('freqClose').onclick = () => closePanels();
+
+  for (const b of Array.from($('freqUnitSeg').children) as HTMLButtonElement[]) {
+    b.onclick = () => {
+      const prev = freqUnit;
+      const u = b.dataset.unit as FreqUnit;
+      // Keep the typed VALUE meaningful across a unit change: convert it rather
+      // than reinterpreting 100.7 MHz as 100.7 kHz.
+      const el = $<HTMLInputElement>('freqInput');
+      const hz = parseFloat(el.value) * UNIT_DIV[prev];
+      setFreqUnit(u);
+      if (isFinite(hz)) el.value = (hz / UNIT_DIV[u]).toFixed(UNIT_DP[u]);
+    };
+  }
+
+  const go = () => {
+    const v = parseFloat($<HTMLInputElement>('freqInput').value.replace(/[^\d.]/g, ''));
+    if (!isFinite(v) || v <= 0) { $('freqMsg').textContent = 'Enter a frequency'; return; }
+    spec!.tune(clampTune(v * UNIT_DIV[freqUnit]), undefined, { recenter: true });
+    renderFreq();
+    syncStep();
+    closePanels();
+  };
+  $('freqGo').onclick = go;
+  $<HTMLInputElement>('freqInput').onkeydown = (e) => {
+    if (e.key === 'Enter') { go(); e.preventDefault(); }
+  };
+
+  $('freqShare').onclick = shareFrequency;
+  setFreqUnit(freqUnit);
+}
+
+/**
+ * Share the current tuning as a link. Same query shape the APP shares
+ * (SDRScreen.onShareStation): ?freq=&mode=&bwl=&bwh= — so a shared link opens
+ * this same page pointing at the same server, tuned identically.
+ *
+ * navigator.clipboard is SECURE-CONTEXT ONLY and a VibeServer is plain http on a
+ * LAN IP, so it is undefined there. Fall back to the old execCommand path, and
+ * if even that fails, show the URL so it can be copied by hand.
+ */
+async function shareFrequency() {
+  if (!spec) return;
+  const base = `http://${currentHost}/`;
+  const url = `${base}?freq=${Math.round(spec.frequency)}&mode=${spec.mode}`
+    + `&bwl=${Math.round(spec.bandwidthLow)}&bwh=${Math.round(spec.bandwidthHigh)}`;
+
+  const msg = $('freqMsg');
+  try {
+    if (window.isSecureContext && navigator.clipboard) {
+      await navigator.clipboard.writeText(url);
+      msg.textContent = 'Link copied';
+      return;
+    }
+    const ta = document.createElement('textarea');
+    ta.value = url;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    msg.textContent = ok ? 'Link copied' : url;
+  } catch {
+    msg.textContent = url;
+  }
+}
+
+/** A shared link opens tuned to the same station. */
+function applyShareParams() {
+  if (!spec) return false;
+  const q = new URLSearchParams(location.search);
+  const f = Number(q.get('freq'));
+  if (!f) return false;
+  const mode = (q.get('mode') || spec.mode) as SDRMode;
+  const bwl = Number(q.get('bwl'));
+  const bwh = Number(q.get('bwh'));
+  spec.frequency = clampTune(f);
+  setMode(mode, true);
+  spec.tune(spec.frequency, mode, { recenter: true });
+  if (bwl && bwh) { applyBw(bwl, bwh); syncBw(); }
+  renderFreq();
+  return true;
 }
 
 // ── Waterfall input: click-to-tune, drag-to-pan, wheel-to-zoom ───────────────

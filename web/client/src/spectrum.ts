@@ -260,6 +260,38 @@ export class SpectrumClient {
 
   viewCenterHz(): number { return this.view.centerHz || this.cfg.centerFreq; }
 
+  // ── Capture geometry (mirrors of the shim's own maths) ──────────────────────
+  // No protocol field carries these — the client reproduces the server's
+  // arithmetic. Ported from UberSDRClient (captureBandwidth/localMargin/
+  // rfCenterHz/panSpan), which mirrors the shim's viewDongleMargin/dongleForView.
+
+  /** Real captured bandwidth (Hz) — the shim reports it as config.maxBandwidth. */
+  captureBandwidth(): number { return this.cfg.maxBandwidth || 0; }
+
+  /** Margin keeping the VFO inside the usable capture: above the 50 kHz
+   *  auto-retune threshold AND clear of the RTL anti-alias rolloff (~10%). */
+  private localMargin(fs: number): number { return Math.max(fs * 0.10, 60_000); }
+
+  /** The RF (dongle) centre the shim is parked at: it follows the view but is
+   *  clamped so the VFO stays captured, then locks. This is the "second VFO"
+   *  marker — where the hardware actually is, vs where you're looking. */
+  rfCenterHz(): number {
+    const fs = this.captureBandwidth();
+    if (!fs) return this.cfg.centerFreq;
+    const lim = fs / 2 - this.localMargin(fs);
+    const vfo = this.frequency;
+    return Math.max(vfo - lim, Math.min(vfo + lim, this.viewCenterHz()));
+  }
+
+  /** How far the VIEW centre can roam before it hits the capture edge. */
+  panSpan(): { loHz: number; hiHz: number } | null {
+    const fs = this.captureBandwidth();
+    if (!fs) return null;
+    const reach = Math.max(0, fs - this.localMargin(fs) - this.spanHz() / 2);
+    const vfo = this.frequency;
+    return { loHz: vfo - reach, hiHz: vfo + reach };
+  }
+
   /** Set view centre + span. binBandwidth is clamped to sane zoom limits. */
   zoom(frequency: number, binBandwidth: number) {
     const n = this.cfg.binCount || 4096;

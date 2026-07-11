@@ -49,6 +49,9 @@ html, body {
 #splash .sub { color: var(--text-dim); font-size: 12px; letter-spacing: 2px; margin-top: -10px; }
 #splash form { display: flex; flex-direction: column; gap: 10px; width: 320px; margin-top: 6px; }
 #splash label { font-size: 11px; color: var(--text-dim); letter-spacing: 1px; }
+#hostRow, #pinRow { display: flex; flex-direction: column; gap: 6px; }
+#hostRow[hidden], #pinRow[hidden] { display: none; }
+#splash button[hidden] { display: none; }
 #splash input {
   background: var(--pill-bg); border: 1px solid var(--btn-border);
   color: var(--freq); padding: 10px 12px; border-radius: 6px;
@@ -196,7 +199,27 @@ html, body {
 
 .stack { display: flex; flex-direction: column; gap: 0.6em; }
 /* The button cluster shrinks before the right column does. */
-.stack.grow { flex: 0 1 auto; min-width: 0; }
+.stack.grow { flex: 0 1 auto; min-width: 0; align-items: stretch; }
+/* Both rows span the cluster, so the last button on each can be right-aligned
+   and they line up with each other instead of ending wherever their content does. */
+/* Button cluster. A grid, not two flex rows: DECODERS and RECORDINGS share a
+   column so they line up with each other, and stay next to the controls instead
+   of being flung to the cluster's far edge by an auto margin. The controls column
+   is as wide as the wider of the two rows, so the shorter row just carries a
+   little slack — which reads as alignment, not abandonment. */
+#cluster {
+  display: flex; flex-direction: column; gap: 0.6em;
+  flex: 0 1 auto; min-width: 0;
+}
+.panelBtn { justify-self: stretch; text-align: center; }
+/* Rows fill the controls column, and the volume slider takes up any slack — so
+   the shorter row ends flush instead of leaving a hole. It GROWS only; the floor
+   keeps it from ever getting shorter than it is now. */
+/* Rows fill the controls column and CENTRE within it. The two rows are never the
+   same natural width, so the slack has to go somewhere — split evenly reads as
+   deliberate, whereas dumping it all on one side reads as a mistake. */
+#cluster > .group { justify-content: flex-start; }
+#vol { flex: 0 1 auto; min-width: 8em; }
 .group.grow { flex: 1 1 auto; min-width: 0; }
 .sep.tall { height: 4.8em; }
 #tuner { flex: 0 0 auto; }          /* the tuning block never shrinks */
@@ -208,7 +231,15 @@ button.btn {
   letter-spacing: 0.08em; cursor: pointer; white-space: nowrap;
 }
 button.btn:hover { background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx); }
+button.btn[hidden] { display: none; }
 button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx); }
+
+/* MUTE reads as a WARNING, not a mode: the amber "on" style looks like every
+   other active toggle, so it's easy to sit there wondering why there's no audio. */
+#muteBtn.on {
+  color: var(--red); border-color: var(--red);
+  background: rgba(224,80,80,0.16);
+}
 
 /* Recording: unmistakable, and it pulses so you can't leave it running by accident. */
 #recBtn.rec {
@@ -217,7 +248,11 @@ button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active
   animation: recPulse 1.4s ease-in-out infinite;
 }
 @keyframes recPulse { 50% { background: rgba(224,80,80,0.3); } }
-#recTime { color: var(--red); font-variant-numeric: tabular-nums; min-width: 42px; }
+/* REC/STOP and the timer must NOT change the row's width — the button's label
+   swaps (● REC -> ■ STOP) and the timer appears only while recording, so without
+   a fixed size the whole cluster reflows mid-recording and everything shifts. */
+#recBtn { min-width: 6.4em; }
+#recTime { color: var(--red); font-variant-numeric: tabular-nums; min-width: 3.2em; }
 
 .group { display: flex; gap: 0.35em; align-items: center; flex-wrap: nowrap; }
 .sep { width: 1px; height: 1.8em; background: var(--bar-border); flex: 0 0 1px; }
@@ -226,22 +261,148 @@ button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active
 input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 
 /* ── Menu drawer (Radio / Audio / Display) ────────────────────────────────── */
-#menu {
-  position: fixed; top: 0; right: 0; bottom: 0; width: 340px; z-index: 50;
-  background: rgba(8,6,2,0.97); border-left: 1px solid var(--bar-border);
-  padding: 16px; overflow-y: auto;
-  transform: translateX(100%); transition: transform .18s ease-out;
-}
-#menu.open { transform: translateX(0); }
 
-/* Bookmarks: same drawer treatment as the menu. */
-#bookmarksPanel {
-  position: fixed; top: 0; right: 0; bottom: 0; width: 420px; z-index: 51;
-  background: rgba(8,6,2,0.97); border-left: 1px solid var(--bar-border);
-  padding: 16px; overflow-y: auto;
-  transform: translateX(100%); transition: transform .18s ease-out;
+
+/* Panels are centred POP-UPS, not side drawers — a full-height drawer holding
+   five sliders is mostly empty space. Sized to their content, capped at 80vh.
+   The huge box-shadow spread is the backdrop dim (no extra element needed). */
+#menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel {
+  position: fixed; top: 50%; left: 50%; z-index: 51;
+  width: min(92vw, 520px); max-height: 82vh; overflow-y: auto;
+  background: rgba(8,6,2,0.98); border: 1px solid var(--btn-border);
+  border-radius: 12px; padding: 18px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.7), 0 0 0 100vmax rgba(0,0,0,0.55);
+  transform: translate(-50%, -48%) scale(0.97);
+  opacity: 0; visibility: hidden;
+  transition: opacity .14s ease-out, transform .14s ease-out, visibility .14s;
 }
-#bookmarksPanel.open { transform: translateX(0); }
+#menu.open, #bookmarksPanel.open, #decodersPanel.open,
+#recordingsPanel.open, #audioPanel.open, #freqPanel.open {
+  opacity: 1; visibility: visible;
+  transform: translate(-50%, -50%) scale(1);
+}
+/* Wider ones: bookmarks/recordings/decoders list real content. */
+#bookmarksPanel, #recordingsPanel, #decodersPanel { width: min(94vw, 640px); }
+
+/* Decoder output. */
+#decText {
+  margin: 10px 0 0; padding: 10px; min-height: 120px; max-height: 300px; overflow-y: auto;
+  background: #000; border: 1px solid var(--btn-border); border-radius: 6px;
+  color: var(--btn-text); font-size: 12px; white-space: pre-wrap; word-break: break-word;
+}
+#decImage {
+  display: none; width: 100%; margin-top: 10px; background: #000;
+  border: 1px solid var(--btn-border); border-radius: 6px; image-rendering: pixelated;
+}
+#decImage.on { display: block; }
+#decText.off { display: none; }
+#spotList { margin-top: 10px; }
+#decodersPanel button.btn.on,
+#audioPanel button.btn.on,
+#recordingsPanel button.btn[hidden] { display: none; }
+button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active-bdr); }
+
+
+/* ── Decoder output box (persistent, bottom-left) ─────────────────────────── */
+#decBox {
+  /* Absolute inside #wfWrap, NOT fixed to the viewport — fixed + bottom:0 put it
+     underneath the control bar. This way it always floats above the bar, whatever
+     height the bar happens to be. */
+  /* Sits above the VTS bar when that's visible — the offset is set from JS, the
+     way the app positions its DecoderPanel above the pill. */
+  position: absolute; left: 14px; bottom: var(--decBoxBottom, 14px); z-index: 45;
+  transition: bottom .15s ease-out;
+  width: min(46vw, 560px); display: none;
+  background: rgba(8,6,2,0.96); border: 1px solid var(--btn-border);
+  border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  overflow: hidden;
+}
+#decBox.open { display: block; }
+#decBoxHead {
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+  border-bottom: 1px solid var(--bar-border); font-size: 12px;
+}
+#decBoxHead .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: rgba(255,255,255,0.25); flex: 0 0 8px;
+}
+#decBoxHead .dot.live { background: #33cc44; box-shadow: 0 0 6px #33cc44; }
+#decTitle { color: var(--amber); letter-spacing: 2px; }
+#decStatus { color: var(--text-dim); font-size: 11px; flex: 1 1 auto; }
+#decBoxHead .btn { padding: 2px 8px; font-size: 11px; }
+#decBody { max-height: 40vh; overflow-y: auto; padding: 8px 10px; }
+#decBox.min #decBody { display: none; }
+#decText {
+  margin: 0; color: var(--btn-text); font-size: 12px;
+  white-space: pre-wrap; word-break: break-word; min-height: 60px;
+}
+#decText.off { display: none; }
+#decImage { display: none; width: 100%; background: #000; image-rendering: pixelated; }
+#decImage.on { display: block; }
+#spotList { display: none; }
+#spotList.on { display: block; }
+
+/* Menu button rows + settings sub-panels (mirrors the app's menu). */
+.btnRow { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.subPanel {
+  margin: 6px 0 10px; padding: 8px 10px;
+  border: 1px solid var(--bar-border); border-radius: 8px;
+  background: rgba(0,0,0,0.3);
+}
+.subPanel .seg { flex-wrap: wrap; justify-content: flex-end; }
+
+
+/* Mirrored bandwidth sliders. */
+.bwHalf { flex: 1 1 auto; width: auto; min-width: 4em; }
+#bwSync { padding: 0.35em 0.6em; font-size: 0.8em; }
+#bwLoVal, #bwHiVal { min-width: 4em; }
+#bwLoVal { text-align: right; }
+
+/* Frequency entry. */
+#freqInput {
+  width: 100%; background: var(--pill-bg); border: 1px solid var(--btn-border);
+  color: var(--freq); padding: 12px 14px; border-radius: 8px;
+  font-family: inherit; font-size: 26px; letter-spacing: 2px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+#freqInput:focus { outline: none; border-color: var(--btn-active-bdr); }
+#freqPanel { width: min(92vw, 420px); }
+#freqPanel .mrow input { flex: 1 1 auto; }
+
+
+/* Band-plan strip — coloured segments for the bands crossing the current span. */
+#bands { display: block; width: 100%; height: 16px; flex: 0 0 16px; background: #000; }
+
+/* VTS — floating station bar, centred above the control bar (mirrors the app's
+   VTSBar). Green when dead on a station (±99 Hz — the app's VTS_ON_HZ). */
+#vts {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  z-index: 44; display: none; align-items: baseline; gap: 10px;
+  max-width: min(60vw, 520px); padding: 6px 16px;
+  background: rgba(8,6,2,0.92); border: 1px solid var(--btn-border);
+  border-radius: 999px; box-shadow: 0 8px 26px rgba(0,0,0,0.55);
+  font-size: 13px; letter-spacing: 1px; color: var(--btn-text); white-space: nowrap;
+}
+#vts.show { display: flex; }
+#vts img { height: 16px; width: auto; border-radius: 3px; display: none; }
+#vts img.show { display: block; }
+#vtsRds { background: #fff; padding: 1px 3px; }
+#vtsLogo { height: 20px; width: 20px; object-fit: contain; background: rgba(255,255,255,0.9); }
+#vtsSrc {
+  display: none; font-size: 9px; letter-spacing: 1px; color: var(--unit);
+  border: 1px solid var(--btn-border); border-radius: 3px; padding: 0 3px;
+}
+#vtsSrc.show { display: inline; }
+#vtsFlag { font-size: 15px; }
+#vtsOffset { color: var(--unit); font-size: 11px; }
+#vts.on { border-color: rgba(51,204,68,0.6); }
+#vts.on #vtsName { color: #33cc44; }
+#vtsName { overflow: hidden; text-overflow: ellipsis; }
+#vtsBand { color: var(--unit); font-size: 11px; }
+
+/* Recordings. */
+#recsList .sres { flex-wrap: wrap; }
+#recsList audio { width: 100%; margin-top: 6px; height: 30px; }
 #bmList { margin-top: 10px; }
 #bmList .sres button { padding: 2px 7px; font-size: 11px; }
 #bmMsg { min-height: 14px; color: var(--text-dim); }
@@ -274,10 +435,17 @@ select.btn { padding: 6px 8px; }
   <h1>VIBESDR</h1>
   <div class="sub">VIBESERVER · WEB CLIENT</div>
   <form id="connForm" autocomplete="off">
-    <label for="host">SERVER</label>
-    <input id="host" placeholder="192.168.86.134:48000" spellcheck="false">
-    <label for="pin">PIN <span style="color:var(--unit)">(if required)</span></label>
-    <input id="pin" placeholder="······" inputmode="numeric">
+    <!-- SERVER row only exists in dev, where this page is served from a different
+         machine than the radio. When the shim serves it, the server IS this
+         origin — there is nothing to type. -->
+    <div id="hostRow" hidden>
+      <label for="host">SERVER</label>
+      <input id="host" placeholder="192.168.86.134:48000" spellcheck="false">
+    </div>
+    <div id="pinRow">
+      <label for="pin">PIN</label>
+      <input id="pin" placeholder="······" inputmode="numeric" autofocus>
+    </div>
     <div class="row">
       <button type="submit" id="btnConnect">CONNECT</button>
       <button type="button" id="btnSaveConnect">SAVE &amp; CONNECT</button>
@@ -287,8 +455,41 @@ select.btn { padding: 6px 8px; }
 </div>
 
 <div id="app">
+  <canvas id="bands"></canvas>
   <canvas id="scale"></canvas>
-  <div id="wfWrap"><canvas id="wf"></canvas></div>
+  <div id="wfWrap"><canvas id="wf"></canvas>
+<!-- Decoder output box. Floats bottom-left above the control bar and PERSISTS
+     until dismissed (OpenWebRX behaviour) — you keep listening and tuning while
+     it decodes. Not inside the menu: the menu is for choosing, this is for
+     watching. -->
+<!-- VTS — floating station bar, centred above the controls (same as the app's
+     VTSBar, so the two look alike). Only appears when there IS a station. -->
+<div id="vts">
+  <img id="vtsRds" src="__RDS_LOGO__" alt="RDS" title="Live RDS data">
+  <span id="vtsSrc"></span>
+  <img id="vtsLogo" alt="">
+  <span id="vtsFlag"></span>
+  <span id="vtsName">—</span>
+  <span id="vtsOffset"></span>
+  <span id="vtsBand"></span>
+</div>
+
+<div id="decBox">
+  <div id="decBoxHead">
+    <span class="dot" id="decDot"></span>
+    <span id="decTitle">RTTY</span>
+    <span id="decStatus"></span>
+    <button class="btn" id="decClr" title="Clear output">CLR</button>
+    <button class="btn" id="decMin" title="Minimise">–</button>
+    <button class="btn" id="decHide" title="Stop and close">&#10005;</button>
+  </div>
+  <div id="decBody">
+    <pre id="decText"></pre>
+    <canvas id="decImage"></canvas>
+    <div id="spotList"></div>
+  </div>
+</div>
+  </div><!-- /#wfWrap -->
 
   <div id="bar">
     <div class="barRow">
@@ -310,32 +511,45 @@ select.btn { padding: 6px 8px; }
       <!-- Demodulator + its bandwidth, which belongs to it. -->
       <div id="demod">
         <div class="group" id="modes"></div>
+        <!-- Bandwidth: mirrored sliders around the carrier (app's ModeSelector).
+             Slide the LEFT one left to widen the lower sideband, the RIGHT one
+             right to widen the upper. SYNC mirrors both edges. -->
         <div class="bwRow">
-          <span class="lbl">BW</span>
-          <input type="range" id="bw" min="200" max="20000" step="100" value="12500">
-          <span class="val" id="bwVal">12.5k</span>
+          <span class="val" id="bwLoVal">−5.0k</span>
+          <input type="range" id="bwLo" class="bwHalf">
+          <button class="btn" id="bwSync" title="Mirror both edges">SYNC</button>
+          <input type="range" id="bwHi" class="bwHalf">
+          <span class="val" id="bwHiVal">+5.0k</span>
         </div>
       </div>
 
       <div class="sep tall"></div>
 
-      <!-- Button cluster, left of the right-hand column. -->
-      <div class="stack grow">
+      <!-- Button cluster: view controls above, audio controls below. A 2-column
+           grid — the trailing panel buttons share a column so they line up with
+           each other, without being flung to the far edge by an auto margin. -->
+      <!-- Two flat rows. REC is LAST so the timer that appears while recording
+           can only grow rightwards — it can't shove the other buttons around. -->
+      <div id="cluster">
         <div class="group">
           <span class="lbl">ZOOM</span>
           <button class="btn" id="zoomOut">−</button>
           <button class="btn" id="zoomIn">+</button>
           <button class="btn" id="zoomReset">FIT</button>
           <button class="btn on" id="lockBtn" title="View follows the VFO">LOCK</button>
-          <div class="sep"></div>
+          <!-- Only useful while unlocked: snap the view back onto the VFO. -->
+          <button class="btn" id="centreBtn" title="Centre the view on the VFO" hidden>CENTRE</button>
+          <button class="btn" id="menuBtn">MENU</button>
+          <button class="btn" id="decodersBtn" title="RTTY / NAVTEX / WEFAX / SSTV / FT8">DECODERS</button>
+        </div>
+        <div class="group">
           <span class="lbl">VOL</span>
           <input type="range" id="vol" min="0" max="100" value="80">
           <button class="btn" id="muteBtn">MUTE</button>
-        </div>
-        <div class="group">
+          <button class="btn" id="audioBtn" title="Squelch, noise reduction, notch, de-emphasis">AUDIO</button>
+          <button class="btn" id="recordingsBtn" title="Saved recordings">RECORDINGS</button>
           <button class="btn" id="recBtn" title="Record audio to a WAV file">● REC</button>
           <span class="lbl" id="recTime"></span>
-          <button class="btn" id="menuBtn">MENU</button>
         </div>
       </div>
 
@@ -365,6 +579,155 @@ select.btn { padding: 6px 8px; }
       </div>
     </div>
   </div>
+</div>
+
+<!-- Audio DSP gets its own drawer, as in the app (AudioSheet): these are the
+     controls you reach for while listening, so they shouldn't be buried in the
+     settings menu. All of it runs SERVER-side in the shim. -->
+<div id="freqPanel">
+  <div id="menuHead">
+    <span>FREQUENCY</span>
+    <button class="btn" id="freqClose">CLOSE</button>
+  </div>
+  <div class="mrow">
+    <input id="freqInput" type="text" inputmode="decimal" spellcheck="false" autocomplete="off">
+  </div>
+  <div class="mrow">
+    <label>UNITS</label>
+    <div class="seg" id="freqUnitSeg">
+      <button class="btn" data-unit="hz">Hz</button>
+      <button class="btn" data-unit="khz">kHz</button>
+      <button class="btn on" data-unit="mhz">MHz</button>
+    </div>
+  </div>
+  <div class="btnRow">
+    <button class="btn" id="freqGo">TUNE</button>
+    <button class="btn" id="freqShare" title="Copy a link to this frequency">SHARE</button>
+  </div>
+  <div id="freqMsg" class="lbl"></div>
+</div>
+
+<div id="audioPanel">
+  <div id="menuHead">
+    <span>AUDIO</span>
+    <button class="btn" id="audioClose">CLOSE</button>
+  </div>
+  <div class="mrow">
+    <label for="sql">SQUELCH</label>
+    <input type="range" id="sql" min="-100" max="-20" value="-100">
+    <span class="val" id="sqlVal">OFF</span>
+  </div>
+  <div class="mrow">
+    <label for="nr">NOISE REDUCTION</label>
+    <input type="range" id="nr" min="0" max="100" value="0">
+    <span class="val" id="nrVal">OFF</span>
+  </div>
+  <div class="mrow">
+    <label>AUTO NOTCH</label>
+    <div class="seg"><button class="btn" id="notch">OFF</button></div>
+  </div>
+  <div class="mrow">
+    <label>FM DE-EMPHASIS</label>
+    <div class="seg" id="deemphSeg">
+      <button class="btn" data-tau="0">OFF</button>
+      <button class="btn on" data-tau="50">50µs</button>
+      <button class="btn" data-tau="75">75µs</button>
+    </div>
+  </div>
+  <div class="mrow">
+    <label>WFM STEREO</label>
+    <div class="seg"><button class="btn on" id="stereoBtn">ON</button></div>
+  </div>
+</div>
+
+<!-- DECODERS menu — a copy of the app's CLIENT DECODERS + DECODED SPOTS section.
+     No viewer in here: selecting a decoder opens the persistent output box
+     (bottom-left), the way OpenWebRX does it. Morse is absent on purpose — the
+     shim has no morse decoder (the app hides it for local hardware too). -->
+<div id="decodersPanel">
+  <div id="menuHead">
+    <span>DECODERS</span>
+    <button class="btn" id="decClose">CLOSE</button>
+  </div>
+
+  <h2>CLIENT DECODERS</h2>
+  <div class="btnRow">
+    <button class="btn" data-dec="rtty">RTTY</button>
+    <button class="btn" data-dec="navtex">NAVTEX</button>
+    <button class="btn" data-dec="wefax">WEFAX</button>
+    <button class="btn" data-dec="sstv">SSTV</button>
+  </div>
+
+  <!-- Settings for the selected mode appear underneath, as in the app. -->
+  <div class="subPanel" id="rttySettings" hidden>
+    <div class="mrow">
+      <label>PRESET</label>
+      <div class="seg" id="rttyPreset">
+        <button class="btn on" data-preset="ham">HAM</button>
+        <button class="btn" data-preset="weather">WEATHER</button>
+        <button class="btn" data-preset="sitor-b">SITOR-B</button>
+      </div>
+    </div>
+    <div class="mrow">
+      <label>SHIFT</label>
+      <div class="seg" id="rttyShift">
+        <button class="btn on" data-shift="170">170</button>
+        <button class="btn" data-shift="200">200</button>
+        <button class="btn" data-shift="425">425</button>
+        <button class="btn" data-shift="450">450</button>
+        <button class="btn" data-shift="850">850</button>
+      </div>
+    </div>
+    <div class="mrow">
+      <label>BAUD</label>
+      <div class="seg" id="rttyBaud">
+        <button class="btn on" data-baud="45.45">45.45</button>
+        <button class="btn" data-baud="50">50</button>
+        <button class="btn" data-baud="75">75</button>
+        <button class="btn" data-baud="100">100</button>
+      </div>
+    </div>
+    <div class="mrow">
+      <label>ENCODING</label>
+      <div class="seg" id="rttyEnc">
+        <button class="btn on" data-enc="ITA2">ITA2</button>
+        <button class="btn" data-enc="ASCII">ASCII</button>
+        <button class="btn" data-enc="CCIR476">CCIR476</button>
+      </div>
+    </div>
+    <div class="mrow">
+      <label>INVERTED</label>
+      <div class="seg"><button class="btn" id="rttyInv">OFF</button></div>
+    </div>
+  </div>
+
+  <div class="subPanel" id="wefaxSettings" hidden>
+    <div class="mrow">
+      <label>LPM</label>
+      <div class="seg" id="wefaxLpm">
+        <button class="btn" data-lpm="60">60</button>
+        <button class="btn on" data-lpm="120">120</button>
+        <button class="btn" data-lpm="240">240</button>
+      </div>
+    </div>
+  </div>
+
+  <h2>DECODED SPOTS</h2>
+  <div class="btnRow">
+    <button class="btn" id="spotsBtn">DIGITAL SPOTS</button>
+    <button class="btn" id="mapBtn" title="Opens in a new tab">&#128506; MAP</button>
+  </div>
+  <div class="lbl" style="margin-top:6px">
+    Decoding runs on the server. Tap a spot to tune.
+  </div>
+</div>
+
+<div id="recordingsPanel">
+  <div id="menuHead">
+    <span>RECORDINGS</span>
+    <button class="btn" id="recsClose">CLOSE</button>
+  </div>
+  <div id="recsList"></div>
 </div>
 
 <div id="bookmarksPanel">
@@ -422,34 +785,6 @@ select.btn { padding: 6px 8px; }
       <button class="btn" data-ds="1">I</button>
       <button class="btn" data-ds="2">Q</button>
     </div>
-  </div>
-
-  <h2>AUDIO</h2>
-  <div class="mrow">
-    <label for="sql">SQUELCH</label>
-    <input type="range" id="sql" min="-100" max="-20" value="-100">
-    <span class="val" id="sqlVal">OFF</span>
-  </div>
-  <div class="mrow">
-    <label for="nr">NOISE REDUCTION</label>
-    <input type="range" id="nr" min="0" max="100" value="0">
-    <span class="val" id="nrVal">OFF</span>
-  </div>
-  <div class="mrow">
-    <label>AUTO NOTCH</label>
-    <div class="seg"><button class="btn" id="notch">OFF</button></div>
-  </div>
-  <div class="mrow">
-    <label>FM DE-EMPHASIS</label>
-    <div class="seg" id="deemphSeg">
-      <button class="btn" data-tau="0">OFF</button>
-      <button class="btn on" data-tau="50">50µs</button>
-      <button class="btn" data-tau="75">75µs</button>
-    </div>
-  </div>
-  <div class="mrow">
-    <label>WFM STEREO</label>
-    <div class="seg"><button class="btn on" id="stereoBtn">ON</button></div>
   </div>
 
   <h2>DISPLAY</h2>

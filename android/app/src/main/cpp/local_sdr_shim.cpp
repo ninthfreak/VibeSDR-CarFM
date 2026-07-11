@@ -1714,7 +1714,8 @@ struct LocalSdrShim::Impl {
             std::string body;
             if (secret.empty()) body = "{\"required\":false}";
             else body = "{\"required\":true,\"nonce\":\"" + g_vsAuthState.issue() + "\"}";
-            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
             return;
@@ -1731,7 +1732,8 @@ struct LocalSdrShim::Impl {
             acceptWs(sock, wsKey, wsAudio);
         } else if (reqLine.find("/connection") != std::string::npos) {
             std::string body = "{\"allowed\":true}";
-            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
         } else if (reqLine.rfind("GET /stations", 0) == 0) {
@@ -1748,6 +1750,7 @@ struct LocalSdrShim::Impl {
             { std::lock_guard<std::mutex> lk(g_stationsMtx); body = g_stationsJson; }
             if (body.empty()) body = "[]";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Access-Control-Allow-Origin: *\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
@@ -1759,6 +1762,7 @@ struct LocalSdrShim::Impl {
             // all of them.
             static const std::string kPage(kVibeWebPage);
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+                          "Access-Control-Allow-Origin: *\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(kPage.size()) + "\r\n\r\n" + kPage);
             sock->close();

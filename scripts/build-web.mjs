@@ -60,10 +60,19 @@ async function bundle() {
     }
   }
 
-  const html = await readFile(SRC_HTML, 'utf8');
+  const html0 = await readFile(SRC_HTML, 'utf8');
+  // Inline the RDS mark as a data URI — the page must stay self-contained (the
+  // shim serves it from a phone; there is nowhere to fetch an asset FROM).
+  const rdsLogo = await readFile(path.join(root, 'assets/rds-logo.png'));
+  const html = html0.replace('__RDS_LOGO__',
+    `data:image/png;base64,${rdsLogo.toString('base64')}`);
+  // Replacer FUNCTION, not a string: in a replacement string "$&" means "the
+  // matched text", and minified JS is full of `$` sigils — a stray `$&` spliced
+  // the original <script src=...> tag back into the middle of the bundle and
+  // broke the whole page. A function replacement disables all $-substitution.
   const out = html.replace(
     /<script type="module" src="\.\/src\/main\.ts"><\/script>\s*$/,
-    `<script>\n${js}\n</script>\n`,
+    () => `<script>\n${js}\n</script>\n`,
   );
   if (out === html) throw new Error('script tag not found in index.html — did the tag change?');
 

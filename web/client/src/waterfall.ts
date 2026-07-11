@@ -72,12 +72,22 @@ export class Waterfall {
   // Geometry of the last frame — used for click-to-tune and the axis.
   centerHz = 0;
   spanHz = 0;
+  /** Hook so the host can draw the dB axis over the spectrum region. */
+  onDrawAxis: ((ctx: CanvasRenderingContext2D, w: number, h: number) => void) | null = null;
+
   /** VFO marker position, Hz (the needle). */
   vfoHz = 0;
   /** Demod passband relative to the VFO, Hz — drives the acrylic sidebands.
    *  Negative low = below the carrier (SSB sits entirely on one side). */
   filterLow = 0;
   filterHigh = 0;
+
+  /** Unlocked view only: the pan limits (beyond them is dead capture) and the RF
+   *  centre — where the dongle actually is, vs where you're looking. Null = hide,
+   *  which is what LOCK does. */
+  wallLoHz: number | null = null;
+  wallHiHz: number | null = null;
+  rfCenterHz: number | null = null;
 
   /** VFO needle colour — also used for the peak-hold line, as in the app. */
   vfoColor = '#ff2020';
@@ -319,7 +329,10 @@ export class Waterfall {
     ctx.fillRect(0, 0, W, specH);
     ctx.drawImage(this.wf, 0, specH);
 
-    if (specH > 4 && this.spec) this._drawSpec(ctx, W, specH);
+    if (specH > 4 && this.spec) {
+      this._drawSpec(ctx, W, specH);
+      this.onDrawAxis?.(ctx, W, specH);   // dB axis, drawn by main (owns the labels)
+    }
     this._drawVfo(ctx, W, H);
   }
 
@@ -470,6 +483,9 @@ export class Waterfall {
     edge(loX);
     edge(hiX);
 
+    this._drawWalls(ctx, W, H);
+    this._drawRfCentre(ctx, W, H);
+
     // LED needle: three glow layers (28/16/6) + a crisp core filament.
     if (nX >= 0 && nX <= W) {
       const layer = (alpha: number, blur: number, sw: number) => {
@@ -494,6 +510,49 @@ export class Waterfall {
       ctx.stroke();
     }
 
+    ctx.restore();
+  }
+
+  /** Pan boundary walls — solid edge + a dim veil over the unreachable zone.
+   *  Only meaningful when the view is unlocked; LOCK keeps you centred anyway. */
+  private _drawWalls(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    if (this.wallLoHz == null && this.wallHiHz == null) return;
+    ctx.save();
+    if (this.wallLoHz != null) {
+      const x = this.hzToX(this.wallLoHz, W);
+      if (x > 0) {
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        ctx.fillRect(0, 0, Math.min(x, W), H);
+        ctx.fillStyle = 'rgba(255,200,80,0.85)';
+        ctx.fillRect(x - 0.75, 0, 1.5, H);
+      }
+    }
+    if (this.wallHiHz != null) {
+      const x = this.hzToX(this.wallHiHz, W);
+      if (x < W) {
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        ctx.fillRect(Math.max(0, x), 0, W - Math.max(0, x), H);
+        ctx.fillStyle = 'rgba(255,200,80,0.85)';
+        ctx.fillRect(x - 0.75, 0, 1.5, H);
+      }
+    }
+    ctx.restore();
+  }
+
+  /** RF-centre marker — a thin dashed line where the DONGLE is tuned, which is
+   *  not where you're looking once the view is unlocked. */
+  private _drawRfCentre(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    if (this.rfCenterHz == null) return;
+    const x = this.hzToX(this.rfCenterHz, W);
+    if (x < 0 || x > W) return;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(120,200,255,0.75)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x + 0.5, 0);
+    ctx.lineTo(x + 0.5, H);
+    ctx.stroke();
     ctx.restore();
   }
 

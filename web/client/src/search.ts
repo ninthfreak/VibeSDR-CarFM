@@ -73,6 +73,9 @@ export async function loadBookmarks(): Promise<UserBookmark[]> {
 
 export function getBookmarks(): UserBookmark[] { return bookmarks; }
 
+/** The server's station list — used by the VTS steward as well as search. */
+export function getStations(): ServerStation[] { return stations; }
+
 export async function addBookmark(b: Omit<UserBookmark, 'scope'>): Promise<void> {
   bookmarks = mergeBookmarks(bookmarks, [{ ...b, scope: '' }]);
   await saveUserBookmarks(bookmarks);
