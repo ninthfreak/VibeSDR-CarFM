@@ -237,6 +237,18 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     // Runs the SAME shim as a local session but LAN-bound and silent on this
     // phone: no local audio/spectrum client, so the single client slot goes to
     // the one remote VibeSDR. Config (pin/limits/compress) is applied before the
+    // ── Headless autostart (survive a reboot / app update) ────────────────────
+    // Config is mirrored into SharedPreferences because the boot path has no JS
+    // runtime with which to read AsyncStorage. See VibeServerBoot.
+
+    @ReactMethod
+    fun setServerAutoStart(on: Boolean) { VibeServerBoot.setEnabled(reactContext, on) }
+
+    @ReactMethod
+    fun getServerAutoStart(promise: Promise) {
+        promise.resolve(VibeServerBoot.isEnabled(reactContext))
+    }
+
     // shim starts. Resolves { ip, port, name } for the sharing screen + mDNS.
     @ReactMethod
     fun startVibeServer(opts: com.facebook.react.bridge.ReadableMap, promise: Promise) {
@@ -277,6 +289,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // Web client on/off, and a pinned capture rate (0 = client-controlled).
         val webSrv     = if (opts.hasKey("webServer")) opts.getBoolean("webServer") else true
         val lockedRate = if (opts.hasKey("lockedRate")) opts.getDouble("lockedRate") else 0.0
+        // mDNS is registered from JS on a normal start; the BOOT path has no JS, so it
+        // needs to know whether to advertise. Carried here only to be mirrored.
+        val advertiseOnStart = if (opts.hasKey("advertise")) opts.getBoolean("advertise") else true
 
         VibeLocalSDR.setVibeServerAuth(pin)
         VibeLocalSDR.setVibeServerLimits(maxBw, maxFps)
@@ -295,6 +310,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         }
         val ip = getLocalIp() ?: "0.0.0.0"
         RtlTcpServerService.start(reactContext, name, ip, port, "vibeserver")
+        // Mirror the LIVE config so a reboot restarts exactly what was running. Note
+        // this preserves the existing autostart flag — starting the server by hand is
+        // not consent to have it come back on its own; that's the toggle's job.
+        VibeServerBoot.saveConfig(
+            reactContext, VibeServerBoot.isEnabled(reactContext), name, pin,
+            sampleRate, lockedRate, maxFps,
+            compress, webSrv, advertiseOnStart)
         Log.i(TAG, "VibeServer started $ip:$port as \"$name\" (pin=${pin.isNotEmpty()})")
         val res = Arguments.createMap()
         res.putString("ip", ip)
@@ -642,7 +664,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
 
     companion object {
         // RTL-SDR VID/PID allowlist (from SDR++ Brown), packed as (vid<<16)|pid.
-        private val RTL_SDR_VIDPIDS: Set<Int> = listOf(
+        // internal, not private: VibeServerBoot matches on the SAME list. A copy
+        // would drift and quietly stop recognising a dongle on the boot path only.
+        internal val RTL_SDR_VIDPIDS: Set<Int> = listOf(
             0x0bda to 0x2832, 0x0bda to 0x2838, 0x0413 to 0x6680, 0x0413 to 0x6f0f,
             0x0458 to 0x707f, 0x0ccd to 0x00a9, 0x0ccd to 0x00b3, 0x0ccd to 0x00b4,
             0x0ccd to 0x00b5, 0x0ccd to 0x00b7, 0x0ccd to 0x00b8, 0x0ccd to 0x00b9,

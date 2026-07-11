@@ -14,6 +14,7 @@ import {
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
   getServerLocationMode, setServerLocationMode, getManualServerLocation,
   setManualServerLocation, resolveLocation,
+  getServerAutoStart, setServerAutoStart,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
 import { advertiseServer, stopAdvertiseRtlTcp } from '../services/mdns';
@@ -60,6 +61,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [webServer, setWebServer] = useState(true);
   const [locMode, setLocMode]     = useState<LocationMode>('off');
   const [locCity, setLocCity]     = useState('');
+  const [autoStart, setAutoStart] = useState(false);
 
   const [running, setRunning] = useState<VibeServerInfo | null>(null);
   const [status, setStatus]   = useState<VibeServerStatus | null>(null);
@@ -84,6 +86,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         if (ws != null) setWebServer(ws !== '0');
         setLocMode(await getServerLocationMode());
         setLocCity((await getManualServerLocation())?.label ?? '');
+        setAutoStart(await getServerAutoStart());
         if (pm === 'random' || pm === 'custom' || pm === 'off') setPinMode(pm);
         // Restore the saved PIN for BOTH modes so re-opening the server keeps the
         // same code — it only changes when the user taps refresh (↻) or edits it.
@@ -115,6 +118,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   }, [running]);
 
   const effectivePin = pinMode === 'off' ? '' : pin;
+
+  const onAutoStart = useCallback((on: boolean) => {
+    setAutoStart(on);
+    setServerAutoStart(on);
+  }, []);
 
   const start = useCallback(async () => {
     setError(null);
@@ -159,6 +167,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         maxFftRate: fpsForTier(fps),
         compressAudio: compress,
         webServer,
+        advertise,
       });
       setRunning(info);
       runningRef.current = true;
@@ -336,6 +345,33 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 ? 'Anyone on the network can connect and tune. Use only on a trusted LAN.'
                 : 'Clients enter this PIN once. It authenticates control without ever crossing the wire (HMAC challenge-response).'}
             </Text>
+
+            {/* Headless / unattended operation. The pair is deliberate: autostart
+                without the Doze exemption gets killed on an idle phone, and the
+                exemption without autostart doesn't survive the reboot. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>UNATTENDED</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                  Restart after reboot
+                </Text>
+                <Switch value={autoStart} onValueChange={onAutoStart}
+                  trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+              </View>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                {autoStart
+                  ? 'The server comes back on its own after a reboot or an app update. Nothing opens on screen — the phone returns to its normal lock screen with the server running behind it.'
+                  : 'An overnight OS update reboots the phone and the server stays down until you open the app.'}
+              </Text>
+              {autoStart && (
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                  Tick "always open VibeSDR for this device" on the USB prompt — at boot
+                  there is nobody to answer it, so without that the server comes back up
+                  with no radio. Your screen lock stays on: the server starts before the
+                  phone is ever unlocked.
+                </Text>
+              )}
+            </View>
 
             {/* Web server. Turning this OFF means a browser gets nothing — only the
                 VibeSDR app can connect. It's the blunt lock for a server you don't
