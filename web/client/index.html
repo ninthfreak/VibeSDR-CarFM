@@ -148,6 +148,10 @@ html, body {
 #findRow #bookmarksBtn { flex: 0 0 auto; white-space: nowrap; }
 #rds { display: none; }   /* station identity moves into the VTS chip */
 
+/* Source glyphs: a MONITOR = saved in this browser; a SERVER RACK = saved on the
+   receiver, shared with every client. They inherit the amber via currentColor. */
+.srcIcon { width: 1.05em; height: 1.05em; vertical-align: -0.15em; color: inherit; }
+
 /* Readouts under the meter: signal on the left, link + bitrate on the right. */
 #sigLine { display: flex; align-items: center; justify-content: space-between; margin-top: 0.35em; gap: 0.6em; }
 #sigLabel { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap; }
@@ -887,9 +891,16 @@ select.btn { padding: 6px 8px; }
   <div class="mrow" style="gap:6px">
     <input id="bmName" class="btn" placeholder="Bookmark name" spellcheck="false"
            style="flex:1 1 auto; min-width:8em">
-    <button class="btn" id="bmAdd">+ ADD CURRENT</button>
+    <button class="btn" id="bmAdd" title="Save in this browser only">+ ADD HERE</button>
+    <button class="btn" id="bmAddServer" title="Save on the receiver, shared with everyone">+ ADD TO SERVER</button>
+  </div>
+  <!-- Import has to ask WHERE. The two destinations are genuinely different: this
+       browser (private to this computer) vs the receiver (shared with every client,
+       and gated on the PIN). -->
+  <div class="mrow" style="gap:6px">
     <button class="btn" id="bmExport">EXPORT</button>
-    <button class="btn" id="bmImport">IMPORT</button>
+    <button class="btn" id="bmImport">IMPORT HERE</button>
+    <button class="btn" id="bmImportServer">IMPORT TO SERVER</button>
     <input type="file" id="bmFile" accept=".json,.yaml,.yml,.txt" hidden>
   </div>
   <div id="bmMsg" class="lbl"></div>

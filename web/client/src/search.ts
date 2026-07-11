@@ -53,6 +53,81 @@ interface ServerStation {
 let stations: ServerStation[] = [];
 let bookmarks: UserBookmark[] = [];
 
+/**
+ * SERVER bookmarks — the stations this receiver has actually HEARD.
+ *
+ * Learned by the shim from RDS and served at GET /bookmarks. Distinct from the EiBi
+ * schedule (which lists everything that exists, whether or not you can receive it)
+ * and from the browser's own bookmarks (which live only on this computer). These are
+ * shared with every client, and they expire if the receiver stops hearing them.
+ */
+let serverBookmarks: ServerStation[] = [];
+let bmHost = '';
+/** The auth suffix, so writes carry the PIN. Empty on an open server. */
+let bmAuth = '';
+
+export async function loadServerBookmarks(host: string, authSuffix = ''): Promise<number> {
+  bmHost = host;
+  bmAuth = authSuffix;
+  try {
+    const r = await fetch(`http://${host}/bookmarks`, { cache: 'no-store' });
+    if (!r.ok) return 0;
+    const arr = await r.json();
+    serverBookmarks = Array.isArray(arr)
+      ? arr.filter((s: any) => s && s.name && s.frequency)
+           .map((s: any) => ({ ...s, source: 'server' as const }))
+      : [];
+  } catch {
+    serverBookmarks = [];      // older shim, or not reachable
+  }
+  return serverBookmarks.length;
+}
+
+export function getServerBookmarks(): ServerStation[] { return serverBookmarks; }
+
+/** Query string carrying the PIN, so the shim's write gate accepts us. */
+function authQs(): string {
+  // bmAuth is "&vs_nonce=...&vs_auth=..." — as the first param it needs a '?'.
+  return bmAuth ? '?' + bmAuth.replace(/^&/, '') : '';
+}
+
+/** Save to the RECEIVER, shared with every client. Returns the new list. */
+export async function saveToServer(frequency: number, name: string): Promise<boolean> {
+  if (!bmHost) return false;
+  try {
+    const qs = authQs();
+    const sep = qs ? '&' : '?';
+    const r = await fetch(
+      `http://${bmHost}/bookmarks${qs}${sep}frequency=${Math.round(frequency)}` +
+      `&name=${encodeURIComponent(name)}`, { method: 'POST' });
+    if (!r.ok) return false;
+    const arr = await r.json();
+    if (Array.isArray(arr)) {
+      serverBookmarks = arr.filter((s: any) => s && s.name && s.frequency)
+                           .map((s: any) => ({ ...s, source: 'server' as const }));
+    }
+    return true;
+  } catch { return false; }
+}
+
+export async function removeFromServer(frequency: number): Promise<boolean> {
+  if (!bmHost) return false;
+  try {
+    const qs = authQs();
+    const sep = qs ? '&' : '?';
+    const r = await fetch(
+      `http://${bmHost}/bookmarks${qs}${sep}frequency=${Math.round(frequency)}`,
+      { method: 'DELETE' });
+    if (!r.ok) return false;
+    const arr = await r.json();
+    if (Array.isArray(arr)) {
+      serverBookmarks = arr.filter((s: any) => s && s.name && s.frequency)
+                           .map((s: any) => ({ ...s, source: 'server' as const }));
+    }
+    return true;
+  } catch { return false; }
+}
+
 /** Pull the server's station list. Absent/offline is fine — we degrade. */
 export async function loadStations(host: string): Promise<number> {
   try {
@@ -143,7 +218,19 @@ export function search(query: string, limit = 40): SearchResult[] {
     }
   }
 
-  // 2. Server stations (the app's cached EiBi).
+  // 2. SERVER bookmarks — stations this receiver has actually heard. Ranked above
+  //    EiBi deliberately: EiBi lists what EXISTS, this lists what you can RECEIVE,
+  //    and the latter is nearly always the more useful answer.
+  for (const b of serverBookmarks) {
+    if (hit(b.name)) {
+      out.push({
+        name: b.name, frequency: b.frequency, mode: b.mode ?? 'wfm', source: 'server',
+        detail: (b as any).manual ? 'Saved on the receiver' : 'Heard by this receiver',
+      });
+    }
+  }
+
+  // 3. Server stations (the app's cached EiBi).
   for (const s of stations) {
     if (hit(s.name) || hit(s.group) || hit(s.comment)) {
       out.push({
@@ -157,7 +244,7 @@ export function search(query: string, limit = 40): SearchResult[] {
     }
   }
 
-  // 3. Band plan — ALWAYS searched, never filtered out by the sources above.
+  // 4. Band plan — ALWAYS searched, never filtered out by the sources above.
   for (const b of BAND_PLAN) {
     if (hit(b.name) || hit(b.type) || hit(b.bandLabel)) {
       out.push({

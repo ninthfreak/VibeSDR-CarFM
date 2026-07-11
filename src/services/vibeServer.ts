@@ -3,6 +3,7 @@ import { loadActiveEibi } from './eibi';
 import { getUserLocation } from './instancesApi';
 import { getServerName } from './rtlTcpServer';
 import { latLonToGrid, gridToLatLon } from './grid';
+import type { ServerBookmark } from './stations';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // VibeServer: share this device's USB dongle with server-side DSP (compressed
@@ -88,6 +89,7 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
   // already up and useful without it, and this can involve a network fetch.
   void publishStations();
   void publishLocation();
+  startBookmarkAutosave();
   return info;
 }
 
@@ -113,6 +115,75 @@ export async function publishStations(): Promise<void> {
     // Offline or EiBi unreachable — the web client degrades to bookmarks + band
     // plan, which are both local. Not worth surfacing.
   }
+}
+
+// ── Learned station bookmarks (RDS) ─────────────────────────────────────────
+//
+// The SHIM learns these — it is the only place that sees both the tuned frequency
+// and the decoded RDS name. It has no storage of its own, so the app persists them,
+// exactly as it does the station list.
+
+const BM_KEY = 'vs_learned_bookmarks';
+
+/** Hand the shim the saved list at start-up. */
+export async function loadLearnedBookmarks(): Promise<void> {
+  if (!Local?.setBookmarksJson) return;
+  try {
+    const raw = await AsyncStorage.getItem(BM_KEY);
+    if (raw) Local.setBookmarksJson(raw);
+  } catch {}
+}
+
+/** Read the shim's current list back and store it. Expired entries are already
+ *  pruned on the way out, so saving is also what garbage-collects the list. */
+export async function saveLearnedBookmarks(): Promise<void> {
+  if (!Local?.getBookmarksJson) return;
+  try {
+    const json = await Local.getBookmarksJson();
+    if (typeof json === 'string' && json.length > 2) {
+      await AsyncStorage.setItem(BM_KEY, json);
+    }
+  } catch {}
+}
+
+/** The shim's learned list, right now — for the app's own search + VTS. */
+export async function getLearnedBookmarksNow(): Promise<ServerBookmark[]> {
+  if (!Local?.getBookmarksJson) return [];
+  try {
+    const json = await Local.getBookmarksJson();
+    const arr = JSON.parse(json || '[]');
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((b: any) => b?.name && b?.frequency)
+      .map((b: any) => ({
+        name: String(b.name),
+        frequency: Number(b.frequency),
+        mode: b.mode ?? 'wfm',
+        source: 'server' as const,
+      })) as ServerBookmark[];
+  } catch { return []; }
+}
+
+/**
+ * Keep the saved copy in step with what the shim is learning.
+ *
+ * The shim learns continuously but has no storage, so if nothing pulls the list out
+ * and writes it down, everything heard in a session is lost the moment the process
+ * ends. Any session that runs the shim — serving OR listening locally — should hold
+ * one of these. Saving on a timer AND on stop, because a session that is killed
+ * (or crashes) never reaches its stop path.
+ */
+let bmTimer: ReturnType<typeof setInterval> | null = null;
+
+export function startBookmarkAutosave(): void {
+  if (bmTimer) return;
+  void loadLearnedBookmarks();
+  bmTimer = setInterval(() => { void saveLearnedBookmarks(); }, 60_000);
+}
+
+export function stopBookmarkAutosave(): void {
+  if (bmTimer) { clearInterval(bmTimer); bmTimer = null; }
+  void saveLearnedBookmarks();     // final flush
 }
 
 /** Where the host has manually said the receiver is (city picker fallback). */
@@ -312,6 +383,7 @@ export async function publishLocation(): Promise<void> {
 }
 
 export async function stopVibeServer(): Promise<void> {
+  stopBookmarkAutosave();
   try { await Local?.stopVibeServer?.(); } catch {}
 }
 

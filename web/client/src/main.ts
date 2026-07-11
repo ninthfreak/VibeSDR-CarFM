@@ -24,6 +24,7 @@ import { lookupStationLogo } from '../../../src/services/stationLogo';
 import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
   exportBookmarks, importBookmarks, search, type SearchResult,
+  loadServerBookmarks, getServerBookmarks, saveToServer, removeFromServer,
 } from './search';
 import { DecoderClient, type Spot } from './decoders';
 import {
@@ -195,6 +196,7 @@ async function connect(host: string, pin: string) {
 // ── App ──────────────────────────────────────────────────────────────────────
 
 function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthState) {
+  authState = auth;
   $('splash').classList.add('hidden');
   $('app').classList.add('live');
 
@@ -308,6 +310,8 @@ let hwGains: number[] = [];
 let hwRates: number[] = [];
 /** >0 = the SERVER pinned the capture rate; the picker is hidden. */
 let hwLockedRate = 0;
+/** The resolved PIN credentials, kept so bookmark WRITES can carry them. */
+let authState: AuthState | null = null;
 
 function loop() {
   if (!wf || !spec) return;
@@ -533,7 +537,7 @@ function updateVts() {
       name = near.name;
       flag = near.flag || '';
       // Source mark, as in the app: EiBi schedule vs the user's own bookmark.
-      src = near.source === 'user' ? 'MY' : near.source === 'eibi' ? 'EiBi' : 'SRV';
+      src = SRC_LABEL[near.source] ?? '';
     }
   }
 
@@ -561,7 +565,9 @@ function updateVts() {
   // RDS mark only when the data really IS RDS — not for a bookmark guess.
   $('vtsRds').classList.toggle('show', !!rdsName);
   const srcEl = $('vtsSrc');
-  srcEl.textContent = src;
+  // innerHTML, not textContent: the source mark is an inline SVG glyph now, and
+  // textContent would print the markup as literal text.
+  srcEl.innerHTML = src;
   srcEl.classList.toggle('show', !!src && !rdsName);
 
   const logoEl = $<HTMLImageElement>('vtsLogo');
@@ -855,6 +861,12 @@ function buildControls() {
   void loadStations(currentHost).then((n) => {
     if (n) console.info(`stations: ${n} from server`);
   });
+  // Stations this receiver has actually HEARD (learned from RDS by the shim). The
+  // auth suffix goes with it so the SAVE path can write back — the shim gates
+  // POST/DELETE on the same PIN that guards the stream.
+  void loadServerBookmarks(currentHost, authState?.query ?? '').then((n) => {
+    if (n) console.info(`server bookmarks: ${n} heard by this receiver`);
+  });
   initWaterfallInput();
   initKeyboard();
 }
@@ -1071,8 +1083,27 @@ function initIdleThrottle() {
 
 // ── Search + bookmarks ───────────────────────────────────────────────────────
 
+/**
+ * Source marks. "MY" and "SRV" were opaque — you can't tell what they mean without
+ * being told. A MONITOR means "saved in this browser, on this computer"; a SERVER
+ * RACK means "saved on the receiver itself, shared with everyone who connects".
+ *
+ * Inline SVG, not emoji: emoji render differently on every platform (and in colour),
+ * while these inherit the amber and stay crisp at 12px.
+ */
+const ICON_LOCAL =
+  '<svg class="srcIcon" viewBox="0 0 16 16" aria-label="Saved in this browser">' +
+  '<rect x="1" y="2" width="14" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/>' +
+  '<path d="M5 14h6M8 11v3" stroke="currentColor" stroke-width="1.3" fill="none"/></svg>';
+const ICON_SERVER =
+  '<svg class="srcIcon" viewBox="0 0 16 16" aria-label="Saved on the receiver">' +
+  '<rect x="2" y="2" width="12" height="4.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/>' +
+  '<rect x="2" y="9.6" width="12" height="4.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/>' +
+  '<circle cx="4.6" cy="4.2" r="0.8" fill="currentColor"/>' +
+  '<circle cx="4.6" cy="11.8" r="0.8" fill="currentColor"/></svg>';
+
 const SRC_LABEL: Record<string, string> = {
-  user: '★', server: 'SRV', eibi: 'EiBi', band: 'BAND',
+  user: ICON_LOCAL, server: ICON_SERVER, eibi: 'EiBi', band: 'BAND',
 };
 
 function initSearch() {
@@ -1186,6 +1217,19 @@ function initBookmarks() {
   $('bmAdd').onclick = addNow;
   nameEl.onkeydown = (e) => { if (e.key === 'Enter') { void addNow(); e.preventDefault(); } };
 
+  // Save on the RECEIVER — shared with every client, and it survives this browser.
+  // The shim gates the write on the PIN, which is what becomes the admin credential
+  // when public servers arrive.
+  $('bmAddServer').onclick = async () => {
+    if (!spec) return;
+    const name = nameEl.value.trim() || rdsName || `${(spec.frequency / 1e6).toFixed(3)} MHz`;
+    const ok = await saveToServer(spec.frequency, name);
+    $('bmMsg').textContent = ok
+      ? `Saved "${name}" on the receiver`
+      : 'Could not save on the receiver (is the PIN right?)';
+    if (ok) { nameEl.value = ''; renderBookmarks(); }
+  };
+
   // Export: the same UberSDR-importable JSON the phone app writes, so bookmarks
   // move between browser, phone and desktop UberSDR.
   $('bmExport').onclick = () => {
@@ -1197,12 +1241,35 @@ function initBookmarks() {
     setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
   };
 
-  $('bmImport').onclick = () => $('bmFile').click();
+  // Where an import LANDS matters, so the button says which: this browser, or the
+  // receiver. bmImportTarget is read by the file handler below.
+  let bmImportTarget: 'local' | 'server' = 'local';
+  $('bmImport').onclick = () => { bmImportTarget = 'local'; $('bmFile').click(); };
+  $('bmImportServer').onclick = () => { bmImportTarget = 'server'; $('bmFile').click(); };
   $<HTMLInputElement>('bmFile').onchange = async (e) => {
     const f = (e.target as HTMLInputElement).files?.[0];
     if (!f) return;
     try {
-      const n = await importBookmarks(await f.text());
+      const text = await f.text();
+      if (bmImportTarget === 'server') {
+        // Push each one to the receiver. Sequential on purpose: the shim answers with
+        // the whole list every time, and firing 200 concurrent writes at a phone is a
+        // good way to make a server look broken.
+        const parsed = JSON.parse(text);
+        const rows: any[] = Array.isArray(parsed) ? parsed : (parsed?.bookmarks ?? []);
+        let n = 0;
+        for (const b of rows) {
+          if (!b?.name || !b?.frequency) continue;
+          if (await saveToServer(Number(b.frequency), String(b.name))) n++;
+        }
+        renderBookmarks();
+        $('bmMsg').textContent = n
+          ? `Imported ${n} bookmark${n === 1 ? '' : 's'} to the receiver`
+          : 'Nothing imported (is the PIN right?)';
+        (e.target as HTMLInputElement).value = '';
+        return;
+      }
+      const n = await importBookmarks(text);
       renderBookmarks();
       $('bmMsg').textContent = `Imported ${n} bookmark${n === 1 ? '' : 's'}`;
     } catch (err) {
@@ -1214,23 +1281,48 @@ function initBookmarks() {
 
 function renderBookmarks() {
   const host = $('bmList');
-  const list = getBookmarks();
   host.innerHTML = '';
-  if (!list.length) {
-    host.innerHTML = '<div class="sres"><span class="n">No bookmarks yet — tune something and press ADD.</span></div>';
+
+  // Two lists in one, distinguished by their glyph: a MONITOR for the ones saved in
+  // this browser, a SERVER RACK for the ones on the receiver (learned from RDS, or
+  // saved by hand, and shared with every client).
+  type Row = {
+    name: string; frequency: number; mode?: string;
+    local: boolean; heard?: boolean;
+    bwLo?: number | null; bwHi?: number | null;
+  };
+  const rows: Row[] = [
+    ...getBookmarks().map(b => ({
+      name: b.name, frequency: b.frequency, mode: b.mode, local: true,
+      bwLo: b.bandwidth_low, bwHi: b.bandwidth_high,
+    })),
+    ...getServerBookmarks().map(b => ({
+      name: b.name, frequency: b.frequency, mode: b.mode ?? 'wfm', local: false,
+      heard: !(b as any).manual,
+    })),
+  ];
+
+  if (!rows.length) {
+    host.innerHTML = '<div class="sres"><span class="n">No bookmarks yet — tune something and press ADD. Stations heard over RDS are added here automatically.</span></div>';
     return;
   }
-  for (const b of [...list].sort((a, z) => a.frequency - z.frequency)) {
+
+  for (const b of rows.sort((a, z) => a.frequency - z.frequency)) {
     const row = document.createElement('div');
     row.className = 'sres';
+    row.title = b.local ? 'Saved in this browser'
+              : b.heard ? 'Heard by this receiver (expires if it stops being heard)'
+              : 'Saved on the receiver';
     row.innerHTML =
+      `<span class="src">${b.local ? ICON_LOCAL : ICON_SERVER}</span>` +
       `<span class="f">${(b.frequency / 1e6).toFixed(3)}</span>` +
       `<span class="n">${escapeHtml(b.name)}</span>` +
       `<span class="src">${(b.mode || '').toUpperCase()}</span>`;
     row.onclick = () => {
       tuneTo({
-        name: b.name, frequency: b.frequency, mode: b.mode, source: 'user',
-        bandwidthLow: b.bandwidth_low, bandwidthHigh: b.bandwidth_high,
+        name: b.name, frequency: b.frequency, mode: b.mode,
+        source: b.local ? 'user' : 'server',
+        bandwidthLow: b.bwLo, bandwidthHigh: b.bwHi,
       });
       $('bookmarksPanel').classList.remove('open');
     };
@@ -1239,7 +1331,8 @@ function renderBookmarks() {
     del.textContent = '✕';
     del.onclick = async (e) => {
       e.stopPropagation();
-      await removeBookmark(b.name, b.frequency);
+      if (b.local) await removeBookmark(b.name, b.frequency);
+      else await removeFromServer(b.frequency);
       renderBookmarks();
     };
     row.appendChild(del);
@@ -1944,6 +2037,15 @@ function nearestStation(hz: number): NearStation | null {
     if (off < bestOff) {
       bestOff = off;
       best = { name: b.name, frequency: b.frequency, source: 'user' };
+    }
+  }
+  // Stations the receiver has HEARD outrank the EiBi schedule: EiBi says what
+  // exists, this says what actually comes in here.
+  for (const b of getServerBookmarks()) {
+    const off = Math.abs(b.frequency - hz);
+    if (off < bestOff) {
+      bestOff = off;
+      best = { name: b.name, frequency: b.frequency, source: 'server' };
     }
   }
   for (const st of getStations()) {

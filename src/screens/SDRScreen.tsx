@@ -44,6 +44,8 @@ import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { localSessionGen } from '../services/localSession';
+import { startBookmarkAutosave, stopBookmarkAutosave,
+         getLearnedBookmarksNow } from '../services/vibeServer';
 import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
@@ -487,6 +489,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   // VibeServer (remote shim): hardware controls ride the WS to the serving device
   // instead of the (non-existent) local dongle. localHost set = remote session.
   const isRemoteShim = isLocal && !!route.params.localHost;
+
+  // The shim learns station names from RDS whenever it runs — serving OR listening —
+  // but it has no storage, so something has to write the list down. On a REMOTE shim
+  // (VibeServer) the SERVING phone owns that; here we only do it for a shim running
+  // on THIS device.
+  useEffect(() => {
+    if (!isLocal || isRemoteShim) return;
+    startBookmarkAutosave();
+    return () => stopBookmarkAutosave();
+  }, [isLocal, isRemoteShim]);
   const hwClient = useCallback(() => (isRemoteShim
     ? (client.current as {
         setHwGain?: (t: number, a: boolean) => void; setHwBiasT?: (on: boolean) => void;
@@ -2968,10 +2980,26 @@ export default function SDRScreen({ route, navigation }: Props) {
     setSearchBands(BAND_PLAN.map((b: Band) => ({
       label: b.bandLabel ?? b.name, start: b.lo, end: b.hi, group: b.type, mode: b.mode,
     })));
+    // LOCAL / VibeServer: the shim learns stations from RDS as you tune, so local
+    // hardware is no longer bookmark-less — it builds its own list of what this
+    // aerial can actually hear. Poll it (the shim keeps it in memory; the autosave
+    // effect above is what writes it down).
+    if (isLocal) {
+      const load = () => {
+        getLearnedBookmarksNow()
+          .then((b) => { if (!cancelled && b.length) setServerBookmarks(b); })
+          .catch(() => {});
+      };
+      load();
+      const iv = setInterval(load, 30_000);
+      loadUserBookmarks().then((b: UserBookmark[]) => { if (!cancelled) setUserBookmarks(b); }).catch(() => {});
+      return () => { cancelled = true; clearInterval(iv); };
+    }
+
     // Server bookmarks: UberSDR via REST; OWRX/Kiwi arrive over the WS
-    // (onBookmarks, tagged source='server' there); local hardware has none.
+    // (onBookmarks, tagged source='server' there).
     // Whatever a backend yields is preferred; if it yields nothing, the EiBi
-    // fallback below fills in — that's how Kiwi/local get a searchable list.
+    // fallback below fills in — that's how Kiwi gets a searchable list.
     if (!isLocal && st === 'ubersdr') {
       const load = () => {
         fetchBookmarks(baseUrl)
