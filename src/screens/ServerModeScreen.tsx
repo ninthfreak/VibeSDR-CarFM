@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator,
-  StyleSheet, Platform, PermissionsAndroid, Switch,
+  StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -119,7 +119,43 @@ export default function ServerModeScreen({ navigation, route }: Props) {
 
   const effectivePin = pinMode === 'off' ? '' : pin;
 
+  /**
+   * Warn if the OS has BACKGROUND-RESTRICTED us, before we start serving.
+   *
+   * SDRScreen already checks this — but only for local LISTENING, and it never mounts
+   * when you go straight to "Use as server". So a fresh install on a phone that
+   * restricts by default (Motorola does) starts a server the OS then quietly starves,
+   * with nothing on screen to explain it. That's worse for a server than for audio:
+   * nobody is watching it, so the only symptom is "my receiver stopped answering".
+   *
+   * Resolves true if we should go ahead and start.
+   */
+  const checkBackgroundAllowed = useCallback(async (): Promise<boolean> => {
+    const Local = (NativeModules as any).VibeLocalSDR;
+    if (!Local?.isBackgroundRestricted) return true;
+    let restricted = false;
+    try { restricted = await Local.isBackgroundRestricted(); } catch { return true; }
+    if (!restricted) return true;
+
+    return new Promise<boolean>(resolve => {
+      Alert.alert(
+        'Allow background usage',
+        "This phone restricts VibeSDR when it isn't on screen, which will starve the server — clients drop out or stop connecting.\n\n" +
+        "To fix it:\n" +
+        "1. Tap \u201cOpen Settings\u201d.\n" +
+        "2. Open \u201cApp battery usage\u201d (or \u201cBattery\u201d) and turn ON \u201cAllow background usage\u201d (some phones call it \u201cUnrestricted\u201d / \u201cDon't optimise\u201d).\n" +
+        "3. Come back and start the server.",
+        [
+          { text: 'Open Settings', onPress: () => { Local?.openAppSettings?.(); resolve(false); } },
+          { text: 'Start anyway', style: 'destructive', onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) },
+      );
+    });
+  }, []);
+
   const start = useCallback(async () => {
+    if (!(await checkBackgroundAllowed())) return;
     setError(null);
     setStarting(true);
     const n = name.trim() || 'VibeSDR';
@@ -175,7 +211,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       setError(e?.message ?? 'Could not start VibeServer. Is an RTL-SDR plugged in via USB OTG?');
     }
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
-      webServer, autoRestore, locMode, locCity]);
+      webServer, autoRestore, locMode, locCity, checkBackgroundAllowed]);
 
   const stopAndBack = useCallback(() => {
     stopAdvertiseRtlTcp();

@@ -2,7 +2,7 @@
   "expo": {
     "name": "VibeSDR",
     "slug": "VibeSDR",
-    "version": "7.1.0",
+    "version": "8.0.0",
     "scheme": ["vibesdr", "sdr"],
     "orientation": "default",
     "icon": "./assets/icon.png",
