@@ -480,7 +480,14 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
      where the band label sits. It is now attached to .scroll (see fitRadioText) —
      the one state that actually needs it. */
 }
+/* CENTRED while it fits — the box is deliberately wide (so the bar stops resizing),
+   and a short message pinned to the left edge just looked lost in it. Centred, the
+   text grows evenly left and right until it reaches the limits, and only then scrolls.
+   Once it IS scrolling the alignment must go back to the left, or the marquee would
+   start from a shifted position. */
+#vtsRt { text-align: center; }
 #vtsRt:has(.scroll) {
+  text-align: left;
   mask-image: linear-gradient(90deg, #000 0, #000 92%, transparent 100%);
 }
 #vtsRt.show { display: inline-block; }
