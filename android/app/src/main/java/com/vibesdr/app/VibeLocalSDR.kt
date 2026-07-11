@@ -141,6 +141,9 @@ object VibeLocalSDR {
     fun getBookmarksJson(): String { return if (loaded) nativeGetBookmarksJson() else "[]" }
     private external fun nativeSetBookmarksJson(json: String)
     private external fun nativeGetBookmarksJson(): String
+    /** Empty the server's learned + saved bookmarks. */
+    fun clearBookmarks() { if (loaded) nativeClearBookmarks() }
+    private external fun nativeClearBookmarks()
     /** File the shim persists bookmarks to (it saves on every change, no JS involved). */
     fun setBookmarksPath(path: String) { ensureLoaded(); nativeSetBookmarksPath(path) }
     private external fun nativeSetBookmarksPath(path: String)

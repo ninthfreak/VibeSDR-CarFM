@@ -177,6 +177,11 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetBookmarksJson(JNIEnv* env, jobject) {
     return env->NewStringUTF(vibe::LocalSdrShim::getBookmarksJson().c_str());
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeClearBookmarks(JNIEnv*, jobject) {
+    vibe::LocalSdrShim::clearBookmarks();
+}
+
 // The shim OWNS the bookmarks, so it persists them itself. The app's JS could not: it is
 // backgrounded whenever the server is actually serving, and its timers are suspended
 // there, so an import lived in memory and died at the next restart.

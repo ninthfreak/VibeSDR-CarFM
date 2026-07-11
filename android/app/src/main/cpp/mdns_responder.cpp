@@ -36,8 +36,17 @@
 #include <thread>
 #include <vector>
 
+// Portable logging. iOS links this same shim (a prebuilt libvibelocalsdr_ios.a), and
+// android/log.h does not exist there — including it unconditionally simply fails to
+// build. iOS never SERVES (no USB host), but the shim references these symbols, so the
+// file must still compile and link there.
+#ifdef __ANDROID__
 #include <android/log.h>
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "VibeMdns", __VA_ARGS__)
+#else
+#include <cstdio>
+#define LOGI(...) do { fprintf(stderr, "VibeMdns: " __VA_ARGS__); fputc('\n', stderr); } while (0)
+#endif
 
 namespace vibe {
 namespace {

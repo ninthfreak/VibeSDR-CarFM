@@ -407,6 +407,12 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(VibeLocalSDR.getBookmarksJson())
     }
 
+    @ReactMethod
+    fun clearBookmarks(promise: Promise) {
+        VibeLocalSDR.clearBookmarks()
+        promise.resolve(null)
+    }
+
     /** The .local hostname the responder actually took — it renames itself on a clash,
      *  so this is not necessarily the one we asked for. */
     @ReactMethod

@@ -4,6 +4,7 @@ import { getUserLocation } from './instancesApi';
 import { getServerName } from './rtlTcpServer';
 import { latLonToGrid, gridToLatLon } from './grid';
 import type { ServerBookmark } from './stations';
+import { parseBookmarksAny } from './userBookmarks';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // VibeServer: share this device's USB dongle with server-side DSP (compressed
@@ -140,6 +141,50 @@ const BM_KEY = 'vs_learned_bookmarks';
  */
 export function startBookmarkAutosave(): void {}
 export function stopBookmarkAutosave(): void {}
+
+/** Empty the server's bookmark list — learned AND saved. An auto-learning list needs a
+ *  way to be wiped: a wrong station would otherwise sit there for its 30-day expiry, and
+ *  a manually saved one never expires at all. */
+export async function clearServerBookmarks(): Promise<void> {
+  try { await Local?.clearBookmarks?.(); } catch {}
+}
+
+/**
+ * Import a bookmark file straight into the SERVER, from the phone.
+ *
+ * Goes through parseBookmarksAny, so it takes an UberSDR YAML export as happily as JSON —
+ * that is the file people actually have.
+ *
+ * Written as ONE setBookmarksJson call rather than a POST per row: the web client has to
+ * write them one at a time over HTTP, but here we are in-process and can hand the shim
+ * the whole list at once. Returns how many landed.
+ */
+export async function importServerBookmarks(text: string): Promise<number> {
+  if (!Local?.setBookmarksJson || !Local?.getBookmarksJson) return 0;
+  const rows = parseBookmarksAny(text, '');
+  if (!rows.length) throw new Error('No bookmarks found in that file');
+
+  // Merge with what's already there, keyed by frequency, so an import ADDS rather than
+  // replaces — and so re-importing the same file can't pile up duplicates.
+  const existing = JSON.parse((await Local.getBookmarksJson()) || '[]') as any[];
+  const byFreq = new Map<number, any>();
+  for (const b of existing) byFreq.set(Math.round(b.frequency / 1000), b);
+  const now = Math.floor(Date.now() / 1000);
+  for (const b of rows) {
+    if (!b?.name || !b?.frequency) continue;
+    byFreq.set(Math.round(b.frequency / 1000), {
+      frequency: Math.round(b.frequency),
+      name: String(b.name),
+      pi: -1,
+      lastHeard: now,
+      manual: true,                 // imported: never expires
+      mode: b.mode || 'am',
+      source: 'server',
+    });
+  }
+  Local.setBookmarksJson(JSON.stringify([...byFreq.values()]));
+  return rows.length;
+}
 
 /** The shim's learned list, right now — for the app's own search + VTS. */
 export async function getLearnedBookmarksNow(): Promise<ServerBookmark[]> {

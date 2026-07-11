@@ -54,6 +54,7 @@ cc "$CPP/vibedsp/third_party/kissfft/kiss_fftr.c" "$KISSPFX"
 echo "== shim + net + decoders =="
 cxx "$CPP/local_sdr_shim.cpp"
 cxx "$CPP/net_shim.cpp"
+cxx "$CPP/mdns_responder.cpp"   # hostname responder; iOS compiles it but never serves
 cxx "$CPP/spyserver/spyserver_messages.cpp"
 cxx "$CPP/spyserver/spyserver_client.cpp"
 for d in fsk_decoder wefax_decoder ft8_decoder sstv_decoder audio_nr auto_notch; do cxx "$CPP/decoders/$d.cpp"; done

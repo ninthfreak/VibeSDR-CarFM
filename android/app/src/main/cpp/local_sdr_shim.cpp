@@ -640,6 +640,16 @@ static void bmAddManual(double hz, const std::string& name, const std::string& m
     bmSaveLocked();
 }
 
+/** Wipe the lot. An auto-learning list needs a way to be emptied — a wrong or unwanted
+ *  station would otherwise sit there for its full 30-day expiry, and a MANUAL entry
+ *  never expires at all. */
+static void bmClear() {
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    g_bookmarks.clear();
+    g_bmPending.clear();
+    bmSaveLocked();
+}
+
 static void bmRemove(double hz) {
     std::lock_guard<std::mutex> lk(g_bmMtx);
     g_bookmarks.erase(bmKey(hz));
@@ -686,6 +696,10 @@ static void bmLoadJson(const std::string& json) {
         p = ne;
     }
     bmPrune();     // a long gap since the last run may have aged some out
+    // PERSIST. Without this, a list handed in from the app (an import) replaced the
+    // in-memory set but never reached the file, so it evaporated at the next restart —
+    // exactly the bug we just finished fixing for the web client's import path.
+    bmSaveLocked();
 }
 
 /** Serialise WITHOUT taking the lock — callers that already hold it use this. */
@@ -2723,6 +2737,7 @@ void LocalSdrShim::setVibeServerCompressAudio(bool on) { g_vsCompressAudio.store
 void LocalSdrShim::setVibeServerWebEnabled(bool on) { g_vsWebEnabled.store(on); }
 void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(rate > 0 ? rate : 0.0); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }
+void LocalSdrShim::clearBookmarks() { bmClear(); }
 
 /** Give the shim a file to own. It loads immediately and saves on every change. */
 void LocalSdrShim::setBookmarksPath(const std::string& path) {

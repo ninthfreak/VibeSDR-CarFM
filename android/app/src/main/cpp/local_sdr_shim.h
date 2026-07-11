@@ -64,6 +64,8 @@ public:
     /** The name actually taken — may differ from the one requested. */
     static std::string mdnsHostname();
     static std::string getBookmarksJson();
+    /** Empty the learned + saved bookmark list (and the file). */
+    static void clearBookmarks();
     /** Station list (JSON array) served at GET /stations for the web client's
      *  search. Supplied by the app, which already downloads + caches EiBi — a
      *  browser can't fetch eibispace.de itself (it sends no CORS headers). */
