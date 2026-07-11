@@ -396,6 +396,20 @@ public:
     // blended in by pilot-lock confidence so weak/edge signals fade smoothly
     // instead of screeching as lock flickers. Thread-safe to call any time.
     void setStereoEnabled(bool on) { stereoEnabled_ = on; }
+    // Spectrum frame rate (frames/sec), changeable LIVE. This is a real power
+    // lever, not just a bandwidth one: the rate sets how many input samples pass
+    // between FFTs, so lowering it genuinely skips FFT work on the serving phone
+    // (unlike the client's set_rate divisor, which only drops frames at send
+    // time — the FFTs are still computed). Audio is untouched, so a throttled
+    // server still sounds identical. Thread-safe to call any time.
+    void setFftRate(double r) {
+        if (r <= 0.0 || sampleRate_ <= 0.0) return;
+        fftRate_ = r;
+        specStride_.store(std::max(1, (int)std::llround(sampleRate_ / r)),
+                          std::memory_order_relaxed);
+    }
+    double fftRate() const { return fftRate_; }
+
     // FM de-emphasis time constant (seconds): 0 = off, 50e-6 (EU/UK), 75e-6 (US).
     // Applies to WFM and NFM. Takes effect on the next tune/rebuild.
     void setDeemphasis(double tauSec) { deempTau_ = tauSec; dirty_ = true; }
@@ -416,7 +430,9 @@ private:
     std::unique_ptr<ComplexFFT> cfft_;
     std::vector<float> win_, specBuf_, specDb_;
     int specFill_ = 0;          // samples gathered toward the next frame
-    int specStride_ = 0;        // input samples between emitted frames
+    // Input samples between emitted frames. Atomic: setFftRate() writes it from
+    // the control thread while feed() reads it on the DSP thread.
+    std::atomic<int> specStride_{0};
     long long sinceFrame_ = 0;
 
     // audio DDC chain

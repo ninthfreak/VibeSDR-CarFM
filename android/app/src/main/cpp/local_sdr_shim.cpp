@@ -74,6 +74,7 @@
 #include "decoders/sstv_decoder.h"  // SSTV (audio-extension image decoder)
 #include "decoders/audio_nr.h"      // self-contained spectral-subtraction audio NR
 #include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
+#include "vibe_web_page.h"          // GENERATED: the web client served from GET /
 
 #define LOG_TAG "VibeLocalSDR"
 #ifdef __ANDROID__
@@ -1565,6 +1566,42 @@ struct LocalSdrShim::Impl {
         if (type == "directSampling") {
             if (jsonNum(msg,"value",v)) LocalSdrShim::instance().setDirectSampling((int)v); return;
         }
+        // ── Audio DSP (squelch / NR / notch / de-emphasis / stereo) ───────────
+        // These engines already run server-side; they were only reachable from
+        // the on-device JS via JNI, so a REMOTE client (web or phone) had no way
+        // to touch them. Exposing them here gives both remote clients the same
+        // audio controls the local app has — and keeps the DSP server-side, so
+        // the client stays a thin renderer (no duplicate DSP to drift).
+        if (type == "squelch") {
+            // db <= -100 means "off", matching the app's own convention.
+            if (jsonNum(msg, "db", v))
+                LocalSdrShim::instance().setSquelch(v > -100.0, (float)v);
+            return;
+        }
+        if (type == "nr") {
+            LocalSdrShim::instance().setNR(msg.find("\"on\":true") != std::string::npos);
+            if (jsonNum(msg, "strength", v))
+                LocalSdrShim::instance().setNrStrength((float)std::max(0.0, std::min(1.0, v)));
+            return;
+        }
+        if (type == "notch") {
+            LocalSdrShim::instance().setNotch(msg.find("\"on\":true") != std::string::npos); return;
+        }
+        if (type == "deemph") {
+            // tau in SECONDS (0 = off, 50e-6 or 75e-6).
+            if (jsonNum(msg, "tau", v)) LocalSdrShim::instance().setDeemphasis(v);
+            return;
+        }
+        if (type == "stereo") {
+            LocalSdrShim::instance().setStereoEnabled(msg.find("\"on\":true") != std::string::npos); return;
+        }
+        // Live spectrum frame rate — the client throttles this when the user goes
+        // idle, so an unattended (solar/battery) server stops burning CPU and
+        // Wi-Fi on a waterfall nobody is looking at. Audio keeps running.
+        if (type == "fftRate") {
+            if (jsonNum(msg, "value", v) && v > 0) LocalSdrShim::instance().setFftRate(v);
+            return;
+        }
     }
 
     // VibeServer: advertise the tuner's supported gains to the client so its gain
@@ -1685,6 +1722,17 @@ struct LocalSdrShim::Impl {
             std::string body = "{\"allowed\":true}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
+        } else if (reqLine.rfind("GET / ", 0) == 0 || reqLine.rfind("GET /index.htm", 0) == 0) {
+            // VibeServer web client. Compiled in (vibe_web_page.h) because a phone
+            // has nowhere to serve files FROM — one self-contained page, no assets,
+            // no second request. Matched on the request-line PREFIX, not a substring:
+            // every other route here is a substring test, and a bare "/" would match
+            // all of them.
+            static const std::string kPage(kVibeWebPage);
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(kPage.size()) + "\r\n\r\n" + kPage);
             sock->close();
         } else {
             sock->sendstr("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
@@ -2543,6 +2591,20 @@ void LocalSdrShim::setStereoEnabled(bool on) {
     if (!p) return;
     p->rx.setStereoEnabled(on);           // engine blends L-R out when off (-> mono)
     LOGI("stereo: %s", on ? "on" : "forced mono");
+}
+// Live spectrum frame rate. The power lever for a solar/battery-powered server:
+// the engine skips the FFT work entirely (specStride_ = sampleRate/fps), and the
+// spectrum bytes on the wire fall with it — so both the CPU and the Wi-Fi radio
+// wind down. Audio is untouched, so a throttled server still sounds identical.
+// (Contrast with the client's set_rate divisor, which only drops frames at SEND
+// time: the FFTs are still computed, so it saves bandwidth and nothing else.)
+void LocalSdrShim::setFftRate(double fps) {
+    if (!p || fps <= 0) return;
+    double mr = g_vsMaxFftRate.load();       // never exceed the server's own cap
+    if (mr > 0 && fps > mr) fps = mr;
+    p->fftRate = fps;
+    p->rx.setFftRate(fps);
+    LOGI("fft rate: %.1f fps", fps);
 }
 void LocalSdrShim::setSampleRate(double rate) {
     if (!p || rate <= 0) return;
