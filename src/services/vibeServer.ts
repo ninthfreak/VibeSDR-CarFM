@@ -2,7 +2,7 @@ import { NativeModules, Platform } from 'react-native';
 import { loadActiveEibi } from './eibi';
 import { getUserLocation } from './instancesApi';
 import { getServerName } from './rtlTcpServer';
-import { latLonToGrid } from './grid';
+import { latLonToGrid, gridToLatLon } from './grid';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // VibeServer: share this device's USB dongle with server-side DSP (compressed
@@ -121,11 +121,42 @@ export async function setManualServerLocation(loc: ServerLocation | null): Promi
 }
 
 /**
+ * Resolve whatever the host typed into a position — a place name OR a Maidenhead
+ * locator ("Northampton" or "IO92nh").
+ *
+ * A LOCATOR is tried first and never touches the network: it decodes arithmetically.
+ * That matters because a VibeServer is exactly the thing likely to be sitting in a
+ * shed on a solar panel with no internet — a radio amateur knows their grid square,
+ * and making them depend on a geocoding API to state it would be daft.
+ *
+ * A place name falls back to Nominatim. Called ONCE, when the host saves — never per
+ * client — and the result is stored, so the server keeps serving its location offline
+ * forever after.
+ */
+export async function resolveLocation(input: string): Promise<ServerLocation | null> {
+  const q = input.trim();
+  if (!q) return null;
+
+  // Maidenhead: 2 letters, 2 digits, optionally 2 more letters. Decoded locally.
+  if (/^[A-R]{2}[0-9]{2}([A-X]{2})?$/i.test(q)) {
+    const ll = gridToLatLon(q);
+    if (ll) {
+      // Canonical casing: fields/squares upper, subsquare lower (IO92nh).
+      const g = q.length >= 6
+        ? q.slice(0, 4).toUpperCase() + q.slice(4, 6).toLowerCase()
+        : q.toUpperCase();
+      return { lat: ll.lat, lon: ll.lon, label: g };
+    }
+  }
+  return geocodeCity(q);
+}
+
+/**
  * Turn a typed place name into a position ("Northampton" → 52.24, -0.90).
  *
- * Called ONCE, when the host saves the setting — never per client. The result is
- * stored, so a server with no internet still serves its location. Nominatim asks
- * for a identifying User-Agent, and rate-limits; both are fine for a one-shot.
+ * Needs the network. Prefer resolveLocation(), which handles a grid square offline.
+ * Nominatim asks for an identifying User-Agent and rate-limits; both fine for a
+ * one-shot.
  */
 export async function geocodeCity(name: string): Promise<ServerLocation | null> {
   const q = name.trim();

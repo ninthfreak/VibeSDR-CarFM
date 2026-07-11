@@ -13,7 +13,7 @@ import {
   startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio,
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
   getServerLocationMode, setServerLocationMode, getManualServerLocation,
-  setManualServerLocation, geocodeCity,
+  setManualServerLocation, resolveLocation,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
 import { advertiseServer, stopAdvertiseRtlTcp } from '../services/mdns';
@@ -137,10 +137,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       const city = locCity.trim();
       const known = await getManualServerLocation();
       if (city && known?.label !== city) {
-        const geo = await geocodeCity(city);
+        const geo = await resolveLocation(city);
         if (!geo) {
           setStarting(false);
-          setError(`Couldn't find "${city}". Check the spelling, or use the device's location instead.`);
+          setError(`Couldn't find "${city}". Check the spelling, or enter a Maidenhead locator (e.g. IO92nh) — that needs no internet.`);
           return;
         }
         await setManualServerLocation(geo);
@@ -381,7 +381,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             </View>
             {locMode === 'manual' && (
               <TextInput value={locCity} onChangeText={setLocCity}
-                placeholder="Town or city (e.g. Northampton)" placeholderTextColor={C.textDim}
+                placeholder="Town, or grid locator (Northampton / IO92nh)" placeholderTextColor={C.textDim}
                 style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
             )}
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
@@ -389,7 +389,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 ? 'No location is published. Clients show "receiver location not set" and go without spot distances, map centring and the regional band plan.'
                 : locMode === 'device'
                 ? "This phone's coarse position (~1 km) is published to every client that connects."
-                : 'The city you name is published to every client. Use this if the receiver lives somewhere other than where you are.'}
+                : 'A town or city needs an internet connection when you press Start (looked up once, then stored). A Maidenhead locator works OFFLINE — use it if this server has no internet. Published to every client; set it if the receiver lives somewhere other than where you are.'}
             </Text>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
               Distances and band edges are properties of the ANTENNA, not the listener —

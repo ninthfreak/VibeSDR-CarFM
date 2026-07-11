@@ -1344,7 +1344,10 @@ function locLine(): string {
   if (!serverLoc) return '';
   const { lat, lon, label, grid } = serverLoc;
   const place = label || `${lat.toFixed(2)}, ${lon.toFixed(2)}`;
-  return grid ? `${place} ${grid}` : place;
+  // The host may have named the receiver BY its locator, in which case place and
+  // grid are the same thing — don't print "IO92nh IO92nh".
+  const isGrid = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/i.test(place);
+  return grid && !isGrid ? `${place} ${grid}` : place;
 }
 
 async function loadServerLocation(host: string) {
