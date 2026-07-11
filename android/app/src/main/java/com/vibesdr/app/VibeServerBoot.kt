@@ -108,9 +108,19 @@ object VibeServerBoot {
      * Bring the server back up. Returns a short reason on failure, null on success —
      * the caller only logs it (there is nobody to tell).
      */
+    @Volatile private var running = false
+
+    @Synchronized
     fun start(ctx: Context): String? {
         val p = prefs(ctx)
         if (!p.getBoolean(K_ENABLED, false)) return "autostart off"
+        // The boot RETRY LOOP and a USB ATTACH can both fire — an attach during the
+        // boot poll is in fact the expected sequence. Without this they would both
+        // open the dongle and the second would tear the fd out from under the first.
+        if (running) return null
+        // ...and the APP may already be serving (started from the UI), in which case
+        // our own flag says nothing. Ask the shim, which is the single source of truth.
+        if (isShimServing()) return null
 
         val mgr = ctx.getSystemService(Context.USB_SERVICE) as? UsbManager
             ?: return "no USB service"
@@ -147,6 +157,7 @@ object VibeServerBoot {
         }
         // The connection must outlive this call — the shim owns the fd until stop.
         heldConn = conn
+        running = true
 
         val ip = getLocalIp() ?: "0.0.0.0"
         RtlTcpServerService.start(ctx, name, ip, port, "vibeserver")
@@ -159,6 +170,11 @@ object VibeServerBoot {
     /** Kotlin must keep the UsbDeviceConnection alive — the native shim holds the raw
      *  fd, and letting this be collected closes it out from under the DSP thread. */
     private var heldConn: android.hardware.usb.UsbDeviceConnection? = null
+
+    /** Is the shim already serving? Covers the case where the APP started it. */
+    private fun isShimServing(): Boolean = try {
+        VibeLocalSDR.getVibeServerStatus().contains("\"running\":true")
+    } catch (_: Throwable) { false }
 
     private fun isRtlSdr(dev: UsbDevice): Boolean {
         // Same VID/PID set the module matches on (Realtek 0x0bda + the usual clones).

@@ -182,6 +182,46 @@ export async function geocodeCity(name: string): Promise<ServerLocation | null> 
   }
 }
 
+/** Cache of coarse lat/lon → place name, so the reverse lookup happens once ever. */
+const RGEO_KEY = 'vs_rgeo';
+
+/**
+ * Name the place we're at ("Moulton"), from a coarse position.
+ *
+ * Done on the SERVER, once — not in each client. Clients would otherwise each hit a
+ * geocoder for the same answer, and a name is a property of the receiver just as its
+ * position is. Cached against the ROUNDED coordinates, so it survives a restart and
+ * never repeats. With no internet we keep the bare coordinates: ugly but honest, and
+ * the grid square is there regardless.
+ */
+export async function reverseGeocode(lat: number, lon: number): Promise<string | null> {
+  const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
+  try {
+    const raw = await AsyncStorage.getItem(RGEO_KEY);
+    const cache: Record<string, string> = raw ? JSON.parse(raw) : {};
+    if (cache[key]) return cache[key];
+
+    const r = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&zoom=13&lat=${lat}&lon=${lon}`,
+      { headers: { 'User-Agent': 'VibeSDR/8 (https://github.com/stuey3d/VibeSDR)' } },
+    );
+    const j = await r.json() as { address?: Record<string, string> };
+    const a = j?.address ?? {};
+    // Most specific useful name first. zoom=13 keeps this to a town, never a street:
+    // the position is deliberately coarsened to ~1 km and the label must not imply
+    // more precision than that.
+    const name = a.town || a.village || a.city || a.suburb || a.municipality
+              || a.county || a.state || null;
+    if (!name) return null;
+
+    cache[key] = name;
+    await AsyncStorage.setItem(RGEO_KEY, JSON.stringify(cache));
+    return name;
+  } catch {
+    return null;   // offline — coordinates + grid still work
+  }
+}
+
 export async function getManualServerLocation(): Promise<ServerLocation | null> {
   try {
     const raw = await AsyncStorage.getItem(LOC_KEY);
@@ -249,9 +289,15 @@ export async function publishLocation(): Promise<void> {
     // nowhere near enough to point at a house. It is served to every client.
     const lat = Math.round(loc.lat * 100) / 100;
     const lon = Math.round(loc.lon * 100) / 100;
+
+    // A bare "52.29, -0.85" means nothing to a human. On the DEVICE path there's no
+    // label to show, so name the place — once, here, and cached — rather than make
+    // every client reverse-geocode the same point for itself.
+    let label = mode === 'manual' ? manual?.label ?? undefined : undefined;
+    if (!label) label = (await reverseGeocode(lat, lon)) ?? undefined;
+
     emit({
-      lat, lon,
-      label: mode === 'manual' ? manual?.label ?? undefined : undefined,
+      lat, lon, label,
       // The grid is DERIVED here, so no client ever has to ask a human for it —
       // a locator is a property of the antenna, not something the listener knows.
       grid: latLonToGrid(lat, lon),

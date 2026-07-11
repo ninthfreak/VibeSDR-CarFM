@@ -74,6 +74,16 @@
         <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
         <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
       </intent-filter>
+      <!-- Start headlessly the moment the dongle is plugged in: no UI, no unlock.
+           Android's OTG stack usually will NOT enumerate a dongle that was already
+           attached when the phone booted, and no API can force it. So a replug (or a
+           power blip on the hub) is what revives an unattended server, and this is
+           what makes that automatic. -->
+      <intent-filter>
+        <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"/>
+      </intent-filter>
+      <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                 android:resource="@xml/device_filter"/>
     </receiver>
     <service android:name=".VibeStreamService" android:foregroundServiceType="mediaPlayback" android:exported="true">
       <intent-filter>

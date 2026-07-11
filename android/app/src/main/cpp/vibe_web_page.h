@@ -3,7 +3,7 @@
 // The VibeSDR web client, compiled into the shim so `GET /` can serve the whole
 // thing from a phone. Rebuild with:  node scripts/build-web.mjs
 //
-// Source: web/client/  (552.0 KB)
+// Source: web/client/  (552.4 KB)
 #pragma once
 
 static const char* const kVibeWebPage = R"VIBEWEB(<meta charset="utf-8">
@@ -139,10 +139,16 @@ html, body {
   display: flex; align-items: center; gap: 12px;
   min-width: 0; justify-self: center;
 }
-/* Side tracks hug the outer edges; their content shrinks rather than wrapping. */
+/* Side tracks hug the outer edges.
+   NO min-width:0 HERE. On a grid item that permits shrinking BELOW its own content,
+   and the tuner/demod block then spills straight out of its track and under the
+   middle block — which is the overlap this grid was meant to cure. Leaving the
+   default (min-width:auto = min-content) makes the 1fr track refuse to go narrower
+   than the buttons inside it, so the middle is pushed away rather than sat on.
+   The bar's clamped font-size is what absorbs a narrow window, not overflow. */
 #leftCol {
   display: flex; align-items: center; gap: 12px;
-  justify-self: start; min-width: 0;
+  justify-self: start;
 }
 #rightCol { justify-self: end; width: 38em; min-width: 22em; max-width: 46em; }
 #sigWrap { width: 100%; }

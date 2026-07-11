@@ -27,17 +27,46 @@ import android.util.Log
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
         val a = intent.action
-        if (a != Intent.ACTION_BOOT_COMPLETED &&
-            a != Intent.ACTION_LOCKED_BOOT_COMPLETED &&
-            a != Intent.ACTION_MY_PACKAGE_REPLACED) return
+        val isBoot = a == Intent.ACTION_BOOT_COMPLETED ||
+                     a == Intent.ACTION_LOCKED_BOOT_COMPLETED ||
+                     a == Intent.ACTION_MY_PACKAGE_REPLACED
+        val isAttach = a == android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED
+        if (!isBoot && !isAttach) return
 
         if (!VibeServerBoot.isEnabled(ctx)) return
 
         // Do the work off the main thread: onReceive runs on it and is time-limited,
-        // and opening USB + starting the DSP is not instant.
+        // while opening USB and starting the DSP is not instant.
         Thread {
-            val err = VibeServerBoot.start(ctx)
-            if (err != null) Log.w("BootReceiver", "VibeServer autostart skipped: $err")
+            if (isAttach) {
+                // The dongle just appeared. Start immediately — no UI, no unlock. This
+                // is also the RECOVERY path for the boot case below.
+                val err = VibeServerBoot.start(ctx)
+                if (err != null) Log.w(TAG, "autostart on attach skipped: $err")
+                return@Thread
+            }
+
+            // BOOT. Android's OTG host stack frequently does NOT enumerate a device
+            // that was already plugged in when the phone powered up — the port only
+            // enters host mode on a sensed attach, and a dongle sitting there through
+            // boot never generates one. There is no API to force re-enumeration.
+            //
+            // So don't check once and give up: some devices DO enumerate late. Retry
+            // for a couple of minutes. If it never appears, the USB_DEVICE_ATTACHED
+            // branch above means a single replug (or a power-cycle of the hub) starts
+            // the server with nobody touching the phone.
+            val deadline = System.currentTimeMillis() + 120_000
+            var lastErr: String? = null
+            while (System.currentTimeMillis() < deadline) {
+                lastErr = VibeServerBoot.start(ctx)
+                if (lastErr == null) return@Thread                    // up and running
+                if (lastErr != "no RTL-SDR attached") break           // a real failure
+                Thread.sleep(5_000)
+            }
+            Log.w(TAG, "VibeServer autostart after boot gave up: $lastErr " +
+                       "(replug the dongle — attach will start it)")
         }.start()
     }
+
+    private companion object { const val TAG = "BootReceiver" }
 }
