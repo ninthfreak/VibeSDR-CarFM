@@ -560,6 +560,11 @@ function updateVts() {
   const showRt = !!rt && rt !== name;
   if (rtInner.textContent !== rt) rtInner.textContent = rt;
   rtEl.classList.toggle('show', showRt);
+  // Pin the bar's width while RadioText is on show. Without this the bar is
+  // content-sized under a max-width, so it simply GREW to fit each message — which
+  // meant the text never overflowed, never scrolled, and the whole bar visibly
+  // expanded and contracted on every RadioText update instead.
+  vts.classList.toggle('rt', showRt);
   if (showRt) requestAnimationFrame(() => fitRadioText(rtEl, rtInner));
 
   // RDS mark only when the data really IS RDS — not for a bookmark guess.

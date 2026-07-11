@@ -2157,6 +2157,16 @@ struct LocalSdrShim::Impl {
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
+        } else if (reqLine.rfind("GET /favicon", 0) == 0) {
+            // A REAL file, not the data: URI in the page. Safari refuses data: URI
+            // favicons outright and silently shows its own default arrow instead, so
+            // the icon has to come from a URL. ~1 KB, compiled in beside the page.
+            std::string body((const char*)kVibeFavicon, kVibeFaviconLen);
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n"
+                          "Access-Control-Allow-Origin: *\r\n"
+                          "Cache-Control: max-age=86400\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
         } else if (reqLine.rfind("GET /bookmarks", 0) == 0) {
             // Stations this receiver has actually HEARD, learned from RDS, plus any
             // saved by hand. Expired entries are pruned on the way out (see bmPrune).

@@ -1,8 +1,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VibeSDR</title>
-<link rel="icon" type="image/png" href="__FAVICON__">
-<link rel="apple-touch-icon" href="__FAVICON__">
+<!-- A real URL, not a data: URI — Safari refuses data: favicons and falls back
+     to its default arrow. The shim serves this from GET /favicon.png. -->
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/favicon.png">
 <style>
 /* Design tokens — the same values as src/constants/theme.ts, which were
    themselves transcribed from the original CSS. Amber-on-black. */
@@ -448,6 +450,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   font-size: 13px; letter-spacing: 1px; color: var(--btn-text); white-space: nowrap;
 }
 #vts.show { display: flex; }
+/* A STABLE width once there's RadioText to show. The bar is otherwise content-sized
+   (max-width only), so it grew to fit every message: the text never overflowed, so it
+   never scrolled, and the bar itself expanded and contracted on each update. */
+#vts.rt { width: min(82vw, 900px); }
 #vts img { height: 16px; width: auto; border-radius: 3px; display: none; }
 #vts img.show { display: block; }
 #vtsRds { background: #fff; padding: 1px 3px; }
@@ -468,6 +474,13 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   display: none; position: relative; flex: 1 1 auto; min-width: 0;
   overflow: hidden; white-space: nowrap;
   border-left: 1px solid var(--bar-border); padding-left: 10px;
+  /* NO mask by default. The fade exists to soften the edge of a message that is
+     SCROLLING past the clip; applied unconditionally it also ate the tail of a
+     message that fitted perfectly well, so "…with Shine" faded into nothing right
+     where the band label sits. It is now attached to .scroll (see fitRadioText) —
+     the one state that actually needs it. */
+}
+#vtsRt:has(.scroll) {
   mask-image: linear-gradient(90deg, #000 0, #000 92%, transparent 100%);
 }
 #vtsRt.show { display: inline-block; }
@@ -485,7 +498,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* The station NAME never truncates — it's the one thing you actually need to
    read. The bar grows instead, and the RadioText gives up the space. */
 #vtsName { flex: 0 0 auto; white-space: nowrap; }
-#vtsBand { color: var(--unit); font-size: 11px; }
+#vtsBand {
+  color: var(--unit); font-size: 11px; flex: 0 0 auto;
+  /* Its own space, with a divider: the RadioText is elastic and the band label is
+     not, so without this the two simply collide at the seam. */
+  padding-left: 10px; border-left: 1px solid var(--bar-border);
+}
 
 
 /* Spot table — the app's columns: time / band / snr / call / country / distance */
