@@ -576,6 +576,9 @@ struct LocalSdrShim::Impl {
     int    fftSize    = 1024;
     double fftRate    = 20.0;
     std::atomic<double> rtlCenter{100000000.0}; // RTL tuned (dongle) centre — the DC of the capture
+    // Last hardware retune caused by a view move (ms). See the zoom handler: a
+    // PLL relock per pan message breaks the audio.
+    long long lastDongleMoveMs = 0;
     std::atomic<double> viewCenter{100000000.0};// DISPLAY centre — may sit off the dongle centre so
                                                 // the user can pan the view across the captured band
                                                 // while a station stays tuned (RF-centre marker = dongle).
@@ -718,9 +721,21 @@ struct LocalSdrShim::Impl {
         // A span wider than the capture can't satisfy both — keep the VFO captured.
         if (lo > hi) return std::min(vfo + lim, std::max(vfo - lim, view));
 
-        // Stay exactly where we are if that's still legal: no retune, no PLL
-        // relock, and the pan becomes a pure crop of spectrum we already have.
-        return std::min(hi, std::max(lo, cur));
+        // Still legal where we are? Then DON'T MOVE: no retune, no PLL relock, and
+        // the pan is a pure crop of spectrum we already have.
+        if (cur >= lo && cur <= hi) return cur;
+
+        // We DO have to move. Move DECISIVELY: recentre the dongle on the view
+        // (clamped so the VFO stays captured) rather than shuffling it the minimum
+        // distance to make this one pan legal.
+        //
+        // The minimum move is a trap: it leaves the view pinned to the capture
+        // edge, so the NEXT pan step needs another retune, and the next — at ~30
+        // pan messages a second that's a continuous PLL relock storm. It starves
+        // the DSP thread (audio drops out) and the waterfall crawls. Recentring
+        // buys a whole capture's worth of headroom, so the following hundred pan
+        // steps are free crops again.
+        return std::min(hi, std::max(lo, view));
     }
 
     // Tune the radio to (logical centre + HW_OFFSET_HZ).
@@ -1560,7 +1575,13 @@ struct LocalSdrShim::Impl {
                     : displaySpan() / zoomFactor.load();
                 double dongle = dongleForView(v, viewSpan);
                 bool moved = std::fabs(dongle - rtlCenter.load()) > 1.0;
-                if (moved) {
+                // Cooldown: a hardware retune is a PLL relock, and doing it on every
+                // pan message audibly breaks the audio. The crop keeps the display
+                // honest in between, so skipping a retune costs nothing visible.
+                auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                if (moved && nowMs - lastDongleMoveMs >= 120) {
+                    lastDongleMoveMs = nowMs;
                     rtlCenter.store(dongle);
                     tuneHw(dongle);
                     rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
