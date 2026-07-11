@@ -4,6 +4,66 @@ VibeSDR is free software under the **GNU GPL v3**. Source: https://github.com/St
 
 ---
 
+## v8.0.0 — VibeServer: share your radio, from any browser (2026-07-11)
+
+### VibeServer
+- **Turn an Android phone with an RTL-SDR into a receiver anyone on your network can
+  use** — from a **web browser**, or from VibeSDR on another phone. Point a browser at
+  the serving phone's address and the full client is there: no install, no app.
+- The **serving phone does all the DSP** and sends compressed audio plus a ready-made
+  waterfall, so it's roughly **25× lighter on the network than raw RTL-TCP** — it works
+  comfortably over Wi-Fi, and over a phone hotspot.
+- The web client is the real thing, not a cut-down view: waterfall and spectrum with the
+  same palettes and colouring as the app, **click-to-tune, panning and cursor zoom**,
+  audio with **recording**, the **decoders** (RTTY, NAVTEX, WEFAX, SSTV, and FT8 with its
+  map), **station search**, **bookmarks** you can export, the band plan, and **OS media
+  controls with artwork** on the lock screen.
+- **Decoders run on the server**, as they do in OpenWebRX — a browser doesn't have to do
+  any DSP, and a phone or tablet client stays cool.
+- **PIN protected** by HMAC challenge-response, so the PIN itself never crosses the
+  network. Or run it open on a trusted LAN.
+- **Turn the web client off** and only the VibeSDR app can connect, so nobody can stumble
+  into your receiver from a URL.
+- **Bandwidth: client-controlled or pinned.** Leave clients free to pick their own span,
+  or pin it — pinned, the client's picker disappears and tells them the server set it.
+  Enforced on the server, not just hidden in the UI.
+- **Receiver location, opt-in.** Granting location to sort a server list is not consent to
+  broadcast your position, so publishing is off until you choose it: use the device's
+  coarse position, or name a town, or give a Maidenhead locator (which needs no internet
+  — the shed case). Clients then show the receiver's **name and place** on the spectrum,
+  and — importantly — measure spot distances, map centring and the **regional band plan
+  from the ANTENNA**, not from wherever the listener happens to be sitting.
+- **Survives a crash.** If the app is killed while serving, the server rebuilds itself and
+  carries on. (It cannot survive a *reboot*: Android will not detect a dongle that was
+  plugged in while the phone was off, and no app can change that — replug it.)
+- Warns you if the phone is **background-restricting** VibeSDR, which would otherwise
+  starve the server with no visible explanation.
+
+### Custom server — one box reaches every backend
+- The RTL-TCP box becomes **CUSTOM SERVER**. Type any address — `192.168.1.50:8073`, or
+  `myserver.example.com:8073` — and VibeSDR **works out what's listening**: VibeServer,
+  OpenWebRX, KiwiSDR, UberSDR, FM-DX Webserver, rtl_tcp or SpyServer.
+- Give it a name, and it's saved as a favourite that reconnects straight to the right
+  backend. (rtl_tcp and SpyServer speak raw TCP with nothing to identify them, so on a
+  non-standard port you can still pick the type by hand.)
+- **Local Hardware is now RTL-SDR**, with **Listen** and **Use as server** side by side.
+
+### Fixes
+- **Entering a frequency in another band now switches the demodulator and span to match.**
+  Jumping from a medium-wave station to an FM one used to leave you in AM with a 5 kHz
+  filter — audio broke up, and the span looked stuck zoomed in.
+- **The waterfall no longer shows half a minute of stale history after a big jump.** It
+  wasn't frozen; it was still scrolling out rows from the band you'd left.
+- **The lower sample rates (0.96 and 1.2 MHz) no longer break up.** The USB buffer was
+  sized in samples, not time, so a low rate meant a ~136 ms buffer.
+- **rtl_tcp no longer plays chipmunks** on rates the tuner quantises.
+- **Dragging the gain slider no longer breaks up the audio.** Each step was a USB control
+  transfer competing with the sample stream; they're now coalesced.
+- **Panning past the tuned station no longer drops audio or crawls.**
+- **Auto-contrast now defaults to 5** — 10 was too dark.
+
+---
+
 ## v5.1.0 — Unlocked VFO + waterfall panning, recordings player (2026-06-23)
 
 ### Waterfall panning & the VFO Lock
