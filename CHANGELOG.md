@@ -34,8 +34,8 @@ VibeSDR is free software under the **GNU GPL v3**. Source: https://github.com/St
   and — importantly — measure spot distances, map centring and the **regional band plan
   from the ANTENNA**, not from wherever the listener happens to be sitting.
 - **Survives a crash.** If the app is killed while serving, the server rebuilds itself and
-  carries on. (It cannot survive a *reboot*: Android will not detect a dongle that was
-  plugged in while the phone was off, and no app can change that — replug it.)
+  carries on. (After a phone *reboot*, replug the dongle — Android doesn't detect one that
+  was plugged in while the phone was off.)
 - Warns you if the phone is **background-restricting** VibeSDR, which would otherwise
   starve the server with no visible explanation.
 
