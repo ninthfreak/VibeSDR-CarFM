@@ -163,6 +163,20 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLockedRate(JNIEnv*, jobject
     vibe::LocalSdrShim::setVibeServerLockedRate(rate);
 }
 
+// Learned RDS station bookmarks. The shim LEARNS them (it is the only place that sees
+// both the tuned frequency and the decoded name); the app PERSISTS them.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetBookmarksJson(JNIEnv* env, jobject, jstring json) {
+    const char* c = env->GetStringUTFChars(json, nullptr);
+    vibe::LocalSdrShim::setBookmarksJson(c ? c : "");
+    if (c) env->ReleaseStringUTFChars(json, c);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeGetBookmarksJson(JNIEnv* env, jobject) {
+    return env->NewStringUTF(vibe::LocalSdrShim::getBookmarksJson().c_str());
+}
+
 // Station list (JSON array) for the web client's search, served at GET /stations.
 // The APP supplies it because it already downloads + caches EiBi — and a browser
 // cannot fetch eibispace.de itself (no CORS headers), unlike React Native.

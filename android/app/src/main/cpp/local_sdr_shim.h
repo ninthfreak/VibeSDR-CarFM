@@ -52,6 +52,9 @@ public:
     static void setVibeServerWebEnabled(bool on);
     /** Pin the capture rate (Hz). 0 = client-controlled. */
     static void setVibeServerLockedRate(double rate);
+    /** Learned RDS station bookmarks. The APP persists them; the shim learns them. */
+    static void setBookmarksJson(const std::string& json);
+    static std::string getBookmarksJson();
     /** Station list (JSON array) served at GET /stations for the web client's
      *  search. Supplied by the app, which already downloads + caches EiBi — a
      *  browser can't fetch eibispace.de itself (it sends no CORS headers). */

@@ -135,6 +135,12 @@ object VibeLocalSDR {
     fun setStationsJson(json: String) { ensureLoaded(); nativeSetStationsJson(json) }
     /** Receiver coarse location, served at GET /location. */
     fun setLocationJson(json: String) { ensureLoaded(); nativeSetLocationJson(json) }
+    /** Learned RDS station bookmarks (served at GET /bookmarks). The shim learns them
+     *  from RDS; the app persists them across restarts. */
+    fun setBookmarksJson(json: String) { ensureLoaded(); nativeSetBookmarksJson(json) }
+    fun getBookmarksJson(): String { return if (loaded) nativeGetBookmarksJson() else "[]" }
+    private external fun nativeSetBookmarksJson(json: String)
+    private external fun nativeGetBookmarksJson(): String
     private external fun nativeSetVibeServerAuth(secret: String)
     private external fun nativeSetVibeServerLimits(maxBwHz: Double, maxFftRate: Double)
     private external fun nativeSetVibeServerCompressAudio(on: Boolean)

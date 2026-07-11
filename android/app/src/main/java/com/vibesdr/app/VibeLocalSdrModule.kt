@@ -351,6 +351,15 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         VibeServerRestore.cacheLocation(reactContext, json)
     }
 
+    /** Learned station bookmarks (RDS). The shim learns them; JS persists them. */
+    @ReactMethod
+    fun setBookmarksJson(json: String) { VibeLocalSDR.setBookmarksJson(json) }
+
+    @ReactMethod
+    fun getBookmarksJson(promise: Promise) {
+        promise.resolve(VibeLocalSDR.getBookmarksJson())
+    }
+
     @ReactMethod
     fun getVibeServerStatus(promise: Promise) {
         try {
