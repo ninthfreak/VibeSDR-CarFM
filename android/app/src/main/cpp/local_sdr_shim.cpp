@@ -363,6 +363,13 @@ static std::mutex          g_vsMtx;
 static std::string         g_vsSecret;                 // empty = no PIN (open)
 static std::atomic<double> g_vsMaxBandwidth{0.0};      // <=0 = no cap
 static std::atomic<double> g_vsMaxFftRate{0.0};        // <=0 = server default (20 fps)
+
+// Station list (EiBi + anything else the app has) served at GET /stations for the
+// web client's search. Supplied BY THE APP — it already downloads and caches EiBi,
+// and a browser can't fetch eibispace.de itself (no CORS headers). Same model as
+// UberSDR: the server presents the stations, the client just renders them.
+static std::mutex  g_stationsMtx;
+static std::string g_stationsJson;
 static std::atomic<bool>   g_vsCompressAudio{true};
 
 // Nonce ledger (single-use, 30 s TTL) + per-IP failure backoff. Small maps: a
@@ -1714,6 +1721,10 @@ struct LocalSdrShim::Impl {
         }
 
         if (wsDx && !wsKey.empty()) {
+            // PIN-gate this like the other sockets. It was open: anyone who could
+            // reach the port could attach decoders and start the FT8 engine without
+            // the PIN — burning the host's CPU on an unattended (solar) server.
+            if (!vsAuthOk(sock, reqLine)) { sock->close(); return; }
             acceptDxcluster(sock, wsKey);
         } else if ((wsSpec || wsAudio) && !wsKey.empty()) {
             if (!vsAuthOk(sock, reqLine)) { sock->close(); return; }
@@ -1721,6 +1732,23 @@ struct LocalSdrShim::Impl {
         } else if (reqLine.find("/connection") != std::string::npos) {
             std::string body = "{\"allowed\":true}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
+        } else if (reqLine.rfind("GET /stations", 0) == 0) {
+            // Station list for the web client's search: the EiBi schedule the APP
+            // already downloaded and cached, handed to the shim when Server mode
+            // starts (setStationsJson).
+            //
+            // The browser can't fetch EiBi itself — eibispace.de sends no
+            // Access-Control-Allow-Origin, and unlike React Native a browser
+            // enforces CORS. Serving the app's cached copy from here is same-origin,
+            // so it just works, AND it needs no internet at query time (the
+            // allotment case). Empty until the app supplies it.
+            std::string body;
+            { std::lock_guard<std::mutex> lk(g_stationsMtx); body = g_stationsJson; }
+            if (body.empty()) body = "[]";
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
         } else if (reqLine.rfind("GET / ", 0) == 0 || reqLine.rfind("GET /index.htm", 0) == 0) {
@@ -2121,6 +2149,11 @@ void LocalSdrShim::setVibeServerLimits(double maxBandwidthHz, double maxFftRate)
     g_vsMaxBandwidth.store(maxBandwidthHz); g_vsMaxFftRate.store(maxFftRate);
 }
 void LocalSdrShim::setVibeServerCompressAudio(bool on) { g_vsCompressAudio.store(on); }
+void LocalSdrShim::setStationsJson(const std::string& json) {
+    std::lock_guard<std::mutex> lk(g_stationsMtx);
+    g_stationsJson = json;
+    LOGI("stations list set (%zu bytes)", json.size());
+}
 
 LocalSdrShim& LocalSdrShim::instance() { static LocalSdrShim inst; return inst; }
 

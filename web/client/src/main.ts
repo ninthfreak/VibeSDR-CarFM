@@ -12,6 +12,10 @@ import { Waterfall } from './waterfall';
 import { resolveAuth, withAuth, type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
+import {
+  loadStations, loadBookmarks, getBookmarks, addBookmark, removeBookmark,
+  exportBookmarks, importBookmarks, search, type SearchResult,
+} from './search';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -164,6 +168,7 @@ function startApp(specUrl: string, audioUrl: string) {
 
   spec = new SpectrumClient(specUrl, {
     onBins: (bins, centerHz, bwHz) => {
+      noteFrame();
       wf!.push(bins, centerHz, bwHz);
       updateSignal(bins, centerHz, bwHz);
     },
@@ -234,6 +239,10 @@ let hwRates: number[] = [];
 function loop() {
   if (!wf || !spec) return;
   wf.vfoHz = spec.frequency;
+  // Passband drives the acrylic sidebands — so bandwidth is something you SEE
+  // sitting on the signal, not a number you read.
+  wf.filterLow = spec.bandwidthLow;
+  wf.filterHigh = spec.bandwidthHigh;
   wf.tick();      // synthesise any waterfall lines now due (see Waterfall.tick)
   wf.draw();
   drawScale();
@@ -365,10 +374,62 @@ function setStatus(s: string, detail?: string) {
   }
 }
 
+// ── Link quality ─────────────────────────────────────────────────────────────
+//
+// Measured from SPEC FRAME TIMING, not RTT — a link that has stopped delivering
+// frames is broken even if pings still come back, and that's what the app keys
+// off too (its own note: an FFT-timing reading taken after the jitter buffer
+// "stays green while the network is failing").
+//
+//   3 green  frames arriving on schedule
+//   2 amber  gaps up to 3x the expected interval — jitter or drops
+//   1 red    stalled: nothing for over 3x
+//   0 (✕)    socket down
+
+let lastFrameAt = 0;
+let linkQ: 0 | 1 | 2 | 3 = 0;
+
+function noteFrame() {
+  const now = performance.now();
+  const expected = 1000 / (throttled ? IDLE_FPS : ACTIVE_FPS);
+  if (lastFrameAt) {
+    const gap = now - lastFrameAt;
+    if (gap > expected * 3) linkQ = 1;
+    else if (gap > expected * 1.6) linkQ = 2;
+    else linkQ = 3;
+  }
+  lastFrameAt = now;
+}
+
+function updateLink() {
+  // No frame for a long time = stalled, regardless of what the last gap said.
+  if (!spec || !lastFrameAt) linkQ = 0;
+  else {
+    const expected = 1000 / (throttled ? IDLE_FPS : ACTIVE_FPS);
+    const since = performance.now() - lastFrameAt;
+    if (since > expected * 8) linkQ = 1;
+    if (since > 5000) linkQ = 0;
+  }
+  const el = $('linkBars');
+  el.className = `q${linkQ}`;
+}
+
 function updateStatus() {
+  updateLink();
   const idle = throttled ? ` · IDLE ${IDLE_FPS}fps` : '';
-  $('status').textContent =
-    `${audioKbps.toFixed(0)} KB/s · ${rtt.toFixed(0)} ms${idle}`;
+  const base = `${audioKbps.toFixed(0)} KB/s · ${rtt.toFixed(0)} ms${idle}`;
+
+  // Silence has several causes that look identical from the outside. Name the one
+  // we're in — especially the tab-level mute, which no in-page control can undo.
+  let warn = '';
+  switch (audio?.health) {
+    case 'suspended': warn = 'AUDIO PAUSED — click the page'; break;
+    case 'no-stream': warn = 'AUDIO DISCONNECTED'; break;
+    case 'silent':    warn = 'NO SOUND — is the browser tab muted?'; break;
+  }
+  $('status').innerHTML = warn
+    ? `${base} · <span class="bad">${warn}</span>`
+    : base;
 }
 
 // ── Controls ─────────────────────────────────────────────────────────────────
@@ -413,8 +474,19 @@ function buildControls() {
   };
 
   $('pill').onclick = promptFrequency;
+  initBw();
   initRecorder();
+  initSearch();
+  initBookmarks();
   buildMenu();
+
+  // Station list comes from the SERVER (the app's cached EiBi) — the browser
+  // can't fetch eibispace.de itself, no CORS headers there. Absent = degrade to
+  // bookmarks + band plan, both of which are local.
+  void loadBookmarks();
+  void loadStations(currentHost).then((n) => {
+    if (n) console.info(`stations: ${n} from server`);
+  });
   initWaterfallInput();
   initKeyboard();
 }
@@ -464,6 +536,158 @@ function initIdleThrottle() {
     if (document.hidden) { lastInteraction = 0; checkIdle(); }
     else markActive();
   });
+}
+
+// ── Search + bookmarks ───────────────────────────────────────────────────────
+
+const SRC_LABEL: Record<string, string> = {
+  user: '★', server: 'SRV', eibi: 'EiBi', band: 'BAND',
+};
+
+function initSearch() {
+  const el = $<HTMLInputElement>('search');
+  const list = $('searchResults');
+  let results: SearchResult[] = [];
+  let sel = -1;
+
+  const close = () => { list.classList.remove('open'); sel = -1; };
+
+  const render = () => {
+    if (!results.length) { close(); return; }
+    list.innerHTML = '';
+    results.forEach((r, i) => {
+      const row = document.createElement('div');
+      row.className = 'sres' + (i === sel ? ' sel' : '');
+      row.innerHTML =
+        `<span class="f">${(r.frequency / 1e6).toFixed(3)}</span>` +
+        `<span class="n">${r.flag ? r.flag + ' ' : ''}${escapeHtml(r.name)}` +
+        (r.detail ? ` <span class="src">${escapeHtml(r.detail)}</span>` : '') +
+        `</span>` +
+        `<span class="src">${SRC_LABEL[r.source] ?? ''}</span>`;
+      row.onclick = () => { tuneTo(r); close(); };
+      list.appendChild(row);
+    });
+    list.classList.add('open');
+  };
+
+  el.oninput = () => {
+    results = search(el.value);
+    sel = -1;
+    render();
+  };
+  el.onfocus = () => { if (results.length) list.classList.add('open'); };
+  el.onblur = () => setTimeout(close, 150);   // let a click land first
+
+  el.onkeydown = (e) => {
+    if (e.key === 'Escape') { el.blur(); close(); return; }
+    if (!results.length) return;
+    if (e.key === 'ArrowDown') { sel = Math.min(results.length - 1, sel + 1); render(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { sel = Math.max(0, sel - 1); render(); e.preventDefault(); }
+    else if (e.key === 'Enter') {
+      tuneTo(results[Math.max(0, sel)]);
+      el.blur();
+      close();
+      e.preventDefault();
+    }
+  };
+}
+
+function tuneTo(r: SearchResult) {
+  if (!spec || !r) return;
+  const mode = (r.mode || spec.mode) as SDRMode;
+  spec.tune(clampTune(r.frequency), mode, { recenter: true });
+  setMode(mode, false);
+  // A bookmark can carry its own passband — honour it rather than the mode default.
+  if (typeof r.bandwidthLow === 'number' && typeof r.bandwidthHigh === 'number') {
+    spec.setBandwidth(r.bandwidthLow, r.bandwidthHigh);
+    syncBw();
+  }
+  renderFreq();
+  syncStep();
+}
+
+function initBookmarks() {
+  $('bookmarksBtn').onclick = () => {
+    $('bookmarksPanel').classList.toggle('open');
+    renderBookmarks();
+  };
+  $('bmClose').onclick = () => $('bookmarksPanel').classList.remove('open');
+
+  // Bookmark whatever we're listening to right now.
+  $('bmAdd').onclick = async () => {
+    if (!spec) return;
+    const name = prompt('Bookmark name', `${(spec.frequency / 1e6).toFixed(3)} MHz ${spec.mode.toUpperCase()}`);
+    if (!name) return;
+    await addBookmark({
+      name,
+      frequency: Math.round(spec.frequency),
+      mode: spec.mode,
+      group: null, comment: null, extension: null,
+      bandwidth_low: spec.bandwidthLow,
+      bandwidth_high: spec.bandwidthHigh,
+    });
+    renderBookmarks();
+  };
+
+  // Export: the same UberSDR-importable JSON the phone app writes, so bookmarks
+  // move between browser, phone and desktop UberSDR.
+  $('bmExport').onclick = () => {
+    const blob = new Blob([exportBookmarks()], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'vibesdr-bookmarks.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  };
+
+  $('bmImport').onclick = () => $('bmFile').click();
+  $<HTMLInputElement>('bmFile').onchange = async (e) => {
+    const f = (e.target as HTMLInputElement).files?.[0];
+    if (!f) return;
+    try {
+      const n = await importBookmarks(await f.text());
+      renderBookmarks();
+      $('bmMsg').textContent = `Imported ${n} bookmark${n === 1 ? '' : 's'}`;
+    } catch (err) {
+      $('bmMsg').textContent = err instanceof Error ? err.message : 'Import failed';
+    }
+    $<HTMLInputElement>('bmFile').value = '';
+  };
+}
+
+function renderBookmarks() {
+  const host = $('bmList');
+  const list = getBookmarks();
+  host.innerHTML = '';
+  if (!list.length) {
+    host.innerHTML = '<div class="sres"><span class="n">No bookmarks yet — tune something and press ADD.</span></div>';
+    return;
+  }
+  for (const b of [...list].sort((a, z) => a.frequency - z.frequency)) {
+    const row = document.createElement('div');
+    row.className = 'sres';
+    row.innerHTML =
+      `<span class="f">${(b.frequency / 1e6).toFixed(3)}</span>` +
+      `<span class="n">${escapeHtml(b.name)}</span>` +
+      `<span class="src">${(b.mode || '').toUpperCase()}</span>`;
+    row.onclick = () => {
+      tuneTo({
+        name: b.name, frequency: b.frequency, mode: b.mode, source: 'user',
+        bandwidthLow: b.bandwidth_low, bandwidthHigh: b.bandwidth_high,
+      });
+      $('bookmarksPanel').classList.remove('open');
+    };
+    const del = document.createElement('button');
+    del.className = 'btn';
+    del.textContent = '✕';
+    del.onclick = async (e) => {
+      e.stopPropagation();
+      await removeBookmark(b.name, b.frequency);
+      renderBookmarks();
+    };
+    row.appendChild(del);
+    host.appendChild(row);
+  }
 }
 
 // ── Recorder ─────────────────────────────────────────────────────────────────
@@ -621,6 +845,18 @@ function buildMenu() {
   slider('smooth', 'smoothVal', (v) => String(v),
     (v) => wf!.applySettings({ smoothingFrames: v }), 'smoothingFrames');
   toggle('peakHold', (on) => wf!.applySettings({ peakHold: on }), 'peakHold', true);
+
+  // ── VFO (needle + acrylic sidebands), as in the app ──────────────────────
+  const colEl = $<HTMLInputElement>('vfoColor');
+  const savedCol = prefs().vfoColor;
+  if (typeof savedCol === 'string') colEl.value = savedCol;
+  wf!.vfoColor = colEl.value;
+  colEl.oninput = () => { wf!.vfoColor = colEl.value; savePref('vfoColor', colEl.value); };
+
+  slider('vfoGlow', 'vfoGlowVal', (v) => String(v),
+    (v) => { wf!.vfoIntensity = v; }, 'vfoIntensity');
+  slider('vfoFrost', 'vfoFrostVal', (v) => (v === 0 ? 'OFF' : String(v)),
+    (v) => { wf!.vfoFrost = v; }, 'vfoFrost');
 }
 
 /**
@@ -711,6 +947,60 @@ function setMode(m: SDRMode, send: boolean) {
     b.classList.toggle('on', b.dataset.mode === m);
   }
   if (m !== 'wfm') { $('stereo').classList.remove('on'); $('rds').innerHTML = ''; }
+  syncBw();
+}
+
+// ── Demodulator bandwidth ────────────────────────────────────────────────────
+//
+// The slider is a single WIDTH, but the passband isn't symmetric in every mode:
+// SSB sits entirely on one side of the carrier. So width is mapped to a low/high
+// pair per mode rather than assumed to be ±width/2.
+
+/** Sensible width range per mode, Hz. */
+const BW_RANGE: Record<SDRMode, [number, number]> = {
+  usb: [500, 6000],   lsb: [500, 6000],
+  am:  [2000, 20000], sam: [2000, 20000],
+  cwu: [100, 2000],   cwl: [100, 2000],
+  fm:  [5000, 30000], nfm: [5000, 30000],
+  wfm: [50000, 250000],
+};
+
+/** Width -> (low, high) about the carrier, per mode. */
+function bwPair(mode: SDRMode, width: number): [number, number] {
+  switch (mode) {
+    case 'usb': return [50, 50 + width];        // entirely above the carrier
+    case 'lsb': return [-(50 + width), -50];    // entirely below
+    default:    return [-width / 2, width / 2]; // symmetric
+  }
+}
+
+function fmtBw(hz: number): string {
+  return hz >= 1000 ? `${(hz / 1000).toFixed(hz >= 100_000 ? 0 : 1)}k` : `${hz}`;
+}
+
+/** Point the slider at the current mode's range, seeded from the mode default. */
+function syncBw() {
+  if (!spec) return;
+  const el = $<HTMLInputElement>('bw');
+  const [min, max] = BW_RANGE[spec.mode];
+  const width = Math.abs(spec.bandwidthHigh - spec.bandwidthLow);
+  el.min = String(min);
+  el.max = String(max);
+  el.step = String(Math.max(50, Math.round((max - min) / 100)));
+  el.value = String(Math.max(min, Math.min(max, Math.round(width))));
+  $('bwVal').textContent = fmtBw(Number(el.value));
+}
+
+function initBw() {
+  const el = $<HTMLInputElement>('bw');
+  el.oninput = () => {
+    if (!spec) return;
+    const width = Number(el.value);
+    $('bwVal').textContent = fmtBw(width);
+    const [lo, hi] = bwPair(spec.mode, width);
+    spec.setBandwidth(Math.round(lo), Math.round(hi));
+  };
+  syncBw();
 }
 
 /** The step ladder is band-aware — the app switches to VHF steps above 30 MHz,
@@ -755,12 +1045,23 @@ function syncStep() {
   $('stepBtn').textContent = formatStep(step);
 }
 
+/** Never let the VFO walk down to DC — 0 Hz is not a frequency, and once there
+ *  the display reads 0.000 and nothing sensible can be tuned. */
+const MIN_TUNE_HZ = 10_000;
+
+function clampTune(hz: number): number {
+  const max = spec?.cfg.maxBandwidth
+    ? Math.max(30e6, spec.cfg.centerFreq + spec.cfg.maxBandwidth)
+    : 2e9;
+  return Math.max(MIN_TUNE_HZ, Math.min(max, Math.round(hz)));
+}
+
 function nudge(hz: number) {
   if (!spec) return;
   // Snap to the step grid so repeated nudges stay on round frequencies.
   const mag = Math.abs(hz);
   const next = Math.round((spec.frequency + hz) / mag) * mag;
-  spec.tune(Math.max(0, next));
+  spec.tune(clampTune(next));
   syncStep();
   renderFreq();
 }
@@ -776,7 +1077,7 @@ function promptFrequency() {
   if (!v) return;
   const mhz = parseFloat(v.replace(/[^\d.]/g, ''));
   if (!isFinite(mhz) || mhz <= 0) return;
-  spec.tune(Math.round(mhz * 1e6), undefined, { recenter: true });
+  spec.tune(clampTune(mhz * 1e6), undefined, { recenter: true });
   renderFreq();
 }
 
@@ -811,7 +1112,7 @@ function initWaterfallInput() {
       const rect = c.getBoundingClientRect();
       // Snap the click to the step grid, so the arrows carry on from a round number.
       const hz = Math.round(wf.xToHz(e.clientX - rect.left) / step) * step;
-      spec.tune(Math.max(0, hz));
+      spec.tune(clampTune(hz));
       syncStep();
       renderFreq();
     }

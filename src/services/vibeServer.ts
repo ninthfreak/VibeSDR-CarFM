@@ -1,4 +1,5 @@
 import { NativeModules, Platform } from 'react-native';
+import { loadActiveEibi } from './eibi';
 
 // VibeServer: share this device's USB dongle with server-side DSP (compressed
 // audio + waterfall over a WebSocket, ~25x lighter than raw RTL-TCP IQ). The
@@ -52,7 +53,7 @@ export type VibeServerStatus = {
 };
 
 export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServerInfo> {
-  return Local.startVibeServer({
+  const info = await Local.startVibeServer({
     name: cfg.name,
     centerFreq: cfg.centerFreq,
     sampleRate: cfg.sampleRate,
@@ -62,6 +63,34 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     maxFftRate: cfg.maxFftRate ?? 0,
     compressAudio: cfg.compressAudio ?? true,
   });
+  // Hand the web client's search its station list. Fire-and-forget: the server is
+  // already up and useful without it, and this can involve a network fetch.
+  void publishStations();
+  return info;
+}
+
+/**
+ * Publish the station list the web client searches (GET /stations on the shim).
+ *
+ * The APP does this, not the shim, for two reasons:
+ *   1. A browser CANNOT fetch eibispace.de — it sends no Access-Control-Allow-Origin,
+ *      and unlike React Native a browser enforces CORS. Served from the shim it's
+ *      same-origin, so the problem disappears.
+ *   2. The app already owns the EiBi download + seasonal cache, so the search keeps
+ *      working with no internet at query time — the allotment case.
+ *
+ * Same model as UberSDR: the server presents the stations, the client renders them.
+ */
+export async function publishStations(): Promise<void> {
+  if (!Local?.setStationsJson) return;
+  try {
+    const eibi = await loadActiveEibi();
+    if (!eibi.length) return;
+    Local.setStationsJson(JSON.stringify(eibi));
+  } catch {
+    // Offline or EiBi unreachable — the web client degrades to bookmarks + band
+    // plan, which are both local. Not worth surfacing.
+  }
 }
 
 export async function stopVibeServer(): Promise<void> {

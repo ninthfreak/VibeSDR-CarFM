@@ -311,6 +311,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun setVibeServerCompressAudio(on: Boolean) { VibeLocalSDR.setVibeServerCompressAudio(on) }
 
+    /** Hand the web client's search its station list (JSON array), served at
+     *  GET /stations. The app owns the EiBi download + cache; the browser can't
+     *  fetch eibispace.de itself (no CORS headers there), and this also means the
+     *  search still works with no internet — the allotment case. */
+    @ReactMethod
+    fun setStationsJson(json: String) { VibeLocalSDR.setStationsJson(json) }
+
     @ReactMethod
     fun getVibeServerStatus(promise: Promise) {
         try {

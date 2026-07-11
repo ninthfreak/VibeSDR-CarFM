@@ -30,6 +30,13 @@ function clampRatio(r: number): number {
   return Math.max(0, Math.min(0.8, r));
 }
 
+/** '#rrggbb' + alpha -> 'rgba(...)'. Mirrors the app's hexRgba(). */
+function rgba(hex: string, a: number): string {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
 export class Waterfall {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -65,8 +72,19 @@ export class Waterfall {
   // Geometry of the last frame — used for click-to-tune and the axis.
   centerHz = 0;
   spanHz = 0;
-  /** VFO marker position, Hz (drawn as the centre crosshair). */
+  /** VFO marker position, Hz (the needle). */
   vfoHz = 0;
+  /** Demod passband relative to the VFO, Hz — drives the acrylic sidebands.
+   *  Negative low = below the carrier (SSB sits entirely on one side). */
+  filterLow = 0;
+  filterHigh = 0;
+
+  /** VFO needle colour — also used for the peak-hold line, as in the app. */
+  vfoColor = '#ff2020';
+  /** 1–10 halo brightness (5 = the app's original look). */
+  vfoIntensity = 5;
+  /** 0–10 smoked-glass backing under the passband (0 = off). */
+  vfoFrost = 0;
   /** Latest normalised spectrum trace + peak hold, and the previous pair — the
    *  trace is blended between them so it GLIDES between server frames instead of
    *  stepping. This matters more than the waterfall: slow waterfall rows just
@@ -364,23 +382,119 @@ export class Waterfall {
         const y = H - v * H;
         if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
-      ctx.strokeStyle = 'rgba(255,245,200,0.55)';
+      // Peak-hold line takes the VFO colour, matching the app (WaterfallView
+      // peakPaint: needleColor at 0.85, blur 2).
+      ctx.strokeStyle = rgba(this.vfoColor, 0.85);
+      ctx.shadowColor = rgba(this.vfoColor, 0.85);
+      ctx.shadowBlur = 2;
       ctx.lineWidth = 1;
       ctx.stroke();
+      ctx.shadowBlur = 0;
     }
   }
 
-  /** Vertical VFO crosshair at the tuned frequency. */
+  /**
+   * VFO needle + acrylic sidebands — ported 1:1 from the app's WaterfallView
+   * (:798 geometry, :847 glow strips, :1007 acrylic gradients).
+   *
+   * The sidebands are the point: they show the PASSBAND sitting on the signal, so
+   * bandwidth is something you see rather than a number you read.
+   *
+   * The app renders the halo with a Skia MaskFilter, which blurs the stroke
+   * ITSELF — and its own comment notes that canvas shadowBlur instead glows
+   * BEHIND a sharp stroke, which is the original v1 look it was imitating. We're
+   * in canvas, so we get the v1 semantics for free: blurred halo + razor hairline.
+   */
   private _drawVfo(ctx: CanvasRenderingContext2D, W: number, H: number) {
     if (!this.spanHz || !this.vfoHz) return;
-    const x = this.hzToX(this.vfoHz, W);
-    if (x < 0 || x > W) return;
-    ctx.strokeStyle = 'rgba(255,229,102,0.85)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(x + 0.5, 0);
-    ctx.lineTo(x + 0.5, H);
-    ctx.stroke();
+
+    const nX = this.hzToX(this.vfoHz, W);
+    let loX = this.hzToX(this.vfoHz + this.filterLow, W);
+    let hiX = this.hzToX(this.vfoHz + this.filterHigh, W);
+
+    // Keep the sidebands visible when zoomed out — a passband narrower than a few
+    // pixels would otherwise vanish entirely.
+    const minSb = (this.filterLow === 0 && this.filterHigh === 0) ? 20 : 4;
+    if (nX - loX < minSb) loX = nX - minSb;
+    if (hiX - nX < minSb) hiX = nX + minSb;
+    const loXc = Math.max(0, loX);
+    const hiXc = Math.min(W, hiX);
+
+    const col = this.vfoColor;
+    const k = this.vfoIntensity / 5;          // 5 = the app's original look
+    const wk = Math.max(1, k);
+
+    ctx.save();
+
+    // Frosted backing: dims the waterfall across the passband so the needle keeps
+    // contrast on bright palettes, whatever colour it is.
+    if (this.vfoFrost > 0 && hiXc > loXc) {
+      ctx.fillStyle = `rgba(0,0,0,${(this.vfoFrost / 10) * 0.72})`;
+      ctx.fillRect(loXc, 0, hiXc - loXc, H);
+    }
+
+    // Acrylic sideband panels — 4-stop gradients rising toward the needle.
+    if (nX > loXc) {
+      const g = ctx.createLinearGradient(loXc, 0, nX, 0);
+      g.addColorStop(0,    rgba(col, 0.03));
+      g.addColorStop(0.15, rgba(col, 0.06));
+      g.addColorStop(0.55, rgba(col, 0.14));
+      g.addColorStop(1,    rgba(col, 0.28));
+      ctx.fillStyle = g;
+      ctx.fillRect(loXc, 0, nX - loXc, H);
+    }
+    if (hiXc > nX) {
+      const g = ctx.createLinearGradient(nX, 0, hiXc, 0);
+      g.addColorStop(0,    rgba(col, 0.28));
+      g.addColorStop(0.45, rgba(col, 0.14));
+      g.addColorStop(0.85, rgba(col, 0.06));
+      g.addColorStop(1,    rgba(col, 0.03));
+      ctx.fillStyle = g;
+      ctx.fillRect(nX, 0, hiXc - nX, H);
+    }
+
+    // Sideband edges: soft glow + crisp acrylic line (both at 0.35).
+    const edge = (x: number) => {
+      if (x <= 0 || x >= W) return;
+      ctx.strokeStyle = rgba(col, 0.35);
+      ctx.lineWidth = Math.max(0.75, 0.75);
+      ctx.shadowColor = rgba(col, 0.35);
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.moveTo(x + 0.5, 0);
+      ctx.lineTo(x + 0.5, H);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.stroke();          // razor line on top of the halo
+    };
+    edge(loX);
+    edge(hiX);
+
+    // LED needle: three glow layers (28/16/6) + a crisp core filament.
+    if (nX >= 0 && nX <= W) {
+      const layer = (alpha: number, blur: number, sw: number) => {
+        ctx.strokeStyle = rgba(col, Math.min(1, alpha));
+        ctx.lineWidth = sw;
+        ctx.shadowColor = rgba(col, Math.min(1, alpha));
+        ctx.shadowBlur = blur;
+        ctx.beginPath();
+        ctx.moveTo(nX + 0.5, 0);
+        ctx.lineTo(nX + 0.5, H);
+        ctx.stroke();
+      };
+      layer(0.35 * k, 28, 1.5 * wk);   // outer halo
+      layer(0.70 * k, 16, 0.8 * wk);   // mid glow
+      layer(0.80 * k, 6,  0.8 * wk);   // filament glow
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = col;           // crisp core
+      ctx.lineWidth = 0.75 * wk;
+      ctx.beginPath();
+      ctx.moveTo(nX + 0.5, 0);
+      ctx.lineTo(nX + 0.5, H);
+      ctx.stroke();
+    }
+
+    ctx.restore();
   }
 
   // ── Geometry helpers (shared with click-to-tune / drag-to-pan) ─────────────

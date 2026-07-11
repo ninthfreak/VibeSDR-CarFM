@@ -29,6 +29,15 @@ async function bundle() {
     bundle: true,
     format: 'iife',
     platform: 'browser',
+    // Let the web client import the APP's modules verbatim. userBookmarks.ts is
+    // pure logic (YAML/JSON parsers, kHz heuristic, merge, UberSDR-compatible
+    // export) apart from its AsyncStorage load/save — so we swap that one import
+    // for a localStorage shim rather than forking the file and letting the two
+    // drift. Nothing else React-Native is reachable from the web entry point.
+    alias: {
+      '@react-native-async-storage/async-storage':
+        path.join(root, 'web/client/src/shims/asyncStorage.ts'),
+    },
     target: ['chrome110', 'safari16', 'firefox115'],
     minify: !process.argv.includes('--dev'),
     sourcemap: false,
@@ -104,8 +113,10 @@ if (process.argv.includes('--serve')) {
       res.writeHead(204).end();
       return;
     }
-    // Always re-bundle on load in dev so a refresh picks up edits.
-    if (process.argv.includes('--dev')) page = await bundle();
+    // ALWAYS re-bundle on load, not just with --dev. A dev server that quietly
+    // serves a stale build is worse than none — you end up debugging a page that
+    // no longer exists.
+    page = await bundle();
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(page);
   }).listen(port, () => {

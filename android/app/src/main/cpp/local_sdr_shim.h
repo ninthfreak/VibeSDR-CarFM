@@ -48,6 +48,10 @@ public:
     // Compressed (IMA-ADPCM) audio on the /ws/audio path (default on). A client
     // that hits a decode issue can ask the server to fall back to raw int16 PCM.
     static void setVibeServerCompressAudio(bool on);
+    /** Station list (JSON array) served at GET /stations for the web client's
+     *  search. Supplied by the app, which already downloads + caches EiBi — a
+     *  browser can't fetch eibispace.de itself (it sends no CORS headers). */
+    static void setStationsJson(const std::string& json);
 
     // SpyServer-compatible backend. Mirrors startTcp(): network IQ into the same
     // DSP pipeline, so demod/decoders/NR/audio all work unchanged — and, like

@@ -79,40 +79,133 @@ html, body {
 #wf.panning { cursor: grabbing; }
 
 /* ── Control bar — mirrors ControlsBar.tsx, drums swapped for buttons ─────── */
+/* UI SCALE. The app derives one from the viewport (useUiScale: clamp(0.58, W/926,
+   1.45)); the web equivalent is a single clamped font-size on the bar, with every
+   control sized in em from it. So a 1366x768 laptop gets a proportionally smaller
+   bar rather than a clipped one, and a 4K screen doesn't get a postage stamp.
+   Everything below is relative to this ONE number. */
 #bar {
   flex: 0 0 auto; background: var(--bar-bg); border-top: 1px solid var(--bar-border);
-  padding: 10px 14px; display: flex; flex-direction: column; gap: 10px;
+  font-size: clamp(9px, 0.72vw, 13px);
+  padding: 0.8em 1.1em; display: flex; flex-direction: column; gap: 0.8em;
 }
-.barRow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* NEVER wrap. With flex-wrap:wrap the right-hand column jumped to a new line the
+   moment the content grew a few pixels (a longer status string was enough), which
+   read as the layout randomly rearranging itself. Let items SHRINK instead. */
+.barRow { display: flex; align-items: center; gap: 12px; flex-wrap: nowrap; min-width: 0; }
 
-/* Signal meter + freq/mode pill (row 1) */
-#sigWrap { flex: 1 1 220px; min-width: 160px; }
-#sig { position: relative; height: 8px; border-radius: 4px; background: var(--meter-track); overflow: hidden; }
+/* Right column. BOOKMARKS + search are one item; the meter spans their width.
+   Shrinkable (not fixed) and pushed to the right edge, so a narrow window
+   squeezes it rather than wrapping the whole bar. */
+#rightCol { flex: 1 1 38em; min-width: 22em; max-width: 46em; margin-left: auto; }
+#sigWrap { width: 100%; }
+#findRow { display: flex; gap: 0.6em; align-items: stretch; width: 100%; }
+#findRow #bookmarksBtn { flex: 0 0 auto; white-space: nowrap; }
+#rds { display: none; }   /* station identity moves into the VTS chip */
+
+/* Readouts under the meter: signal on the left, link + bitrate on the right. */
+#sigLine { display: flex; align-items: center; justify-content: space-between; margin-top: 0.35em; gap: 0.6em; }
+#sigLabel { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap; }
+#linkStats { display: flex; align-items: center; gap: 8px; }
+#status { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap; }
+
+/* Link-quality bars — same semantics as the app: 3 green solid, 2 amber jitter,
+   1 red stalling, ✕ disconnected. Driven by SPEC frame timing, not just RTT:
+   frames stopping is what a failing link actually looks like. */
+#linkBars { display: inline-flex; align-items: flex-end; gap: 2px; height: 11px; }
+#linkBars i { width: 3px; background: rgba(255,255,255,0.18); border-radius: 1px; }
+#linkBars i:nth-child(1) { height: 4px; }
+#linkBars i:nth-child(2) { height: 7px; }
+#linkBars i:nth-child(3) { height: 11px; }
+#linkBars.q1 i:nth-child(-n+1) { background: #e04040; }
+#linkBars.q2 i:nth-child(-n+2) { background: #e0b020; }
+#linkBars.q3 i { background: #33cc44; }
+#linkBars.q0::before { content: '✕'; color: #e04040; font-weight: 900; font-size: 11px; line-height: 11px; }
+#linkBars.q0 i { display: none; }
+
+/* Search: bookmarks + band plan. */
+#searchWrap { position: relative; flex: 1 1 auto; min-width: 0; }
+#search {
+  width: 100%; height: 100%; background: var(--pill-bg); border: 1px solid var(--btn-border);
+  color: var(--btn-text); padding: 0.55em 0.9em; border-radius: 0.45em;
+  font-family: inherit; font-size: 0.95em; letter-spacing: 0.08em;
+}
+#search:focus { outline: none; border-color: var(--btn-active-bdr); }
+#search::placeholder { color: var(--text-dim); }
+
+/* Results float UPWARD — the bar is at the bottom of the screen. */
+#searchResults {
+  display: none; position: absolute; bottom: calc(100% + 6px); left: 0; right: 0;
+  max-height: 320px; overflow-y: auto; z-index: 40;
+  background: rgba(8,6,2,0.98); border: 1px solid var(--btn-border);
+  border-radius: 8px; padding: 4px;
+}
+#searchResults.open { display: block; }
+.sres {
+  display: flex; align-items: baseline; gap: 8px; padding: 7px 9px;
+  border-radius: 5px; cursor: pointer; font-size: 12px;
+}
+.sres:hover, .sres.sel { background: var(--btn-active-bg); }
+.sres .f { color: var(--freq); font-variant-numeric: tabular-nums; min-width: 84px; }
+.sres .n { color: var(--btn-text); flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sres .src { color: var(--unit); font-size: 10px; letter-spacing: 1px; }
+/* Everything from here is pushed to the right edge, so BOOKMARKS lands directly
+   under the search box above it and the two rows line up. */
+.pushRight { margin-left: auto; }
+#sig { position: relative; height: 0.62em; border-radius: 0.31em; background: var(--meter-track); overflow: hidden; }
 #sigFill { position: absolute; inset: 0 auto 0 0; width: 0%; background: linear-gradient(90deg, var(--green), var(--amber), var(--red)); }
 #sigPeak { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--peak-line); left: 0; }
 #sigLabel { margin-top: 4px; font-size: 10px; color: var(--text-dim); letter-spacing: 1px; }
 
 #pill {
-  display: flex; align-items: baseline; gap: 10px;
+  display: flex; align-items: baseline; justify-content: center; gap: 0.75em;
   background: var(--pill-bg); border: 1px solid var(--btn-border);
-  border-radius: 8px; padding: 6px 14px; cursor: pointer;
+  border-radius: 0.6em; padding: 0.5em 1em; cursor: pointer;
 }
 #pill:hover { border-color: var(--btn-active-bdr); }
-#freq { font-size: 26px; color: var(--freq); letter-spacing: 2px; font-variant-numeric: tabular-nums; }
-#freqUnit { font-size: 12px; color: var(--unit); }
-#modeLbl { font-size: 13px; color: var(--amber); letter-spacing: 2px; }
-#stereo { font-size: 10px; color: var(--green); border: 1px solid var(--green); border-radius: 3px; padding: 0 3px; display: none; }
+#freq { font-size: 2.3em; color: var(--freq); letter-spacing: 0.05em; font-variant-numeric: tabular-nums; }
+#freqUnit { font-size: 0.85em; color: var(--unit); }
+#modeLbl { font-size: 1em; color: var(--amber); letter-spacing: 0.15em; }
+#stereo { font-size: 0.78em; color: var(--green); border: 1px solid var(--green); border-radius: 3px; padding: 0 0.25em; display: none; }
 #stereo.on { display: inline; }
 
-/* VFO: step-tied left/right arrows — the desktop stand-in for the tuning drum. */
-#vfo { display: flex; gap: 6px; align-items: center; }
-#vfo .arrow { font-size: 15px; padding: 7px 16px; }
-#stepBtn { min-width: 74px; }
+/* ── Tuning block ─────────────────────────────────────────────────────────────
+   One unit: the frequency you READ sits directly above the arrows you USE, so
+   your eye and your hand stay in the same place. Bordered so it reads as a
+   single instrument rather than two loose controls. */
+#tuner {
+  display: flex; flex-direction: column; align-items: stretch; gap: 0.6em;
+  padding: 0.6em; border: 1px solid var(--btn-border); border-radius: 0.8em;
+  background: rgba(0,0,0,0.35);
+}
+
+/* VFO: step-tied left/right arrows — the desktop stand-in for the tuning drum.
+   These are the most-used control on the page, so they get the biggest targets. */
+#vfo { display: flex; gap: 0.45em; align-items: center; }
+#vfo .arrow {
+  font-size: 1.55em; line-height: 1; padding: 0.5em 0; flex: 1 1 0;
+  min-width: 4.6em;
+}
+#stepBtn { min-width: 6.6em; padding: 0.75em 0.6em; font-size: 1em; }
+
+/* Demodulator + the bandwidth that belongs to it. */
+#demod { display: flex; flex-direction: column; gap: 0.6em; }
+.bwRow { display: flex; align-items: center; gap: 0.6em; }
+.bwRow input[type=range] { flex: 1 1 auto; width: auto; min-width: 6em; }
+.bwRow .val { color: var(--unit); font-size: 0.82em; min-width: 3.4em; font-variant-numeric: tabular-nums; }
+
+.stack { display: flex; flex-direction: column; gap: 0.6em; }
+/* The button cluster shrinks before the right column does. */
+.stack.grow { flex: 0 1 auto; min-width: 0; }
+.group.grow { flex: 1 1 auto; min-width: 0; }
+.sep.tall { height: 4.8em; }
+#tuner { flex: 0 0 auto; }          /* the tuning block never shrinks */
+#demod { flex: 0 1 auto; min-width: 0; }
 
 button.btn {
   background: var(--btn-bg); border: 1px solid var(--btn-border); color: var(--btn-text);
-  padding: 7px 12px; border-radius: 6px; font-family: inherit; font-size: 12px;
-  letter-spacing: 1px; cursor: pointer;
+  padding: 0.55em 0.9em; border-radius: 0.45em; font-family: inherit; font-size: 0.95em;
+  letter-spacing: 0.08em; cursor: pointer; white-space: nowrap;
 }
 button.btn:hover { background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx); }
 button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx); }
@@ -126,11 +219,11 @@ button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active
 @keyframes recPulse { 50% { background: rgba(224,80,80,0.3); } }
 #recTime { color: var(--red); font-variant-numeric: tabular-nums; min-width: 42px; }
 
-.group { display: flex; gap: 4px; align-items: center; }
-.sep { width: 1px; height: 22px; background: var(--bar-border); }
-.lbl { font-size: 10px; color: var(--text-dim); letter-spacing: 1px; }
+.group { display: flex; gap: 0.35em; align-items: center; flex-wrap: nowrap; }
+.sep { width: 1px; height: 1.8em; background: var(--bar-border); flex: 0 0 1px; }
+.lbl { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap; }
 
-input[type=range] { accent-color: var(--amber); width: 110px; }
+input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 
 /* ── Menu drawer (Radio / Audio / Display) ────────────────────────────────── */
 #menu {
@@ -140,6 +233,18 @@ input[type=range] { accent-color: var(--amber); width: 110px; }
   transform: translateX(100%); transition: transform .18s ease-out;
 }
 #menu.open { transform: translateX(0); }
+
+/* Bookmarks: same drawer treatment as the menu. */
+#bookmarksPanel {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 420px; z-index: 51;
+  background: rgba(8,6,2,0.97); border-left: 1px solid var(--bar-border);
+  padding: 16px; overflow-y: auto;
+  transform: translateX(100%); transition: transform .18s ease-out;
+}
+#bookmarksPanel.open { transform: translateX(0); }
+#bmList { margin-top: 10px; }
+#bmList .sres button { padding: 2px 7px; font-size: 11px; }
+#bmMsg { min-height: 14px; color: var(--text-dim); }
 #menu h2 {
   margin: 18px 0 8px; font-size: 11px; letter-spacing: 2px; color: var(--text-dim);
   font-weight: 500; border-bottom: 1px solid var(--bar-border); padding-bottom: 5px;
@@ -187,52 +292,94 @@ select.btn { padding: 6px 8px; }
 
   <div id="bar">
     <div class="barRow">
-      <div id="sigWrap">
-        <div id="sig"><div id="sigFill"></div><div id="sigPeak"></div></div>
-        <div id="sigLabel">—</div>
+      <!-- Tuner: what you READ sits above what you USE. -->
+      <div id="tuner">
+        <div id="pill" title="Click to enter a frequency">
+          <span id="freq">—</span><span id="freqUnit">MHz</span>
+          <span id="modeLbl">NFM</span><span id="stereo">ST</span>
+        </div>
+        <div id="vfo">
+          <button class="btn arrow" id="tuneDown" title="Tune down one step">◀</button>
+          <button class="btn" id="stepBtn" title="Tuning step — click to change">1kHz</button>
+          <button class="btn arrow" id="tuneUp" title="Tune up one step">▶</button>
+        </div>
       </div>
-      <div id="pill" title="Click to enter a frequency">
-        <span id="freq">—</span><span id="freqUnit">MHz</span>
-        <span id="modeLbl">NFM</span><span id="stereo">ST</span>
-      </div>
-      <div id="rds"></div>
-      <div id="status">—</div>
-    </div>
 
-    <div class="barRow">
-      <div id="vfo">
-        <button class="btn arrow" id="tuneDown" title="Tune down one step">◀</button>
-        <button class="btn" id="stepBtn" title="Tuning step — click to change">1kHz</button>
-        <button class="btn arrow" id="tuneUp" title="Tune up one step">▶</button>
+      <div class="sep tall"></div>
+
+      <!-- Demodulator + its bandwidth, which belongs to it. -->
+      <div id="demod">
+        <div class="group" id="modes"></div>
+        <div class="bwRow">
+          <span class="lbl">BW</span>
+          <input type="range" id="bw" min="200" max="20000" step="100" value="12500">
+          <span class="val" id="bwVal">12.5k</span>
+        </div>
       </div>
-      <div class="sep"></div>
-      <div class="group" id="modes"></div>
-      <div class="sep"></div>
-      <div class="group">
-        <span class="lbl">ZOOM</span>
-        <button class="btn" id="zoomOut">−</button>
-        <button class="btn" id="zoomIn">+</button>
-        <button class="btn" id="zoomReset">FIT</button>
+
+      <div class="sep tall"></div>
+
+      <!-- Button cluster, left of the right-hand column. -->
+      <div class="stack grow">
+        <div class="group">
+          <span class="lbl">ZOOM</span>
+          <button class="btn" id="zoomOut">−</button>
+          <button class="btn" id="zoomIn">+</button>
+          <button class="btn" id="zoomReset">FIT</button>
+          <button class="btn on" id="lockBtn" title="View follows the VFO">LOCK</button>
+          <div class="sep"></div>
+          <span class="lbl">VOL</span>
+          <input type="range" id="vol" min="0" max="100" value="80">
+          <button class="btn" id="muteBtn">MUTE</button>
+        </div>
+        <div class="group">
+          <button class="btn" id="recBtn" title="Record audio to a WAV file">● REC</button>
+          <span class="lbl" id="recTime"></span>
+          <button class="btn" id="menuBtn">MENU</button>
+        </div>
       </div>
-      <div class="sep"></div>
-      <div class="group">
-        <button class="btn on" id="lockBtn" title="View follows the VFO">LOCK</button>
+
+      <!-- Right column. The BOOKMARKS button + search box are ONE item for layout
+           purposes, and the signal meter spans exactly their combined width. -->
+      <div class="stack" id="rightCol">
+        <div id="sigWrap">
+          <div id="sig"><div id="sigFill"></div><div id="sigPeak"></div></div>
+          <div id="sigLine">
+            <span id="sigLabel">—</span>
+            <span id="linkStats">
+              <span id="linkBars" title="Link quality">
+                <i></i><i></i><i></i>
+              </span>
+              <span id="status">—</span>
+            </span>
+          </div>
+        </div>
+        <div id="findRow">
+          <button class="btn" id="bookmarksBtn" title="Bookmarks">&#9733; BOOKMARKS</button>
+          <div id="searchWrap">
+            <input id="search" type="search" placeholder="Search stations, bands, frequency…"
+                   spellcheck="false" autocomplete="off">
+            <div id="searchResults"></div>
+          </div>
+        </div>
       </div>
-      <div class="sep"></div>
-      <div class="group">
-        <span class="lbl">VOL</span>
-        <input type="range" id="vol" min="0" max="100" value="80">
-        <button class="btn" id="muteBtn">MUTE</button>
-      </div>
-      <div class="sep"></div>
-      <div class="group">
-        <button class="btn" id="recBtn" title="Record audio to a WAV file">● REC</button>
-        <span class="lbl" id="recTime"></span>
-      </div>
-      <div class="sep"></div>
-      <button class="btn" id="menuBtn">MENU</button>
     </div>
   </div>
+</div>
+
+<div id="bookmarksPanel">
+  <div id="menuHead">
+    <span>&#9733; BOOKMARKS</span>
+    <button class="btn" id="bmClose">CLOSE</button>
+  </div>
+  <div class="mrow" style="gap:6px">
+    <button class="btn" id="bmAdd">+ ADD CURRENT</button>
+    <button class="btn" id="bmExport">EXPORT</button>
+    <button class="btn" id="bmImport">IMPORT</button>
+    <input type="file" id="bmFile" accept=".json,.yaml,.yml,.txt" hidden>
+  </div>
+  <div id="bmMsg" class="lbl"></div>
+  <div id="bmList"></div>
 </div>
 
 <div id="menu">
@@ -338,6 +485,22 @@ select.btn { padding: 6px 8px; }
   <div class="mrow">
     <label>PEAK HOLD</label>
     <div class="seg"><button class="btn on" id="peakHold">ON</button></div>
+  </div>
+
+  <h2>VFO</h2>
+  <div class="mrow">
+    <label for="vfoColor">NEEDLE COLOUR</label>
+    <input type="color" id="vfoColor" value="#ff2020">
+  </div>
+  <div class="mrow">
+    <label for="vfoGlow">GLOW</label>
+    <input type="range" id="vfoGlow" min="1" max="10" value="5">
+    <span class="val" id="vfoGlowVal">5</span>
+  </div>
+  <div class="mrow">
+    <label for="vfoFrost">FROSTED BACKING</label>
+    <input type="range" id="vfoFrost" min="0" max="10" value="0">
+    <span class="val" id="vfoFrostVal">OFF</span>
   </div>
 </div>
 <script type="module" src="./src/main.ts"></script>

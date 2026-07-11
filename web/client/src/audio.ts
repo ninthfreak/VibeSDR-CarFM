@@ -157,18 +157,26 @@ export class AudioPlayer {
   private _startScriptProcessor() {
     const ctx = this.ctx!;
     this.ring = [new Float32Array(this.cap), new Float32Array(this.cap)];
-    const target = 48000 * 0.25;              // 250ms jitter buffer, as in the worklet
-
     const sp = ctx.createScriptProcessor(4096, 0, 2);
     sp.onaudioprocess = (e) => {
       const outL = e.outputBuffer.getChannelData(0);
       const outR = e.outputBuffer.getChannelData(1);
       const n = outL.length;
+
+      // Re-arm ONLY on a true underrun (not enough samples for this block).
+      // An earlier version also paused whenever the buffer dipped below a
+      // fraction of the target — which fires constantly while the buffer is
+      // still filling on a fresh connect, so playback stalled, rebuilt, stalled
+      // again, and the audio chopped until it happened to outrun the threshold.
+      // Never gate playback on how FULL the buffer is; only on whether the next
+      // block can actually be served.
       if (!this.playing || this.filled < n) {
-        if (this.playing && this.filled < n) this.playing = false;   // underrun: re-arm
-        outL.fill(0); outR.fill(0);
+        if (this.playing) this.playing = false;
+        outL.fill(0);
+        outR.fill(0);
         return;
       }
+
       const [bl, br] = this.ring!;
       for (let i = 0; i < n; i++) {
         const r = (this.rPos + i) % this.cap;
@@ -177,7 +185,6 @@ export class AudioPlayer {
       }
       this.rPos = (this.rPos + n) % this.cap;
       this.filled -= n;
-      if (this.filled < target * 0.15) this.playing = false;
     };
     sp.connect(this.gain!).connect(ctx.destination);
     this.sp = sp;
@@ -276,6 +283,7 @@ export class AudioPlayer {
         if (m > peak) peak = m;
       }
     }
+    if (peak > 0.002) this.lastAudibleAt = performance.now();
     this.cb.onLevel?.(peak);
     if (this.node) this.node.port.postMessage({ l, r }, [l.buffer, r.buffer]);
     else if (this.ring) this._pushRing(l, r);
@@ -314,6 +322,28 @@ export class AudioPlayer {
 
   /** True when the browser is holding playback until a user gesture. */
   get suspended(): boolean { return !!this.ctx && this.ctx.state === 'suspended'; }
+
+  /** True while audio frames are actually arriving. */
+  get streaming(): boolean { return this.ws?.readyState === WebSocket.OPEN; }
+
+  /**
+   * What's actually wrong with the audio, for the status line. Silence has
+   * several causes that look identical from the outside — a suspended context, a
+   * dead socket, our own mute, or (invisibly to us) SAFARI'S PER-TAB MUTE, which
+   * no in-page control can override. Say which, rather than just going quiet.
+   */
+  get health(): 'ok' | 'suspended' | 'no-stream' | 'muted' | 'silent' {
+    if (!this.ctx) return 'no-stream';
+    if (this.suspended) return 'suspended';
+    if (!this.streaming) return 'no-stream';
+    if (this._muted) return 'muted';
+    // Frames arriving, context running, not muted — but nothing has been heard
+    // for a while. Most likely the browser is muting us at the tab level.
+    if (this.lastAudibleAt && performance.now() - this.lastAudibleAt > 5000) return 'silent';
+    return 'ok';
+  }
+
+  private lastAudibleAt = 0;
 
   async resume() {
     if (this.ctx && this.ctx.state === 'suspended') await this.ctx.resume();
