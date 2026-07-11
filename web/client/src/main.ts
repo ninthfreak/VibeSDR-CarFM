@@ -234,6 +234,7 @@ let hwRates: number[] = [];
 function loop() {
   if (!wf || !spec) return;
   wf.vfoHz = spec.frequency;
+  wf.tick();      // synthesise any waterfall lines now due (see Waterfall.tick)
   wf.draw();
   drawScale();
 

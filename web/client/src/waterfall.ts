@@ -44,14 +44,39 @@ export class Waterfall {
   private rowImg: ImageData | null = null;
   private specRatio: number;
 
+  // ── Temporal line synthesis ────────────────────────────────────────────────
+  // The waterfall scrolls at a FIXED rate regardless of how fast frames arrive:
+  // between two received rows we synthesise the intermediate lines by blending
+  // them. So a server throttled to 5fps still produces a smooth 20-rows/sec
+  // waterfall instead of a chunky one — which is what makes the idle power
+  // saving free rather than a trade.
+  //
+  // At 20fps in = 20 rows/sec out, exactly one row per frame and this is a no-op.
+  private static readonly ROWS_PER_SEC = 20;
+  private prevRow: Uint8Array | null = null;   // last received row
+  private curRow: Uint8Array | null = null;    // newest received row
+  private blendRow: Uint8Array | null = null;  // scratch for the synthesised line
+  private lastArrival = 0;
+  private emitStart = 0;
+  private emitInterval = 0;   // ms between synthesised rows for this pair
+  private emitTotal = 0;      // rows to synthesise between prev and cur
+  private emitted = 0;
+
   // Geometry of the last frame — used for click-to-tune and the axis.
   centerHz = 0;
   spanHz = 0;
   /** VFO marker position, Hz (drawn as the centre crosshair). */
   vfoHz = 0;
-  /** Latest normalised spectrum trace + peak hold. */
+  /** Latest normalised spectrum trace + peak hold, and the previous pair — the
+   *  trace is blended between them so it GLIDES between server frames instead of
+   *  stepping. This matters more than the waterfall: slow waterfall rows just
+   *  read as texture, but a live trace visibly jumps. */
   private spec: Float32Array | null = null;
   private peak: Float32Array | null = null;
+  private prevSpec: Float32Array | null = null;
+  private prevPeak: Float32Array | null = null;
+  private drawSpec: Float32Array | null = null;
+  private drawPeak: Float32Array | null = null;
 
   constructor(canvas: HTMLCanvasElement, opts: WaterfallOpts = {}) {
     this.canvas = canvas;
@@ -140,33 +165,120 @@ export class Waterfall {
     this.rowImg = this.ctx.createImageData(w, 1);
   }
 
-  /** Feed one raw dBFS frame. */
+  /** Feed one raw dBFS frame. Rows are NOT drawn here — see tick(). */
   push(bins: Float32Array, centerHz: number, bwHz: number) {
     this.centerHz = centerHz;
     this.spanHz = bwHz;
 
     const frame = this.proc.process(bins, centerHz, bwHz);
-    this.spec = frame.spec;
-    this.peak = frame.peak;
 
+    // Roll the trace: keep the OLD frame so draw() can blend towards the new one.
+    if (!this.spec || this.spec.length !== frame.spec.length) {
+      this.prevSpec = new Float32Array(frame.spec);
+      this.prevPeak = new Float32Array(frame.peak);
+      this.spec = new Float32Array(frame.spec);
+      this.peak = new Float32Array(frame.peak);
+      this.drawSpec = new Float32Array(frame.spec.length);
+      this.drawPeak = new Float32Array(frame.peak.length);
+    } else {
+      this.prevSpec!.set(this.spec);
+      this.prevPeak!.set(this.peak!);
+      this.spec.set(frame.spec);
+      this.peak!.set(frame.peak);
+    }
+
+    const now = performance.now();
+    const row = frame.row;
+
+    // Finish the previous pair before starting a new one, or a frame that arrives
+    // slightly early silently eats its own lines and the waterfall stops scrolling.
+    this.flushPending();
+
+    // Roll cur -> prev, and copy in the new row (frame.row is a reused buffer).
+    if (!this.curRow || this.curRow.length !== row.length) {
+      this.prevRow = new Uint8Array(row);
+      this.curRow = new Uint8Array(row);
+      this.blendRow = new Uint8Array(row.length);
+    } else {
+      this.prevRow!.set(this.curRow);
+      this.curRow.set(row);
+    }
+
+    // How many lines to synthesise before the next frame lands. Derived from the
+    // OBSERVED arrival gap, so it adapts to whatever rate the server is running —
+    // no need to be told, and it self-corrects across a throttle change.
+    const gap = this.lastArrival ? now - this.lastArrival : 1000 / Waterfall.ROWS_PER_SEC;
+    this.lastArrival = now;
+
+    // Clamp: a stalled link mustn't queue up hundreds of lines to catch up on.
+    const clamped = Math.max(20, Math.min(1000, gap));
+    this.emitTotal = Math.max(1, Math.round(clamped / (1000 / Waterfall.ROWS_PER_SEC)));
+    this.emitInterval = clamped / this.emitTotal;
+    this.emitStart = now;
+    this.emitted = 0;
+  }
+
+  /** Emit any waterfall lines now due. Call once per animation frame.
+   *  At 20fps in this draws exactly one row per frame (emitTotal === 1) and the
+   *  blending collapses to a straight copy of the newest row. */
+  tick() {
+    if (!this.curRow || !this.prevRow) return;
+    const now = performance.now();
+    let guard = 0;
+    while (
+      this.emitted < this.emitTotal &&
+      // Row k is due at emitStart + k*interval, k starting at 0 — so the FIRST row
+      // lands the moment the frame arrives. (Anchoring it a full interval later
+      // meant that at 20fps the row became due exactly as the next frame reset the
+      // counter, so it was never drawn and the waterfall crawled.)
+      now >= this.emitStart + this.emitted * this.emitInterval &&
+      guard++ < 8                       // never spend a whole frame catching up
+    ) {
+      this.emitted++;
+      this.drawRow(this.emitted / this.emitTotal);
+    }
+  }
+
+  /** Draw any rows still owed for the current pair. Called when a new frame
+   *  arrives, so every pair contributes exactly emitTotal lines. */
+  private flushPending() {
+    let guard = 0;
+    while (this.emitted < this.emitTotal && guard++ < 8) {
+      this.emitted++;
+      this.drawRow(this.emitted / this.emitTotal);
+    }
+  }
+
+  /** Scroll down one line and draw the row blended t of the way from prev to cur. */
+  private drawRow(t: number) {
     const W = this.wf.width;
     const H = this.wf.height;
     if (!W || !H || !this.rowImg) return;
 
-    // Scroll down one pixel, then draw the new row at the top.
-    this.wfCtx.drawImage(this.wf, 0, 1);
+    const prev = this.prevRow!;
+    const cur = this.curRow!;
+    const blend = this.blendRow!;
+    const n = cur.length;
 
-    const row = frame.row;
-    const n = row.length;
+    if (t >= 1) {
+      blend.set(cur);
+    } else {
+      const a = Math.round(t * 256);
+      const b = 256 - a;
+      for (let i = 0; i < n; i++) blend[i] = (prev[i] * b + cur[i] * a) >> 8;
+    }
+
+    this.wfCtx.drawImage(this.wf, 0, 1);   // scroll
+
     const img = this.rowImg.data;
     const lut = this.lut;
-
     for (let x = 0; x < W; x++) {
       // Peak-preserving downsample: take the max over this pixel's bin bucket.
+      // Averaging would bury a narrow carrier in its own noise floor.
       const b0 = Math.floor((x * n) / W);
       const b1 = Math.max(b0 + 1, Math.floor(((x + 1) * n) / W));
       let v = 0;
-      for (let b = b0; b < b1 && b < n; b++) if (row[b] > v) v = row[b];
+      for (let bi = b0; bi < b1 && bi < n; bi++) if (blend[bi] > v) v = blend[bi];
       const o = v << 2;
       const p = x << 2;
       img[p]     = lut[o];
@@ -193,9 +305,31 @@ export class Waterfall {
     this._drawVfo(ctx, W, H);
   }
 
-  private _drawSpec(ctx: CanvasRenderingContext2D, W: number, H: number) {
+  /** Trace blended prev->cur by elapsed time. Runs at the display's refresh rate,
+   *  NOT the server's frame rate, so at 5fps the trace glides instead of jumping.
+   *  At 20fps the blend completes within a frame and it looks as it did before. */
+  private interpolatedTrace(): { spec: Float32Array; peak: Float32Array } {
     const spec = this.spec!;
-    const peak = this.peak;
+    const peak = this.peak!;
+    const prevSpec = this.prevSpec;
+    const prevPeak = this.prevPeak;
+    const ds = this.drawSpec;
+    const dp = this.drawPeak;
+    if (!prevSpec || !prevPeak || !ds || !dp || !this.emitInterval) return { spec, peak };
+
+    const span = this.emitInterval * this.emitTotal;   // observed gap between frames
+    const t = Math.max(0, Math.min(1, (performance.now() - this.emitStart) / span));
+    if (t >= 1) return { spec, peak };
+
+    for (let i = 0; i < spec.length; i++) ds[i] = prevSpec[i] + (spec[i] - prevSpec[i]) * t;
+    // Peak hold only rises — take the max, so an interpolated peak line never dips
+    // below the peak it is meant to be holding.
+    for (let i = 0; i < peak.length; i++) dp[i] = Math.max(prevPeak[i], peak[i]);
+    return { spec: ds, peak: dp };
+  }
+
+  private _drawSpec(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    const { spec, peak } = this.interpolatedTrace();
     const n = spec.length;
 
     // Trace, filled to the floor — same shape as the app's signal display.

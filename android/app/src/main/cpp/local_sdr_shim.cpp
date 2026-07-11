@@ -2603,8 +2603,11 @@ void LocalSdrShim::setFftRate(double fps) {
     double mr = g_vsMaxFftRate.load();       // never exceed the server's own cap
     if (mr > 0 && fps > mr) fps = mr;
     p->fftRate = fps;
-    p->rx.setFftRate(fps);
-    LOGI("fft rate: %.1f fps", fps);
+    // The engine runs at FFT_AVG× the EMIT rate — onSpectrum block-averages
+    // FFT_AVG frames into each one it sends (see start(): rx.start(..., fftRate *
+    // FFT_AVG, ...)). Pass the raw fps here and everything comes out 4× too slow.
+    p->rx.setFftRate(fps * FFT_AVG);
+    LOGI("fft rate: %.1f fps (engine %.1f)", fps, fps * FFT_AVG);
 }
 void LocalSdrShim::setSampleRate(double rate) {
     if (!p || rate <= 0) return;
