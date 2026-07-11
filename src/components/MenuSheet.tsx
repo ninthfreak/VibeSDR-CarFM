@@ -7,6 +7,7 @@
  *   Reset Interface Settings
  */
 
+import StationLogo from './StationLogo';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -851,6 +852,11 @@ export default function MenuSheet({
                         <Text style={styles.searchMode}>
                           {r.isBand ? grpAbbr(r.band?.group) : (r.bm?.mode ?? '—').toUpperCase()}
                         </Text>
+                        {/* Logo makes a long list scannable. EiBi rows carry their
+                            transmitter country, so those resolve with no guesswork. */}
+                        {!r.isBand && r.bm?.name
+                          ? <StationLogo name={r.bm.name} itu={r.bm.itu} />
+                          : null}
                         <Text style={styles.searchName} numberOfLines={1}>
                           {!r.isBand && r.bm?.repeater ? <Text style={styles.searchRpt}>📡 </Text> : null}
                           {!r.isBand && r.bm?.flag ? r.bm.flag + ' ' : ''}

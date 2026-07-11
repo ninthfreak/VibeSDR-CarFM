@@ -16,7 +16,7 @@ import {
   BAND_PLAN, getBandsAtRegion, bandTuneDefaults, type Band,
 } from '../../../src/constants/bandPlan';
 import { deriveItuRegion } from '../../../src/services/stations';
-import { resolveStationIso, isoToFlag } from '../../../src/services/rdsCountry';
+import { resolveStationIso, isoToFlag, ituToIso } from '../../../src/services/rdsCountry';
 import { countryForCallsign } from '../../../src/services/callsignCountry';
 import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
@@ -26,6 +26,7 @@ import {
   exportBookmarks, importBookmarks, search, type SearchResult,
   loadServerBookmarks, getServerBookmarks, saveToServer, removeFromServer,
 } from './search';
+import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { DecoderClient, type Spot } from './decoders';
 import {
   saveRecording, listRecordings, deleteRecording, formatSize, formatDuration,
@@ -1149,6 +1150,9 @@ function initSearch() {
         (r.detail ? ` <span class="src">${escapeHtml(r.detail)}</span>` : '') +
         `</span>` +
         `<span class="src">${SRC_LABEL[r.source] ?? ''}</span>`;
+      // A logo makes a long result list scannable at a glance. EiBi rows carry their
+      // transmitter country, so those resolve without any guesswork at all.
+      if (r.source !== 'band') void attachBookmarkLogo(row, r.name, r.itu);
       row.onclick = () => { tuneTo(r); close(); };
       list.appendChild(row);
     });
@@ -1275,11 +1279,13 @@ function initBookmarks() {
     try {
       const text = await f.text();
       if (bmImportTarget === 'server') {
+        // parseBookmarksAny, NOT JSON.parse. UberSDR exports YAML, and the app already
+        // has a parser that handles both — calling JSON.parse here threw on every real
+        // UberSDR export, which is exactly the file people have to import.
+        const rows = parseBookmarksAny(text, '');
         // Push each one to the receiver. Sequential on purpose: the shim answers with
-        // the whole list every time, and firing 200 concurrent writes at a phone is a
-        // good way to make a server look broken.
-        const parsed = JSON.parse(text);
-        const rows: any[] = Array.isArray(parsed) ? parsed : (parsed?.bookmarks ?? []);
+        // the whole list every time, and firing 145 concurrent writes at a phone is a
+        // good way to make a working server look broken.
         let n = 0;
         for (const b of rows) {
           if (!b?.name || !b?.frequency) continue;
@@ -1361,18 +1367,30 @@ function renderBookmarks() {
     row.appendChild(del);
     host.appendChild(row);
 
-    // Logo, lazily. Only worth it for stations the receiver actually heard — a local
-    // bookmark is whatever the user called it and won't match a station database.
-    if (!b.local) void attachBookmarkLogo(row, b.name);
+    // Logo, lazily — for BOTH kinds. Local bookmarks were skipped on the theory that
+    // "a local bookmark is whatever the user called it", but importing an UberSDR list
+    // disproves that: it is full of real station names that match perfectly well, and
+    // showing logos on one list and not the other just looks broken.
+    void attachBookmarkLogo(row, b.name);
   }
 }
 
-/** Resolve (and cache) a station logo, then slot it into the row. */
-async function attachBookmarkLogo(row: HTMLElement, name: string) {
-  let url = bmLogos.get(name);
+/**
+ * Resolve (and cache) a station logo, then slot it into the row.
+ *
+ * `itu` is EiBi's transmitter-country code, and it is AUTHORITATIVE — the schedule
+ * states the country outright, so it is used as a hard FILTER rather than the
+ * receiver's country as a mere preference. No guessing at all for EiBi rows.
+ */
+async function attachBookmarkLogo(row: HTMLElement, name: string, itu?: string) {
+  const iso = itu ? ituToIso(itu) : '';
+  const key = `${name}|${iso}`;
+  let url = bmLogos.get(key);
   if (url === undefined) {
-    url = await lookupStationLogo(name, undefined, serverIso || undefined).catch(() => null);
-    bmLogos.set(name, url ?? null);
+    url = await lookupStationLogo(
+      name, iso || undefined, iso ? undefined : (serverIso || undefined),
+    ).catch(() => null);
+    bmLogos.set(key, url ?? null);
   }
   if (!url || !row.isConnected) return;
   const img = document.createElement('img');

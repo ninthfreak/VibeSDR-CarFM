@@ -3319,20 +3319,24 @@ export default function SDRScreen({ route, navigation }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveStation.name, liveStation.text, liveStation.countryIso, liveLogo, status.mode]);
 
-  // ── WFM RDS station logo (radio-browser favicon, country-filtered) ──────────
+  // ── Station logo (radio-browser favicon) ────────────────────────────────────
+  // NOT gated on WFM any more. The gate existed because a station name only ever
+  // arrived via RDS, which is FM-only — but a name now also comes from a bookmark or
+  // the EiBi schedule, so an AM or shortwave station has one too, and EiBi even states
+  // the transmitter's country outright. Refusing to look it up outside WFM meant the
+  // browser client showed logos for stations the app wouldn't.
   useEffect(() => {
     const name = liveStation.name?.trim();
     const iso = validIso(liveStation.countryIso) ? liveStation.countryIso!.toUpperCase() : '';
-    const wfm = status.mode === 'wfm';
-    const key = `${wfm ? 1 : 0}|${name ?? ''}|${iso}`;
+    const key = `${name ?? ''}|${iso}`;
     if (key === lastLiveLogoKey.current) return;
     lastLiveLogoKey.current = key;
-    if (!wfm || !name) { setLiveLogo(null); return; }
+    if (!name) { setLiveLogo(null); return; }
     setLiveLogo(null);
     resolveStationLogo({ pi: liveStation.pi, name, iso: iso || undefined }).then((url) => {
       if (!destroyed.current && lastLiveLogoKey.current === key) setLiveLogo(url);
     });
-  }, [liveStation.name, liveStation.countryIso, liveStation.pi, status.mode]);
+  }, [liveStation.name, liveStation.countryIso, liveStation.pi]);
 
   // ── VTS-aware media session ────────────────────────────────────────────────
   // Track  = freq (user's unit) + demod + tune step ("648 kHz AM · 9 kHz step")

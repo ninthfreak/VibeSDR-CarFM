@@ -33,6 +33,7 @@ export interface SearchResult {
   source: ResultSource;
   detail?: string;           // group / comment / band type
   flag?: string;             // EiBi transmitter country
+  itu?: string;              // EiBi transmitter-country code — AUTHORITATIVE, no guessing
   bandwidthLow?: number | null;
   bandwidthHigh?: number | null;
 }
@@ -45,6 +46,7 @@ interface ServerStation {
   group?: string;
   comment?: string;
   flag?: string;
+  itu?: string;
   source?: 'eibi' | 'server' | 'user';
   bandwidth_low?: number;
   bandwidth_high?: number;
@@ -238,6 +240,7 @@ export function search(query: string, limit = 40): SearchResult[] {
         source: s.source === 'server' ? 'server' : 'eibi',
         detail: s.group || s.comment || undefined,
         flag: s.flag,
+        itu: (s as any).itu,
         bandwidthLow: s.bandwidth_low, bandwidthHigh: s.bandwidth_high,
       });
       if (out.length > limit * 4) break;   // bound the scan; EiBi is ~10k rows
