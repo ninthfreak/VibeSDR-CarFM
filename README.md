@@ -5,12 +5,16 @@ A mobile-first SDR receiver app for iOS and Android — and far more than a sing
 **What VibeSDR connects to:**
 - **Remote SDR servers** — native adapters for [UberSDR](https://ubersdr.org), **OpenWebRX / OpenWebRX+**, **KiwiSDR**, and **FM-DX Webserver** (the worldwide network of shared FM broadcast tuners), all behind one interface, with a directory chooser in the instance picker.
 - **Local hardware** — plug an **RTL-SDR into an Android phone over USB** ("Local Hardware"), or connect to a networked **rtl_tcp** server from either platform. VibeSDR demodulates the raw IQ itself.
+- **VibeServer** *(new in v8)* — turn an Android phone with an RTL-SDR into a **receiver anyone on your network can use, from a browser**. The phone does the DSP and sends compressed audio and a ready-made waterfall (~25× lighter than raw rtl_tcp), so it works comfortably over Wi-Fi or a hotspot. Point a browser at `vibesdr.local` — no app, no install.
 - **VibeDSP** — its own from-scratch, ARM-NEON-optimised DSP engine for the on-device paths (no SDR++ / FFTW / VOLK), so the local radio is fast, light on battery, and free of bundled third-party GPL DSP.
 
 > Built by Stuart Carr (Stuey3D) with AI assistance from Claude (Anthropic).
 > Free software under the GNU GPL-3.0.
 
-**Latest release: [v7.1.0](https://github.com/Stuey3D/VibeSDR/releases/latest)** — iOS `.ipa` and Android `.apk`. Adds **SpyServer** compatibility via `sdr://` links, a reorganised audio menu with section icons, favouriting the receiver you are listening to, plus recording and deep-link fixes. Builds on **v7.0.0**'s FM-DX Webserver support.
+**Latest release: [v8.0.0](https://github.com/Stuey3D/VibeSDR/releases/latest)** — iOS `.ipa` and Android `.apk`. **VibeServer**: share your radio from any browser, with the full client (waterfall, audio, decoders, FT8 map, search, bookmarks, media controls) served by the phone itself. Plus a **Custom server** box that works out what any address is running, station bookmarks the receiver **learns from RDS**, and `vibesdr.local`.
+
+![VibeSDR web client](docs/screenshots/v8-web-client.png)
+*The VibeServer web client — served by an Android phone with an RTL-SDR, open in Safari at `vibesdr-moto-g35.local`.*
 
 > **📱 iOS App Store approval is in progress.** Apple review is taking a while at the moment, but a **TestFlight link is coming soon** so you'll be able to install on iPhone without re-signing anything. In the meantime, iPhone users can sign and sideload the `.ipa` — see [Installing on iPhone](#installing-on-iphone-signing-the-ipa-with-xcode) below.
 
