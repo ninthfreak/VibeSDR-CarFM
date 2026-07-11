@@ -1,0 +1,342 @@
+/**
+ * spectrum.ts — VibeServer spectrum WebSocket client (browser).
+ *
+ * Browser port of src/services/UberSDRClient.ts, trimmed to what the shim
+ * actually speaks. Shim reference: android/app/src/main/cpp/local_sdr_shim.cpp
+ *
+ *   /ws/user-spectrum
+ *     <- text  {"type":"config"|"hwinfo"|"rds"|"pong", ...}
+ *     <- bin   'SPEC' frames (22-byte header + binCount u8 bins)
+ *     -> text  {"type":"zoom"|"tune"|"mode"|"bandwidth"|"gain"|... }
+ *
+ * Two things here are load-bearing and easy to get wrong:
+ *   1. SPEC bins arrive in FFT order (DC first) — they MUST be rotated by
+ *      binCount/2 to draw left-to-right.
+ *   2. Zoom/pan sends are coalesced. Every view request triggers a config echo
+ *      from the server; an un-throttled drag fires at 60–120 Hz and floods the
+ *      link. Keep _sendView.
+ */
+
+export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
+
+/** The server applies these on every mode change and never reports bandwidth
+ *  back, so the client mirrors the table to stay in sync. */
+export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
+  usb: [50, 2700],     lsb: [-2700, -50],
+  am:  [-5000, 5000],  sam: [-5000, 5000],
+  cwu: [-200, 200],    cwl: [-200, 200],
+  fm:  [-6000, 6000],  nfm: [-5000, 5000],
+  wfm: [-100000, 100000],
+};
+
+const SPEC_MAGIC    = 0x43455053; // 'SPEC' little-endian
+const FLAG_FULL_U8  = 0x03;
+const U8_DBFS_OFFSET = -256;      // dBFS = u8 - 256
+
+const VIEW_SEND_MS   = 33;
+const VIEW_SETTLE_MS = 300;
+const MIN_SPAN_HZ    = 6_000;     // max-zoom floor; deeper looks frozen/artefacted
+
+export interface Config {
+  centerFreq: number;
+  binCount: number;
+  binBandwidth: number;
+  totalBandwidth: number;
+  maxBandwidth: number;
+}
+
+export interface RdsMeta {
+  stereo: boolean;
+  ps: string;
+  radiotext: string;
+  pi: number;
+  ecc: number;
+}
+
+export interface SpectrumCallbacks {
+  onBins?:   (bins: Float32Array, centerHz: number, bwHz: number) => void;
+  onConfig?: (cfg: Config) => void;
+  onHwInfo?: (gains: number[], rates: number[]) => void;
+  onRds?:    (meta: RdsMeta) => void;
+  onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
+  onRtt?:    (ms: number) => void;
+}
+
+export class SpectrumClient {
+  private ws: WebSocket | null = null;
+  private url: string;
+  private cb: SpectrumCallbacks;
+  private closedByUs = false;
+
+  // Server-reported geometry.
+  cfg: Config = {
+    centerFreq: 0, binCount: 4096, binBandwidth: 0,
+    totalBandwidth: 0, maxBandwidth: 0,
+  };
+
+  // VFO state (client-owned; the server never reports it back).
+  frequency = 0;
+  mode: SDRMode = 'nfm';
+  bandwidthLow = -5000;
+  bandwidthHigh = 5000;
+
+  /** Locked = the view follows the VFO. Unlocked = pan freely. */
+  followVfo = true;
+
+  // Predicted view (what we've asked for), vs cfg (what the server acked).
+  private view = { centerHz: 0, binBandwidth: 0 };
+  private pendingView: { frequency: number; binBandwidth: number } | null = null;
+  private sendTimer: number | null = null;
+  private lastSendAt = 0;
+  private pingTimer: number | null = null;
+  private lastPingAt = 0;
+  private reconnectTimer: number | null = null;
+
+  // Scratch buffers, resized on bin-count change.
+  private bins: Float32Array | null = null;
+
+  constructor(url: string, cb: SpectrumCallbacks) {
+    this.url = url;
+    this.cb = cb;
+  }
+
+  connect() {
+    this.closedByUs = false;
+    this.cb.onStatus?.('connecting');
+    const ws = new WebSocket(this.url);
+    ws.binaryType = 'arraybuffer';
+    this.ws = ws;
+
+    ws.onopen = () => {
+      this.cb.onStatus?.('open');
+      // Ask for the view we want (server echoes a config back).
+      if (this.view.centerHz && this.view.binBandwidth) {
+        this._flushView();
+      }
+      this.pingTimer = window.setInterval(() => {
+        this.lastPingAt = performance.now();
+        this._send({ type: 'ping' });
+      }, 5000);
+    };
+
+    ws.onmessage = (e) => {
+      if (typeof e.data === 'string') this._handleText(e.data);
+      else this._handleBinary(e.data as ArrayBuffer);
+    };
+
+    ws.onerror = () => this.cb.onStatus?.('error', 'websocket error');
+
+    ws.onclose = (e) => {
+      this._stopTimers();
+      this.cb.onStatus?.('closed', e.code === 1006 ? 'connection lost' : `closed (${e.code})`);
+      if (!this.closedByUs) {
+        this.reconnectTimer = window.setTimeout(() => this.connect(), 3000);
+      }
+    };
+  }
+
+  close() {
+    this.closedByUs = true;
+    this._stopTimers();
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    this.ws?.close();
+    this.ws = null;
+  }
+
+  private _stopTimers() {
+    if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
+    if (this.sendTimer) { clearTimeout(this.sendTimer); this.sendTimer = null; }
+  }
+
+  private _send(obj: Record<string, unknown>) {
+    const ws = this.ws;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  }
+
+  // ── Inbound ────────────────────────────────────────────────────────────────
+
+  private _handleText(raw: string) {
+    let msg: any;
+    try { msg = JSON.parse(raw); } catch { return; }
+    switch (msg.type) {
+      case 'config': {
+        const cfg: Config = {
+          centerFreq:     msg.centerFreq ?? this.cfg.centerFreq,
+          binCount:       msg.binCount ?? this.cfg.binCount,
+          binBandwidth:   msg.binBandwidth ?? this.cfg.binBandwidth,
+          totalBandwidth: msg.totalBandwidth ?? this.cfg.totalBandwidth,
+          maxBandwidth:   msg.maxBandwidth ?? this.cfg.maxBandwidth,
+        };
+        this.cfg = cfg;
+        // Adopt the server's view once our own sends have settled. While a
+        // gesture is in flight our predicted view wins, otherwise the config
+        // echoes fight the drag.
+        if (!this._viewInFlight()) {
+          this.view.centerHz     = cfg.centerFreq;
+          this.view.binBandwidth = cfg.binBandwidth;
+        }
+        this.cb.onConfig?.(cfg);
+        break;
+      }
+      case 'hwinfo':
+        this.cb.onHwInfo?.(msg.gains ?? [], msg.rates ?? []);
+        break;
+      case 'rds':
+        this.cb.onRds?.({
+          stereo: !!msg.stereo, ps: msg.ps ?? '', radiotext: msg.radiotext ?? '',
+          pi: msg.pi ?? -1, ecc: msg.ecc ?? 0,
+        });
+        break;
+      case 'pong':
+        if (this.lastPingAt) this.cb.onRtt?.(performance.now() - this.lastPingAt);
+        break;
+    }
+  }
+
+  private _handleBinary(buf: ArrayBuffer) {
+    if (buf.byteLength < 22) return;
+    const dv = new DataView(buf);
+    if (dv.getUint32(0, true) !== SPEC_MAGIC) return;
+    const flags = dv.getUint8(5);
+    if (flags !== FLAG_FULL_U8) return; // shim only ever emits FULL_UINT8
+
+    const centerHz = Number(dv.getBigUint64(14, true));
+    const n = buf.byteLength - 22;
+    if (n <= 0) return;
+
+    if (!this.bins || this.bins.length !== n) this.bins = new Float32Array(n);
+    const bins = this.bins;
+    const u8 = new Uint8Array(buf, 22, n);
+
+    // Bins arrive in FFT order (DC first, then +f, then -f). Rotate by n/2 so
+    // the array runs low→high frequency for the renderer.
+    const half = n >> 1;
+    for (let i = 0; i < n; i++) {
+      const src = (i + half) % n;
+      bins[i] = u8[src] + U8_DBFS_OFFSET;
+    }
+
+    const bwHz = this.cfg.binBandwidth * n;
+    this.cb.onBins?.(bins, centerHz, bwHz);
+  }
+
+  // ── Outbound ───────────────────────────────────────────────────────────────
+
+  /** Tune the VFO. Recentres the view when locked (or when forced). */
+  tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) {
+    if (frequency) this.frequency = Math.round(frequency);
+    if (mode) this.setMode(mode);
+    else this._send({
+      type: 'tune', frequency: this.frequency, mode: this.mode,
+      bandwidthLow: this.bandwidthLow, bandwidthHigh: this.bandwidthHigh,
+    });
+    if (this.followVfo || opts?.recenter) {
+      const bb = this.view.binBandwidth || this.cfg.binBandwidth;
+      if (bb) this.zoom(this.frequency, bb);
+    }
+  }
+
+  setMode(mode: SDRMode) {
+    this.mode = mode;
+    const bw = MODE_BANDWIDTHS[mode];
+    if (bw) { this.bandwidthLow = bw[0]; this.bandwidthHigh = bw[1]; }
+    // The shim IGNORES bandwidth fields on a tune that also changes mode
+    // (local_sdr_shim.cpp:1529) — so send mode, then bandwidth separately.
+    this._send({ type: 'tune', frequency: this.frequency, mode });
+    this._send({ type: 'bandwidth', bandwidthLow: this.bandwidthLow, bandwidthHigh: this.bandwidthHigh });
+  }
+
+  setBandwidth(low: number, high: number) {
+    this.bandwidthLow = low;
+    this.bandwidthHigh = high;
+    this._send({ type: 'bandwidth', bandwidthLow: low, bandwidthHigh: high });
+  }
+
+  /** Current display span (Hz). */
+  spanHz(): number {
+    const n = this.cfg.binCount || 4096;
+    return (this.view.binBandwidth || this.cfg.binBandwidth) * n;
+  }
+
+  viewCenterHz(): number { return this.view.centerHz || this.cfg.centerFreq; }
+
+  /** Set view centre + span. binBandwidth is clamped to sane zoom limits. */
+  zoom(frequency: number, binBandwidth: number) {
+    const n = this.cfg.binCount || 4096;
+    const spanCap = this.cfg.maxBandwidth > 0 ? this.cfg.maxBandwidth : 30e6;
+    const bb = Math.max(MIN_SPAN_HZ / n, Math.min(binBandwidth, spanCap / n));
+    this.view.centerHz = Math.round(frequency);
+    this.view.binBandwidth = bb;
+    this._sendView(this.view.centerHz, bb);
+  }
+
+  /** Zoom by a factor about the current centre (>1 = zoom in). */
+  zoomBy(factor: number) {
+    const bb = (this.view.binBandwidth || this.cfg.binBandwidth) / factor;
+    this.zoom(this.viewCenterHz(), bb);
+  }
+
+  pan(frequency: number) {
+    this.zoom(frequency, this.view.binBandwidth || this.cfg.binBandwidth);
+  }
+
+  resetView() { this._send({ type: 'reset' }); }
+
+  /** Frame decimation: server emits only every Nth frame. NB this saves BANDWIDTH
+   *  ONLY — the server still computes every FFT. Use setFftRate() to save power. */
+  setRateDivisor(n: number) { this._send({ type: 'set_rate', divisor: Math.max(1, Math.round(n)) }); }
+
+  /** Live spectrum frame rate on the SERVER. Lowering it makes the serving phone
+   *  skip the FFT work outright, so it saves real CPU and radio power — the point
+   *  of the idle throttle. Audio is unaffected. */
+  setFftRate(fps: number) { this._send({ type: 'fftRate', value: fps }); }
+
+  // Hardware controls — the client drives the remote radio.
+  setHwGain(tenthDb: number, auto: boolean) {
+    this._send(auto ? { type: 'gain', auto: true } : { type: 'gain', value: Math.round(tenthDb) });
+  }
+  setHwBiasT(on: boolean)  { this._send({ type: 'biasT', on }); }
+  setHwAgc(on: boolean)    { this._send({ type: 'agc', on }); }
+  setHwPpm(ppm: number)    { this._send({ type: 'ppm', value: Math.round(ppm) }); }
+  setHwSampleRate(r: number) { this._send({ type: 'sampleRate', value: Math.round(r) }); }
+  setHwDirectSampling(v: 0 | 1 | 2) { this._send({ type: 'directSampling', value: v }); }
+
+  // Audio DSP — runs server-side in the shim (the client stays a thin renderer).
+  /** db <= -100 turns squelch off, matching the app's convention. */
+  setSquelch(db: number) { this._send({ type: 'squelch', db }); }
+  setNr(on: boolean, strength: number) { this._send({ type: 'nr', on, strength }); }
+  setNotch(on: boolean) { this._send({ type: 'notch', on }); }
+  /** tau in seconds: 0 = off, 50e-6 or 75e-6. */
+  setDeemph(tau: number) { this._send({ type: 'deemph', tau }); }
+  setStereo(on: boolean) { this._send({ type: 'stereo', on }); }
+
+  // ── Coalesced view sender ──────────────────────────────────────────────────
+
+  private _viewInFlight(): boolean {
+    return Date.now() - this.lastSendAt < VIEW_SETTLE_MS;
+  }
+
+  /** Keep only the latest target; send ≤1 per VIEW_SEND_MS, trailing edge always
+   *  delivered so the final position of a gesture lands. */
+  private _sendView(frequency: number, binBandwidth: number) {
+    this.pendingView = { frequency, binBandwidth };
+    const wait = this.lastSendAt + VIEW_SEND_MS - Date.now();
+    if (wait <= 0) { this._flushView(); return; }
+    if (!this.sendTimer) {
+      this.sendTimer = window.setTimeout(() => {
+        this.sendTimer = null;
+        this._flushView();
+      }, wait);
+    }
+  }
+
+  private _flushView() {
+    const p = this.pendingView ?? {
+      frequency: this.view.centerHz, binBandwidth: this.view.binBandwidth,
+    };
+    if (!p.frequency || !p.binBandwidth) return;
+    this.pendingView = null;
+    this.lastSendAt = Date.now();
+    this._send({ type: 'zoom', frequency: p.frequency, binBandwidth: p.binBandwidth });
+  }
+}
