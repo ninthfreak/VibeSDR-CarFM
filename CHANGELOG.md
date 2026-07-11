@@ -39,6 +39,38 @@ VibeSDR is free software under the **GNU GPL v3**. Source: https://github.com/St
 - Warns you if the phone is **background-restricting** VibeSDR, which would otherwise
   starve the server with no visible explanation.
 
+### Station bookmarks that learn themselves
+- **The receiver names the stations it can hear.** When a station announces itself over
+  RDS, VibeSDR remembers it against the frequency — so the search bar fills itself in
+  with the stations this aerial *actually receives*, rather than a schedule of what
+  merely exists. Works while listening on local hardware as well as while serving.
+- It keeps itself honest. The **PI code** identifies the station (short, error-protected,
+  and present in every RDS group), so if you move and a different broadcaster is on that
+  frequency, the change is spotted immediately. If a frequency simply goes quiet, the
+  bookmark **expires after 30 days unheard** — so a station you can no longer receive
+  doesn't sit on top of static forever.
+- The name is **reconstructed by majority vote** across repetitions. RDS corruption is
+  random each time, so "H%art", "He%rt" and "H**r%" all vote for **Heart** — it recovers
+  a name that no single transmission ever delivered cleanly, and it declines to guess at
+  all when the signal is too poor to be sure.
+- **Save to the receiver** (shared with everyone who connects) or **to this browser**
+  (private to you) — marked with a server-rack and a monitor icon respectively. Import an
+  existing list to either, including an UberSDR YAML export. The server's own list can be
+  imported and reset from the phone.
+
+### "vibesdr.local"
+- Point a browser at **`http://vibesdr.local`** — no IP address to remember. The name
+  follows the server's advertised name, and if two phones serve on the same network the
+  second renames itself automatically.
+
+### Station logos and flags
+- Logos and country flags now actually appear — across **every backend**, and on AM and
+  shortwave stations too, not only FM. They were previously so rare as to look broken: a
+  station named "Heart" could never match "Heart FM" in the logo database, and the country
+  needed to anchor that search is something most stations never transmit.
+- Where the country genuinely cannot be known — a Spanish station arriving on sporadic-E,
+  say — VibeSDR now **declines to show a flag** rather than showing your own country's.
+
 ### Custom server — one box reaches every backend
 - The RTL-TCP box becomes **CUSTOM SERVER**. Type any address — `192.168.1.50:8073`, or
   `myserver.example.com:8073` — and VibeSDR **works out what's listening**: VibeServer,
