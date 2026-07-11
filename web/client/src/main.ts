@@ -546,7 +546,7 @@ function updateVts() {
   let name = rdsName;
   let flag = rdsName ? isoToFlag(rdsIso) : '';
   let src = '';
-  const logo = rdsName ? rdsLogoUrl : '';
+  let logo = rdsName ? rdsLogoUrl : '';
 
   // RDS is always genuine — the station is naming itself. A bookmark only counts
   // when we're actually sitting on it.
@@ -557,6 +557,12 @@ function updateVts() {
       flag = near.flag || '';
       // Source mark, as in the app: EiBi schedule vs the user's own bookmark.
       src = SRC_LABEL[near.source] ?? '';
+      // A logo for a BOOKMARK-identified station too, not only an RDS one. The logo
+      // was gated on rdsName, so an AM or shortwave station recognised from a bookmark
+      // showed its name and its source glyph but never its logo — even though the same
+      // station carried one perfectly well in the bookmark list two panels away.
+      logo = bmLogos.get(`${near.name}|`) ?? '';
+      if (!bmLogos.has(`${near.name}|`)) void primeStationLogo(near.name);
     }
   }
 
@@ -1250,7 +1256,7 @@ function initBookmarks() {
   $('bmAddServer').onclick = async () => {
     if (!spec) return;
     const name = nameEl.value.trim() || rdsName || `${(spec.frequency / 1e6).toFixed(3)} MHz`;
-    const ok = await saveToServer(spec.frequency, name);
+    const ok = await saveToServer(spec.frequency, name, spec.mode);
     $('bmMsg').textContent = ok
       ? `Saved "${name}" on the receiver`
       : 'Could not save on the receiver (is the PIN right?)';
@@ -1289,7 +1295,7 @@ function initBookmarks() {
         let n = 0;
         for (const b of rows) {
           if (!b?.name || !b?.frequency) continue;
-          if (await saveToServer(Number(b.frequency), String(b.name))) n++;
+          if (await saveToServer(Number(b.frequency), String(b.name), b.mode || undefined)) n++;
         }
         renderBookmarks();
         $('bmMsg').textContent = n
@@ -1382,6 +1388,22 @@ function renderBookmarks() {
  * states the country outright, so it is used as a hard FILTER rather than the
  * receiver's country as a mere preference. No guessing at all for EiBi rows.
  */
+/**
+ * Warm the logo cache for a station we've just identified, so the VTS can paint it.
+ *
+ * The cache is claimed IMMEDIATELY (set to null before the fetch) because the VTS runs
+ * on every frame: without that, one un-cached station fires a lookup per frame until
+ * the first reply lands.
+ */
+async function primeStationLogo(name: string) {
+  const key = `${name}|`;
+  if (bmLogos.has(key)) return;
+  bmLogos.set(key, null);
+  const url = await lookupStationLogo(name, undefined, serverIso || undefined)
+    .catch(() => null);
+  bmLogos.set(key, url ?? null);
+}
+
 async function attachBookmarkLogo(row: HTMLElement, name: string, itu?: string) {
   const iso = itu ? ituToIso(itu) : '';
   const key = `${name}|${iso}`;

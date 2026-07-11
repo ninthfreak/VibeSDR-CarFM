@@ -444,6 +444,7 @@ struct LearnedBm {
     std::string name;            // RDS programme-service name, trimmed
     int         pi = -1;         // RDS PI code (station identity)
     long long   hz = 0;          // the EXACT frequency — the map key is only a rounding
+    std::string mode = "wfm";    // RDS learning is FM-only, but an IMPORT carries any mode
     long long   lastHeard = 0;   // unix seconds — drives expiry
     bool        manual = false;  // saved by hand: never expires
 };
@@ -471,6 +472,17 @@ struct PendingBm {
 };
 static std::mutex g_bmMtx;
 static std::map<long long, LearnedBm> g_bookmarks;    // key: Hz (rounded)
+/**
+ * Where to persist. The shim OWNS these bookmarks, so the shim must SAVE them.
+ *
+ * They were previously written by the app's JavaScript on a timer — but while the
+ * server is serving, the app is BACKGROUNDED, and JS timers there are throttled or
+ * suspended outright. So the save frequently never ran at all: an import of 145
+ * bookmarks appeared in the list, lived only in memory, and vanished the instant the
+ * server restarted. Shortening the timer would not have helped; the timer was the bug.
+ * Writing from here, on every change, takes the JS runtime out of the path entirely.
+ */
+static std::string g_bmPath;
 static std::map<long long, PendingBm> g_bmPending;    // awaiting confirmation
 
 // THE PI CODE IS THE STATION'S IDENTITY — the name is only its label.
@@ -510,6 +522,8 @@ static const long long kExpirySecs  = 30LL * 24 * 3600;   // 30 days unheard
  * CB11 (27.085) both landed on 27.080.
  */
 static long long bmKey(double hz) { return (long long)(llround(hz / 1000.0) * 1000LL); }
+
+static void bmSaveLocked();          // defined below; callers hold g_bmMtx
 
 static std::string bmTrim(const std::string& s) {
     size_t a = s.find_first_not_of(" \t\r\n");
@@ -602,19 +616,34 @@ static void bmLearn(double hz, int pi, const std::string& psRaw) {
     g_bmPending.erase(key);
 }
 
-/** Manual "save to server". Never expires. */
-static void bmAddManual(double hz, const std::string& name) {
+/**
+ * Manual "save to server" / import. Never expires.
+ *
+ * The MODE matters. RDS learning is FM-only so "wfm" is right for a LEARNED station, but
+ * an imported list is full of AM, USB, CW and fax — defaulting those to WFM makes every
+ * one of them unlistenable. And the EXACT hz is kept: the map key is a rounding, used to
+ * group a station despite VFO drift, and emitting it as the frequency put bookmarks up
+ * to 500 Hz out — far enough that the VTS (which matches within 99 Hz) never saw them.
+ */
+static void bmAddManual(double hz, const std::string& name, const std::string& mode) {
     const std::string n = bmTrim(name);
     if (n.empty() || hz <= 0) return;
     std::lock_guard<std::mutex> lk(g_bmMtx);
     LearnedBm b;
-    b.name = n; b.pi = -1; b.lastHeard = (long long)time(nullptr); b.manual = true;
+    b.name = n;
+    b.pi = -1;
+    b.hz = (long long)llround(hz);
+    b.mode = mode.empty() ? "am" : mode;
+    b.lastHeard = (long long)time(nullptr);
+    b.manual = true;
     g_bookmarks[bmKey(hz)] = b;
+    bmSaveLocked();
 }
 
 static void bmRemove(double hz) {
     std::lock_guard<std::mutex> lk(g_bmMtx);
     g_bookmarks.erase(bmKey(hz));
+    bmSaveLocked();
 }
 
 /** Drop anything unheard for kExpirySecs. Manual entries are exempt. */
@@ -639,6 +668,7 @@ static void bmLoadJson(const std::string& json) {
         size_t np  = json.find("\"name\":\"", p);
         size_t lp  = json.find("\"lastHeard\":", p);
         size_t mp  = json.find("\"manual\":", p);
+        size_t mdp = json.find("\"mode\":\"", p);
         size_t pip = json.find("\"pi\":", p);
         if (np == std::string::npos || lp == std::string::npos) break;
         size_t ns = np + 8, ne = json.find('"', ns);
@@ -648,14 +678,18 @@ static void bmLoadJson(const std::string& json) {
         b.lastHeard = atoll(json.c_str() + lp + 12);
         b.manual = (mp != std::string::npos) && json.compare(mp + 9, 4, "true") == 0;
         b.hz = freq;                              // the saved value IS the exact frequency
+        if (mdp != std::string::npos) {
+            size_t ms = mdp + 8, me = json.find('"', ms);
+            if (me != std::string::npos) b.mode = json.substr(ms, me - ms);
+        }
         if (freq > 0 && !b.name.empty()) g_bookmarks[bmKey((double)freq)] = b;
         p = ne;
     }
     bmPrune();     // a long gap since the last run may have aged some out
 }
 
-static std::string bmJson() {
-    std::lock_guard<std::mutex> lk(g_bmMtx);
+/** Serialise WITHOUT taking the lock — callers that already hold it use this. */
+static std::string bmJsonLocked() {
     bmPrune();
     std::string j = "[";
     bool first = true;
@@ -671,9 +705,30 @@ static std::string bmJson() {
            + ",\"pi\":" + std::to_string(kv.second.pi)
            + ",\"lastHeard\":" + std::to_string(kv.second.lastHeard)
            + ",\"manual\":" + (kv.second.manual ? "true" : "false")
-           + ",\"mode\":\"wfm\",\"source\":\"server\"}";
+           + ",\"mode\":\"" + bmEsc(kv.second.mode) + "\""
+           + ",\"source\":\"server\"}";
     }
     return j + "]";
+}
+
+static std::string bmJson() {
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    return bmJsonLocked();
+}
+
+/** Write the list out. Called on EVERY change — a bookmark the user saved and then
+ *  lost to a restart is worse than one that was never saved. Caller holds g_bmMtx. */
+static void bmSaveLocked() {
+    if (g_bmPath.empty()) return;
+    const std::string body = bmJsonLocked();
+    // Write-and-rename, so a kill mid-write can't leave a truncated file behind and
+    // destroy the whole list.
+    const std::string tmp = g_bmPath + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "wb");
+    if (!f) return;
+    fwrite(body.data(), 1, body.size(), f);
+    fclose(f);
+    rename(tmp.c_str(), g_bmPath.c_str());
 }
 
 // RECEIVER location, served at GET /location. It is the SERVER's location, not the
@@ -2208,7 +2263,8 @@ struct LocalSdrShim::Impl {
                 sock->close();
                 return;
             }
-            if (remove) bmRemove(hz); else bmAddManual(hz, name);
+            if (remove) bmRemove(hz);
+            else bmAddManual(hz, name, urlDecode(queryParam(reqLine, "mode")));
 
             std::string body = bmJson();
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
@@ -2620,6 +2676,21 @@ static std::mutex g_lifecycle;
 // its members can read it). A separate act rather than a start() parameter: it
 // exposes a tuning-control channel, so it must never be a defaulted argument.
 void LocalSdrShim::setServeOnLan(bool on) { g_serveOnLan.store(on); }
+
+// mDNS hostname responder — "vibesdr.local". NsdManager publishes a SERVICE, which is
+// what the app's Discovered list uses, but a browser resolving a hostname needs an A
+// record and NsdManager cannot publish one. See mdns_responder.cpp.
+// NB: this file is ALREADY inside `namespace vibe`, so these are declared bare —
+// wrapping them in `namespace vibe { }` here would nest to vibe::vibe and fail to link.
+void mdnsStart(const std::string& host, const std::string& ipv4);
+void mdnsStop();
+std::string mdnsHost();
+
+void LocalSdrShim::startMdns(const std::string& host, const std::string& ipv4) {
+    mdnsStart(host, ipv4);
+}
+void LocalSdrShim::stopMdns() { mdnsStop(); }
+std::string LocalSdrShim::mdnsHostname() { return mdnsHost(); }
 bool LocalSdrShim::serveOnLan() { return g_serveOnLan.load(); }
 static const char* bindHost() { return g_serveOnLan.load() ? "0.0.0.0" : "127.0.0.1"; }
 
@@ -2634,6 +2705,23 @@ void LocalSdrShim::setVibeServerCompressAudio(bool on) { g_vsCompressAudio.store
 void LocalSdrShim::setVibeServerWebEnabled(bool on) { g_vsWebEnabled.store(on); }
 void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(rate > 0 ? rate : 0.0); }
 void LocalSdrShim::setBookmarksJson(const std::string& json) { bmLoadJson(json); }
+
+/** Give the shim a file to own. It loads immediately and saves on every change. */
+void LocalSdrShim::setBookmarksPath(const std::string& path) {
+    std::string body;
+    {
+        std::lock_guard<std::mutex> lk(g_bmMtx);
+        g_bmPath = path;
+    }
+    if (path.empty()) return;
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return;                       // nothing saved yet — that's fine
+    char buf[8192];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) body.append(buf, n);
+    fclose(f);
+    if (!body.empty()) bmLoadJson(body);
+}
 std::string LocalSdrShim::getBookmarksJson() { return bmJson(); }
 void LocalSdrShim::setStationsJson(const std::string& json) {
     std::lock_guard<std::mutex> lk(g_stationsMtx);

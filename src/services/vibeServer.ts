@@ -125,26 +125,21 @@ export async function publishStations(): Promise<void> {
 
 const BM_KEY = 'vs_learned_bookmarks';
 
-/** Hand the shim the saved list at start-up. */
-export async function loadLearnedBookmarks(): Promise<void> {
-  if (!Local?.setBookmarksJson) return;
-  try {
-    const raw = await AsyncStorage.getItem(BM_KEY);
-    if (raw) Local.setBookmarksJson(raw);
-  } catch {}
-}
-
-/** Read the shim's current list back and store it. Expired entries are already
- *  pruned on the way out, so saving is also what garbage-collects the list. */
-export async function saveLearnedBookmarks(): Promise<void> {
-  if (!Local?.getBookmarksJson) return;
-  try {
-    const json = await Local.getBookmarksJson();
-    if (typeof json === 'string' && json.length > 2) {
-      await AsyncStorage.setItem(BM_KEY, json);
-    }
-  } catch {}
-}
+/**
+ * Bookmark persistence now lives in the SHIM (setBookmarksPath), not here.
+ *
+ * The app used to pull the list out on a 60s JS timer and write it to AsyncStorage. It
+ * did not work: while the server is serving, the app is BACKGROUNDED, and JS timers are
+ * throttled or suspended there — so the save often never ran, and an import of 145
+ * bookmarks appeared in the list, lived in memory, and vanished at the next restart.
+ * Worse, on start-up the JS pushed its stale copy back INTO the shim, which would now
+ * clobber whatever the shim had correctly loaded from its own file.
+ *
+ * The shim owns the bookmarks, so the shim saves them — on every change, atomically,
+ * with no JS runtime in the path. These no-ops remain so callers need not change.
+ */
+export function startBookmarkAutosave(): void {}
+export function stopBookmarkAutosave(): void {}
 
 /** The shim's learned list, right now — for the app's own search + VTS. */
 export async function getLearnedBookmarksNow(): Promise<ServerBookmark[]> {
@@ -164,27 +159,6 @@ export async function getLearnedBookmarksNow(): Promise<ServerBookmark[]> {
   } catch { return []; }
 }
 
-/**
- * Keep the saved copy in step with what the shim is learning.
- *
- * The shim learns continuously but has no storage, so if nothing pulls the list out
- * and writes it down, everything heard in a session is lost the moment the process
- * ends. Any session that runs the shim — serving OR listening locally — should hold
- * one of these. Saving on a timer AND on stop, because a session that is killed
- * (or crashes) never reaches its stop path.
- */
-let bmTimer: ReturnType<typeof setInterval> | null = null;
-
-export function startBookmarkAutosave(): void {
-  if (bmTimer) return;
-  void loadLearnedBookmarks();
-  bmTimer = setInterval(() => { void saveLearnedBookmarks(); }, 60_000);
-}
-
-export function stopBookmarkAutosave(): void {
-  if (bmTimer) { clearInterval(bmTimer); bmTimer = null; }
-  void saveLearnedBookmarks();     // final flush
-}
 
 /** Where the host has manually said the receiver is (city picker fallback). */
 const LOC_KEY = 'lsv_server_location';

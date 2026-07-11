@@ -130,6 +130,37 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     // The USB path needs no WiFi lock; the server path holds its own in the FGS.
     private val tcpWifiLock by lazy { VibeWifiLock(reactContext, "VibeSDR:RtlTcpClient") }
 
+    // MULTICAST LOCK — mandatory for the mDNS responder. Android drops multicast packets
+    // for apps that don't hold one, so without this the responder binds, joins the group
+    // and then never sees a single query: "vibesdr.local" would simply never resolve.
+    private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
+
+    private fun acquireMulticastLock() {
+        if (multicastLock != null) return
+        try {
+            val wm = reactContext.applicationContext
+                .getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            multicastLock = wm.createMulticastLock("VibeSDR:mDNS").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (t: Throwable) { Log.w(TAG, "multicast lock failed: ${t.message}") }
+    }
+
+    private fun releaseMulticastLock() {
+        try { multicastLock?.let { if (it.isHeld) it.release() } } catch (_: Throwable) {}
+        multicastLock = null
+    }
+
+    /** "VibeSDR: Moto G35" -> "vibesdr-moto-g35". A hostname can't carry spaces or
+     *  punctuation, and a name the user typed is full of both. */
+    private fun hostSlug(name: String): String {
+        val s = name.lowercase()
+            .replace(Regex("[^a-z0-9]+"), "-")
+            .trim('-')
+        return if (s.isEmpty()) "vibesdr" else s.take(32)
+    }
+
     /**
      * Open the first attached RTL-SDR and start the local-SDR spectrum server.
      * Resolves with { port, wsBaseUrl } so JS can point UberSDRClient at
@@ -152,6 +183,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         mgr: UsbManager, dev: UsbDevice,
         opts: com.facebook.react.bridge.ReadableMap, promise: Promise
     ) {
+        // Learned bookmarks persist for LOCAL listening too — the shim learns whenever
+        // it runs, not only when serving.
+        VibeLocalSDR.setBookmarksPath(java.io.File(reactContext.filesDir, "vibe_bookmarks.json").absolutePath)
         stopSpectrumInternal()
         val conn = mgr.openDevice(dev)
             ?: run { promise.reject("open_failed", "openDevice returned null"); return }
@@ -283,6 +317,10 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // crashes REPEATEDLY would otherwise crash-loop, re-opening the dongle each time.
         val autoRestore = if (opts.hasKey("autoRestore")) opts.getBoolean("autoRestore") else true
 
+        // Give the shim a file for its bookmarks BEFORE it starts, so it loads the saved
+        // set and then saves every change itself. The JS side cannot be relied on: it is
+        // backgrounded while serving, where its timers are suspended.
+        VibeLocalSDR.setBookmarksPath(java.io.File(reactContext.filesDir, "vibe_bookmarks.json").absolutePath)
         VibeLocalSDR.setVibeServerAuth(pin)
         VibeLocalSDR.setVibeServerLimits(maxBw, maxFps)
         VibeLocalSDR.setVibeServerCompressAudio(compress)
@@ -299,6 +337,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             return
         }
         val ip = getLocalIp() ?: "0.0.0.0"
+        // "<name>.local" in any browser on the network. The responder probes first and
+        // renames itself (vibesdr-2, ...) if the name is already taken, so two phones
+        // serving at once don't fight over one name.
+        if (ip != "0.0.0.0") {
+            acquireMulticastLock()
+            VibeLocalSDR.startMdns(hostSlug(name), ip)
+        }
         RtlTcpServerService.start(reactContext, name, ip, port, "vibeserver")
         // Remember the live config so the service can rebuild the shim if the process
         // dies under it (START_STICKY brings the service back, but not the radio).
@@ -321,6 +366,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // DISARM FIRST. A deliberate stop must not be undone: without this the crash-
         // recovery path would happily resurrect a server the user had just switched off.
         VibeServerRestore.disarm(reactContext)
+        VibeLocalSDR.stopMdns()
+        releaseMulticastLock()
         RtlTcpServerService.stop(reactContext)
         stopSpectrumInternal()
         VibeLocalSDR.setServeOnLan(false)
@@ -358,6 +405,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun getBookmarksJson(promise: Promise) {
         promise.resolve(VibeLocalSDR.getBookmarksJson())
+    }
+
+    /** The .local hostname the responder actually took — it renames itself on a clash,
+     *  so this is not necessarily the one we asked for. */
+    @ReactMethod
+    fun getMdnsHostname(promise: Promise) {
+        promise.resolve(VibeLocalSDR.mdnsHostname())
     }
 
     @ReactMethod

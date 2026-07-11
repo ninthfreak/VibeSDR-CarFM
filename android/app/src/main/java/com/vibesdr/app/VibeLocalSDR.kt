@@ -141,6 +141,17 @@ object VibeLocalSDR {
     fun getBookmarksJson(): String { return if (loaded) nativeGetBookmarksJson() else "[]" }
     private external fun nativeSetBookmarksJson(json: String)
     private external fun nativeGetBookmarksJson(): String
+    /** File the shim persists bookmarks to (it saves on every change, no JS involved). */
+    fun setBookmarksPath(path: String) { ensureLoaded(); nativeSetBookmarksPath(path) }
+    private external fun nativeSetBookmarksPath(path: String)
+    /** mDNS hostname responder — serve "<host>.local". Renames itself on a clash. */
+    fun startMdns(host: String, ipv4: String) { ensureLoaded(); nativeStartMdns(host, ipv4) }
+    fun stopMdns() { if (loaded) nativeStopMdns() }
+    /** The hostname actually taken (vibesdr-2 if vibesdr was already in use). */
+    fun mdnsHostname(): String = if (loaded) nativeMdnsHostname() else ""
+    private external fun nativeStartMdns(host: String, ipv4: String)
+    private external fun nativeStopMdns()
+    private external fun nativeMdnsHostname(): String
     private external fun nativeSetVibeServerAuth(secret: String)
     private external fun nativeSetVibeServerLimits(maxBwHz: Double, maxFftRate: Double)
     private external fun nativeSetVibeServerCompressAudio(on: Boolean)
