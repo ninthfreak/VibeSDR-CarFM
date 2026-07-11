@@ -779,6 +779,16 @@ struct VsAuth {
         auto it = fails.find(ip);
         return it != fails.end() && nowMs() < it->second.until;
     }
+    /** Seconds left on this IP's lockout, 0 if none. The CLIENT needs this: a WebSocket
+     *  error carries no status code, so without being told, a locked-out browser reports
+     *  "wrong PIN" and the user retypes a perfectly correct one forever. */
+    int blockedFor(const std::string& ip) {
+        std::lock_guard<std::mutex> lk(mtx);
+        auto it = fails.find(ip);
+        if (it == fails.end()) return 0;
+        int64_t left = it->second.until - nowMs();
+        return left > 0 ? (int)((left + 999) / 1000) : 0;
+    }
     void recordFail(const std::string& ip) {
         std::lock_guard<std::mutex> lk(mtx);
         auto& f = fails[ip];
@@ -2173,7 +2183,15 @@ struct LocalSdrShim::Impl {
             std::string secret; { std::lock_guard<std::mutex> lk(g_vsMtx); secret = g_vsSecret; }
             std::string body;
             if (secret.empty()) body = "{\"required\":false}";
-            else body = "{\"required\":true,\"nonce\":\"" + g_vsAuthState.issue() + "\"}";
+            else {
+                // Report a lockout HERE. The WS upgrade answers 429, but a WebSocket
+                // error gives the browser no status code at all — so a locked-out client
+                // could only guess, and it guessed "wrong PIN", leaving the user retyping
+                // a perfectly correct one until the backoff expired.
+                int wait = g_vsAuthState.blockedFor(sock->peerAddress());
+                body = "{\"required\":true,\"nonce\":\"" + g_vsAuthState.issue() + "\""
+                     + ",\"lockedFor\":" + std::to_string(wait) + "}";
+            }
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);

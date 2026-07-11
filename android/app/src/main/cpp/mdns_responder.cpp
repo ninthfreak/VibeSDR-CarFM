@@ -113,6 +113,41 @@ std::string buildAnswer(const std::string& host, uint32_t addr, uint16_t txid) {
     return p;
 }
 
+/**
+ * A NEGATIVE answer: "this name exists, and the only record type it has is A".
+ *
+ * Without this, an AAAA (IPv6) query for our name goes UNANSWERED — and a resolver asks
+ * for A and AAAA together, then WAITS for the missing reply to time out before using the
+ * IPv4 address it already had. That wait is why connecting by .local felt markedly
+ * slower than connecting by IP. Silence is not "no"; NSEC is how mDNS says "no".
+ *
+ * RDATA = <next domain name> <window 0> <bitmap length 1> <bitmap>, and the bitmap's
+ * high bit of byte 0 is type 1 (A) — so 0x40.
+ */
+std::string buildNsec(const std::string& host, uint16_t txid) {
+    const std::string name = encodeName(host);
+    std::string p;
+    auto u16 = [&](uint16_t v) { p += (char)(v >> 8); p += (char)(v & 0xFF); };
+    auto u32 = [&](uint32_t v) {
+        p += (char)(v >> 24); p += (char)((v >> 16) & 0xFF);
+        p += (char)((v >> 8) & 0xFF); p += (char)(v & 0xFF);
+    };
+    u16(txid);
+    u16(0x8400);            // response, authoritative
+    u16(0); u16(1); u16(0); u16(0);
+    p += name;
+    u16(47);                // TYPE NSEC
+    u16(0x8001);            // CLASS IN + cache-flush
+    u32(kTtl);
+    std::string rdata = name;      // "next name" is our own, as mDNS does
+    rdata += (char)0x00;           // window 0
+    rdata += (char)0x01;           // bitmap length
+    rdata += (char)0x40;           // bit for type 1 (A) only — no AAAA
+    u16((uint16_t)rdata.size());
+    p += rdata;
+    return p;
+}
+
 /** Ask whether anyone else already answers for `host`. */
 std::string buildProbe(const std::string& host) {
     const std::string name = encodeName(host);
@@ -261,9 +296,18 @@ void loop(std::string base, uint32_t addr) {
             off = skip + 4;
 
             if (!used) continue;
-            if (qtype != 1 && qtype != 255) continue;           // A or ANY only
 
-            const std::string ans = buildAnswer(host, addr, 0);
+            std::string ans;
+            if (qtype == 1 || qtype == 255) {
+                ans = buildAnswer(host, addr, 0);          // A
+            } else if (qtype == 28) {
+                // AAAA — we have none. ANSWER anyway, with NSEC: leaving it unanswered
+                // makes the resolver wait out a timeout before using the A record it
+                // already holds, which is exactly what made .local feel slow.
+                ans = buildNsec(host, 0);
+            } else {
+                continue;
+            }
             // Honour the QU bit: a resolver that asked for a unicast reply gets one.
             if (unicast) { from.sin_port = htons(kPort); sendTo(fd, ans, from); }
             else         sendTo(fd, ans, group);
