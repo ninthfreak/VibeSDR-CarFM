@@ -44,9 +44,6 @@ export type VibeServerConfig = {
   /** Pin the capture rate: clients cannot change it, and their picker is hidden.
    *  0 (the default) = client-controlled, as on the RTL-TCP server. */
   lockedRate?: number;
-  /** mDNS advertise. Carried into native only so the BOOT path (which has no JS to
-   *  register mDNS with) can reproduce it. */
-  advertise?: boolean;
 };
 
 export type VibeServerInfo = { ip: string; port: number; name: string };
@@ -80,7 +77,6 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     compressAudio: cfg.compressAudio ?? true,
     webServer: cfg.webServer ?? true,
     lockedRate: cfg.lockedRate ?? 0,
-    advertise: cfg.advertise ?? true,
   });
   // Hand the web client's search its station list. Fire-and-forget: the server is
   // already up and useful without it, and this can involve a network fetch.
@@ -339,17 +335,3 @@ export function fmtRate(bytesPerSec: number): string {
   return kb >= 1000 ? `${(kb / 1024).toFixed(1)} MB/s` : `${kb.toFixed(0)} KB/s`;
 }
 
-// ── Headless autostart ───────────────────────────────────────────────────────
-// Restart the server after a reboot or an app update, so a receiver left running
-// somewhere unattended survives an overnight OS update. Nothing appears on screen:
-// the boot path starts the FOREGROUND SERVICE, never an Activity (Android blocks
-// background activity starts anyway), so the phone comes back to its normal lock
-// screen with the server already up behind it.
-
-export async function getServerAutoStart(): Promise<boolean> {
-  try { return !!(await Local?.getServerAutoStart?.()); } catch { return false; }
-}
-
-export function setServerAutoStart(on: boolean): void {
-  try { Local?.setServerAutoStart?.(on); } catch {}
-}

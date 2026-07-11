@@ -8,9 +8,6 @@
   <!-- RTL-TCP server: connectedDevice FGS + wake lock (keep USB/TCP stream alive screen-off) -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
   <uses-permission android:name="android.permission.WAKE_LOCK"/>
-  <!-- Restart VibeServer after a reboot / app update, so a receiver left running
-       somewhere unattended survives an overnight OS update. -->
-  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-permission android:name="android.permission.INTERNET"/>
   <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
@@ -61,30 +58,7 @@
       <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                  android:resource="@xml/device_filter"/>
     </activity>
-    <service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice"
-             android:exported="false" android:directBootAware="true"/>
-    <!-- Boot / post-update restart. Starting a foreground service from
-         BOOT_COMPLETED is exempt from Android 12's background-FGS-start ban;
-         starting an ACTIVITY from here is not possible at all (blocked since
-         Android 10) and is not wanted: headless means no UI on screen. -->
-    <receiver android:name=".BootReceiver" android:exported="true" android:enabled="true"
-              android:directBootAware="true">
-      <intent-filter>
-        <action android:name="android.intent.action.BOOT_COMPLETED"/>
-        <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
-        <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
-      </intent-filter>
-      <!-- Start headlessly the moment the dongle is plugged in: no UI, no unlock.
-           Android's OTG stack usually will NOT enumerate a dongle that was already
-           attached when the phone booted, and no API can force it. So a replug (or a
-           power blip on the hub) is what revives an unattended server, and this is
-           what makes that automatic. -->
-      <intent-filter>
-        <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"/>
-      </intent-filter>
-      <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
-                 android:resource="@xml/device_filter"/>
-    </receiver>
+    <service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice" android:exported="false"/>
     <service android:name=".VibeStreamService" android:foregroundServiceType="mediaPlayback" android:exported="true">
       <intent-filter>
         <action android:name="android.media.browse.MediaBrowserService"/>

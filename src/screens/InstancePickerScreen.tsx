@@ -409,6 +409,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     try { pending = await Local.consumeUsbLaunch(); } catch { pending = false; }
     if (!pending) return false;
     splashBridge.dismiss();
+
     // Let the user pick how to use the just-plugged-in dongle: listen on this
     // device, or share it over the network as an RTL-TCP server. (Falls straight
     // through to listen if the server path isn't available on this build.)
