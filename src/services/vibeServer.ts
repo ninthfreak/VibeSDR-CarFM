@@ -255,8 +255,13 @@ export async function geocodeCity(name: string): Promise<ServerLocation | null> 
   }
 }
 
-/** Cache of coarse lat/lon → place name, so the reverse lookup happens once ever. */
-const RGEO_KEY = 'vs_rgeo';
+/** Cache of coarse lat/lon → place, so the reverse lookup happens once ever.
+ *
+ *  _v2: the value used to be a bare NAME STRING and is now { name, country, iso }.
+ *  Reading the old shape back gave `undefined` for every field — the receiver silently
+ *  lost its town, its country AND the ISO that validates a station's PI country nibble.
+ *  Versioning the key retires the old entries instead of misreading them. */
+const RGEO_KEY = 'vs_rgeo_v2';
 
 /**
  * Name the place we're at ("Moulton"), from a coarse position.
@@ -267,11 +272,13 @@ const RGEO_KEY = 'vs_rgeo';
  * never repeats. With no internet we keep the bare coordinates: ugly but honest, and
  * the grid square is there regardless.
  */
-export async function reverseGeocode(lat: number, lon: number): Promise<{ name: string; iso?: string } | null> {
+export async function reverseGeocode(
+  lat: number, lon: number,
+): Promise<{ name: string; country?: string; iso?: string } | null> {
   const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
   try {
     const raw = await AsyncStorage.getItem(RGEO_KEY);
-    const cache: Record<string, { name: string; iso?: string }> = raw ? JSON.parse(raw) : {};
+    const cache: Record<string, { name: string; country?: string; iso?: string }> = raw ? JSON.parse(raw) : {};
     if (cache[key]) return cache[key];
 
     const r = await fetch(
@@ -292,7 +299,11 @@ export async function reverseGeocode(lat: number, lon: number): Promise<{ name: 
     // the RDS country code that would otherwise supply it rides in group 1A, which many
     // stations never transmit. FM is line-of-sight, so a station this receiver can hear
     // is essentially always in the receiver's own country — a very good default.
-    const out = { name, iso: (a.country_code || '').toUpperCase() || undefined };
+    const out = {
+      name,
+      country: a.country || undefined,
+      iso: (a.country_code || '').toUpperCase() || undefined,
+    };
     cache[key] = out;
     await AsyncStorage.setItem(RGEO_KEY, JSON.stringify(cache));
     return out;
@@ -378,8 +389,9 @@ export async function publishLocation(): Promise<void> {
 
     emit({
       lat, lon, label,
-      // Receiver country — clients use it to anchor station-logo lookups and to flag
-      // a station whose RDS never carried a country code of its own.
+      // Receiver country — clients use it to anchor station-logo lookups and to
+      // VALIDATE a station's PI country nibble, and they show it beside the town.
+      country: rev?.country,
       iso: rev?.iso,
       // The grid is DERIVED here, so no client ever has to ask a human for it —
       // a locator is a property of the antenna, not something the listener knows.

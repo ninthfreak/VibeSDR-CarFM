@@ -1469,7 +1469,7 @@ function filteredSpots(): Spot[] {
  * ANTENNA, so asking the listener for one can only produce a wrong answer — if the
  * server publishes no position, we show that plainly and do without distances.
  */
-let serverLoc: { lat: number; lon: number; label?: string; grid?: string } | null = null;
+let serverLoc: { lat: number; lon: number; label?: string; country?: string; grid?: string } | null = null;
 /**
  * The RECEIVER's country — a TIE-BREAK ONLY, never a filter and never a flag.
  *
@@ -1487,12 +1487,15 @@ function myPos(): { lat: number; lon: number } | null { return serverLoc; }
 /** "Northampton IO92nh", or "52.24, -0.90" / "IO92nh" if only one is known. */
 function locLine(): string {
   if (!serverLoc) return '';
-  const { lat, lon, label, grid } = serverLoc;
+  const { lat, lon, label, country, grid } = serverLoc;
   const place = label || `${lat.toFixed(2)}, ${lon.toFixed(2)}`;
   // The host may have named the receiver BY its locator, in which case place and
   // grid are the same thing — don't print "IO92nh IO92nh".
   const isGrid = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/i.test(place);
-  return grid && !isGrid ? `${place} ${grid}` : place;
+  // "Moulton, United Kingdom IO92ng" — the country is skipped when the place IS the
+  // grid (nothing to qualify) or when it would just repeat the place name.
+  const where = (country && !isGrid && country !== place) ? `${place}, ${country}` : place;
+  return grid && !isGrid ? `${where} ${grid}` : where;
 }
 
 async function loadServerLocation(host: string) {
@@ -1502,7 +1505,7 @@ async function loadServerLocation(host: string) {
     serverName = typeof j.name === 'string' ? j.name : '';
     serverIso = typeof j.iso === 'string' ? j.iso : '';
     if (typeof j.lat === 'number' && typeof j.lon === 'number') {
-      serverLoc = { lat: j.lat, lon: j.lon, label: j.label, grid: j.grid };
+      serverLoc = { lat: j.lat, lon: j.lon, label: j.label, country: j.country, grid: j.grid };
     }
     // Menu row.
     const el = $('rxLoc');
