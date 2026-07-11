@@ -443,6 +443,7 @@ static std::string g_stationsJson;
 struct LearnedBm {
     std::string name;            // RDS programme-service name, trimmed
     int         pi = -1;         // RDS PI code (station identity)
+    long long   hz = 0;          // the EXACT frequency — the map key is only a rounding
     long long   lastHeard = 0;   // unix seconds — drives expiry
     bool        manual = false;  // saved by hand: never expires
 };
@@ -499,8 +500,16 @@ static const long long kPiLockSecs  = 5;                  // PI must be steady t
 static const long long kStableSecs  = 15;                 // reconstruction must hold
 static const long long kExpirySecs  = 30LL * 24 * 3600;   // 30 days unheard
 
-/** Round so a few Hz of VFO difference can't create a second entry for one station. */
-static long long bmKey(double hz) { return (long long)(llround(hz / 10000.0) * 10000LL); }
+/**
+ * Round so a few Hz of VFO drift can't create a second entry for one station.
+ *
+ * 1 kHz, NOT 10 kHz. 10 kHz was chosen for FM, where stations sit on a 100 kHz grid —
+ * but shortwave is a 5 kHz grid and medium wave a 9 kHz one, so two genuinely different
+ * stations rounded into the same bucket and the second silently destroyed the first.
+ * Importing a real UberSDR bookmark list lost 25 entries this way: CB10 (27.075) and
+ * CB11 (27.085) both landed on 27.080.
+ */
+static long long bmKey(double hz) { return (long long)(llround(hz / 1000.0) * 1000LL); }
 
 static std::string bmTrim(const std::string& s) {
     size_t a = s.find_first_not_of(" \t\r\n");
@@ -638,7 +647,8 @@ static void bmLoadJson(const std::string& json) {
         b.pi = (pip != std::string::npos) ? atoi(json.c_str() + pip + 5) : -1;
         b.lastHeard = atoll(json.c_str() + lp + 12);
         b.manual = (mp != std::string::npos) && json.compare(mp + 9, 4, "true") == 0;
-        if (freq > 0 && !b.name.empty()) g_bookmarks[freq] = b;
+        b.hz = freq;                              // the saved value IS the exact frequency
+        if (freq > 0 && !b.name.empty()) g_bookmarks[bmKey((double)freq)] = b;
         p = ne;
     }
     bmPrune();     // a long gap since the last run may have aged some out
@@ -652,7 +662,11 @@ static std::string bmJson() {
     for (auto& kv : g_bookmarks) {
         if (!first) j += ",";
         first = false;
-        j += "{\"frequency\":" + std::to_string(kv.first)
+        // The EXACT frequency, never the rounded key. The key only groups a station
+        // despite VFO drift; emitting it as the frequency shifted every bookmark by
+        // up to 500 Hz, and the VTS only recognises a station within 99 Hz — so a
+        // bookmark like 17.428100 MHz simply never showed up when tuned to it.
+        j += "{\"frequency\":" + std::to_string(kv.second.hz ? kv.second.hz : kv.first)
            + ",\"name\":\"" + bmEsc(kv.second.name) + "\""
            + ",\"pi\":" + std::to_string(kv.second.pi)
            + ",\"lastHeard\":" + std::to_string(kv.second.lastHeard)
