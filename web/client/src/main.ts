@@ -236,7 +236,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (last) spec!.tune(last.hz, last.mode, { recenter: true });
       }
     },
-    onHwInfo: (gains, rates) => { hwGains = gains; hwRates = rates; populateHw(); },
+    onHwInfo: (gains, rates, locked) => { hwGains = gains; hwRates = rates; hwLockedRate = locked; populateHw(); },
     onRds: (m) => {
       $('stereo').classList.toggle('on', m.stereo);
       // RDS is the station naming itself — it outranks any bookmark guess.
@@ -306,6 +306,8 @@ let audioKbps = 0;
 let specKbps = 0;
 let hwGains: number[] = [];
 let hwRates: number[] = [];
+/** >0 = the SERVER pinned the capture rate; the picker is hidden. */
+let hwLockedRate = 0;
 
 function loop() {
   if (!wf || !spec) return;
@@ -1328,32 +1330,43 @@ function filteredSpots(): Spot[] {
  * properties of the ANTENNA. Using the listener's position would give nonsense
  * distances and, worse, the wrong region's band edges.
  *
- * The manual grid below is only a fallback for a server that has published no
- * location at all (host declined the permission and picked no city).
+ * There is deliberately NO manual grid entry. A locator is a property of the
+ * ANTENNA, so asking the listener for one can only produce a wrong answer — if the
+ * server publishes no position, we show that plainly and do without distances.
  */
-let serverLoc: { lat: number; lon: number; label?: string } | null = null;
-let myGrid = '';
+let serverLoc: { lat: number; lon: number; label?: string; grid?: string } | null = null;
+let serverName = '';
 
-function myPos(): { lat: number; lon: number } | null {
-  if (serverLoc) return serverLoc;
-  return myGrid ? gridToLatLon(myGrid) : null;
+function myPos(): { lat: number; lon: number } | null { return serverLoc; }
+
+/** "Northampton IO92nh", or "52.24, -0.90" / "IO92nh" if only one is known. */
+function locLine(): string {
+  if (!serverLoc) return '';
+  const { lat, lon, label, grid } = serverLoc;
+  const place = label || `${lat.toFixed(2)}, ${lon.toFixed(2)}`;
+  return grid ? `${place} ${grid}` : place;
 }
 
 async function loadServerLocation(host: string) {
   try {
     const r = await fetch(`http://${host}/location`, { cache: 'no-store' });
     const j = await r.json();
+    serverName = typeof j.name === 'string' ? j.name : '';
     if (typeof j.lat === 'number' && typeof j.lon === 'number') {
-      serverLoc = { lat: j.lat, lon: j.lon, label: j.label };
-      const el = $('rxLoc');
-      el.textContent = serverLoc.label
-        ? `Receiver: ${serverLoc.label}`
-        : `Receiver: ${serverLoc.lat.toFixed(2)}, ${serverLoc.lon.toFixed(2)}`;
-      $('gridRow').hidden = true;      // the server knows; nothing to ask
-      renderSpots();
+      serverLoc = { lat: j.lat, lon: j.lon, label: j.label, grid: j.grid };
     }
+    // Menu row.
+    const el = $('rxLoc');
+    el.textContent = serverLoc
+      ? `Receiver: ${locLine()}`
+      : 'Receiver location not set — distances and the band plan are unavailable.';
+    // Spectrum overlay, UberSDR-style: name on top, location under it.
+    $('rxName').textContent = serverName;
+    $('rxWhere').textContent = locLine();
+    $('rxBadge').hidden = !serverName && !serverLoc;
+    renderSpots();
   } catch {
-    // Older shim, or no location set — fall back to the manual grid.
+    // Older shim with no /location at all — say nothing rather than guess.
   }
 }
 
@@ -1462,14 +1475,6 @@ function initDecoders(host: string, auth: AuthState) {
   };
   $('mapBtn').onclick = openSpotsMap;
 
-  const gridEl = $<HTMLInputElement>('myGrid');
-  myGrid = (prefs().myGrid as string) || '';
-  gridEl.value = myGrid;
-  gridEl.oninput = () => {
-    myGrid = gridEl.value.trim();
-    savePref('myGrid', myGrid);
-    renderSpots();
-  };
 
   // Output box chrome.
   initSpotFilters();
@@ -2308,7 +2313,23 @@ function populateHw() {
     // isn't using.
     if (typeof savedIdx === 'number') spec!.setHwGain(hwGains[Number(g.value)] ?? 0, false);
   }
-  if (hwRates.length) {
+  // The SERVER pinned the capture rate: hide the picker and say who set it.
+  // Offering a control whose every use is silently dropped is worse than offering
+  // none — the shim ignores a client's sampleRate outright when locked.
+  const pinned = hwLockedRate > 0;
+  const rateRow = document.getElementById('rowRate');
+  const rateLock = document.getElementById('rateLocked');
+  if (rateRow)  rateRow.hidden = pinned;
+  if (rateLock) {
+    rateLock.hidden = !pinned;
+    const val = rateLock.querySelector('.val');
+    if (pinned && val) {
+      const mhz = (hwLockedRate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+      val.textContent = `${mhz} MS/s · set by server`;
+    }
+  }
+
+  if (hwRates.length && !pinned) {
     const r = $<HTMLSelectElement>('rate');
     r.innerHTML = '';
     for (const rate of hwRates) {

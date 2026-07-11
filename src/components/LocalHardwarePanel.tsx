@@ -44,6 +44,8 @@ export interface LocalHardwarePanelProps {
   /** VibeServer: the exact sample rates this server offers (sent over the wire),
    *  so the picker aligns with the server rather than a generic RTL-TCP/USB list. */
   serverRates?: number[] | null;
+  /** >0 = the server PINNED the capture rate; the picker is replaced by a note. */
+  lockedRate?: number | null;
   /** SpyServer: the server owns the radio, so most RTL-specific controls do not
    *  apply. Gain does (it is in the protocol); sample rate, PPM, bias-T, digital
    *  AGC and direct sampling do not — some have no wire representation at all,
@@ -110,6 +112,15 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
 
           {!p.isSpy && <>
           <Text style={styles.section}>SAMPLE RATE</Text>
+          {p.lockedRate && p.lockedRate > 0 ? (
+            // The SERVER pinned the rate — it IGNORES a sampleRate message outright.
+            // Showing a picker whose every use is silently dropped is worse than
+            // showing none, so say who set it instead.
+            <Text style={styles.note}>
+              {`${(p.lockedRate / 1e6).toFixed(p.lockedRate % 1e6 === 0 ? 1 : 3)
+                   .replace(/0+$/, '').replace(/\.$/, '.0')}M — set by the server.`}
+            </Text>
+          ) : <>
           {/* A real USB dongle runs sluggish/underfiltered below ~1 MHz, so only
               offer >=1 MHz for local hardware; RTL-TCP keeps the low rates (a
               networked rtl_tcp source like UberSDR only sends ~192 kHz). */}
@@ -120,6 +131,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                           : p.isTcp ? SAMPLE_RATES : SAMPLE_RATES.filter(r => r >= 1_000_000)}
                value={p.sampleRate} onChange={p.onSampleRate}
                fmt={(r) => `${(r / 1e6).toFixed(r % 1e6 === 0 ? 1 : 3).replace(/0+$/, '').replace(/\.$/, '.0')}M`} />
+          </>}
           </>}
           {p.isSpy && <Text style={styles.note}>
             Sample rate is chosen automatically from the mode: the server decimates

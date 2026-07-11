@@ -12,7 +12,9 @@ import { getServerName, saveServerName } from '../services/rtlTcpServer';
 import {
   startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio,
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
-  type FpsTier, type VibeServerInfo, type VibeServerStatus,
+  getServerLocationMode, setServerLocationMode, getManualServerLocation,
+  setManualServerLocation, geocodeCity,
+  type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
 import { advertiseServer, stopAdvertiseRtlTcp } from '../services/mdns';
 
@@ -27,7 +29,12 @@ type Props = NativeStackScreenProps<RootStackParamList, 'ServerMode'>;
 type Proto = 'vibeserver' | 'rtltcp';
 type PinMode = 'random' | 'custom' | 'off';
 
+// 0 = CLIENT-CONTROLLED: the client picks the span live (the same convention as the
+// RTL-TCP server's overrideRate). Anything else PINS the rate — the client's picker
+// is then hidden and told the server set it, because a rate it can't change is a
+// rate it shouldn't offer.
 const RATE_OPTIONS = [
+  { label: 'Client-controlled', value: 0 },
   { label: 'Full · 2.4 MHz',  value: 2_400_000 },
   { label: '1.2 MHz',         value: 1_200_000 },
   { label: '960 kHz (light)', value: 960_000 },
@@ -36,6 +43,7 @@ const RATE_OPTIONS = [
 const K = {
   proto: 'vs_proto', advertise: 'vs_advertise', pinMode: 'vs_pinmode',
   pin: 'vs_pin', rate: 'vs_rate', fps: 'vs_fps', compress: 'vs_compress',
+  webServer: 'vs_webserver',
 };
 
 export default function ServerModeScreen({ navigation, route }: Props) {
@@ -46,9 +54,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [advertise, setAdvertise] = useState(true);
   const [pinMode, setPinMode]     = useState<PinMode>('random');
   const [pin, setPin]             = useState(() => randomPin(Date.now()));
-  const [rate, setRate]           = useState(2_400_000);
+  const [rate, setRate]           = useState(0);          // 0 = client-controlled
   const [fps, setFps]             = useState<FpsTier>('full');
   const [compress, setCompress]   = useState(true);
+  const [webServer, setWebServer] = useState(true);
+  const [locMode, setLocMode]     = useState<LocationMode>('off');
+  const [locCity, setLocCity]     = useState('');
 
   const [running, setRunning] = useState<VibeServerInfo | null>(null);
   const [status, setStatus]   = useState<VibeServerStatus | null>(null);
@@ -62,20 +73,25 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       const n = await getServerName(route.params?.name ?? 'VibeSDR');
       setName(n);
       try {
-        const [p, a, pm, sp, r, fp, cp] = await Promise.all([
+        const [p, a, pm, sp, r, fp, cp, ws] = await Promise.all([
           AsyncStorage.getItem(K.proto), AsyncStorage.getItem(K.advertise),
           AsyncStorage.getItem(K.pinMode), AsyncStorage.getItem(K.pin),
           AsyncStorage.getItem(K.rate), AsyncStorage.getItem(K.fps),
-          AsyncStorage.getItem(K.compress),
+          AsyncStorage.getItem(K.compress), AsyncStorage.getItem(K.webServer),
         ]);
         if (p === 'rtltcp' || p === 'vibeserver') setProto(p);
         if (a != null) setAdvertise(a !== '0');
+        if (ws != null) setWebServer(ws !== '0');
+        setLocMode(await getServerLocationMode());
+        setLocCity((await getManualServerLocation())?.label ?? '');
         if (pm === 'random' || pm === 'custom' || pm === 'off') setPinMode(pm);
         // Restore the saved PIN for BOTH modes so re-opening the server keeps the
         // same code — it only changes when the user taps refresh (↻) or edits it.
         if (sp) setPin(sp);
         else AsyncStorage.setItem(K.pin, pin);   // first run: persist the generated default
-        if (r) setRate(Number(r) || 2_400_000);
+        // NB: 0 is a REAL value here (client-controlled), so no `if (r)` / `|| default`
+        // — both would silently turn "client-controlled" back into a pinned 2.4 MHz.
+        if (r != null && Number.isFinite(Number(r))) setRate(Number(r));
         if (fp === 'full' || fp === 'half' || fp === 'quarter') setFps(fp);
         if (cp != null) setCompress(cp !== '0');
       } catch {}
@@ -109,17 +125,40 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.proto, proto], [K.advertise, advertise ? '1' : '0'],
       [K.pinMode, pinMode], [K.pin, pin], [K.rate, String(rate)],
       [K.fps, fps], [K.compress, compress ? '1' : '0'],
+      [K.webServer, webServer ? '1' : '0'],
     ]);
     if (Platform.OS === 'android' && Platform.Version >= 33) {
       try { await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS); } catch {}
     }
+
+    // Resolve the location BEFORE starting, so the very first client to connect
+    // already sees it. A typed city is geocoded once, here — never per client.
+    if (locMode === 'manual') {
+      const city = locCity.trim();
+      const known = await getManualServerLocation();
+      if (city && known?.label !== city) {
+        const geo = await geocodeCity(city);
+        if (!geo) {
+          setStarting(false);
+          setError(`Couldn't find "${city}". Check the spelling, or use the device's location instead.`);
+          return;
+        }
+        await setManualServerLocation(geo);
+      }
+    }
+    await setServerLocationMode(locMode);
+
     try {
       const info = await startVibeServer({
         name: n,
-        sampleRate: rate,
+        // rate 0 = client-controlled: start at the full span and let the client
+        // narrow it. Anything else both starts AND pins there.
+        sampleRate: rate || 2_400_000,
+        lockedRate: rate,
         pin: effectivePin,
         maxFftRate: fpsForTier(fps),
         compressAudio: compress,
+        webServer,
       });
       setRunning(info);
       runningRef.current = true;
@@ -129,7 +168,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       setStarting(false);
       setError(e?.message ?? 'Could not start VibeServer. Is an RTL-SDR plugged in via USB OTG?');
     }
-  }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin]);
+  }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
+      webServer, locMode, locCity]);
 
   const stopAndBack = useCallback(() => {
     stopAdvertiseRtlTcp();
@@ -297,14 +337,64 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 : 'Clients enter this PIN once. It authenticates control without ever crossing the wire (HMAC challenge-response).'}
             </Text>
 
+            {/* Web server. Turning this OFF means a browser gets nothing — only the
+                VibeSDR app can connect. It's the blunt lock for a server you don't
+                want a stranger stumbling into via a URL. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WEB CLIENT</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                  Serve the web client
+                </Text>
+                <Switch value={webServer} onValueChange={setWebServer}
+                  trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+              </View>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                {webServer
+                  ? 'Anyone on the network can open this server in a browser (the PIN still applies).'
+                  : 'Browsers get nothing — only the VibeSDR app can connect.'}
+              </Text>
+            </View>
+
             {/* Bandwidth (sample rate) */}
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>BANDWIDTH</Text>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
-              Lower the span to save processing power on a low-end phone.
+              {rate === 0
+                ? 'Clients choose their own span, up to the full 2.4 MHz.'
+                : 'Pinned — clients cannot change the span. Lower it to save processing power on a low-end phone.'}
             </Text>
             {RATE_OPTIONS.map(o => (
               <OptRow key={o.value} C={C} F={F} active={rate === o.value} label={o.label} onPress={() => setRate(o.value)} />
             ))}
+
+            {/* Receiver location. A SEPARATE consent from the app's own location
+                permission: granting location to sort the instance list by distance is
+                not consent to BROADCAST that position to every client. So this is
+                opt-in, and 'off' is the default. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>RECEIVER LOCATION</Text>
+            <View style={styles.pillRow}>
+              {(['off', 'device', 'manual'] as LocationMode[]).map(m => (
+                <Pill key={m} C={C} F={F} active={locMode === m}
+                  label={m === 'off' ? 'Not set' : m === 'device' ? 'Use device' : 'Enter city'}
+                  onPress={() => setLocMode(m)} />
+              ))}
+            </View>
+            {locMode === 'manual' && (
+              <TextInput value={locCity} onChangeText={setLocCity}
+                placeholder="Town or city (e.g. Northampton)" placeholderTextColor={C.textDim}
+                style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
+            )}
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+              {locMode === 'off'
+                ? 'No location is published. Clients show "receiver location not set" and go without spot distances, map centring and the regional band plan.'
+                : locMode === 'device'
+                ? "This phone's coarse position (~1 km) is published to every client that connects."
+                : 'The city you name is published to every client. Use this if the receiver lives somewhere other than where you are.'}
+            </Text>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              Distances and band edges are properties of the ANTENNA, not the listener —
+              80m is 3.5–3.8 MHz in Region 1 but 3.5–4.0 in Region 2.
+            </Text>
 
             {/* Waterfall frame rate */}
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WATERFALL RATE</Text>

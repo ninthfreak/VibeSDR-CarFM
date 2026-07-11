@@ -825,6 +825,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [wfContrast,    setWfContrast]    = useState(0);
   const [wfSharpness,   setWfSharpness]   = useState(5);
   // UberSDR auto-range symmetric contrast (0–20). Web client calibration = 10.
+  const [hwLockedRate, setHwLockedRate] = useState(0);   // >0 = server pinned the rate
   const [autoContrast,  setAutoContrast]  = useState(5);  // production default (10 too dark)
   // M9PSY 5-tap spatial waterfall smooth
   const [spatialSmooth, setSpatialSmooth] = useState(true);
@@ -1871,6 +1872,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // remote client can't query the hardware natively).
       onHwGains: (gains: number[]) => { if (!destroyed.current && gains.length) setHwGains(gains); },
       onHwRates: (rates: number[]) => { if (!destroyed.current && rates.length) setHwServerRates(rates); },
+      onHwLockedRate: (r: number) => { if (!destroyed.current) setHwLockedRate(r); },
       onServerLost: () => {
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio
         // engine, and surface the wait-and-reconnect prompt (no auto-reconnect —
@@ -4072,6 +4074,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onSampleRate={onHwSampleRate}
           isTcp={!!route.params.isTcp}
           serverRates={hwServerRates}
+          lockedRate={hwLockedRate}
           biasTee={hwBiasTee}
           onBiasTee={onHwBiasTee}
           agc={hwAgc}

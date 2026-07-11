@@ -1,6 +1,8 @@
 import { NativeModules, Platform } from 'react-native';
 import { loadActiveEibi } from './eibi';
 import { getUserLocation } from './instancesApi';
+import { getServerName } from './rtlTcpServer';
+import { latLonToGrid } from './grid';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // VibeServer: share this device's USB dongle with server-side DSP (compressed
@@ -36,6 +38,12 @@ export type VibeServerConfig = {
   maxBandwidthHz?: number;  // 0 = no cap
   maxFftRate?: number;      // 0 = server default (20 fps)
   compressAudio?: boolean;  // default true
+  /** Serve the browser client at GET /. Off = only the VibeSDR app can connect,
+   *  so a stranger can't stumble in from a URL. Default true. */
+  webServer?: boolean;
+  /** Pin the capture rate: clients cannot change it, and their picker is hidden.
+   *  0 (the default) = client-controlled, as on the RTL-TCP server. */
+  lockedRate?: number;
 };
 
 export type VibeServerInfo = { ip: string; port: number; name: string };
@@ -67,6 +75,8 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     maxBandwidthHz: cfg.maxBandwidthHz ?? 0,
     maxFftRate: cfg.maxFftRate ?? 0,
     compressAudio: cfg.compressAudio ?? true,
+    webServer: cfg.webServer ?? true,
+    lockedRate: cfg.lockedRate ?? 0,
   });
   // Hand the web client's search its station list. Fire-and-forget: the server is
   // already up and useful without it, and this can involve a network fetch.
@@ -110,11 +120,62 @@ export async function setManualServerLocation(loc: ServerLocation | null): Promi
   await publishLocation();
 }
 
+/**
+ * Turn a typed place name into a position ("Northampton" → 52.24, -0.90).
+ *
+ * Called ONCE, when the host saves the setting — never per client. The result is
+ * stored, so a server with no internet still serves its location. Nominatim asks
+ * for a identifying User-Agent, and rate-limits; both are fine for a one-shot.
+ */
+export async function geocodeCity(name: string): Promise<ServerLocation | null> {
+  const q = name.trim();
+  if (!q) return null;
+  try {
+    const r = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`,
+      { headers: { 'User-Agent': 'VibeSDR/8 (https://github.com/stuey3d/VibeSDR)' } },
+    );
+    const j = await r.json() as Array<{ lat: string; lon: string; display_name?: string }>;
+    if (!j?.length) return null;
+    const lat = parseFloat(j[0].lat), lon = parseFloat(j[0].lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    // Keep the name the HOST typed as the label, not Nominatim's verbose
+    // "Northampton, West Northamptonshire, England, United Kingdom".
+    return { lat, lon, label: q };
+  } catch {
+    return null;
+  }
+}
+
 export async function getManualServerLocation(): Promise<ServerLocation | null> {
   try {
     const raw = await AsyncStorage.getItem(LOC_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch { return null; }
+}
+
+/**
+ * How the server decides what position to publish. Defaults to 'off'.
+ *
+ * This is a SEPARATE consent from the app's own location permission, on purpose.
+ * Granting location so the instance list can be sorted by distance is NOT consent
+ * to BROADCAST that position to every client that connects — and once VibeServer
+ * can be public, "every client" could mean anyone. So publishing is opt-in, and
+ * the default is to publish nothing.
+ */
+export type LocationMode = 'off' | 'device' | 'manual';
+const LOCMODE_KEY = 'vs_locmode';
+
+export async function getServerLocationMode(): Promise<LocationMode> {
+  try {
+    const v = await AsyncStorage.getItem(LOCMODE_KEY);
+    return v === 'device' || v === 'manual' ? v : 'off';
+  } catch { return 'off'; }
+}
+
+export async function setServerLocationMode(m: LocationMode): Promise<void> {
+  await AsyncStorage.setItem(LOCMODE_KEY, m);
+  await publishLocation();
 }
 
 /**
@@ -127,24 +188,43 @@ export async function getManualServerLocation(): Promise<ServerLocation | null> 
  * position gives nonsense distances and, worse, the wrong region's band edges
  * (80m is 3.5–3.8 MHz in R1 but 3.5–4.0 in R2).
  *
- * Coarse location if the host has granted it; otherwise whatever city they picked.
- * Neither = no location, and the client simply does without distances.
+ * Publishes ONLY what the host explicitly opted into — see LocationMode. When the
+ * mode is 'off' (the default) we publish nothing at all, and the client shows a
+ * "receiver location not set" warning rather than silently pretending to know.
  */
 export async function publishLocation(): Promise<void> {
   if (!Local?.setLocationJson) return;
+  // The NAME is always published — it identifies the receiver and is not sensitive
+  // (the host typed it). The POSITION is published only when opted into. Clients
+  // show "Moto G35 / Northampton IO92nh" when both are known, and just the name
+  // with a "location not set" note when only the name is.
+  const name = await getServerName('VibeSDR');
+  const emit = (extra: object = {}) => {
+    try { Local.setLocationJson(JSON.stringify({ name, ...extra })); } catch {}
+  };
   try {
+    const mode = await getServerLocationMode();
+    if (mode === 'off') { emit(); return; }
+
     const manual = await getManualServerLocation();
-    const loc = manual ?? await getUserLocation();
-    if (!loc) return;
+    const loc = mode === 'manual' ? manual : await getUserLocation();
+    if (!loc) { emit(); return; }
+
     // Coarsened to ~1 km — enough for distances, rings and the ITU region, and
     // nowhere near enough to point at a house. It is served to every client.
     const lat = Math.round(loc.lat * 100) / 100;
     const lon = Math.round(loc.lon * 100) / 100;
-    Local.setLocationJson(JSON.stringify({
-      lat, lon, label: (manual as ServerLocation | null)?.label ?? undefined,
-    }));
+    emit({
+      lat, lon,
+      label: mode === 'manual' ? manual?.label ?? undefined : undefined,
+      // The grid is DERIVED here, so no client ever has to ask a human for it —
+      // a locator is a property of the antenna, not something the listener knows.
+      grid: latLonToGrid(lat, lon),
+    });
   } catch {
-    // No permission, no city picked — the client degrades to no distances.
+    // Permission revoked, or the picked city went missing — publish the name only,
+    // never a position the host never agreed to share.
+    emit();
   }
 }
 

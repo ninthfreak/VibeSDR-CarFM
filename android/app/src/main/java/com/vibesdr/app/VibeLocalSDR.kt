@@ -123,6 +123,12 @@ object VibeLocalSDR {
     fun setVibeServerAuth(secret: String) { ensureLoaded(); nativeSetVibeServerAuth(secret) }
     fun setVibeServerLimits(maxBwHz: Double, maxFftRate: Double) { ensureLoaded(); nativeSetVibeServerLimits(maxBwHz, maxFftRate) }
     fun setVibeServerCompressAudio(on: Boolean) { ensureLoaded(); nativeSetVibeServerCompressAudio(on) }
+    /** Serve the browser client at GET /. Off = app-only: a browser gets 403. */
+    fun setVibeServerWebEnabled(on: Boolean) { ensureLoaded(); nativeSetVibeServerWebEnabled(on) }
+    /** Pin the capture rate (Hz). 0 = client-controlled. */
+    fun setVibeServerLockedRate(rate: Double) { ensureLoaded(); nativeSetVibeServerLockedRate(rate) }
+    private external fun nativeSetVibeServerWebEnabled(on: Boolean)
+    private external fun nativeSetVibeServerLockedRate(rate: Double)
     /** Station list (JSON array) served at GET /stations for the web client's
      *  search. The app supplies it — it already downloads + caches EiBi, and a
      *  browser can't fetch eibispace.de itself (that host sends no CORS headers). */

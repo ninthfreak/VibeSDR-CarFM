@@ -5,6 +5,28 @@
 // sidecar) emits that grid in each digital_spot, so we can show distance from the
 // receiver to each spot without any server-side enrichment.
 
+/**
+ * Encode lat/lon as a 6-char Maidenhead locator ("IO92nh").
+ *
+ * The inverse of gridToLatLon. Used to describe the RECEIVER's own position the way
+ * radio people expect to read it — a VibeServer announces itself as e.g.
+ * "Moto G35 / Northampton IO92nh", the same shape UberSDR uses.
+ *
+ * Field (18 zones of 20°/10°) → square (10 of 2°/1°) → subsquare (24 of 5'/2.5').
+ * Convention: fields and squares upper-case, subsquare lower-case.
+ */
+export function latLonToGrid(lat: number, lon: number): string {
+  const A = 'ABCDEFGHIJKLMNOPQR';
+  const a = 'abcdefghijklmnopqrstuvwx';
+  // Shift to 0..360 / 0..180 so all the divisions are positive.
+  const x = Math.min(359.99999, Math.max(0, lon + 180));
+  const y = Math.min(179.99999, Math.max(0, lat + 90));
+  const f1 = Math.floor(x / 20), f2 = Math.floor(y / 10);
+  const s1 = Math.floor((x % 20) / 2), s2 = Math.floor(y % 10);
+  const u1 = Math.floor(((x % 2) / 2) * 24), u2 = Math.floor((y % 1) * 24);
+  return `${A[f1]}${A[f2]}${s1}${s2}${a[u1]}${a[u2]}`;
+}
+
 /** Decode a 4- or 6-char Maidenhead locator to the centre of its square.
  *  Returns null for anything that isn't a valid locator. */
 export function gridToLatLon(grid?: string | null): { lat: number; lon: number } | null {

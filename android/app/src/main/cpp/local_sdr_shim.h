@@ -48,6 +48,10 @@ public:
     // Compressed (IMA-ADPCM) audio on the /ws/audio path (default on). A client
     // that hits a decode issue can ask the server to fall back to raw int16 PCM.
     static void setVibeServerCompressAudio(bool on);
+    /** Serve the browser client at GET /. Off = app-only (a browser gets 403). */
+    static void setVibeServerWebEnabled(bool on);
+    /** Pin the capture rate (Hz). 0 = client-controlled. */
+    static void setVibeServerLockedRate(double rate);
     /** Station list (JSON array) served at GET /stations for the web client's
      *  search. Supplied by the app, which already downloads + caches EiBi — a
      *  browser can't fetch eibispace.de itself (it sends no CORS headers). */

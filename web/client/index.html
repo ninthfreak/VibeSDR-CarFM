@@ -83,6 +83,16 @@ html, body {
 #wf { display: block; width: 100%; height: 100%; cursor: crosshair; }
 #wf.panning { cursor: grabbing; }
 
+/* Receiver identity badge — top-right of the spectrum, like UberSDR.
+   pointer-events:none so it never steals a click-to-tune or a pan gesture. */
+#rxBadge {
+  position: absolute; top: 8px; right: 12px;
+  text-align: right; pointer-events: none;
+  text-shadow: 0 0 6px #000, 0 0 2px #000;   /* legible over a bright waterfall */
+}
+#rxName  { font-size: 0.95em; color: var(--amber); letter-spacing: 0.04em; }
+#rxWhere { font-size: 0.78em; color: var(--text-dim); margin-top: 1px; }
+
 /* ── Control bar — mirrors ControlsBar.tsx, drums swapped for buttons ─────── */
 /* UI SCALE. The app derives one from the viewport (useUiScale: clamp(0.58, W/926,
    1.45)); the web equivalent is a single clamped font-size on the bar, with every
@@ -560,6 +570,13 @@ select.btn { padding: 6px 8px; }
   <canvas id="bands"></canvas>
   <canvas id="scale"></canvas>
   <div id="wfWrap"><canvas id="wf"></canvas>
+  <!-- Receiver identity, top-right of the spectrum (the shape UberSDR uses): the
+       server's name, and under it where it actually is. Both come from the SERVER
+       (GET /location) — the location half is absent unless the host opted in. -->
+  <div id="rxBadge" hidden>
+    <div id="rxName"></div>
+    <div id="rxWhere"></div>
+  </div>
 <!-- Decoder output box. Floats bottom-left above the control bar and PERSISTS
      until dismissed (OpenWebRX behaviour) — you keep listening and tuning while
      it decodes. Not inside the menu: the menu is for choosing, this is for
@@ -830,11 +847,6 @@ select.btn { padding: 6px 8px; }
 
   <h2>RECEIVER LOCATION</h2>
   <div class="lbl" id="rxLoc">Not published by this server</div>
-  <div class="mrow" id="gridRow">
-    <label for="myGrid">GRID</label>
-    <input id="myGrid" class="btn" placeholder="IO91wm" spellcheck="false"
-           style="max-width:9em; text-align:center">
-  </div>
   <div class="lbl" style="margin-bottom:6px">
     Distances and the band plan are measured from the RECEIVER, not from you —
     the server may be in another town. Set a grid here only if the server hasn't
@@ -894,9 +906,14 @@ select.btn { padding: 6px 8px; }
     <label>AUTO GAIN</label>
     <div class="seg"><button class="btn" id="gainAuto">AUTO</button></div>
   </div>
-  <div class="mrow">
+  <div class="mrow" id="rowRate">
     <label for="rate">SAMPLE RATE</label>
     <select id="rate" class="btn"></select>
+  </div>
+  <!-- Shown INSTEAD of the picker when the host pinned the rate (hwinfo.lockedRate). -->
+  <div class="mrow" id="rateLocked" hidden>
+    <label>SAMPLE RATE</label>
+    <span class="val"></span>
   </div>
   <div class="mrow">
     <label for="ppm">PPM</label>

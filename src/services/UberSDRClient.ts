@@ -61,6 +61,8 @@ export interface SDRCallbacks {
   /** VibeServer: the sample rates (spectrum spans) THIS server offers, so the
    *  client's rate picker aligns with the server rather than a generic list. */
   onHwRates?:   (rates: number[]) => void;
+  /** >0 = the serving host PINNED the capture rate; the client hides its picker. */
+  onHwLockedRate?: (rate: number) => void;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -781,6 +783,10 @@ export class UberSDRClient {
       // VibeServer sent the serving device's tuner gains + offered sample rates.
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);
       if (Array.isArray(msg.rates)) this.callbacks.onHwRates?.(msg.rates as number[]);
+      // >0 = the host PINNED the capture rate. The server ignores our sampleRate
+      // messages outright, so the client hides the picker rather than offer a
+      // control that silently does nothing.
+      this.callbacks.onHwLockedRate?.(Number(msg.lockedRate) || 0);
       return;
     }
     if (msg.type === 'config') {

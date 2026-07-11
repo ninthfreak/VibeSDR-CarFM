@@ -405,6 +405,14 @@ static std::mutex          g_vsMtx;
 static std::string         g_vsSecret;                 // empty = no PIN (open)
 static std::atomic<double> g_vsMaxBandwidth{0.0};      // <=0 = no cap
 static std::atomic<double> g_vsMaxFftRate{0.0};        // <=0 = server default (20 fps)
+// Serve the browser client at GET /? Off = app-only, so a stranger who finds the
+// address in a browser gets nothing. The WS endpoints stay up (the app uses them);
+// only the human-facing page is withheld.
+static std::atomic<bool>   g_vsWebEnabled{true};
+// Pinned capture rate (Hz). 0 = client-controlled. When pinned, a client's
+// {"type":"sampleRate"} is IGNORED and the rate is advertised as locked, so the
+// client can hide a control it isn't allowed to use.
+static std::atomic<double> g_vsLockedRate{0.0};
 
 // Station list (EiBi + anything else the app has) served at GET /stations for the
 // web client's search. Supplied BY THE APP — it already downloads and caches EiBi,
@@ -1675,7 +1683,15 @@ struct LocalSdrShim::Impl {
         // can widen/narrow it (e.g. drop the rate to ease a struggling link) without
         // touching the server. setSampleRate restarts the IQ stream and pushes a
         // fresh config, so the client's waterfall span updates itself.
-        if (type == "sampleRate") { if (jsonNum(msg,"value",v) && v > 0) LocalSdrShim::instance().setSampleRate(v); return; }
+        // A PINNED rate ignores the client outright. The client is also TOLD it is
+        // pinned (hwinfo.lockedRate) and hides its picker — this check is the
+        // enforcement, not the UI: an old client, or a hand-rolled one, must not be
+        // able to widen a span the host deliberately narrowed to save CPU.
+        if (type == "sampleRate") {
+            if (g_serveOnLan.load() && g_vsLockedRate.load() > 0) return;
+            if (jsonNum(msg,"value",v) && v > 0) LocalSdrShim::instance().setSampleRate(v);
+            return;
+        }
         if (type == "directSampling") {
             if (jsonNum(msg,"value",v)) LocalSdrShim::instance().setDirectSampling((int)v); return;
         }
@@ -1726,7 +1742,13 @@ struct LocalSdrShim::Impl {
         // Capture sample rates this server offers (= the spectrum spans the client
         // may pick). These are the rates built into THIS server, so the client's
         // picker aligns with the server rather than a generic RTL-TCP list.
-        j += "],\"rates\":[3200000,2400000,1800000,1200000,960000]}";
+        j += "],\"rates\":[3200000,2400000,1800000,1200000,960000]";
+        // A pinned rate is advertised so the client can HIDE its rate picker and say
+        // who set it, rather than offering a control whose every use is silently
+        // dropped. 0 = client-controlled (the default).
+        { double lr = g_serveOnLan.load() ? g_vsLockedRate.load() : 0.0;
+          j += ",\"lockedRate\":" + std::to_string((long long)(lr > 0 ? lr : 0)); }
+        j += "}";
         sendText(sock, j);
     }
 
@@ -1878,6 +1900,22 @@ struct LocalSdrShim::Impl {
             // no second request. Matched on the request-line PREFIX, not a substring:
             // every other route here is a substring test, and a bare "/" would match
             // all of them.
+            if (!g_vsWebEnabled.load()) {
+                // Host turned the web client off: app-only. Say so in plain words —
+                // a bare 404 reads as "wrong address" and sends people hunting.
+                static const std::string kOff =
+                    "<!doctype html><meta charset=utf-8>"
+                    "<title>VibeSDR</title>"
+                    "<body style=\"background:#080601;color:#ffb833;font:16px ui-monospace,monospace;"
+                    "display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center\">"
+                    "<div><h1 style=\"letter-spacing:6px\">VibeSDR</h1>"
+                    "<p>This server does not serve the web client.<br>Connect with the VibeSDR app.</p></div>";
+                sock->sendstr("HTTP/1.1 403 Forbidden\r\nContent-Type: text/html; charset=utf-8\r\n"
+                              "Connection: close\r\nContent-Length: "
+                              + std::to_string(kOff.size()) + "\r\n\r\n" + kOff);
+                sock->close();
+                return;
+            }
             static const std::string kPage(kVibeWebPage);
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
                           "Access-Control-Allow-Origin: *\r\n"
@@ -2271,6 +2309,8 @@ void LocalSdrShim::setVibeServerLimits(double maxBandwidthHz, double maxFftRate)
     g_vsMaxBandwidth.store(maxBandwidthHz); g_vsMaxFftRate.store(maxFftRate);
 }
 void LocalSdrShim::setVibeServerCompressAudio(bool on) { g_vsCompressAudio.store(on); }
+void LocalSdrShim::setVibeServerWebEnabled(bool on) { g_vsWebEnabled.store(on); }
+void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(rate > 0 ? rate : 0.0); }
 void LocalSdrShim::setStationsJson(const std::string& json) {
     std::lock_guard<std::mutex> lk(g_stationsMtx);
     g_stationsJson = json;

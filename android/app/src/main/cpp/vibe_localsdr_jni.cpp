@@ -153,6 +153,16 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerCompressAudio(JNIEnv*, jobj
     vibe::LocalSdrShim::setVibeServerCompressAudio(on);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerWebEnabled(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::setVibeServerWebEnabled(on);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLockedRate(JNIEnv*, jobject, jdouble rate) {
+    vibe::LocalSdrShim::setVibeServerLockedRate(rate);
+}
+
 // Station list (JSON array) for the web client's search, served at GET /stations.
 // The APP supplies it because it already downloads + caches EiBi — and a browser
 // cannot fetch eibispace.de itself (no CORS headers), unlike React Native.

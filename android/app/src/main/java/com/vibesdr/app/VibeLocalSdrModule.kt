@@ -274,10 +274,15 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         val maxBw      = if (opts.hasKey("maxBandwidthHz")) opts.getDouble("maxBandwidthHz") else 0.0
         val maxFps     = if (opts.hasKey("maxFftRate")) opts.getDouble("maxFftRate") else 0.0
         val compress   = if (opts.hasKey("compressAudio")) opts.getBoolean("compressAudio") else true
+        // Web client on/off, and a pinned capture rate (0 = client-controlled).
+        val webSrv     = if (opts.hasKey("webServer")) opts.getBoolean("webServer") else true
+        val lockedRate = if (opts.hasKey("lockedRate")) opts.getDouble("lockedRate") else 0.0
 
         VibeLocalSDR.setVibeServerAuth(pin)
         VibeLocalSDR.setVibeServerLimits(maxBw, maxFps)
         VibeLocalSDR.setVibeServerCompressAudio(compress)
+        VibeLocalSDR.setVibeServerWebEnabled(webSrv)
+        VibeLocalSDR.setVibeServerLockedRate(lockedRate)
         VibeLocalSDR.setServeOnLan(true)
 
         val port = VibeLocalSDR.startSpectrum(
