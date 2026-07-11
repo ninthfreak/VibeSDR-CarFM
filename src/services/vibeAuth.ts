@@ -80,6 +80,22 @@ export function vibeAuthToken(pin: string, nonce: string): string {
  * Returns e.g. "&vs_nonce=abc&vs_auth=def" to append to a WS URL, or "" when the
  * server needs no PIN. Throws only on a network failure the caller can surface.
  */
+/**
+ * Does the VibeServer at `baseUrl` want a PIN?
+ *
+ * A server DISCOVERED over mDNS carries this in its TXT record, but one the user
+ * TYPED into the Custom-server box has no TXT to read — so ask it. Without this we
+ * would either prompt for a PIN on an open server (annoying) or never prompt on a
+ * locked one (a failed connect with no explanation). Throws on a network failure,
+ * which the caller surfaces as "can't reach it".
+ */
+export async function vibeServerNeedsPin(baseUrl: string): Promise<boolean> {
+  const base = baseUrl.replace(/\/+$/, '');
+  const resp = await fetch(`${base}/vibeserver/auth`);
+  const j = await resp.json() as { required?: boolean };
+  return !!j?.required;
+}
+
 export async function resolveVibeAuth(baseUrl: string, pin: string): Promise<string> {
   const base = baseUrl.replace(/\/+$/, '');
   const resp = await fetch(`${base}/vibeserver/auth`);

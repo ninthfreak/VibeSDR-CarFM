@@ -1,10 +1,11 @@
+import type { BackendType } from './sdrTypes';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const KEY = 'vsdr_favourites';
 
 // SpyServer favourites carry url = spyserver://host:port (the protocol has no
 // web UI to point a browser at); the picker routes on serverType.
-export type Favourite = { name: string; url: string; serverType?: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx' | 'spyserver' };
+export type Favourite = { name: string; url: string; serverType?: BackendType };
 
 export async function getFavourites(): Promise<Favourite[]> {
   try {
@@ -49,7 +50,7 @@ export async function saveTcpFavs(favs: TcpFav[]): Promise<void> {
 }
 
 /** Persist a learned serverType onto an existing favourite (after detection). */
-export async function setFavouriteServerType(url: string, serverType: 'ubersdr' | 'kiwi' | 'owrx' | 'fmdx'): Promise<void> {
+export async function setFavouriteServerType(url: string, serverType: BackendType): Promise<void> {
   const favs = await getFavourites();
   let changed = false;
   const next = favs.map(f => {

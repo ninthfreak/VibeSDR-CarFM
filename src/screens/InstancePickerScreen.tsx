@@ -32,7 +32,32 @@ import {
   isVersionOld,
   MIN_RECOMMENDED_VERSION,
 } from '../services/instancesApi';
-import { checkConnection, detectServerType } from '../services/sdrTypes';
+import { checkConnection, detectServerType, probeServer, DEFAULT_PORT,
+         type BackendType, type ServerType } from '../services/sdrTypes';
+import { vibeServerNeedsPin } from '../services/vibeAuth';
+
+/**
+ * Pull a host and port out of anything a person might reasonably type:
+ * a bare IP, "stuey3d.freemyip.com:8073", "http://host/path", "ws://host:1234".
+ *
+ * URL() is deliberately not used — it rejects a bare "host:8073" (it reads "host"
+ * as the scheme), which is the single most likely thing to be typed into the box.
+ * When no port is given we fall back to the backend's default, or 80/443.
+ */
+function parseHostPort(raw: string, hint?: BackendType): { host: string; port: number } | null {
+  let s = raw.trim()
+    .replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
+  const https = /^https:\/\//i.test(s);
+  s = s.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');   // drop scheme + path
+  if (!s) return null;
+  const m = /^(.+?)(?::(\d+))?$/.exec(s);
+  if (!m) return null;
+  const host = m[1];
+  const port = m[2] ? parseInt(m[2], 10)
+    : hint ? DEFAULT_PORT[hint]
+    : https ? 443 : 80;
+  return Number.isFinite(port) && port > 0 && port < 65536 ? { host, port } : null;
+}
 import {
   DefaultInstance,
   clearDefaultInstance,
@@ -443,6 +468,42 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     }
   }, [navigation, viewMode]);
 
+  /**
+   * THE ROUTER. One place that turns a BackendType into the right connect call.
+   *
+   * Every backend used to be reached by its own hard-coded entry point, which is
+   * why the Custom-server box could only ever produce an http receiver: there was
+   * nowhere to say "this turned out to be a VibeServer, open it as one". Probe
+   * once, route here, and a single typed address can reach anything we support.
+   */
+  const connectDetected = useCallback(async (
+    type: BackendType, host: string, port: number, name: string,
+  ) => {
+    const label = name || `${host}:${port}`;
+    switch (type) {
+      case 'rtltcp':   connectTcp(host, port, label); return;
+      case 'spyserver': connectSpy(host, port, label); return;
+      case 'vibeserver': {
+        // Ask the server itself whether it wants a PIN — a typed host has no mDNS
+        // TXT record to tell us. See vibeServerNeedsPin().
+        let needsPin = true;
+        try { needsPin = await vibeServerNeedsPin(`http://${host}:${port}`); }
+        catch {
+          Alert.alert('VibeServer', `Could not reach ${host}:${port}. Is it on the same network?`);
+          return;
+        }
+        openVibeServer(host, port, label, needsPin);
+        return;
+      }
+      default: {
+        // The HTTP receivers (ubersdr / kiwi / owrx / fmdx) all go through connect(),
+        // which routes fmdx to the tuner screen and the rest to the waterfall.
+        const url = `http://${host}:${port}`;
+        connect(url, label, undefined, null, type);
+      }
+    }
+  }, [connect, connectTcp, connectSpy, openVibeServer]);
+
   // sdr:// deep link → auto-connect once. Guard with a ref + clear the param so a
   // failed connect leaves the user on the picker (connectSpy's own Alert is the
   // error UX) instead of a retry loop. markDeepLinkActive() (set by useDeepLinks)
@@ -555,29 +616,41 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const detected = await detectServerType(fav.url);
     const type = detected ?? fav.serverType ?? 'ubersdr';
     if (type !== fav.serverType) setFavouriteServerType(fav.url, type).catch(() => {});
-    connect(fav.url, fav.name, undefined, null, type);
-  }, [connect]);
+    // A favourite can now detect as a VibeServer (it serves a web page, so it IS
+    // sniffable) — that must open through the router, not connect(), or it would be
+    // opened as a plain UberSDR receiver with no PIN handshake.
+    if (type === 'vibeserver') {
+      const u = parseHostPort(fav.url, 'vibeserver');
+      if (u) { connectDetected('vibeserver', u.host, u.port, fav.name); return; }
+    }
+    connect(fav.url, fav.name, undefined, null, type as ServerType | 'fmdx');
+  }, [connect, connectDetected]);
 
   const connectCustom = useCallback(async () => {
     if (!customUrl.trim()) return;
-    let url = customUrl.trim();
+    const raw = customUrl.trim();
     // A pasted SpyServer link (Airspy's directory only offers copy, no tappable
     // anchor) — this single-field box is where people naturally paste it. Route
     // it to the SpyServer path instead of treating it as an http(s) receiver.
-    const spy = parseSdrUrl(url.replace(/^spyserver:\/\//i, 'sdr://'));
+    const spy = parseSdrUrl(raw.replace(/^spyserver:\/\//i, 'sdr://'));
     if (spy) { setCustomUrl(''); connectSpy(spy.host, spy.port, `${spy.host}:${spy.port}`); return; }
-    // Accept ws://, wss://, http(s)://, or a bare host. Normalise ws→http so the
-    // host parses correctly (typing "ws://192.168.x.x" used to become
-    // "http://ws://…", parsing the host as "ws" → bogus "not local" rejection).
-    url = url.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
-    if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
-    // Plain HTTP to public-internet servers IS allowed (NSAllowsArbitraryLoads in
-    // Info.plist/app.json) — most KiwiSDR/OpenWebRX receivers are hobbyist HTTP
-    // boxes with no TLS, so we don't block them (same as Echo SDR et al.).
-    // v3: sniff the backend type (OpenWebRX / KiwiSDR / UberSDR) for manual adds.
-    const type = (await detectServerType(url)) ?? 'ubersdr';
-    connect(url, url, undefined, null, type);
-  }, [customUrl, connect, connectSpy]);
+
+    const u = parseHostPort(raw);
+    if (!u) { Alert.alert('Custom server', `Couldn't read an address from "${raw}".`); return; }
+
+    // Probe, then route. Plain HTTP to public-internet servers IS allowed
+    // (NSAllowsArbitraryLoads) — most Kiwi/OpenWebRX receivers are hobbyist HTTP
+    // boxes with no TLS, so we don't block them.
+    setConnecting(true);
+    const type = await probeServer(u.host, u.port, null);
+    setConnecting(false);
+    if (!type) {
+      Alert.alert('Custom server',
+        `Nothing answered at ${u.host}:${u.port}.\n\nIf this is an rtl_tcp or SpyServer on a non-standard port, add it with the + button and pick the type — raw TCP servers can't be auto-detected.`);
+      return;
+    }
+    connectDetected(type, u.host, u.port, raw);
+  }, [customUrl, connectSpy, connectDetected]);
 
   const handleSetDefault = useCallback((inst: DefaultInstance) => {
     Alert.alert('Set Default', `Auto-connect to "${inst.name}" on startup?`, [
