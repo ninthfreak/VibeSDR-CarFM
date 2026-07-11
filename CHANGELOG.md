@@ -4,7 +4,9 @@ VibeSDR is free software under the **GNU GPL v3**. Source: https://github.com/St
 
 ---
 
-## v8.0.0 — VibeServer: share your radio, from any browser (2026-07-11)
+## v8.0.0 — Now introducing VibeServer (2026-07-12)
+
+> **Your phone is now the receiver — and anyone can listen to it in a browser.**
 
 ### VibeServer
 - **Turn an Android phone with an RTL-SDR into a receiver anyone on your network can
