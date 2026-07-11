@@ -18,7 +18,7 @@
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzip } from 'pako';
 import { VibePowerModule } from '../components/AudioPlayer';
-import { eccPiToIso } from './rdsCountry';
+import { resolveStationIso, receiverIso } from './rdsCountry';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -775,7 +775,14 @@ export class UberSDRClient {
         badge: ps ? 'RDS' : undefined,
         stereo,
         pi,
-        countryIso: eccPiToIso(ecc, pi) || undefined,
+        // ECC + PI when the station sends an ECC; otherwise the PI's country nibble
+        // VALIDATED against the receiver's own country. Most stations never transmit an
+        // ECC (it rides in group 1A), which is why the flag and the station logo almost
+        // never appeared — with no country, the logo lookup demanded a near-exact name
+        // match and silently failed. The nibble check recovers the country for domestic
+        // stations without inventing one for a foreign catch: a sporadic-E Spaniard's
+        // nibble does not match a British receiver, so it stays blank.
+        countryIso: resolveStationIso(ecc, pi, receiverIso()) || undefined,
       });
       return;
     }

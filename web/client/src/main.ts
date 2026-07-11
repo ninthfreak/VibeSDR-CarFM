@@ -16,7 +16,7 @@ import {
   BAND_PLAN, getBandsAtRegion, bandTuneDefaults, type Band,
 } from '../../../src/constants/bandPlan';
 import { deriveItuRegion } from '../../../src/services/stations';
-import { eccPiToIso, isoToFlag } from '../../../src/services/rdsCountry';
+import { resolveStationIso, isoToFlag } from '../../../src/services/rdsCountry';
 import { countryForCallsign } from '../../../src/services/callsignCountry';
 import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
@@ -254,7 +254,13 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (!rdsName && rt) rdsName = rt;   // some stations send only RadioText
       // Transmitter country from the RDS Extended Country Code + PI, as the app
       // does (rdsCountry.eccPiToIso) — that's what the flag comes from.
-      rdsIso = m.pi > 0 ? eccPiToIso(m.ecc || undefined, m.pi.toString(16)) : '';
+      // ECC + PI when the station sends an ECC (unambiguous); otherwise the PI's
+      // country nibble CHECKED against the receiver's own country — a validation, not
+      // an assumption. A Spanish station on sporadic-E has a nibble inconsistent with a
+      // British receiver, so it resolves to nothing rather than to a wrong flag.
+      rdsIso = m.pi > 0
+        ? resolveStationIso(m.ecc || undefined, m.pi.toString(16), serverIso || undefined)
+        : '';
       if (rdsName) void resolveRdsLogo(rdsName, rdsIso);
       updateVts();
     },
@@ -511,6 +517,18 @@ let rdsName = '';
 let rdsText = '';   // RDS RadioText — the message, distinct from the PS name
 let rdsIso = '';        // transmitter country, from RDS ECC + PI
 let rdsLogoUrl = '';    // resolved station logo (radio-browser)
+
+/**
+ * Logos for the bookmark LIST, resolved lazily and remembered.
+ *
+ * Deliberately logo-only: the RDS name is what the transmitter itself broadcasts, so
+ * it is authoritative, and letting a crowd-sourced database overrule it risks turning
+ * a correct "Heart" into "Heart 96.6 (Northampton)". The logo is the part the internet
+ * can add that RDS never could, and it can't corrupt anything.
+ *
+ * null = looked up, nothing found — cached so we don't ask again on every render.
+ */
+const bmLogos = new Map<string, string | null>();
 let logoQuery = '';     // guards against a stale async logo landing late
 
 function updateVts() {
@@ -599,7 +617,7 @@ async function resolveRdsLogo(name: string, iso: string) {
   logoQuery = key;
   rdsLogoUrl = '';
   try {
-    const url = await lookupStationLogo(name, iso || undefined);
+    const url = await lookupStationLogo(name, iso || undefined, serverIso || undefined);
     // A slow lookup must not overwrite a station we've since tuned away from.
     if (logoQuery !== key) return;
     rdsLogoUrl = url || '';
@@ -1342,7 +1360,26 @@ function renderBookmarks() {
     };
     row.appendChild(del);
     host.appendChild(row);
+
+    // Logo, lazily. Only worth it for stations the receiver actually heard — a local
+    // bookmark is whatever the user called it and won't match a station database.
+    if (!b.local) void attachBookmarkLogo(row, b.name);
   }
+}
+
+/** Resolve (and cache) a station logo, then slot it into the row. */
+async function attachBookmarkLogo(row: HTMLElement, name: string) {
+  let url = bmLogos.get(name);
+  if (url === undefined) {
+    url = await lookupStationLogo(name, undefined, serverIso || undefined).catch(() => null);
+    bmLogos.set(name, url ?? null);
+  }
+  if (!url || !row.isConnected) return;
+  const img = document.createElement('img');
+  img.className = 'bmLogo';
+  img.src = url;
+  img.alt = '';
+  row.insertBefore(img, row.firstChild);
 }
 
 
@@ -1433,6 +1470,16 @@ function filteredSpots(): Spot[] {
  * server publishes no position, we show that plainly and do without distances.
  */
 let serverLoc: { lat: number; lon: number; label?: string; grid?: string } | null = null;
+/**
+ * The RECEIVER's country — a TIE-BREAK ONLY, never a filter and never a flag.
+ *
+ * It is tempting to assume a station you can hear is in your own country, and for the
+ * ordinary case it is. But sporadic-E drops a Spanish station into a Northampton
+ * receiver, and people living near a border hear three countries routinely — so using
+ * this as truth would put a Union Jack on a Spanish station, which is worse than
+ * showing nothing. It only breaks ties between otherwise equally good name matches.
+ */
+let serverIso = '';
 let serverName = '';
 
 function myPos(): { lat: number; lon: number } | null { return serverLoc; }
@@ -1453,6 +1500,7 @@ async function loadServerLocation(host: string) {
     const r = await fetch(`http://${host}/location`, { cache: 'no-store' });
     const j = await r.json();
     serverName = typeof j.name === 'string' ? j.name : '';
+    serverIso = typeof j.iso === 'string' ? j.iso : '';
     if (typeof j.lat === 'number' && typeof j.lon === 'number') {
       serverLoc = { lat: j.lat, lon: j.lon, label: j.label, grid: j.grid };
     }

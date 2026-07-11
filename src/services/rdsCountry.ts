@@ -67,3 +67,62 @@ export function eccPiToIso(ecc?: number, pi?: string): string {
   const nibble = parseInt(pi[0], 16);          // PI top nibble = country code
   return nibble >= 1 && nibble <= 15 ? (row[nibble - 1] || '') : '';
 }
+
+/**
+ * The RECEIVER's country, set per session.
+ *
+ * Needed to validate a PI country nibble (see resolveStationIso). It must be the
+ * ANTENNA's country, not the listener's: a phone in London tuned to an UberSDR in
+ * Germany is hearing German stations, so the listener's locale would be actively
+ * misleading. Set it from whatever actually knows — the serving phone's published
+ * location, or the device's own region when the dongle is on this device — and leave
+ * it blank when we genuinely don't know. Blank simply means "don't validate", which
+ * degrades to the old ECC-only behaviour rather than to a wrong answer.
+ */
+let receiverIsoState = '';
+export function setReceiverIso(iso?: string) { receiverIsoState = (iso || '').toUpperCase(); }
+export function receiverIso(): string { return receiverIsoState; }
+
+/**
+ * All the countries a PI code's country nibble COULD mean.
+ *
+ * The PI's top nibble is a country code, but it is only unique WITHIN an ECC — the
+ * Extended Country Code, which rides in RDS group 1A and which a great many stations
+ * simply never transmit. So the nibble alone maps to a handful of candidates: nibble
+ * 'C' is GB, but also Canada, Mexico, China and others across the different ECC rows.
+ */
+export function piCountryCandidates(pi?: string): string[] {
+  if (!pi) return [];
+  const nibble = parseInt(pi[0], 16);
+  if (!(nibble >= 1 && nibble <= 15)) return [];
+  const out = new Set<string>();
+  for (const row of Object.values(ECC_CC_ISO)) {
+    const iso = row[nibble - 1];
+    if (iso) out.add(iso);
+  }
+  return [...out];
+}
+
+/**
+ * The station's country — resolved, not guessed.
+ *
+ * In order of confidence:
+ *   1. ECC + PI. Unambiguous, when the station bothers to send an ECC.
+ *   2. PI nibble CHECKED AGAINST THE RECEIVER'S OWN COUNTRY. This is the important one,
+ *      and it is a VALIDATION rather than an assumption: if the nibble is consistent
+ *      with where the receiver is, it is a domestic station and we can say so. If it is
+ *      NOT — a Spanish station arriving on sporadic-E, whose nibble is 'E' where the
+ *      receiver's is 'C' — the check FAILS and we return nothing rather than stamping a
+ *      Union Jack on Spain. Assuming the receiver's country outright would do exactly
+ *      that; this refuses to.
+ *   3. Nothing. Better blank than confidently wrong.
+ */
+export function resolveStationIso(
+  ecc: number | undefined, pi: string | undefined, receiverIso?: string,
+): string {
+  const exact = eccPiToIso(ecc, pi);
+  if (exact) return exact;
+  if (!receiverIso) return '';
+  const cands = piCountryCandidates(pi);
+  return cands.includes(receiverIso.toUpperCase()) ? receiverIso.toUpperCase() : '';
+}

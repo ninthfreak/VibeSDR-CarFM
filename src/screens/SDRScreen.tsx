@@ -46,6 +46,7 @@ import { KiwiAdapter } from '../services/KiwiAdapter';
 import { localSessionGen } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
          getLearnedBookmarksNow } from '../services/vibeServer';
+import { setReceiverIso } from '../services/rdsCountry';
 import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
@@ -489,6 +490,37 @@ export default function SDRScreen({ route, navigation }: Props) {
   // VibeServer (remote shim): hardware controls ride the WS to the serving device
   // instead of the (non-existent) local dongle. localHost set = remote session.
   const isRemoteShim = isLocal && !!route.params.localHost;
+
+  // Tell the RDS decoder where the RECEIVER is, so it can VALIDATE a station's PI
+  // country nibble instead of the app inventing a country. It has to be the ANTENNA's
+  // country: a phone in London listening to a German UberSDR hears German stations, so
+  // the phone's own locale would be actively wrong. Blank when we don't know, which
+  // just falls back to ECC-only (i.e. the old behaviour) rather than to a bad guess.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (isRemoteShim && route.params.localHost) {
+        // A remote VibeServer publishes its own location, including the country.
+        try {
+          const r = await fetch(`http://${route.params.localHost}:${route.params.localPort}/location`);
+          const j = await r.json();
+          if (!cancelled) setReceiverIso(typeof j?.iso === 'string' ? j.iso : '');
+        } catch { if (!cancelled) setReceiverIso(''); }
+        return;
+      }
+      if (isLocal) {
+        // The dongle is on THIS device, so this device's region is the aerial's region.
+        try {
+          const loc = Intl.DateTimeFormat().resolvedOptions().locale || '';
+          const region = loc.split('-')[1] || '';
+          if (!cancelled) setReceiverIso(/^[A-Za-z]{2}$/.test(region) ? region : '');
+        } catch { if (!cancelled) setReceiverIso(''); }
+        return;
+      }
+      if (!cancelled) setReceiverIso('');   // network instance: we don't know where it is
+    })();
+    return () => { cancelled = true; setReceiverIso(''); };
+  }, [isLocal, isRemoteShim]);
 
   // The shim learns station names from RDS whenever it runs — serving OR listening —
   // but it has no storage, so something has to write the list down. On a REMOTE shim

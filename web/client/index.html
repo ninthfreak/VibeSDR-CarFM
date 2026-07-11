@@ -153,6 +153,11 @@ html, body {
 /* Source glyphs: a MONITOR = saved in this browser; a SERVER RACK = saved on the
    receiver, shared with every client. They inherit the amber via currentColor. */
 .srcIcon { width: 1.05em; height: 1.05em; vertical-align: -0.15em; color: inherit; }
+/* Station logo in the bookmark list — only for stations the receiver actually heard. */
+.bmLogo {
+  width: 18px; height: 18px; object-fit: contain; border-radius: 3px;
+  background: rgba(255,255,255,0.9); flex: 0 0 auto; margin-right: 6px;
+}
 
 /* Readouts under the meter: signal on the left, link + bitrate on the right. */
 #sigLine { display: flex; align-items: center; justify-content: space-between; margin-top: 0.35em; gap: 0.6em; }

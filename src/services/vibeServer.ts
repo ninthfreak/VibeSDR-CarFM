@@ -267,11 +267,11 @@ const RGEO_KEY = 'vs_rgeo';
  * never repeats. With no internet we keep the bare coordinates: ugly but honest, and
  * the grid square is there regardless.
  */
-export async function reverseGeocode(lat: number, lon: number): Promise<string | null> {
+export async function reverseGeocode(lat: number, lon: number): Promise<{ name: string; iso?: string } | null> {
   const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
   try {
     const raw = await AsyncStorage.getItem(RGEO_KEY);
-    const cache: Record<string, string> = raw ? JSON.parse(raw) : {};
+    const cache: Record<string, { name: string; iso?: string }> = raw ? JSON.parse(raw) : {};
     if (cache[key]) return cache[key];
 
     const r = await fetch(
@@ -287,9 +287,15 @@ export async function reverseGeocode(lat: number, lon: number): Promise<string |
               || a.county || a.state || null;
     if (!name) return null;
 
-    cache[key] = name;
+    // The COUNTRY is the valuable half. Station-logo lookup needs it to anchor a name
+    // match (without one it demands a near-exact name and so almost always fails), and
+    // the RDS country code that would otherwise supply it rides in group 1A, which many
+    // stations never transmit. FM is line-of-sight, so a station this receiver can hear
+    // is essentially always in the receiver's own country — a very good default.
+    const out = { name, iso: (a.country_code || '').toUpperCase() || undefined };
+    cache[key] = out;
     await AsyncStorage.setItem(RGEO_KEY, JSON.stringify(cache));
-    return name;
+    return out;
   } catch {
     return null;   // offline — coordinates + grid still work
   }
@@ -366,11 +372,15 @@ export async function publishLocation(): Promise<void> {
     // A bare "52.29, -0.85" means nothing to a human. On the DEVICE path there's no
     // label to show, so name the place — once, here, and cached — rather than make
     // every client reverse-geocode the same point for itself.
+    const rev = await reverseGeocode(lat, lon);
     let label = mode === 'manual' ? manual?.label ?? undefined : undefined;
-    if (!label) label = (await reverseGeocode(lat, lon)) ?? undefined;
+    if (!label) label = rev?.name ?? undefined;
 
     emit({
       lat, lon, label,
+      // Receiver country — clients use it to anchor station-logo lookups and to flag
+      // a station whose RDS never carried a country code of its own.
+      iso: rev?.iso,
       // The grid is DERIVED here, so no client ever has to ask a human for it —
       // a locator is a property of the antenna, not something the listener knows.
       grid: latLonToGrid(lat, lon),
