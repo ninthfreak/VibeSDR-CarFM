@@ -1,6 +1,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VibeSDR</title>
+<link rel="icon" type="image/png" href="__FAVICON__">
+<link rel="apple-touch-icon" href="__FAVICON__">
 <style>
 /* Design tokens — the same values as src/constants/theme.ts, which were
    themselves transcribed from the original CSS. Amber-on-black. */
@@ -100,7 +102,25 @@ html, body {
 /* Right column. BOOKMARKS + search are one item; the meter spans their width.
    Shrinkable (not fixed) and pushed to the right edge, so a narrow window
    squeezes it rather than wrapping the whole bar. */
-#rightCol { flex: 1 1 38em; min-width: 22em; max-width: 46em; margin-left: auto; }
+/* Three blocks: [tuner + demod] | [controls] | [meter + search].
+   The controls are centred on the SCREEN, not between their neighbours — the
+   tuning and search blocks are different widths, so "centred between them" lands
+   visibly off-centre. Absolute centring only kicks in when there's room for it;
+   below that the block flows normally so nothing can overlap. */
+#midBlock {
+  display: flex; align-items: center; gap: 12px;
+  margin-left: auto; margin-right: auto; flex: 0 1 auto; min-width: 0;
+}
+@media (min-width: 1500px) {
+  .barRow { position: relative; }
+  #midBlock {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    margin: 0;
+  }
+  /* The right column no longer has the mid block pushing it, so pin it right. */
+  #rightCol { margin-left: auto; }
+}
+#rightCol { flex: 0 1 38em; min-width: 22em; max-width: 46em; }
 #sigWrap { width: 100%; }
 #findRow { display: flex; gap: 0.6em; align-items: stretch; width: 100%; }
 #findRow #bookmarksBtn { flex: 0 0 auto; white-space: nowrap; }
@@ -446,10 +466,18 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #spotFilters { display: none; gap: 3px; }
 #spotFilters.show { display: inline-flex; }
 #spotFilters .btn { padding: 2px 6px; font-size: 10px; }
+/* Columns: time · band · snr · call · country · distance.
+   The CALL was 1fr, so it soaked up all the slack (a lake of dead space) while
+   COUNTRY sat at a fixed 2.6em and collided with the distance. Country is the
+   variable-length field, so that's the one that should flex — and it ellipsises
+   rather than overrunning its neighbour. */
 #spotList .sres.spot {
-  display: grid; grid-template-columns: 3.4em 3em 2.6em 1fr 2.6em 4.4em;
-  gap: 6px; align-items: baseline; font-size: 11px; padding: 4px 6px;
+  display: grid;
+  grid-template-columns: 3.2em 2.6em 2.6em 5.6em minmax(0, 1fr) 4.6em;
+  gap: 8px; align-items: baseline; font-size: 11px; padding: 4px 6px;
 }
+#spotList .cty { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#spotList .call { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #spotList .t { color: var(--unit); font-variant-numeric: tabular-nums; }
 #spotList .band { color: var(--text-dim); }
 #spotList .snr { text-align: right; font-variant-numeric: tabular-nums; }
@@ -493,6 +521,11 @@ select.btn { padding: 6px 8px; }
 #rds { font-size: 11px; color: var(--amber); letter-spacing: 1px; min-height: 14px; }
 #rds .rt { color: var(--text-dim); }
 </style>
+
+<!-- Lock-screen / Now Playing artwork, composited at runtime from the same two
+     images the phone uses (see VibeStreamService.refreshArtwork). -->
+<img id="artBase" src="__ARTWORK_BASE__" alt="" hidden>
+<img id="artInset" src="__ARTWORK_INSET__" alt="" hidden>
 
 <div id="splash">
   <h1>VIBESDR</h1>
@@ -577,7 +610,8 @@ select.btn { padding: 6px 8px; }
 
       <div class="sep tall"></div>
 
-      <!-- Demodulator + its bandwidth, which belongs to it. -->
+      <!-- Demodulator + its bandwidth. Part of the TUNING block: what you're
+           listening to and how you're demodulating it are one decision. -->
       <div id="demod">
         <div class="group" id="modes"></div>
         <!-- Bandwidth: mirrored sliders around the carrier (app's ModeSelector).
@@ -592,11 +626,13 @@ select.btn { padding: 6px 8px; }
         </div>
       </div>
 
+      <!-- MIDDLE BLOCK — the controls, CENTRED in whatever space is left between
+           the tuning block and the right column. On an ultrawide the slack used to
+           pile into one gap; auto margins split it either side, so the bar reads
+           as three groups: [tune + demod] [controls] [meter + search]. -->
+      <div id="midBlock">
       <div class="sep tall"></div>
 
-      <!-- Button cluster: view controls above, audio controls below. A 2-column
-           grid — the trailing panel buttons share a column so they line up with
-           each other, without being flung to the far edge by an auto margin. -->
       <!-- Two flat rows. REC is LAST so the timer that appears while recording
            can only grow rightwards — it can't shove the other buttons around. -->
       <div id="cluster">
@@ -621,6 +657,7 @@ select.btn { padding: 6px 8px; }
           <span class="lbl" id="recTime"></span>
         </div>
       </div>
+      </div><!-- /#midBlock -->
 
       <!-- Right column. The BOOKMARKS button + search box are ONE item for layout
            purposes, and the signal meter spans exactly their combined width. -->
@@ -817,7 +854,11 @@ select.btn { padding: 6px 8px; }
     <span>&#9733; BOOKMARKS</span>
     <button class="btn" id="bmClose">CLOSE</button>
   </div>
+  <!-- Naming happens IN THE PAGE. A native prompt() suspends Safari's
+       AudioContext, which killed the audio mid-listen. -->
   <div class="mrow" style="gap:6px">
+    <input id="bmName" class="btn" placeholder="Bookmark name" spellcheck="false"
+           style="flex:1 1 auto; min-width:8em">
     <button class="btn" id="bmAdd">+ ADD CURRENT</button>
     <button class="btn" id="bmExport">EXPORT</button>
     <button class="btn" id="bmImport">IMPORT</button>
@@ -894,8 +935,8 @@ select.btn { padding: 6px 8px; }
   </div>
   <div class="mrow" id="rowAutoContrast">
     <label for="autoContrast">AUTO CONTRAST</label>
-    <input type="range" id="autoContrast" min="0" max="20" value="10">
-    <span class="val" id="autoContrastVal">10</span>
+    <input type="range" id="autoContrast" min="0" max="20" value="5">
+    <span class="val" id="autoContrastVal">5</span>
   </div>
   <div class="mrow" id="rowMinDb" hidden>
     <label for="minDb">MIN dB</label>

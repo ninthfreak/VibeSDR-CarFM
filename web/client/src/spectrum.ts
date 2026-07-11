@@ -230,8 +230,29 @@ export class SpectrumClient {
 
   // ── Outbound ───────────────────────────────────────────────────────────────
 
-  /** Tune the VFO. Recentres the view when locked (or when forced). */
-  tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) {
+  /**
+   * A sensible display span for a mode: roughly ten times the demod bandwidth.
+   * Wide enough to see the signal in context, narrow enough that it isn't a
+   * speck. (Same rule we settled on for the watch.)
+   */
+  private defaultSpanHz(mode: SDRMode): number {
+    const [lo, hi] = MODE_BANDWIDTHS[mode];
+    const bw = Math.abs(hi - lo);
+    const span = bw * 10;
+    const cap = this.cfg.maxBandwidth || span;
+    return Math.max(MIN_SPAN_HZ, Math.min(span, cap));
+  }
+
+  /**
+   * Tune the VFO. Recentres the view when locked (or when forced).
+   *
+   * `retarget` — for a DISCRETE JUMP (frequency entry, bookmark, search, spot):
+   * also reset the span to something sensible for the mode. Carrying the old span
+   * across a jump is how you end up tuning from 648 kHz AM (zoomed right in) to
+   * 96.6 MHz FM and finding a single station filling a 250 kHz window. A jump to
+   * a different band should not inherit the zoom of the one you left.
+   */
+  tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean; retarget?: boolean }) {
     if (frequency) this.frequency = Math.round(frequency);
     if (mode) this.setMode(mode);
     else this._send({
@@ -239,7 +260,10 @@ export class SpectrumClient {
       bandwidthLow: this.bandwidthLow, bandwidthHigh: this.bandwidthHigh,
     });
     if (this.followVfo || opts?.recenter) {
-      const bb = this.view.binBandwidth || this.cfg.binBandwidth;
+      const n = this.cfg.binCount || 4096;
+      const bb = opts?.retarget
+        ? this.defaultSpanHz(this.mode) / n
+        : (this.view.binBandwidth || this.cfg.binBandwidth);
       if (bb) this.zoom(this.frequency, bb);
     }
   }

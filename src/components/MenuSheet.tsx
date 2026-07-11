@@ -499,7 +499,7 @@ export default function MenuSheet({
   vfoFrost = 0, onVfoFrost,
   bgOpacity = 3, onBgOpacity, hasBgImage = false,
   wfCoarse = 'auto', onWfCoarse,
-  autoContrast = 10, onAutoContrast,
+  autoContrast = 5, onAutoContrast,
   spatialSmooth = true, onSpatialSmooth,
   wfBrightness = 0, onWfBrightness,
   wfContrast = 0, onWfContrast,

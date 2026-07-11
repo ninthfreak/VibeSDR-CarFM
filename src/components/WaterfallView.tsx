@@ -155,7 +155,7 @@ export interface WaterfallViewProps {
   // Display settings (SignalProcessor + layout)
   specShow?:       boolean;
   specFrac?:       number;        // spectrum fraction of (height − BAND_H − TICK_H)
-  autoContrast?:   number;        // 0–20, default 10 (UberSDR calibration)
+  autoContrast?:   number;        // 0–20, default 5 (10 is too dark)
   specSmoothing?:  number;        // 1–10 → smoothingFrames
   specFloor?:      number;        // ±20 dB
   specPeakScale?:  number;        // 10 = 1.0×
@@ -267,7 +267,7 @@ function WaterfallView({
   ituRegion = 1, fontFamily = 'Atkinson Hyperlegible',
   onPanDelta, onZoomDelta, onTapTune, onPinchZoom,
   specShow = true, specFrac = 0.26,
-  autoContrast = 10, specSmoothing = 5, specFloor = 0, specPeakScale = 10,
+  autoContrast = 5, specSmoothing = 5, specFloor = 0, specPeakScale = 10,
   peakHold = true, spatialSmooth = true,
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0,
   frameRate = '20fps', needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,

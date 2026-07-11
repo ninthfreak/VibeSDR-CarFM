@@ -110,6 +110,21 @@ export class AudioPlayer {
 
   // ScriptProcessor fallback — see start(). Only one of `node` / `sp` is live.
   private sp: ScriptProcessorNode | null = null;
+  /**
+   * Real <audio> element fed by a MediaStream from the Web Audio graph.
+   *
+   * The OS media widget (macOS Now Playing, Windows, Android lock screen, media
+   * keys) only attaches to a MEDIA ELEMENT that is genuinely playing. A Web Audio
+   * graph alone does NOT register — UberSDR hit this too and says so plainly:
+   * "a pure AudioContext + navigator.mediaSession metadata is not sufficient".
+   *
+   * They solved it by streaming WebM/Opus over HTTP into an <audio src=...>.
+   * We can't (no Opus/WebM muxer in the shim) — but we don't need to: routing our
+   * OWN decoded audio into a MediaStreamAudioDestinationNode gives a real element
+   * playing real audio, with no server change and no second copy of the stream.
+   */
+  private mediaEl: HTMLAudioElement | null = null;
+  private streamDest: MediaStreamAudioDestinationNode | null = null;
   private ring: [Float32Array, Float32Array] | null = null;
   private cap = 48000 * 2;
   private wPos = 0;
@@ -134,6 +149,23 @@ export class AudioPlayer {
       this.gain = this.ctx.createGain();
       this.gain.gain.value = this._muted ? 0 : this._volume;
 
+      // Play OUT through a media element, so the OS sees real playback and gives
+      // us Now Playing / lock-screen / media-key control. Falls back to the plain
+      // destination if the browser won't take a MediaStream.
+      try {
+        this.streamDest = this.ctx.createMediaStreamDestination();
+        this.mediaEl = new Audio();
+        this.mediaEl.srcObject = this.streamDest.stream;
+        this.mediaEl.autoplay = true;
+        // The GainNode already carries volume/mute; keep the element wide open or
+        // the two would fight.
+        this.mediaEl.volume = 1;
+        void this.mediaEl.play().catch(() => { /* resumed on the next gesture */ });
+      } catch {
+        this.streamDest = null;
+        this.mediaEl = null;
+      }
+
       // AudioWorklet is [SecureContext]-only. A VibeServer is plain http:// on a
       // LAN IP, so `ctx.audioWorklet` is UNDEFINED there and there is no worklet
       // path at all — fall back to ScriptProcessor, which has no such gate.
@@ -144,7 +176,8 @@ export class AudioPlayer {
         await this.ctx.audioWorklet.addModule(url);
         URL.revokeObjectURL(url);
         this.node = new AudioWorkletNode(this.ctx, 'vibe-sink', { outputChannelCount: [2] });
-        this.node.connect(this.gain).connect(this.ctx.destination);
+        this.node.connect(this.gain);
+        this._connectOutput();
       } else {
         this._startScriptProcessor();
       }
@@ -186,9 +219,22 @@ export class AudioPlayer {
       this.rPos = (this.rPos + n) % this.cap;
       this.filled -= n;
     };
-    sp.connect(this.gain!).connect(ctx.destination);
+    sp.connect(this.gain!);
+    this._connectOutput();
     this.sp = sp;
   }
+
+  /** Send the mixed output to the media element when we have one (so the OS sees
+   *  playback), otherwise straight to the speakers. Never both — that would play
+   *  the audio twice. */
+  private _connectOutput() {
+    if (!this.gain || !this.ctx) return;
+    if (this.streamDest) this.gain.connect(this.streamDest);
+    else this.gain.connect(this.ctx.destination);
+  }
+
+  /** The element the OS media controls attach to (null if unavailable). */
+  get element(): HTMLAudioElement | null { return this.mediaEl; }
 
   /** Push decoded frames into the fallback ring buffer. */
   private _pushRing(l: Float32Array, r: Float32Array) {
@@ -347,6 +393,7 @@ export class AudioPlayer {
 
   async resume() {
     if (this.ctx && this.ctx.state === 'suspended') await this.ctx.resume();
+    if (this.mediaEl && this.mediaEl.paused) await this.mediaEl.play().catch(() => {});
   }
 
   set volume(v: number) {
@@ -365,6 +412,8 @@ export class AudioPlayer {
     this.closedByUs = true;
     this.ws?.close();
     this.ws = null;
+    if (this.mediaEl) { this.mediaEl.pause(); this.mediaEl.srcObject = null; this.mediaEl = null; }
+    this.streamDest = null;
     if (this.sp) { this.sp.onaudioprocess = null; this.sp.disconnect(); this.sp = null; }
     this.ctx?.close();
     this.ctx = null;

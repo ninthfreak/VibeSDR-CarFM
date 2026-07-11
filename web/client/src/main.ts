@@ -13,7 +13,7 @@ import { resolveAuth, withAuth, type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
 import {
-  BAND_PLAN, getBandsAtRegion, type Band,
+  BAND_PLAN, getBandsAtRegion, bandTuneDefaults, type Band,
 } from '../../../src/constants/bandPlan';
 import { deriveItuRegion } from '../../../src/services/stations';
 import { eccPiToIso, isoToFlag } from '../../../src/services/rdsCountry';
@@ -40,6 +40,8 @@ let step = 1000;                 // tuning step, Hz (restored from prefs on load
 let spec: SpectrumClient | null = null;
 let audio: AudioPlayer | null = null;
 let wf: Waterfall | null = null;
+/** Last config's frequency window — see onConfig, for the stale-history wipe. */
+let lastWindow: { lo: number; hi: number } | null = null;
 
 // ── Saved servers (PIN per host:port, like the app) ──────────────────────────
 
@@ -213,6 +215,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       updateSignal(bins, centerHz, bwHz);
     },
     onConfig: (cfg) => {
+      // Drop stale waterfall history when the new window shares no frequency with
+      // the old one. Overlapping windows (pan, zoom) keep their history — the rows
+      // are still about the band you're looking at. A jump has nothing in common
+      // with what's on screen, and letting it scroll out takes ~30s at 18 rows/s.
+      const span = cfg.binCount * cfg.binBandwidth;
+      const lo = cfg.centerFreq - span / 2, hi = cfg.centerFreq + span / 2;
+      if (wf && lastWindow && (hi <= lastWindow.lo || lo >= lastWindow.hi)) wf.clearHistory();
+      lastWindow = { lo, hi };
+
       if (!spec!.frequency) {
         // A shared link's frequency wins over the remembered dial.
         if (applyShareParams()) return;
@@ -265,17 +276,19 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   // credits it to the Connect click and may leave it suspended. Rather than rely
   // on that chain surviving, always arm a resume on the next real interaction.
   audio.start().catch((e) => console.error('audio start failed', e));
-  const kick = () => {
-    audio?.resume();
-    if (!audio?.suspended) {
-      window.removeEventListener('pointerdown', kick);
-      window.removeEventListener('keydown', kick);
-    }
-  };
-  window.addEventListener('pointerdown', kick);
-  window.addEventListener('keydown', kick);
+
+  // PERMANENT resume. Anything that steals focus — a native dialog, a tab switch,
+  // the OS — can suspend the AudioContext, and an unsuspend handler that removes
+  // itself once it has worked ONCE leaves you stuck with no audio and no way back
+  // except a page reload. On a desktop there is no reason to ever sit suspended.
+  const kick = () => { void audio?.resume(); };
+  for (const ev of ['pointerdown', 'keydown', 'focus'] as const) {
+    window.addEventListener(ev, kick);
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) kick(); });
 
   buildControls();
+  initMediaSession();
   initDecoders(host, auth);
   initIdleThrottle();
   window.addEventListener('resize', () => { wf!.resize(); });
@@ -455,10 +468,20 @@ function drawBands() {
     ctx.fillStyle = bandColour(b);
     ctx.fillRect(x0, 0, x1 - x0, h);
 
-    // Label only when the segment can actually hold it.
-    const label = b.bandLabel || b.name;
-    const tw = ctx.measureText(label).width;
-    if (x1 - x0 > tw + 8 * dpr) {
+    // Full title first ("40m Ham Band"), as the app shows it. Only fall back to
+    // the short label ("40m") when the segment genuinely can't hold the full one.
+    const full = b.name;
+    const short = b.bandLabel || b.name;
+    const wFull = ctx.measureText(full).width;
+    const wShort = ctx.measureText(short).width;
+    const room = x1 - x0;
+
+    let label = '';
+    let tw = 0;
+    if (room > wFull + 8 * dpr) { label = full; tw = wFull; }
+    else if (room > wShort + 8 * dpr) { label = short; tw = wShort; }
+
+    if (label) {
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
       ctx.fillText(label, (x0 + x1) / 2 - tw / 2 + dpr, h / 2 + dpr);
       ctx.fillStyle = 'rgba(255,255,255,0.95)';
@@ -788,13 +811,13 @@ function buildControls() {
     spec!.followVfo = !spec!.followVfo;
     lock.classList.toggle('on', spec!.followVfo);
     lock.textContent = spec!.followVfo ? 'LOCK' : 'FREE';
-    // Walls, the RF-centre marker and CENTRE only mean anything once the view is
-    // free to wander away from the VFO.
-    $('centreBtn').hidden = spec!.followVfo;
+    // Walls and the RF-centre marker only mean anything once the view is free to
+    // wander. CENTRE is governed separately — see updateCentreBtn().
     updateViewOverlays();
   };
 
-  // Snap the view back onto the VFO without re-locking it.
+  // Snap the view back onto the VFO. Works whether locked or not — being locked
+  // is exactly the case where you have no other way to bring it back.
   $('centreBtn').onclick = () => {
     spec!.pan(spec!.frequency);
     updateViewOverlays();
@@ -811,6 +834,7 @@ function buildControls() {
   mute.onclick = () => {
     audio!.muted = !audio!.muted;
     mute.classList.toggle('on', audio!.muted);
+    updateMediaSession();
   };
 
   initFreqEntry();
@@ -843,8 +867,28 @@ function buildControls() {
  * the HARDWARE is (dashed marker) and where you are LOOKING part company — and
  * the walls are where the capture runs out entirely.
  */
+/**
+ * CENTRE is offered whenever the LISTEN VFO is off screen — whatever the lock
+ * says. Re-locking does NOT drag the view back (the server only recentres on a
+ * tune), so you could end up locked, with the VFO somewhere off-screen, and no
+ * button to get back to it. The button's job is "I can't see what I'm listening
+ * to", and that condition has nothing to do with the lock.
+ */
+function updateCentreBtn() {
+  if (!wf || !spec) return;
+  const span = wf.spanHz;
+  let offscreen = false;
+  if (span > 0) {
+    const lo = wf.displayCenterHz() - span / 2;
+    const hi = lo + span;
+    offscreen = spec.frequency < lo || spec.frequency > hi;
+  }
+  $('centreBtn').hidden = !offscreen && spec.followVfo;
+}
+
 function updateViewOverlays() {
   if (!wf || !spec) return;
+  updateCentreBtn();
   if (spec.followVfo) {
     wf.wallLoHz = wf.wallHiHz = wf.rfCenterHz = null;   // locked: nothing to show
     return;
@@ -863,6 +907,117 @@ function updateViewOverlays() {
   wf.wallHiHz = fs ? rf + fs / 2 : null;
   wf.captureLoHz = null;   // the walls now do this job; no second bracket
   wf.captureHiHz = null;
+}
+
+// ── OS media controls (macOS Now Playing, media keys) ────────────────────────
+//
+// The Media Session API only attaches to a real MEDIA ELEMENT — a Web Audio graph
+// alone doesn't register with the OS. So we keep a silent, looping <audio> alive
+// purely to claim the Now Playing slot, and map the transport controls onto the
+// radio:
+//
+//   play / pause  -> unmute / mute
+//   next / prev   -> tune one step up / down
+//
+// Metadata shows the station (RDS or bookmark) and the frequency, so the menu bar
+// and the media keys say something useful.
+
+/**
+ * Now Playing artwork — composited exactly as the PHONE does it
+ * (VibeStreamService.refreshArtwork): the artwork base, with the RTL-TCP logo
+ * inset bottom-right at 30% of the width, 4.5% padding, amber-tinted (#ffb833)
+ * on a dark rounded inset. Same two source images, same numbers, so the lock
+ * screen looks identical whether you're listening on the phone or in the browser.
+ */
+let artworkUrl = '';
+
+function buildArtwork() {
+  const base = $<HTMLImageElement>('artBase');
+  const inset = $<HTMLImageElement>('artInset');
+  const make = () => {
+    if (!base.naturalWidth) return;
+    const S = 512;
+    const c = document.createElement('canvas');
+    c.width = c.height = S;
+    const ctx = c.getContext('2d')!;
+    ctx.drawImage(base, 0, 0, S, S);
+
+    if (inset.naturalWidth) {
+      const size = S * 0.30;
+      const pad = S * 0.045;
+      const x = S - size - pad;
+      const y = S - size - pad;
+
+      // Dark rounded inset behind the logo, as the app draws it.
+      ctx.fillStyle = 'rgba(12,10,6,0.92)';
+      const r = size * 0.18;
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + size, y, x + size, y + size, r);
+      ctx.arcTo(x + size, y + size, x, y + size, r);
+      ctx.arcTo(x, y + size, x, y, r);
+      ctx.arcTo(x, y, x + size, y, r);
+      ctx.closePath();
+      ctx.fill();
+
+      // The logo is black line art — tint it amber, as the app does.
+      const t = document.createElement('canvas');
+      t.width = t.height = Math.round(size);
+      const tc = t.getContext('2d')!;
+      const p = size * 0.14;
+      tc.drawImage(inset, p, p, size - 2 * p, size - 2 * p);
+      tc.globalCompositeOperation = 'source-in';
+      tc.fillStyle = '#ffb833';
+      tc.fillRect(0, 0, t.width, t.height);
+      ctx.drawImage(t, x, y);
+    }
+    artworkUrl = c.toDataURL('image/png');
+    updateMediaSession();
+  };
+  if (base.complete) make(); else base.onload = make;
+  inset.onload = make;
+}
+
+function initMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  buildArtwork();
+
+  // No dummy element: AudioPlayer now plays out through a REAL <audio> fed by a
+  // MediaStream from the audio graph, which is what the OS actually attaches to.
+  // (A silent placeholder doesn't register — the element has to be playing real
+  // audio. UberSDR ran into the same wall and streams WebM/Opus into an element
+  // for exactly this reason.)
+  const ms = navigator.mediaSession;
+  ms.setActionHandler('play', () => {
+    if (audio) { audio.muted = false; $('muteBtn').classList.remove('on'); }
+    void audio?.resume();
+    updateMediaSession();
+  });
+  ms.setActionHandler('pause', () => {
+    if (audio) { audio.muted = true; $('muteBtn').classList.add('on'); }
+    updateMediaSession();
+  });
+  ms.setActionHandler('nexttrack', () => nudge(step));
+  ms.setActionHandler('previoustrack', () => nudge(-step));
+  updateMediaSession();
+}
+
+function updateMediaSession() {
+  if (!('mediaSession' in navigator) || !spec) return;
+  const freq = `${(spec.frequency / 1e6).toFixed(3)} MHz`;
+  const station = rdsName || $('vtsName').textContent || '';
+  // Artwork: the RTL-TCP art the app uses, so Now Playing looks the same whether
+  // you're listening on the phone or in the browser. If the station has an RDS
+  // logo, prefer that — it's a picture of what you're actually hearing.
+  const artSrc = rdsLogoUrl || artworkUrl;
+  if (!artSrc) return;
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: station && station !== '—' ? station : freq,
+    artist: station && station !== '—' ? `${freq} · ${spec.mode.toUpperCase()}` : spec.mode.toUpperCase(),
+    album: 'VibeSDR',
+    artwork: [{ src: artSrc, sizes: '512x512', type: 'image/png' }],
+  });
+  navigator.mediaSession.playbackState = audio?.muted ? 'paused' : 'playing';
 }
 
 // ── Idle power saving ────────────────────────────────────────────────────────
@@ -966,10 +1121,30 @@ function initSearch() {
   };
 }
 
+/**
+ * Mode + step for a discrete jump, from the band plan — exactly what the app does
+ * (bandTuneDefaults). Without it, typing 96.6 MHz while listening to 648 kHz AM
+ * leaves you demodulating an FM broadcast station in AM with a ±5 kHz passband:
+ * the audio breaks up, and the span (sized from the AM bandwidth) is far too
+ * narrow. The band knows what it wants; use it.
+ */
+function applyBandDefaults(hz: number) {
+  if (!spec) return;
+  const d = bandTuneDefaults(hz, ituRegion());
+  if (d.mode && d.mode !== spec.mode) setMode(d.mode as SDRMode, true);
+  if (d.step) {
+    step = d.step;
+    savePref('step', step);
+  }
+  syncStep();
+}
+
 function tuneTo(r: SearchResult) {
   if (!spec || !r) return;
-  const mode = (r.mode || spec.mode) as SDRMode;
-  spec.tune(clampTune(r.frequency), mode, { recenter: true });
+  // An explicit mode on the result wins; otherwise take the band's.
+  const bandMode = bandTuneDefaults(r.frequency, ituRegion()).mode;
+  const mode = (r.mode || bandMode || spec.mode) as SDRMode;
+  spec.tune(clampTune(r.frequency), mode, { recenter: true, retarget: true });
   setMode(mode, false);
   // A bookmark can carry its own passband — honour it rather than the mode default.
   if (typeof r.bandwidthLow === 'number' && typeof r.bandwidthHigh === 'number') {
@@ -987,11 +1162,14 @@ function initBookmarks() {
   };
   $('bmClose').onclick = () => $('bookmarksPanel').classList.remove('open');
 
-  // Bookmark whatever we're listening to right now.
-  $('bmAdd').onclick = async () => {
+  // Bookmark whatever we're listening to right now. The name comes from an
+  // in-page field: a native prompt() SUSPENDS the AudioContext in Safari, which
+  // silently killed the audio mid-listen.
+  const nameEl = $<HTMLInputElement>('bmName');
+  const addNow = async () => {
     if (!spec) return;
-    const name = prompt('Bookmark name', `${(spec.frequency / 1e6).toFixed(3)} MHz ${spec.mode.toUpperCase()}`);
-    if (!name) return;
+    const name = nameEl.value.trim()
+      || `${(spec.frequency / 1e6).toFixed(3)} MHz ${spec.mode.toUpperCase()}`;
     await addBookmark({
       name,
       frequency: Math.round(spec.frequency),
@@ -1000,8 +1178,11 @@ function initBookmarks() {
       bandwidth_low: spec.bandwidthLow,
       bandwidth_high: spec.bandwidthHigh,
     });
+    nameEl.value = '';
     renderBookmarks();
   };
+  $('bmAdd').onclick = addNow;
+  nameEl.onkeydown = (e) => { if (e.key === 'Enter') { void addNow(); e.preventDefault(); } };
 
   // Export: the same UberSDR-importable JSON the phone app writes, so bookmarks
   // move between browser, phone and desktop UberSDR.
@@ -1443,7 +1624,7 @@ function renderSpots() {
       `<span class="km">${km != null ? Math.round(km) + 'km' : ''}</span>`;
     row.title = `${sp.mode} · ${sp.grid || 'no grid'} · ${(sp.frequency / 1e6).toFixed(3)} MHz`;
     row.onclick = () => {
-      spec?.tune(clampTune(sp.frequency), 'usb', { recenter: true });
+      spec?.tune(clampTune(sp.frequency), 'usb', { recenter: true, retarget: true });
       renderFreq();
     };
     host.appendChild(row);
@@ -1473,18 +1654,25 @@ function initSpotFilters() {
  * tab keeps that intact and gives the map real screen space. Spots are baked into
  * the page as data, so it needs no connection back to the server.
  */
+/**
+ * FT8 map — opens in a NEW TAB, with docked stats panels.
+ *
+ * Modelled on UberSDR's Digital Spots Map rather than the phone app's sheet: on a
+ * desktop there's room to DOCK the statistics beside the map, so they're always
+ * readable. The app's full-screen overlay was a small-screen compromise we don't
+ * have to inherit.
+ *
+ * Opens even with no spots — a button that does nothing reads as broken.
+ */
 function openSpotsMap() {
   const rows = filteredSpots().filter(s => s.grid && s.grid.length >= 4);
-  if (!rows.length) {
-    $('decStatus').textContent = 'no spots with a grid yet';
-    return;
-  }
-
   const me = myPos();
+
   const pts = rows.map(s => {
     const p = gridToLatLon(s.grid)!;
     return {
-      ...s,
+      callsign: s.callsign, grid: s.grid, mode: s.mode, band: s.band, snr: s.snr,
+      frequency: s.frequency, timestamp: s.timestamp,
       lat: p.lat, lon: p.lon,
       country: countryForCallsign(s.callsign) || '',
       km: me ? Math.round(haversineKm(me, p)) : null,
@@ -1492,94 +1680,239 @@ function openSpotsMap() {
     };
   });
 
-  // NB: the closing script tag is assembled at runtime. A literal "</script>"
-  // inside this string would terminate the page's OWN inline <script> when the
-  // bundle is inlined into the served HTML — which silently breaks everything.
+  // Closing tags assembled at runtime — a literal </script> or </style> here would
+  // terminate the page's OWN inline <script> when the bundle is inlined.
   const ES = '<' + '/script>';
-  const bandsUsed = [...new Set(pts.map(p => p.band))];
+  const ST = '<' + '/style>';
 
-  const html = `<!doctype html><meta charset="utf-8"><title>VibeSDR — FT8 map</title>
+  const html = `<!doctype html><meta charset="utf-8"><title>VibeSDR — Digital Spots Map</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">${ES}
 <style>
-  html,body,#m{height:100%;margin:0;background:#080601}
-  .pop{font:12px ui-monospace,Menlo,monospace;color:#111;line-height:1.5}
-  .pop b{font-size:13px;letter-spacing:1px}
-  /* Legend — collapsed to an ⓘ, expands on click (the app's map legend). */
-  #legend{position:absolute;bottom:22px;left:12px;z-index:1000;
-    background:rgba(8,6,2,0.92);border:1px solid rgba(255,160,0,0.35);border-radius:8px;
-    color:#ffb833;font:11px ui-monospace,Menlo,monospace;overflow:hidden}
-  #leghead{padding:6px 10px;cursor:pointer;letter-spacing:1px;display:flex;gap:8px;align-items:center}
-  #legbody{display:none;padding:2px 10px 8px;max-height:40vh;overflow-y:auto}
-  #legend.open #legbody{display:block}
-  .lrow{display:flex;align-items:center;gap:7px;padding:2px 0;white-space:nowrap}
+  :root{--amber:#ffb833;--dim:rgba(255,160,0,0.45);--bg:rgba(8,6,2,0.94);
+        --bdr:rgba(255,160,0,0.30);--hi:#ffe566}
+  html,body{height:100%;margin:0;background:#080601;
+    font:12px ui-monospace,"SF Mono",Menlo,monospace;color:var(--amber)}
+  #wrap{display:flex;flex-direction:column;height:100%}
+  /* Top bar — counts + the toggles, as UberSDR does. */
+  #top{display:flex;align-items:center;gap:14px;padding:7px 12px;
+    background:var(--bg);border-bottom:1px solid var(--bdr);flex:0 0 auto}
+  #count{color:var(--hi);font-weight:bold}
+  #top label{display:inline-flex;gap:4px;align-items:center;color:var(--dim);cursor:pointer}
+  #top .sp{flex:1 1 auto}
+  #main{position:relative;flex:1 1 auto;min-height:0}
+  #m{position:absolute;inset:0}
+  .panel{position:absolute;z-index:1000;background:var(--bg);
+    border:1px solid var(--bdr);border-radius:8px}
+  /* Docked stats — left column, scrollable, NOT covering the map. */
+  #stats{top:10px;left:10px;width:265px;max-height:calc(100% - 20px);overflow-y:auto;padding:10px 12px}
+  #stats.hide,#legend.hide,#summary.hide{display:none}
+  .sect{font-size:9px;letter-spacing:1.5px;color:var(--dim);margin:10px 0 6px;
+    border-top:1px solid rgba(255,160,0,0.15);padding-top:8px}
+  .sect:first-child{border-top:none;margin-top:0;padding-top:0}
+  .row{display:flex;justify-content:space-between;gap:8px;margin:3px 0;font-size:11px}
+  .row b{color:var(--hi);font-weight:bold}
+  .bar{height:3px;background:rgba(255,160,0,0.12);border-radius:2px;margin:2px 0 5px}
+  .bar i{display:block;height:3px;border-radius:2px;background:var(--amber)}
+  .sub{font-size:9px;color:var(--dim);margin:-2px 0 6px}
+  /* Compass rose — 8 bearings, like UberSDR's. */
+  #rose{display:grid;grid-template-columns:repeat(4,1fr);gap:4px 8px}
+  #rose div{font-size:10px}
+  #rose .n{color:var(--dim)}
+  /* Legend — right. */
+  #legend{top:10px;right:10px;padding:8px 10px;min-width:110px}
+  .lrow{display:flex;align-items:center;gap:7px;padding:2px 0;white-space:nowrap;font-size:11px}
   .sw{width:11px;height:11px;border-radius:50%;flex:0 0 11px}
-  .note{color:rgba(255,160,0,0.55);margin-top:6px;max-width:230px;white-space:normal}
-  #stats{color:rgba(255,160,0,0.6)}
-${ES.replace('<', '<')}
-<div id="m"></div>
-<div id="legend">
-  <div id="leghead">&#9432; LEGEND <span id="stats"></span></div>
-  <div id="legbody"></div>
+  /* Summary strip — bottom, like UberSDR's latest/rarest row. */
+  #summary{bottom:10px;left:50%;transform:translateX(-50%);padding:8px 14px;
+    display:flex;gap:26px;font-size:11px;white-space:nowrap}
+  #summary .k{color:var(--dim);font-size:9px;letter-spacing:1px}
+  #summary .v{color:var(--hi)}
+  #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    color:var(--dim);pointer-events:none;z-index:900;font-size:13px}
+  .pop{font:12px ui-monospace,Menlo,monospace;color:#111;line-height:1.5}
+${ST}
+<div id="wrap">
+  <div id="top">
+    <span id="count">0</span><span style="color:var(--dim)">spots</span>
+    <label><input type="checkbox" id="tStats" checked>Stats</label>
+    <label><input type="checkbox" id="tSummary" checked>Summary</label>
+    <label><input type="checkbox" id="tLegend" checked>Legend</label>
+    <span class="sp"></span>
+    <span id="clock" style="color:var(--dim)"></span>
+  </div>
+  <div id="main">
+    <div id="m"></div>
+    <div id="empty"></div>
+    <div class="panel" id="stats"></div>
+    <div class="panel" id="legend"></div>
+    <div class="panel" id="summary"></div>
+  </div>
 </div>
 <script>
 const spots = ${JSON.stringify(pts)};
 const me = ${JSON.stringify(me)};
-const bands = ${JSON.stringify(bandsUsed)};
 const COL = ${JSON.stringify(BAND_COLOUR)};
 
-const map = L.map('m', { worldCopyJump: true }).setView([20, 0], 3);
-// Colour OSM tiles — the same basemap the app's map uses.
+const map = L.map('m', { worldCopyJump: true })
+  .setView(me ? [me.lat, me.lon] : [25, 5], me ? 4 : 3);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
   { attribution: '&copy; OpenStreetMap', maxZoom: 14 }).addTo(map);
 
-// Markers: coloured by BAND, sized by SNR (skin parity).
 function radius(snr) {
   const s = Math.max(-24, Math.min(12, snr));
-  return 4 + ((s + 24) / 36) * 9;      // -24dB -> 4px, +12dB -> 13px
+  return 4 + ((s + 24) / 36) * 9;
 }
-const layer = L.layerGroup().addTo(map);
 for (const s of spots) {
   L.circleMarker([s.lat, s.lon], {
     radius: radius(s.snr), color: '#00000066', weight: 1,
     fillColor: s.colour, fillOpacity: 0.85,
-  }).addTo(layer).bindPopup(
+  }).addTo(map).bindPopup(
     '<div class="pop"><b>' + s.callsign + '</b><br>' +
-    (s.country ? s.country + '<br>' : '') +
-    s.grid + (s.km != null ? ' · ' + s.km + ' km' : '') + '<br>' +
+    (s.country ? s.country + '<br>' : '') + s.grid +
+    (s.km != null ? ' · ' + s.km + ' km' : '') + '<br>' +
     s.mode + ' · ' + s.band + ' · ' + (s.snr > 0 ? '+' : '') + s.snr + ' dB<br>' +
     (s.frequency / 1e6).toFixed(3) + ' MHz</div>');
 }
-
-// The receiver, if we know where it is.
 if (me) {
-  L.circleMarker([me.lat, me.lon], {
-    radius: 7, color: '#fff', weight: 2, fillColor: '#e05050', fillOpacity: 1,
-  }).addTo(map).bindPopup('<div class="pop"><b>RX</b><br>You are here</div>');
-  // Range rings, so distance is readable at a glance.
+  L.circleMarker([me.lat, me.lon], { radius: 7, color: '#fff', weight: 2,
+    fillColor: '#e05050', fillOpacity: 1 }).addTo(map)
+    .bindPopup('<div class="pop"><b>RX</b><br>Receiver</div>');
   for (const km of [1000, 2500, 5000]) {
-    L.circle([me.lat, me.lon], {
-      radius: km * 1000, color: 'rgba(255,160,0,0.35)', weight: 1, fill: false, dashArray: '4 6',
-    }).addTo(map);
+    L.circle([me.lat, me.lon], { radius: km * 1000, color: 'rgba(255,160,0,0.30)',
+      weight: 1, fill: false, dashArray: '4 6' }).addTo(map);
   }
 }
-
 const all = spots.map(s => [s.lat, s.lon]);
 if (me) all.push([me.lat, me.lon]);
-if (all.length) map.fitBounds(all, { padding: [50, 50] });
+if (all.length > 1) map.fitBounds(all, { padding: [60, 60] });
 
-// Legend: the bands actually present, plus a little context.
-const body = document.getElementById('legbody');
-body.innerHTML = bands.map(b =>
-  '<div class="lrow"><span class="sw" style="background:' + (COL[b] || '#aaa') + '"></span>' + b + '</div>'
-).join('') +
-  '<div class="lrow" style="margin-top:6px"><span class="sw" style="background:#e05050"></span>Receiver</div>' +
-  '<div class="note">Marker size = SNR. Rings at 1000 / 2500 / 5000 km.' +
-  (me ? '' : ' Set your grid in the menu for distances and rings.') + '</div>';
-document.getElementById('stats').textContent =
-  '· ' + spots.length + ' spots · ' + new Set(spots.map(s => s.country).filter(Boolean)).size + ' countries';
-const leg = document.getElementById('legend');
-document.getElementById('leghead').onclick = () => leg.classList.toggle('open');
+document.getElementById('count').textContent = String(spots.length);
+document.getElementById('empty').textContent = spots.length
+  ? '' : 'No spots with a grid yet — leave DIGITAL SPOTS running.';
+
+// ── Stats ────────────────────────────────────────────────────────────────────
+function bearing(a, b) {
+  const toR = (d) => d * Math.PI / 180, toD = (r) => r * 180 / Math.PI;
+  const dLon = toR(b.lon - a.lon);
+  const y = Math.sin(dLon) * Math.cos(toR(b.lat));
+  const x = Math.cos(toR(a.lat)) * Math.sin(toR(b.lat)) -
+            Math.sin(toR(a.lat)) * Math.cos(toR(b.lat)) * Math.cos(dLon);
+  return (toD(Math.atan2(y, x)) + 360) % 360;
+}
+const DIRS = ['N','NE','E','SE','S','SW','W','NW'];
+function tally(fn) {
+  const o = {};
+  for (const s of spots) { const k = fn(s); if (k) o[k] = (o[k] || 0) + 1; }
+  return o;
+}
+function barList(counts, colourFor, limit) {
+  const e = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, limit || 8);
+  if (!e.length) return '<div class="sub">Nothing yet</div>';
+  const max = e[0][1];
+  return e.map(([k, n]) =>
+    '<div class="row"><span>' + k + '</span><b>' + n + '</b></div>' +
+    '<div class="bar"><i style="width:' + Math.round(n / max * 100) + '%' +
+    (colourFor && colourFor(k) ? ';background:' + colourFor(k) : '') + '"></i></div>').join('');
+}
+
+let html = '';
+const withKm = spots.filter(s => s.km != null).sort((a, b) => a.km - b.km);
+
+// Distance buckets — UberSDR's four bands, as percentages of the total.
+if (withKm.length) {
+  const max = withKm[withKm.length - 1].km, min = withKm[0].km;
+  const step = Math.max(1, (max - min) / 4);
+  html += '<div class="sect">DISTANCE</div>';
+  for (let i = 0; i < 4; i++) {
+    const lo = Math.round(min + i * step), hi = Math.round(min + (i + 1) * step);
+    const n = withKm.filter(s => s.km >= lo && (i === 3 ? s.km <= hi : s.km < hi)).length;
+    const pct = Math.round(n / withKm.length * 100);
+    html += '<div class="row"><span>' + lo + '–' + hi + ' km</span><b>' + n + ' (' + pct + '%)</b></div>' +
+            '<div class="bar"><i style="width:' + pct + '%"></i></div>';
+  }
+
+  html += '<div class="sect">BEARING</div><div id="roseWrap"></div>';
+}
+
+if (withKm.length) {
+  const c = withKm[0], f = withKm[withKm.length - 1];
+  html += '<div class="sect">RANGE</div>' +
+    '<div class="row"><span>Closest</span><b>' + c.km + ' km</b></div>' +
+    '<div class="sub">' + c.callsign + ' (' + c.grid + ') · ' + (c.country || '') +
+    ' · ' + c.band + ' · ' + c.snr + 'dB</div>' +
+    '<div class="row"><span>Farthest</span><b>' + f.km + ' km</b></div>' +
+    '<div class="sub">' + f.callsign + ' (' + f.grid + ') · ' + (f.country || '') +
+    ' · ' + f.band + ' · ' + f.snr + 'dB</div>';
+} else if (spots.length) {
+  html += '<div class="sect">RANGE</div><div class="sub">' +
+    'No receiver location published — distances unavailable.</div>';
+}
+
+html += '<div class="sect">TOP COUNTRIES</div>' + barList(tally(s => s.country), null, 10);
+html += '<div class="sect">BY BAND</div>' + barList(tally(s => s.band), (b) => COL[b], 12);
+html += '<div class="sect">BY MODE</div>' + barList(tally(s => s.mode), null, 6);
+html += '<div class="sect">TOTALS</div>' +
+  '<div class="row"><span>Spots</span><b>' + spots.length + '</b></div>' +
+  '<div class="row"><span>Countries</span><b>' +
+    new Set(spots.map(s => s.country).filter(Boolean)).size + '</b></div>' +
+  '<div class="row"><span>Bands</span><b>' +
+    new Set(spots.map(s => s.band)).size + '</b></div>';
+document.getElementById('stats').innerHTML = html;
+
+// Bearing rose — only meaningful with a receiver position.
+if (me && withKm.length) {
+  const counts = new Array(8).fill(0);
+  for (const s of spots) {
+    const b = bearing(me, s);
+    counts[Math.round(b / 45) % 8]++;
+  }
+  const tot = counts.reduce((a, b) => a + b, 0) || 1;
+  document.getElementById('roseWrap').innerHTML =
+    '<div id="rose">' + DIRS.map((d, i) =>
+      '<div><span class="n">' + d + '</span> <b>' + counts[i] + '</b><br>' +
+      '<span class="n">' + Math.round(counts[i] / tot * 100) + '%</span></div>').join('') +
+    '</div>';
+}
+
+// Legend
+const bandsUsed = [...new Set(spots.map(s => s.band))];
+document.getElementById('legend').innerHTML =
+  (me ? '<div class="lrow"><span class="sw" style="background:#e05050"></span>Receiver</div>' : '') +
+  (bandsUsed.length
+    ? bandsUsed.map(b => '<div class="lrow"><span class="sw" style="background:' +
+        (COL[b] || '#aaa') + '"></span>' + b + '</div>').join('')
+    : '<div class="lrow" style="color:var(--dim)">No bands yet</div>') +
+  '<div class="lrow" style="color:var(--dim);font-size:9px;margin-top:4px">Size = SNR</div>';
+
+// Summary strip — latest and rarest, as UberSDR shows along the bottom.
+const byTime = [...spots].sort((a, b) => b.timestamp - a.timestamp);
+const cCounts = tally(s => s.country);
+const rarest = Object.entries(cCounts).sort((a, b) => a[1] - b[1])[0];
+const latest = byTime[0];
+function cell(k, v, sub) {
+  return '<div><div class="k">' + k + '</div><div class="v">' + v + '</div>' +
+         (sub ? '<div class="k">' + sub + '</div>' : '') + '</div>';
+}
+document.getElementById('summary').innerHTML = spots.length
+  ? cell('LATEST', (latest.country || latest.callsign) + ' · ' + latest.band,
+         latest.callsign + ' · ' + latest.mode + ' · ' + latest.snr + 'dB') +
+    (rarest ? cell('RAREST COUNTRY', rarest[0] + ' (' + rarest[1] + ')', '') : '') +
+    cell('SPOTS', String(spots.length), new Set(spots.map(s => s.country).filter(Boolean)).size + ' countries')
+  : cell('WAITING', 'no spots yet', '');
+
+// Clock + panel toggles
+function tick() {
+  const d = new Date();
+  document.getElementById('clock').textContent =
+    'UTC ' + d.toISOString().slice(11, 19) + ' · ' + d.toLocaleTimeString();
+}
+tick(); setInterval(tick, 1000);
+const bind = (id, el) => {
+  document.getElementById(id).onchange = (e) =>
+    document.getElementById(el).classList.toggle('hide', !e.target.checked);
+};
+bind('tStats', 'stats'); bind('tSummary', 'summary'); bind('tLegend', 'legend');
 ${ES}`;
 
   const w = window.open('', '_blank');
@@ -2182,6 +2515,7 @@ let freqUnit: FreqUnit = 'mhz';
 function renderFreq() {
   if (!spec) return;
   updateVts();
+  updateMediaSession();
   const hz = Math.round(spec.frequency);
   $('freq').textContent = (hz / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
   $('freqUnit').textContent = UNIT_LBL[freqUnit];
@@ -2225,7 +2559,7 @@ function initFreqEntry() {
   const go = () => {
     const v = parseFloat($<HTMLInputElement>('freqInput').value.replace(/[^\d.]/g, ''));
     if (!isFinite(v) || v <= 0) { $('freqMsg').textContent = 'Enter a frequency'; return; }
-    spec!.tune(clampTune(v * UNIT_DIV[freqUnit]), undefined, { recenter: true });
+    spec!.tune(clampTune(v * UNIT_DIV[freqUnit]), undefined, { recenter: true, retarget: true });
     renderFreq();
     syncStep();
     closePanels();

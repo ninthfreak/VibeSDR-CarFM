@@ -338,6 +338,10 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             m.putBoolean("pinEnabled", o.optBoolean("pinEnabled", false))
             m.putDouble("fftRate", o.optLong("fftRate", 0).toDouble())
             m.putDouble("bandwidthHz", o.optLong("bandwidthHz", 0).toDouble())
+            // NB: this map is built field-by-field, so a new field in the C++ JSON
+            // is silently DROPPED here until it's added. That's why SAMPLE RATE
+            // showed "—" despite the native side emitting it.
+            m.putDouble("sampleRate", o.optLong("sampleRate", 0).toDouble())
             m.putInt("port", o.optInt("port", 0))
             m.putString("ip", if (o.optBoolean("running", false)) (getLocalIp() ?: "") else "")
             promise.resolve(m)

@@ -187,6 +187,15 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               vc={client ? C.green : C.goldDim} />
             <Row C={C} F={F} k="WATERFALL" v={`${fmtRate(spec)}`} vc={client ? C.amber : C.goldDim} />
             <Row C={C} F={F} k="AUDIO" v={`${fmtRate(aud)}${status?.compressed ? '' : ' (raw)'}`} vc={client ? C.amber : C.goldDim} />
+            {/* The client drives the capture rate (and the frame rate) live. Showing
+                them here is how the HOST sees the server answering the client —
+                otherwise a remote change is invisible from this end. */}
+            <Row C={C} F={F} k="SAMPLE RATE"
+              v={status?.sampleRate ? `${(status.sampleRate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s` : '—'}
+              vc={client ? C.amber : C.goldDim} />
+            <Row C={C} F={F} k="FRAME RATE"
+              v={status?.fftRate ? `${Math.round(status.fftRate)} fps` : '—'}
+              vc={client ? C.amber : C.goldDim} />
           </View>
 
           <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>

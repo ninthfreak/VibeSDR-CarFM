@@ -219,6 +219,23 @@ export class Waterfall {
     this.rowImg = this.ctx.createImageData(w, 1);
   }
 
+  /**
+   * Wipe the waterfall history to black.
+   *
+   * History is frequency-indexed and deliberately never re-aligned (see draw()),
+   * which is right for pan/zoom — old rows stay meaningful. But after a
+   * DISCONTINUOUS retune (648 kHz → 96.6 MHz) every stored row belongs to a
+   * band you're no longer looking at, and at ~18 rows/sec a full-height
+   * waterfall takes ~30 seconds to scroll itself clean. That reads as "the
+   * spectrum froze and wouldn't zoom out" — it hadn't; it was showing valid but
+   * utterly stale history. Clearing on a jump makes new rows appear at once.
+   */
+  clearHistory() {
+    if (!this.wf.width || !this.wf.height) return;
+    this.wfCtx.fillStyle = '#000';
+    this.wfCtx.fillRect(0, 0, this.wf.width, this.wf.height);
+  }
+
   /** Feed one raw dBFS frame. Rows are NOT drawn here — see tick(). */
   push(bins: Float32Array, centerHz: number, bwHz: number) {
     this.centerHz = centerHz;

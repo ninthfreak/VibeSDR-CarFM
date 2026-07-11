@@ -50,6 +50,9 @@ export type VibeServerStatus = {
   pinEnabled: boolean;
   fftRate: number;
   bandwidthHz: number;
+  /** Capture sample rate the CLIENT currently has the server running at. Shown on
+   *  the sharing screen so the host can SEE the server answering the client. */
+  sampleRate: number;
   port: number;
   ip: string;
 };

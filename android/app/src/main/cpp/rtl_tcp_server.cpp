@@ -289,10 +289,20 @@ int RtlTcpServer::start(int fd, int /*vid*/, int /*pid*/,
     // USB reader: raw u8 IQ → fan out to the client.
     impl->rtlThread = std::thread([self]() {
         prctl(PR_SET_NAME, "vibe-srv-usb");
+        // Size the USB transfer by TIME, not sample count. librtlsdr's default
+        // (buf_len = 0 -> 131072 samples) covers ~55 ms at 2.4 MSPS but ~136 ms at
+        // 0.96 — so at low rates the IQ arrives in big infrequent lumps and the
+        // stream breaks up. Same bug the local shim had.
+        double r = 0;
+        { r = (double)rtlsdr_get_sample_rate(self->dev); }
+        if (r <= 0) r = 2400000.0;
+        uint32_t bufLen = (uint32_t)((r * 2.0 * 0.032) / 512.0 + 0.5) * 512;
+        if (bufLen < 16384)  bufLen = 16384;
+        if (bufLen > 262144) bufLen = 262144;
         rtlsdr_read_async(self->dev,
             [](unsigned char* buf, uint32_t len, void* ctx) {
                 static_cast<Impl*>(ctx)->fanoutIq(buf, len);
-            }, self, 0, 0);
+            }, self, 0, bufLen);
     });
 
     // Accept loop: single client; reap dead client each iteration.

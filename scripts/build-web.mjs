@@ -63,9 +63,24 @@ async function bundle() {
   const html0 = await readFile(SRC_HTML, 'utf8');
   // Inline the RDS mark as a data URI — the page must stay self-contained (the
   // shim serves it from a phone; there is nowhere to fetch an asset FROM).
-  const rdsLogo = await readFile(path.join(root, 'assets/rds-logo.png'));
-  const html = html0.replace('__RDS_LOGO__',
-    `data:image/png;base64,${rdsLogo.toString('base64')}`);
+  // All inlined as data URIs — the page must stay self-contained (the shim serves
+  // it from a phone; there is nowhere to fetch an asset FROM).
+  const dataUri = async (rel) =>
+    `data:image/png;base64,${(await readFile(path.join(root, rel))).toString('base64')}`;
+  // replaceAll, not replace: __FAVICON__ appears twice (icon + apple-touch-icon)
+  // and replace() would leave the second one as a literal placeholder.
+  const html = html0
+    .replaceAll('__RDS_LOGO__', await dataUri('assets/rds-logo.png'))
+    .replaceAll('__FAVICON__', await dataUri('assets/favicon.png'))
+    // Album art for the OS media controls — the app's RTL-TCP art, so the phone
+    // and the browser show the same thing in Now Playing.
+    // The PHONE's lock-screen artwork, composited in the browser from the SAME two
+    // images the app uses (VibeStreamService.refreshArtwork): the artwork base with
+    // the RTL-TCP logo inset bottom-right. Shipping the two sources and compositing
+    // client-side keeps them in step with the app.
+    .replaceAll('__ARTWORK_BASE__',
+      await dataUri('android/app/src/main/res/drawable-nodpi/artwork_base.png'))
+    .replaceAll('__ARTWORK_INSET__', await dataUri('assets/rtltcp@2x.png'));
   // Replacer FUNCTION, not a string: in a replacement string "$&" means "the
   // matched text", and minified JS is full of `$` sigils — a stray `$&` spliced
   // the original <script src=...> tag back into the middle of the bundle and

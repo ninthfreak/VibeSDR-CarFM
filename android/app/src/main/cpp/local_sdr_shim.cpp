@@ -273,6 +273,48 @@ struct ModeParams {
 // stays uniform and scales with bandwidth. ~75 Hz/bin → fine enough that
 // zoomed-in views (crop-zoom stretches existing bins, it doesn't add resolution)
 // still have plenty of bins. Smallest power-of-2 >= rate/75, clamped [4096, 32768].
+/**
+ * USB transfer size for a given sample rate.
+ *
+ * librtlsdr's default (buf_len = 0 → 262144 bytes = 131072 samples) is a fixed
+ * SAMPLE COUNT, so the TIME each buffer represents scales inversely with the
+ * rate: ~55 ms at 2.4 MSPS but ~136 ms at 0.96 MSPS. At the low rates the IQ
+ * arrives in big infrequent lumps — the DSP thread starves between them, the
+ * audio breaks up and the waterfall lurches. (Exactly the observed threshold:
+ * 2.4 and 1.8 fine, 1.2 and 0.96 broken.)
+ *
+ * Size it by TIME instead — ~32 ms per buffer at any rate. libusb requires a
+ * multiple of 512; clamp to librtlsdr's sane range.
+ */
+static uint32_t rtlBufLenForRate(double rate) {
+    double bytes = rate * 2.0 * 0.032;             // 2 bytes/sample (I+Q u8), 32 ms
+    uint32_t len = (uint32_t)(bytes / 512.0 + 0.5) * 512;
+    if (len < 16384)  len = 16384;
+    if (len > 262144) len = 262144;
+    return len;
+}
+
+/**
+ * The rate an RTL2832 will ACTUALLY run at when asked for `rate`.
+ *
+ * The device derives its rate from a 28.8 MHz clock through a fractional divider,
+ * so it quantises the request. On USB we can read the truth back
+ * (rtlsdr_get_sample_rate), but over rtl_tcp there is no way to ask — the
+ * protocol has no reply channel. We used to just assume we got what we asked for,
+ * which meant the DSP resampled against the WRONG rate: audio came out
+ * pitch-shifted (the "chipmunks"). Reproduce librtlsdr's own arithmetic instead.
+ */
+static double rtlActualRate(double rate) {
+    if (rate <= 0) return rate;
+    const double xtal = 28800000.0;
+    const double two22 = 4194304.0;                       // 1 << 22
+    uint32_t ratio = (uint32_t)(xtal * two22 / rate);
+    ratio &= 0x0ffffffcu;                                 // librtlsdr masks the low bits
+    if (!ratio) return rate;
+    const double real = xtal * two22 / (double)ratio;
+    return real;
+}
+
 int fftSizeForRate(double rate) {
     double want = rate / 75.0;
     int s = 4096;
@@ -2299,7 +2341,13 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
 
     impl->startDspThread();
-    impl->rtlThread = std::thread([impl]{ vibeThreadName("vibe-rtl"); rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); });
+    {
+        const uint32_t bufLen = rtlBufLenForRate(impl->sampleRate);
+        impl->rtlThread = std::thread([impl, bufLen]{
+            vibeThreadName("vibe-rtl");
+            rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, bufLen);
+        });
+    }
 
     p = impl;
     LOGI("local SDR started: center=%.0f rate=%.0f fft=%d mode=%s port=%d",
@@ -2743,8 +2791,12 @@ void LocalSdrShim::setSampleRate(double rate) {
     std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
     uint32_t actual;
     if (tcp) {
-        impl->sendTcpCmd(0x02, (uint32_t)rate);   // rtl_tcp uses the rate as-is
-        actual = (uint32_t)rate;
+        impl->sendTcpCmd(0x02, (uint32_t)rate);
+        // rtl_tcp has no reply channel, so the server can't tell us what the device
+        // really landed on. Compute it the way librtlsdr does — assuming we got
+        // exactly what we asked for made the DSP resample against the wrong rate,
+        // and the audio came out pitch-shifted.
+        actual = (uint32_t)llround(rtlActualRate(rate));
     } else {
         rtlsdr_set_sample_rate(impl->dev, (uint32_t)rate);
         rtlsdr_reset_buffer(impl->dev);
@@ -2762,7 +2814,13 @@ void LocalSdrShim::setSampleRate(double rate) {
     { std::lock_guard<std::mutex> lk(impl->clientMtx); if (impl->specClient) impl->sendConfig(impl->specClient); }
     impl->startDspThread();
     if (tcp) { impl->tcpRunning.store(true); impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); }); }
-    else     { impl->rtlThread = std::thread([impl]{ vibeThreadName("vibe-rtl"); rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, 0); }); }
+    else {
+        const uint32_t bufLen = rtlBufLenForRate(impl->sampleRate);
+        impl->rtlThread = std::thread([impl, bufLen]{
+            vibeThreadName("vibe-rtl");
+            rtlsdr_read_async(impl->dev, &Impl::asyncHandler, impl, 0, bufLen);
+        });
+    }
     LOGI("sample rate: %.0f (actual %u) fft=%d tcp=%d", rate, actual, impl->fftSize, tcp);
 }
 void LocalSdrShim::setDeemphasis(double tau) {
@@ -2798,6 +2856,7 @@ LocalSdrShim::VibeServerStatus LocalSdrShim::getVibeServerStatus() {
     s.running   = g_serveOnLan.load();
     s.fftRate   = p->fftRate;
     s.bandwidthHz = p->vfoBwHz.load();
+    s.sampleRate  = p->sampleRate;
     { std::lock_guard<std::mutex> lk(p->clientMtx);
       auto sp = p->specClient, au = p->audioClient;
       s.clientConnected = (sp && sp->isOpen()) || (au && au->isOpen());

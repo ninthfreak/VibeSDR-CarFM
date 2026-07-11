@@ -134,6 +134,10 @@ public:
         bool     pinEnabled       = false;
         double   fftRate          = 0.0;
         double   bandwidthHz      = 0.0;
+        /** Capture sample rate the CLIENT has asked for (the shim honours it
+         *  live). Surfaced on the sharing screen so the host can see the server
+         *  responding to the client. */
+        double   sampleRate       = 0.0;
     };
     VibeServerStatus getVibeServerStatus();
 

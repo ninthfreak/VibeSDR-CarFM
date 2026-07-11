@@ -330,6 +330,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetVibeServerStatus(JNIEnv* env, jobject
     j += ",\"pinEnabled\":"      + std::string(s.pinEnabled ? "true" : "false");
     j += ",\"fftRate\":"         + std::to_string((long long)(s.fftRate + 0.5));
     j += ",\"bandwidthHz\":"     + std::to_string((long long)(s.bandwidthHz + 0.5));
+    j += ",\"sampleRate\":"      + std::to_string((long long)(s.sampleRate + 0.5));
     j += "}";
     return env->NewStringUTF(j.c_str());
 }

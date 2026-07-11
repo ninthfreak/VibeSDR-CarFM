@@ -68,7 +68,7 @@ export interface SignalProcessorSettings {
 }
 
 export const DEFAULT_PROCESSOR_SETTINGS: SignalProcessorSettings = {
-  autoContrast:    10,      // matches UberSDR web client's fixed autoContrast
+  autoContrast:    5,       // 10 (UberSDR's value) crushes the floor — too dark
   manualRange:     null,
   specFloor:       0,
   specPeakScale:   10,
