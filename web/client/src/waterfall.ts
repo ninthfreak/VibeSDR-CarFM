@@ -51,6 +51,7 @@ export class Waterfall {
   private rowImg: ImageData | null = null;
   private specRatio: number;
 
+
   // ── Temporal line synthesis ────────────────────────────────────────────────
   // The waterfall scrolls at a FIXED rate regardless of how fast frames arrive:
   // between two received rows we synthesise the intermediate lines by blending
@@ -88,6 +89,22 @@ export class Waterfall {
   wallLoHz: number | null = null;
   wallHiHz: number | null = null;
   rfCenterHz: number | null = null;
+  /** Edges of the CAPTURED band right now (dongle ± Fs/2). Distinct from the
+   *  walls: the walls are how far you may ever pan, this is what the radio is
+   *  actually receiving at this moment — outside it there is no spectrum, and
+   *  panning there forces the RF centre to move. */
+  captureLoHz: number | null = null;
+  captureHiHz: number | null = null;
+  /** Timestamp of the last time a pan was CLAMPED at a wall. The wall flashes for
+   *  a moment so you know why the view stopped moving — otherwise, zoomed in with
+   *  the wall off-screen, the drag just silently stops dead. */
+  wallHitAt = 0;
+  wallHitSide: 'lo' | 'hi' | null = null;
+
+  /** Spectrum trace visible? (The waterfall keeps the space either way.) */
+  showSpec = true;
+  /** Fill opacity of the trace (the app's bgOpacity). */
+  specAlpha = 0.85;
 
   /** VFO needle colour — also used for the peak-hold line, as in the app. */
   vfoColor = '#ff2020';
@@ -135,11 +152,17 @@ export class Waterfall {
     if (this.specGrad && this.specGradH === H) return this.specGrad;
     const g = ctx.createLinearGradient(0, 0, 0, H);
     const lut = this.lut;
-    const STOPS = 16;
-    for (let i = 0; i <= STOPS; i++) {
-      const t = i / STOPS;                 // 0 = top of trace (max signal)
-      const o = Math.round((1 - t) * 255) << 2;
-      g.addColorStop(t, `rgb(${lut[o]},${lut[o + 1]},${lut[o + 2]})`);
+    // Sample the LUT 90 -> 235 in 9 stops, NOT 0 -> 255 (the app does exactly
+    // this, WaterfallView specGradColors). Black-based palettes — Sonar, Night
+    // Vision — are near-invisible below index ~90, so a fill that starts at 0
+    // fades into the black background and the base of the trace disappears. The
+    // baseline instead starts where the palette has actually picked up colour, so
+    // weak signals stay visible while the trace still inherits the waterfall hue.
+    for (let gi = 0; gi <= 8; gi++) {
+      const idx = Math.max(0, Math.min(255, Math.round(90 + (gi / 8) * 145)));
+      const o = idx << 2;
+      // Gradient runs top->bottom, hot colour at the top.
+      g.addColorStop(1 - gi / 8, `rgb(${lut[o]},${lut[o + 1]},${lut[o + 2]})`);
     }
     this.specGrad = g;
     this.specGradH = H;
@@ -157,6 +180,8 @@ export class Waterfall {
     this.specRatio = clampRatio(r);
     this.resize();
   }
+
+  getSpecRatio(): number { return this.specRatio; }
 
   applySettings(patch: Partial<SignalProcessorSettings>) { this.proc.applySettings(patch); }
   getSettings(): SignalProcessorSettings { return this.proc.getSettings(); }
@@ -190,6 +215,7 @@ export class Waterfall {
       tmp.getContext('2d')!.putImageData(old, 0, 0);
       this.wfCtx.drawImage(tmp, 0, 0, w, wfH);
     }
+    // drawRow() bails without this, so the waterfall silently never draws.
     this.rowImg = this.ctx.createImageData(w, 1);
   }
 
@@ -301,7 +327,7 @@ export class Waterfall {
     const img = this.rowImg.data;
     const lut = this.lut;
     for (let x = 0; x < W; x++) {
-      // Peak-preserving downsample: take the max over this pixel's bin bucket.
+      // Peak-preserving downsample: the max over this pixel's bin bucket.
       // Averaging would bury a narrow carrier in its own noise floor.
       const b0 = Math.floor((x * n) / W);
       const b1 = Math.max(b0 + 1, Math.floor(((x + 1) * n) / W));
@@ -327,9 +353,19 @@ export class Waterfall {
 
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, specH);
+    // Straight blit, in BIN space — exactly what the app does (its shader maps
+    // display x directly to bins: tx = xy.x / uDrawW * uTexW). No pan offset, no
+    // frequency-indexed history, no re-alignment. Old rows keep their old bins
+    // and scroll away.
+    //
+    // Both of the clever alternatives were worse: sliding the history sideways
+    // fought the frames still in flight (snap-back), and cropping a
+    // frequency-space buffer rescaled the whole waterfall every frame (the
+    // "redraws itself on every movement" blur). The app doesn't compensate at
+    // all — it sends the view change and lets the frames arrive.
     ctx.drawImage(this.wf, 0, specH);
 
-    if (specH > 4 && this.spec) {
+    if (specH > 4 && this.spec && this.showSpec) {
       this._drawSpec(ctx, W, specH);
       this.onDrawAxis?.(ctx, W, specH);   // dB axis, drawn by main (owns the labels)
     }
@@ -377,7 +413,7 @@ export class Waterfall {
     ctx.closePath();
     // Filled from the palette LUT, like the app: the trace is shaded by the same
     // colours the waterfall uses, so a signal reads the same in both halves.
-    ctx.globalAlpha = 0.85;
+    ctx.globalAlpha = this.specAlpha;
     ctx.fillStyle = this.specGradient(ctx, H);
     ctx.fill();
     ctx.globalAlpha = 1;
@@ -483,6 +519,7 @@ export class Waterfall {
     edge(loX);
     edge(hiX);
 
+    this._drawCapture(ctx, W, H);
     this._drawWalls(ctx, W, H);
     this._drawRfCentre(ctx, W, H);
 
@@ -508,43 +545,131 @@ export class Waterfall {
       ctx.moveTo(nX + 0.5, 0);
       ctx.lineTo(nX + 0.5, H);
       ctx.stroke();
+
+      // Say what it is. With an RF-centre marker on screen too, an unlabelled
+      // needle is ambiguous — which line is the one you're listening to?
+      const dpr2 = Math.min(2, window.devicePixelRatio || 1);
+      this.markerLabel(ctx, nX, W, 28 * dpr2,
+        `LISTEN ${(this.vfoHz / 1e6).toFixed(3)}M`, col);
     }
 
     ctx.restore();
   }
 
-  /** Pan boundary walls — solid edge + a dim veil over the unreachable zone.
-   *  Only meaningful when the view is unlocked; LOCK keeps you centred anyway. */
+  /** The live capture window (dongle ± Fs/2) — a bracket showing the 2.4 MHz the
+   *  radio is actually receiving. Pan past it and the RF centre has to move. */
+  private _drawCapture(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    if (this.captureLoHz == null || this.captureHiHz == null) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const x0 = this.hzToX(this.captureLoHz, W);
+    const x1 = this.hzToX(this.captureHiHz, W);
+    if (x1 < 0 || x0 > W) return;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(120,200,255,0.45)';
+    ctx.lineWidth = 1;
+    for (const x of [x0, x1]) {
+      if (x < 0 || x > W) continue;
+      ctx.beginPath();
+      ctx.moveTo(x + 0.5, 0);
+      ctx.lineTo(x + 0.5, H);
+      ctx.stroke();
+    }
+    // Only worth labelling when the whole window is visible (i.e. zoomed out).
+    if (x0 > 0 && x1 < W && x1 - x0 > 90 * dpr) {
+      const span = (this.captureHiHz - this.captureLoHz) / 1e6;
+      const label = `CAPTURE ${span.toFixed(1)} MHz`;
+      ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
+      const tw = ctx.measureText(label).width;
+      const cx = (x0 + x1) / 2 - tw / 2;
+      const y = H - 8 * dpr;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(cx - 3 * dpr, y - 9 * dpr, tw + 6 * dpr, 13 * dpr);
+      ctx.fillStyle = 'rgba(120,200,255,0.8)';
+      ctx.fillText(label, cx, y);
+    }
+    ctx.restore();
+  }
+
+  /** A small boxed label pinned to a vertical marker. Flips side near the edge so
+   *  it never runs off-screen. */
+  private markerLabel(
+    ctx: CanvasRenderingContext2D, x: number, W: number, y: number,
+    text: string, colour: string,
+  ) {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
+    const tw = ctx.measureText(text).width;
+    const lx = x + 6 * dpr + tw > W ? x - tw - 6 * dpr : x + 6 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(lx - 3 * dpr, y - 9 * dpr, tw + 6 * dpr, 13 * dpr);
+    ctx.fillStyle = colour;
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(text, lx, y);
+  }
+
+  /**
+   * Pan boundary walls. Drawn ONLY when a wall is actually in view — i.e. when
+   * you're zoomed out far enough to see the limit of the reachable band. They are
+   * not permanent chrome.
+   *
+   * Zoomed IN, a wall is usually off-screen, so hitting it would just make the
+   * drag stop dead for no visible reason. So when a pan gets clamped we flash the
+   * edge of the screen on that side instead: same information, no clutter.
+   */
   private _drawWalls(ctx: CanvasRenderingContext2D, W: number, H: number) {
     if (this.wallLoHz == null && this.wallHiHz == null) return;
     ctx.save();
+
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const WALL = 'rgba(255,200,80,0.95)';
+
     if (this.wallLoHz != null) {
       const x = this.hzToX(this.wallLoHz, W);
-      if (x > 0) {
+      if (x > 0 && x < W) {
         ctx.fillStyle = 'rgba(0,0,0,0.45)';
-        ctx.fillRect(0, 0, Math.min(x, W), H);
+        ctx.fillRect(0, 0, x, H);
         ctx.fillStyle = 'rgba(255,200,80,0.85)';
         ctx.fillRect(x - 0.75, 0, 1.5, H);
+        this.markerLabel(ctx, x, W, H - 24 * dpr,
+          `LOWER LIMIT ${(this.wallLoHz / 1e6).toFixed(3)}M`, WALL);
       }
     }
     if (this.wallHiHz != null) {
       const x = this.hzToX(this.wallHiHz, W);
-      if (x < W) {
+      if (x < W && x > 0) {
         ctx.fillStyle = 'rgba(0,0,0,0.45)';
-        ctx.fillRect(Math.max(0, x), 0, W - Math.max(0, x), H);
+        ctx.fillRect(x, 0, W - x, H);
         ctx.fillStyle = 'rgba(255,200,80,0.85)';
         ctx.fillRect(x - 0.75, 0, 1.5, H);
+        this.markerLabel(ctx, x, W, H - 24 * dpr,
+          `UPPER LIMIT ${(this.wallHiHz / 1e6).toFixed(3)}M`, WALL);
       }
+    }
+
+    // Hit-the-limit feedback: a brief glow at the screen edge you pushed against.
+    const age = performance.now() - this.wallHitAt;
+    if (this.wallHitSide && age < 500) {
+      const a = (1 - age / 500) * 0.5;
+      const lo = this.wallHitSide === 'lo';
+      const g = ctx.createLinearGradient(lo ? 0 : W, 0, lo ? 60 : W - 60, 0);
+      g.addColorStop(0, `rgba(255,200,80,${a})`);
+      g.addColorStop(1, 'rgba(255,200,80,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(lo ? 0 : W - 60, 0, 60, H);
     }
     ctx.restore();
   }
 
   /** RF-centre marker — a thin dashed line where the DONGLE is tuned, which is
-   *  not where you're looking once the view is unlocked. */
+   *  not where you're looking once the view is unlocked. Labelled, because an
+   *  unexplained line is just clutter: it needs to say what it is and where. */
   private _drawRfCentre(ctx: CanvasRenderingContext2D, W: number, H: number) {
     if (this.rfCenterHz == null) return;
     const x = this.hzToX(this.rfCenterHz, W);
     if (x < 0 || x > W) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+
     ctx.save();
     ctx.strokeStyle = 'rgba(120,200,255,0.75)';
     ctx.lineWidth = 1;
@@ -553,19 +678,29 @@ export class Waterfall {
     ctx.moveTo(x + 0.5, 0);
     ctx.lineTo(x + 0.5, H);
     ctx.stroke();
+    ctx.setLineDash([]);
+
+    this.markerLabel(ctx, x, W, 12 * dpr,
+      `RF CENTRE ${(this.rfCenterHz / 1e6).toFixed(3)}M`, 'rgba(120,200,255,0.95)');
     ctx.restore();
   }
 
   // ── Geometry helpers (shared with click-to-tune / drag-to-pan) ─────────────
 
+  /** The centre actually on screen. This is the FRAME's centre — the app makes
+   *  no attempt to render ahead of the server, and neither do we now. */
+  displayCenterHz(): number {
+    return this.centerHz;
+  }
+
   hzToX(hz: number, W = this.canvas.width): number {
-    const lo = this.centerHz - this.spanHz / 2;
+    const lo = this.displayCenterHz() - this.spanHz / 2;
     return ((hz - lo) / this.spanHz) * W;
   }
 
   /** CSS pixel x -> Hz. */
   xToHz(cssX: number): number {
-    const lo = this.centerHz - this.spanHz / 2;
+    const lo = this.displayCenterHz() - this.spanHz / 2;
     const frac = cssX / Math.max(1, this.canvas.clientWidth);
     return lo + frac * this.spanHz;
   }

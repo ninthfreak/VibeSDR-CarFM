@@ -12,8 +12,14 @@ import { Waterfall } from './waterfall';
 import { resolveAuth, withAuth, type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
-import { BAND_PLAN, getPrimaryBandAt, type Band } from '../../../src/constants/bandPlan';
+import {
+  BAND_PLAN, getBandsAtRegion, type Band,
+} from '../../../src/constants/bandPlan';
+import { deriveItuRegion } from '../../../src/services/stations';
 import { eccPiToIso, isoToFlag } from '../../../src/services/rdsCountry';
+import { countryForCallsign } from '../../../src/services/callsignCountry';
+import { abbrCountry } from '../../../src/assets/countryAbbr';
+import { gridToLatLon, haversineKm } from '../../../src/services/grid';
 import { lookupStationLogo } from '../../../src/services/stationLogo';
 import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
@@ -225,11 +231,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // RDS is the station naming itself — it outranks any bookmark guess.
       const ps = m.ps.trim();
       const rt = m.radiotext.trim();
-      const name = ps || rt;
-      if (name !== rdsName) {
-        rdsName = name;
+      // PS is the station's NAME (8 chars); RadioText is its message. They are
+      // different things and the app shows both — don't collapse them.
+      if (ps !== rdsName) {
+        rdsName = ps;
         rdsLogoUrl = '';
       }
+      rdsText = rt;
+      if (!rdsName && rt) rdsName = rt;   // some stations send only RadioText
       // Transmitter country from the RDS Extended Country Code + PI, as the app
       // does (rdsCountry.eccPiToIso) — that's what the flag comes from.
       rdsIso = m.pi > 0 ? eccPiToIso(m.ecc || undefined, m.pi.toString(16)) : '';
@@ -244,6 +253,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (s === 'open') pushSettingsToServer();
     },
     onRtt: (ms) => { rtt = ms; },
+    onBytes: (n) => { specBytes += n; },
   });
   spec.connect();
 
@@ -277,8 +287,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
 
 let rtt = 0;
 let audioBytes = 0;
+let specBytes = 0;
 let lastBytesAt = performance.now();
 let audioKbps = 0;
+let specKbps = 0;
 let hwGains: number[] = [];
 let hwRates: number[] = [];
 
@@ -297,8 +309,11 @@ function loop() {
 
   const now = performance.now();
   if (now - lastBytesAt > 1000) {
-    audioKbps = (audioBytes / 1024) / ((now - lastBytesAt) / 1000);
+    const secs = (now - lastBytesAt) / 1000;
+    audioKbps = (audioBytes / 1024) / secs;
+    specKbps  = (specBytes / 1024) / secs;
     audioBytes = 0;
+    specBytes = 0;
     lastBytesAt = now;
     updateStatus();
     updateRecTime();
@@ -342,7 +357,7 @@ function drawScale() {
   if (!spec || !wf || !wf.spanHz) return;
 
   const span = wf.spanHz;
-  const lo = wf.centerHz - span / 2;
+  const lo = wf.displayCenterHz() - span / 2;
   const step = tickStep(span, 8);
   const first = Math.ceil(lo / step) * step;
 
@@ -379,11 +394,32 @@ function drawScale() {
 // app draws the same thing (WaterfallView BAND_H) — without it the spectrum is
 // just numbers, and you can't see that you're sitting in the middle of 40m.
 
-const BAND_COL: Record<Band['type'], string> = {
-  ham:       'rgba(255,184,51,0.55)',
-  broadcast: 'rgba(251,191,36,0.45)',
-  utility:   'rgba(150,130,90,0.40)',
+// BAND_COLS — verbatim from the app (WaterfallView). Everything was one shade of
+// amber before, so the bands were indistinguishable.
+const BAND_COLS: Record<string, string> = {
+  ham:       'rgba(207,0,0,0.92)',
+  broadcast: 'rgba(9,0,255,0.92)',
+  utility:   'rgba(7,189,0,0.92)',
+  cb:        'rgba(255,119,0,0.92)',
 };
+
+/** 11m CB special-case: typed 'utility' in bandPlan.ts but coloured orange. */
+function bandColour(b: Band): string {
+  if (b.name.includes('CB')) return BAND_COLS.cb;
+  return BAND_COLS[b.type] ?? BAND_COLS.utility;
+}
+
+/**
+ * ITU region, from the receiver's longitude — the app derives it exactly this way
+ * (deriveItuRegion(serverLongitude ?? recvLon)). It MATTERS: the 80m ham band is
+ * 3.5–3.8 in R1 but 3.5–4.0 in R2, and the AM broadcast band's top edge and
+ * channel spacing differ too. Showing the wrong region's edges is worse than
+ * showing none. Falls back to R1 until a grid is set.
+ */
+function ituRegion(): number {
+  const me = myPos();
+  return deriveItuRegion(me ? me.lon : undefined) || 1;
+}
 
 function drawBands() {
   const c = $<HTMLCanvasElement>('bands');
@@ -397,28 +433,35 @@ function drawBands() {
   if (!wf || !wf.spanHz) return;
 
   const span = wf.spanHz;
-  const lo = wf.centerHz - span / 2;
+  const lo = wf.displayCenterHz() - span / 2;
   const hi = lo + span;
   const xOf = (hz: number) => ((hz - lo) / span) * w;
 
   ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
   ctx.textBaseline = 'middle';
 
+  const region = ituRegion();
+
   for (const b of BAND_PLAN) {
-    if (b.hi < lo || b.lo > hi) continue;              // not in view
+    if (b.hi < lo || b.lo > hi) continue;                       // not in view
+    // Region-scoped: an 80m edge or an AM band-top from the wrong ITU region is
+    // simply the wrong information.
+    if (b.regions && b.regions.length && !b.regions.includes(region)) continue;
+
     const x0 = Math.max(0, xOf(b.lo));
     const x1 = Math.min(w, xOf(b.hi));
     if (x1 - x0 < 1) continue;
-    ctx.fillStyle = BAND_COL[b.type];
+
+    ctx.fillStyle = bandColour(b);
     ctx.fillRect(x0, 0, x1 - x0, h);
 
     // Label only when the segment can actually hold it.
     const label = b.bandLabel || b.name;
     const tw = ctx.measureText(label).width;
     if (x1 - x0 > tw + 8 * dpr) {
-      ctx.fillStyle = 'rgba(0,0,0,0.75)';
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
       ctx.fillText(label, (x0 + x1) / 2 - tw / 2 + dpr, h / 2 + dpr);
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
       ctx.fillText(label, (x0 + x1) / 2 - tw / 2, h / 2);
     }
   }
@@ -429,10 +472,14 @@ function drawBands() {
 // station within 150 kHz. Green when dead on it (±99 Hz) — the app's thresholds
 // (stations.ts VTS_ON_HZ / VTS_MAX_KHZ), so the two behave the same.
 
+// ON-TUNE ONLY. The skin's "nearest bookmark within 150 kHz, with an offset and
+// an arrow" was dropped from the app because it threw false positives — a station
+// 80 kHz away is not the one you're listening to, and saying so is worse than
+// saying nothing. VTS appears only when you're essentially ON the bookmark.
 const VTS_ON_HZ = 99;
-const VTS_MAX_HZ = 150_000;
 
 let rdsName = '';
+let rdsText = '';   // RDS RadioText — the message, distinct from the PS name
 let rdsIso = '';        // transmitter country, from RDS ECC + PI
 let rdsLogoUrl = '';    // resolved station logo (radio-browser)
 let logoQuery = '';     // guards against a stale async logo landing late
@@ -440,32 +487,28 @@ let logoQuery = '';     // guards against a stale async logo landing late
 function updateVts() {
   if (!spec) return;
   const hz = spec.frequency;
-  const band = getPrimaryBandAt(hz);
+  // Region-aware, ham before broadcast before utility — the app's VTS ordering.
+  const order: Record<string, number> = { ham: 0, broadcast: 1, utility: 2 };
+  const band = getBandsAtRegion(hz, ituRegion())
+    .sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9))[0] ?? null;
   const vts = $('vts');
 
   // RDS wins — it's the station telling you who it is, rather than us guessing
   // from a bookmark that happens to be nearby.
   let name = rdsName;
-  let onTune = !!rdsName;
   let flag = rdsName ? isoToFlag(rdsIso) : '';
   let src = '';
-  let offset = '';
-  let logo = rdsName ? rdsLogoUrl : '';
+  const logo = rdsName ? rdsLogoUrl : '';
 
+  // RDS is always genuine — the station is naming itself. A bookmark only counts
+  // when we're actually sitting on it.
   if (!name) {
     const near = nearestStation(hz);
-    if (near) {
+    if (near && Math.abs(near.frequency - hz) <= VTS_ON_HZ) {
       name = near.name;
-      const off = near.frequency - hz;
-      onTune = Math.abs(off) <= VTS_ON_HZ;
       flag = near.flag || '';
       // Source mark, as in the app: EiBi schedule vs the user's own bookmark.
       src = near.source === 'user' ? 'MY' : near.source === 'eibi' ? 'EiBi' : 'SRV';
-      if (!onTune) {
-        // Which way to tune, and how far — the app shows the same.
-        const dir = off > 0 ? '▶' : '◀';
-        offset = `${dir} ${fmtHz(Math.abs(off))}Hz`;
-      }
     }
   }
 
@@ -479,7 +522,16 @@ function updateVts() {
   $('vtsName').textContent = name;
   $('vtsBand').textContent = band ? (band.bandLabel || band.name) : '';
   $('vtsFlag').textContent = flag;
-  $('vtsOffset').textContent = offset;
+
+  // RadioText, when the station is sending one. Scroll it only if it actually
+  // overflows — a short message shouldn't slide around for no reason.
+  const rtEl = $('vtsRt');
+  const rtInner = $('vtsRtInner');
+  const rt = rdsName ? rdsText : '';
+  const showRt = !!rt && rt !== name;
+  if (rtInner.textContent !== rt) rtInner.textContent = rt;
+  rtEl.classList.toggle('show', showRt);
+  if (showRt) requestAnimationFrame(() => fitRadioText(rtEl, rtInner));
 
   // RDS mark only when the data really IS RDS — not for a bookmark guess.
   $('vtsRds').classList.toggle('show', !!rdsName);
@@ -496,7 +548,7 @@ function updateVts() {
   }
 
   vts.classList.add('show');
-  vts.classList.toggle('on', onTune);
+  vts.classList.add('on');   // if it's showing at all, we're on the station
   setDecBoxOffset();
 }
 
@@ -518,6 +570,20 @@ async function resolveRdsLogo(name: string, iso: string) {
     updateVts();
   } catch {
     /* no logo — the monogram-less bar is fine */
+  }
+}
+
+/** Marquee the RadioText only when it doesn't fit. */
+function fitRadioText(box: HTMLElement, inner: HTMLElement) {
+  const overflow = inner.scrollWidth - box.clientWidth;
+  if (overflow > 4) {
+    inner.style.setProperty('--rtShift', `${-overflow - 8}px`);
+    // ~30px/sec, so a long message takes its time rather than whipping past.
+    inner.style.animationDuration = `${Math.max(6, (overflow + 8) / 30 * 2)}s`;
+    inner.classList.add('scroll');
+  } else {
+    inner.classList.remove('scroll');
+    inner.style.removeProperty('--rtShift');
   }
 }
 
@@ -671,20 +737,27 @@ function updateLink() {
 
 function updateStatus() {
   updateLink();
-  const idle = throttled ? ` · IDLE ${IDLE_FPS}fps` : '';
-  const base = `${audioKbps.toFixed(0)} KB/s · ${rtt.toFixed(0)} ms${idle}`;
 
-  // Silence has several causes that look identical from the outside. Name the one
-  // we're in — especially the tab-level mute, which no in-page control can undo.
-  let warn = '';
+  // The SPECTRUM is the bigger half of the link (~74 KB/s vs ~47 for audio), so
+  // reporting only the audio understated the real traffic by more than half.
+  const total = audioKbps + specKbps;
+  const idle = throttled ? ` · IDLE ${IDLE_FPS}fps` : '';
+  const el = $('status');
+  el.textContent = `${total.toFixed(0)} KB/s · ${rtt.toFixed(0)} ms${idle}`;
+  el.title = `spectrum ${specKbps.toFixed(0)} KB/s · audio ${audioKbps.toFixed(0)} KB/s`;
+
+  // Faults go on the METER, not into the status text: a long message there ran
+  // off the edge of the screen, and the meter is where you're already looking
+  // when you're wondering why there's no sound.
+  let fault = '';
   switch (audio?.health) {
-    case 'suspended': warn = 'AUDIO PAUSED — click the page'; break;
-    case 'no-stream': warn = 'AUDIO DISCONNECTED'; break;
-    case 'silent':    warn = 'NO SOUND — is the browser tab muted?'; break;
+    case 'suspended': fault = 'AUDIO PAUSED — CLICK THE PAGE'; break;
+    case 'no-stream': fault = 'AUDIO DISCONNECTED'; break;
+    case 'silent':    fault = 'NO SOUND — IS THE TAB MUTED?'; break;
   }
-  $('status').innerHTML = warn
-    ? `${base} · <span class="bad">${warn}</span>`
-    : base;
+  $('sig').classList.toggle('fault', !!fault);
+  $('sigFault').textContent = fault;
+  $('sigFault').classList.toggle('show', !!fault);
 }
 
 // ── Controls ─────────────────────────────────────────────────────────────────
@@ -704,8 +777,10 @@ function buildControls() {
 
   buildVfo();
 
-  $('zoomIn').onclick    = () => spec!.zoomBy(2);
-  $('zoomOut').onclick   = () => spec!.zoomBy(0.5);
+  // No anchor = zoom about the LISTEN VFO: the station you're on stays put and the
+  // span closes in around it.
+  $('zoomIn').onclick    = () => { spec!.zoomBy(2); updateViewOverlays(); };
+  $('zoomOut').onclick   = () => { spec!.zoomBy(0.5); updateViewOverlays(); };
   $('zoomReset').onclick = () => spec!.resetView();
 
   const lock = $<HTMLButtonElement>('lockBtn');
@@ -750,6 +825,7 @@ function buildControls() {
   // can't fetch eibispace.de itself, no CORS headers there. Absent = degrade to
   // bookmarks + band plan, both of which are local.
   void loadBookmarks();
+  void loadServerLocation(currentHost);
   void loadStations(currentHost).then((n) => {
     if (n) console.info(`stations: ${n} from server`);
   });
@@ -773,10 +849,20 @@ function updateViewOverlays() {
     wf.wallLoHz = wf.wallHiHz = wf.rfCenterHz = null;   // locked: nothing to show
     return;
   }
-  const pan = spec.panSpan();
-  wf.wallLoHz = pan ? pan.loHz : null;
-  wf.wallHiHz = pan ? pan.hiHz : null;
-  wf.rfCenterHz = spec.rfCenterHz();
+  const rf = spec.rfCenterHz();
+  const fs = spec.captureBandwidth();
+  wf.rfCenterHz = rf;
+
+  // WALLS = the CAPTURED-BAND EDGES (dongle ± Fs/2) — exactly what the app shows
+  // (SDRScreen: "Hard walls at the captured-band edges … visible as you scroll the
+  // view across the band"). They mark the 2.4 MHz the radio is actually receiving
+  // right now, so as you pan you can see where the window is and where the RF
+  // centre had to move to. I'd originally made them the pan LIMIT, which is a
+  // different thing and not what the app means by a wall.
+  wf.wallLoHz = fs ? rf - fs / 2 : null;
+  wf.wallHiHz = fs ? rf + fs / 2 : null;
+  wf.captureLoHz = null;   // the walls now do this job; no second bracket
+  wf.captureHiHz = null;
 }
 
 // ── Idle power saving ────────────────────────────────────────────────────────
@@ -1019,6 +1105,85 @@ let decCtx: CanvasRenderingContext2D | null = null;
 let decImgWidth = 0;
 const spots: Spot[] = [];
 
+/** Skin BAND_COLOUR — markers coloured by band (verbatim from the app's map). */
+const BAND_COLOUR: Record<string, string> = {
+  '2200m': '#9b30d9', '630m': '#c71585', '160m': '#e8001e', '80m': '#ff5500',
+  '60m': '#ff8c00', '40m': '#ffd700', '30m': '#aacc00', '20m': '#00cc44',
+  '17m': '#00ccaa', '15m': '#00aaff', '12m': '#0055ff', '11m': '#6600ff',
+  '10m': '#cc00cc',
+};
+
+// Spot filters — the app's sf-mode / sf-band / sf-age cyclers.
+const SF_MODES = ['ALL', 'FT8', 'FT4'];
+const SF_BANDS = ['ALL', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m'];
+const SF_AGES: Array<{ label: string; minutes: number }> = [
+  { label: 'AGE', minutes: 0 }, { label: '15m', minutes: 15 },
+  { label: '30m', minutes: 30 }, { label: '1h', minutes: 60 },
+];
+let sfMode = 0, sfBand = 0, sfAge = 0;
+
+/** UTC hh:mm, as the app shows it. */
+function fmtSpotTime(t: number): string {
+  const d = new Date(t);
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+/** Spots after the header filters. */
+function filteredSpots(): Spot[] {
+  const cutoff = SF_AGES[sfAge].minutes ? Date.now() - SF_AGES[sfAge].minutes * 60_000 : 0;
+  return spots.filter(s =>
+    (SF_MODES[sfMode] === 'ALL' || s.mode === SF_MODES[sfMode]) &&
+    (SF_BANDS[sfBand] === 'ALL' || s.band === SF_BANDS[sfBand]) &&
+    (!cutoff || s.timestamp >= cutoff));
+}
+
+/**
+ * RECEIVER position — served by the shim (GET /location), NOT taken from this
+ * browser.
+ *
+ * That distinction matters: the server might be sitting at a relative's house in
+ * another town, and once VibeServer can be public it could be listened to from
+ * anywhere in the world. Distances, map centring and the ITU REGION are all
+ * properties of the ANTENNA. Using the listener's position would give nonsense
+ * distances and, worse, the wrong region's band edges.
+ *
+ * The manual grid below is only a fallback for a server that has published no
+ * location at all (host declined the permission and picked no city).
+ */
+let serverLoc: { lat: number; lon: number; label?: string } | null = null;
+let myGrid = '';
+
+function myPos(): { lat: number; lon: number } | null {
+  if (serverLoc) return serverLoc;
+  return myGrid ? gridToLatLon(myGrid) : null;
+}
+
+async function loadServerLocation(host: string) {
+  try {
+    const r = await fetch(`http://${host}/location`, { cache: 'no-store' });
+    const j = await r.json();
+    if (typeof j.lat === 'number' && typeof j.lon === 'number') {
+      serverLoc = { lat: j.lat, lon: j.lon, label: j.label };
+      const el = $('rxLoc');
+      el.textContent = serverLoc.label
+        ? `Receiver: ${serverLoc.label}`
+        : `Receiver: ${serverLoc.lat.toFixed(2)}, ${serverLoc.lon.toFixed(2)}`;
+      $('gridRow').hidden = true;      // the server knows; nothing to ask
+      renderSpots();
+    }
+  } catch {
+    // Older shim, or no location set — fall back to the manual grid.
+  }
+}
+
+/** Distance to a spot, km — null when either end is unknown. */
+function spotDistanceKm(grid?: string): number | null {
+  const me = myPos();
+  const them = grid ? gridToLatLon(grid) : null;
+  if (!me || !them) return null;
+  return haversineKm(me, them);
+}
+
 interface RttySettings { shift: number; baud: number; encoding: string; inverted: boolean }
 
 // Verbatim from the app (DecoderClient RTTY_PRESETS).
@@ -1116,7 +1281,17 @@ function initDecoders(host: string, auth: AuthState) {
   };
   $('mapBtn').onclick = openSpotsMap;
 
+  const gridEl = $<HTMLInputElement>('myGrid');
+  myGrid = (prefs().myGrid as string) || '';
+  gridEl.value = myGrid;
+  gridEl.oninput = () => {
+    myGrid = gridEl.value.trim();
+    savePref('myGrid', myGrid);
+    renderSpots();
+  };
+
   // Output box chrome.
+  initSpotFilters();
   $('decClr').onclick = () => { $('decText').textContent = ''; };
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
   $('decHide').onclick = () => { stopDecoder(); decoders!.setSpots(false);
@@ -1183,6 +1358,7 @@ function showDecBox(what: string) {
   $('decImage').classList.toggle('on', image);
   $('decText').classList.toggle('off', image || isSpots);
   $('spotList').classList.toggle('on', isSpots);
+  $('spotFilters').classList.toggle('show', isSpots);
   setDecLive(false);
 }
 
@@ -1241,19 +1417,54 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
 function renderSpots() {
   const host = $('spotList');
   host.innerHTML = '';
-  for (const sp of spots.slice(0, 60)) {
+
+  // Newest per callsign+band — a station calling CQ every cycle would otherwise
+  // fill the whole list with itself.
+  const seen = new Set<string>();
+  const rows = filteredSpots().filter(sp => {
+    const k = `${sp.callsign}|${sp.band}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  }).slice(0, 80);
+
+  for (const sp of rows) {
+    const country = countryForCallsign(sp.callsign);
+    const km = spotDistanceKm(sp.grid);
     const row = document.createElement('div');
-    row.className = 'sres';
+    row.className = 'sres spot';
+    // The app's columns: time · band · snr · call · country · distance.
     row.innerHTML =
-      `<span class="f">${(sp.frequency / 1e6).toFixed(3)}</span>` +
-      `<span class="n">${escapeHtml(sp.callsign)}${sp.grid ? ' · ' + escapeHtml(sp.grid) : ''}</span>` +
-      `<span class="src">${sp.mode} ${sp.snr > 0 ? '+' : ''}${sp.snr} ${escapeHtml(sp.band)}</span>`;
+      `<span class="t">${fmtSpotTime(sp.timestamp)}</span>` +
+      `<span class="band" style="color:${BAND_COLOUR[sp.band] || 'var(--text-dim)'}">${escapeHtml(sp.band)}</span>` +
+      `<span class="snr ${sp.snr >= 0 ? 'pos' : 'neg'}">${sp.snr}</span>` +
+      `<span class="call">${escapeHtml(sp.callsign)}</span>` +
+      `<span class="cty">${escapeHtml(abbrCountry(country) || '')}</span>` +
+      `<span class="km">${km != null ? Math.round(km) + 'km' : ''}</span>`;
+    row.title = `${sp.mode} · ${sp.grid || 'no grid'} · ${(sp.frequency / 1e6).toFixed(3)} MHz`;
     row.onclick = () => {
       spec?.tune(clampTune(sp.frequency), 'usb', { recenter: true });
       renderFreq();
     };
     host.appendChild(row);
   }
+}
+
+/** Header cyclers, as in the app: tap to step through the options. */
+function initSpotFilters() {
+  const cycle = (id: string, get: () => number, set: (i: number) => void,
+                 labels: string[]) => {
+    const el = $<HTMLButtonElement>(id);
+    const paint = () => {
+      el.textContent = labels[get()];
+      el.classList.toggle('on', get() !== 0);
+    };
+    el.onclick = () => { set((get() + 1) % labels.length); paint(); renderSpots(); };
+    paint();
+  };
+  cycle('sfMode', () => sfMode, (i) => { sfMode = i; }, SF_MODES);
+  cycle('sfBand', () => sfBand, (i) => { sfBand = i; }, SF_BANDS);
+  cycle('sfAge', () => sfAge, (i) => { sfAge = i; }, SF_AGES.map(a => a.label));
 }
 
 /**
@@ -1263,37 +1474,112 @@ function renderSpots() {
  * the page as data, so it needs no connection back to the server.
  */
 function openSpotsMap() {
-  if (!spots.length) {
-    $('decStatus').textContent = 'no spots yet';
+  const rows = filteredSpots().filter(s => s.grid && s.grid.length >= 4);
+  if (!rows.length) {
+    $('decStatus').textContent = 'no spots with a grid yet';
     return;
   }
-  const pts = spots
-    .filter(s => s.grid && s.grid.length >= 4)
-    .map(s => ({ ...s, ...gridToLatLon(s.grid) }));
+
+  const me = myPos();
+  const pts = rows.map(s => {
+    const p = gridToLatLon(s.grid)!;
+    return {
+      ...s,
+      lat: p.lat, lon: p.lon,
+      country: countryForCallsign(s.callsign) || '',
+      km: me ? Math.round(haversineKm(me, p)) : null,
+      colour: BAND_COLOUR[s.band] || '#aaaaaa',
+    };
+  });
 
   // NB: the closing script tag is assembled at runtime. A literal "</script>"
   // inside this string would terminate the page's OWN inline <script> when the
   // bundle is inlined into the served HTML — which silently breaks everything.
   const ES = '<' + '/script>';
+  const bandsUsed = [...new Set(pts.map(p => p.band))];
+
   const html = `<!doctype html><meta charset="utf-8"><title>VibeSDR — FT8 map</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">${ES}
-<style>html,body,#m{height:100%;margin:0;background:#080601}
-.lbl{font:12px ui-monospace,monospace;color:#ffb833}</style>
+<style>
+  html,body,#m{height:100%;margin:0;background:#080601}
+  .pop{font:12px ui-monospace,Menlo,monospace;color:#111;line-height:1.5}
+  .pop b{font-size:13px;letter-spacing:1px}
+  /* Legend — collapsed to an ⓘ, expands on click (the app's map legend). */
+  #legend{position:absolute;bottom:22px;left:12px;z-index:1000;
+    background:rgba(8,6,2,0.92);border:1px solid rgba(255,160,0,0.35);border-radius:8px;
+    color:#ffb833;font:11px ui-monospace,Menlo,monospace;overflow:hidden}
+  #leghead{padding:6px 10px;cursor:pointer;letter-spacing:1px;display:flex;gap:8px;align-items:center}
+  #legbody{display:none;padding:2px 10px 8px;max-height:40vh;overflow-y:auto}
+  #legend.open #legbody{display:block}
+  .lrow{display:flex;align-items:center;gap:7px;padding:2px 0;white-space:nowrap}
+  .sw{width:11px;height:11px;border-radius:50%;flex:0 0 11px}
+  .note{color:rgba(255,160,0,0.55);margin-top:6px;max-width:230px;white-space:normal}
+  #stats{color:rgba(255,160,0,0.6)}
+${ES.replace('<', '<')}
 <div id="m"></div>
+<div id="legend">
+  <div id="leghead">&#9432; LEGEND <span id="stats"></span></div>
+  <div id="legbody"></div>
+</div>
 <script>
 const spots = ${JSON.stringify(pts)};
-const m = L.map('m').setView([20, 0], 2);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-  { attribution: '&copy; OpenStreetMap, &copy; CARTO', maxZoom: 12 }).addTo(m);
+const me = ${JSON.stringify(me)};
+const bands = ${JSON.stringify(bandsUsed)};
+const COL = ${JSON.stringify(BAND_COLOUR)};
+
+const map = L.map('m', { worldCopyJump: true }).setView([20, 0], 3);
+// Colour OSM tiles — the same basemap the app's map uses.
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  { attribution: '&copy; OpenStreetMap', maxZoom: 14 }).addTo(map);
+
+// Markers: coloured by BAND, sized by SNR (skin parity).
+function radius(snr) {
+  const s = Math.max(-24, Math.min(12, snr));
+  return 4 + ((s + 24) / 36) * 9;      // -24dB -> 4px, +12dB -> 13px
+}
+const layer = L.layerGroup().addTo(map);
 for (const s of spots) {
   L.circleMarker([s.lat, s.lon], {
-    radius: 5, color: '#ffb833', fillColor: '#ffb833', fillOpacity: 0.7, weight: 1,
-  }).addTo(m).bindPopup(
-    '<div class="lbl"><b>' + s.callsign + '</b><br>' + s.grid + '<br>' +
-    (s.frequency/1e6).toFixed(3) + ' MHz · ' + s.mode + ' · ' + s.snr + ' dB</div>');
+    radius: radius(s.snr), color: '#00000066', weight: 1,
+    fillColor: s.colour, fillOpacity: 0.85,
+  }).addTo(layer).bindPopup(
+    '<div class="pop"><b>' + s.callsign + '</b><br>' +
+    (s.country ? s.country + '<br>' : '') +
+    s.grid + (s.km != null ? ' · ' + s.km + ' km' : '') + '<br>' +
+    s.mode + ' · ' + s.band + ' · ' + (s.snr > 0 ? '+' : '') + s.snr + ' dB<br>' +
+    (s.frequency / 1e6).toFixed(3) + ' MHz</div>');
 }
-if (spots.length) m.fitBounds(spots.map(s => [s.lat, s.lon]), { padding: [40, 40] });
+
+// The receiver, if we know where it is.
+if (me) {
+  L.circleMarker([me.lat, me.lon], {
+    radius: 7, color: '#fff', weight: 2, fillColor: '#e05050', fillOpacity: 1,
+  }).addTo(map).bindPopup('<div class="pop"><b>RX</b><br>You are here</div>');
+  // Range rings, so distance is readable at a glance.
+  for (const km of [1000, 2500, 5000]) {
+    L.circle([me.lat, me.lon], {
+      radius: km * 1000, color: 'rgba(255,160,0,0.35)', weight: 1, fill: false, dashArray: '4 6',
+    }).addTo(map);
+  }
+}
+
+const all = spots.map(s => [s.lat, s.lon]);
+if (me) all.push([me.lat, me.lon]);
+if (all.length) map.fitBounds(all, { padding: [50, 50] });
+
+// Legend: the bands actually present, plus a little context.
+const body = document.getElementById('legbody');
+body.innerHTML = bands.map(b =>
+  '<div class="lrow"><span class="sw" style="background:' + (COL[b] || '#aaa') + '"></span>' + b + '</div>'
+).join('') +
+  '<div class="lrow" style="margin-top:6px"><span class="sw" style="background:#e05050"></span>Receiver</div>' +
+  '<div class="note">Marker size = SNR. Rings at 1000 / 2500 / 5000 km.' +
+  (me ? '' : ' Set your grid in the menu for distances and rings.') + '</div>';
+document.getElementById('stats').textContent =
+  '· ' + spots.length + ' spots · ' + new Set(spots.map(s => s.country).filter(Boolean)).size + ' countries';
+const leg = document.getElementById('legend');
+document.getElementById('leghead').onclick = () => leg.classList.toggle('open');
 ${ES}`;
 
   const w = window.open('', '_blank');
@@ -1302,34 +1588,16 @@ ${ES}`;
   w.document.close();
 }
 
-/** Maidenhead locator -> lat/lon (centre of the square). */
-function gridToLatLon(grid: string): { lat: number; lon: number } {
-  const g = grid.toUpperCase();
-  let lon = (g.charCodeAt(0) - 65) * 20 - 180;
-  let lat = (g.charCodeAt(1) - 65) * 10 - 90;
-  lon += (g.charCodeAt(2) - 48) * 2;
-  lat += (g.charCodeAt(3) - 48) * 1;
-  if (g.length >= 6) {
-    lon += (g.charCodeAt(4) - 65) * (2 / 24);
-    lat += (g.charCodeAt(5) - 65) * (1 / 24);
-    lon += 1 / 24;
-    lat += 0.5 / 24;
-  } else {
-    lon += 1;
-    lat += 0.5;
-  }
-  return { lat, lon };
-}
 
 interface NearStation {
   name: string; frequency: number; flag?: string;
   source: 'user' | 'eibi' | 'server';
 }
 
-/** Nearest station (user bookmark, then server/EiBi) within VTS_MAX_HZ. */
+/** Nearest station (user bookmark, then server/EiBi) — on-tune candidates only. */
 function nearestStation(hz: number): NearStation | null {
   let best: NearStation | null = null;
-  let bestOff = VTS_MAX_HZ;
+  let bestOff = VTS_ON_HZ;
   for (const b of getBookmarks()) {
     const off = Math.abs(b.frequency - hz);
     if (off < bestOff) {
@@ -1548,7 +1816,10 @@ function buildMenu() {
   }, 'stereo', true);
   segment('deemphSeg', 'tau', (us) => spec!.setDeemph(us * 1e-6), 'deemph');
 
-  // ── Display (client-side; SignalProcessor + palette, same as the app) ─────
+  // ── Display / Waterfall / Spectrum ───────────────────────────────────────
+  // The full set the app exposes, split into the sections it uses. All of it
+  // feeds SignalProcessor, which is the APP's module — so a setting here does
+  // exactly what the same setting does on the phone.
   const pal = $<HTMLSelectElement>('palette');
   for (const name of [...COLORMAP_NAMES].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))) {
     const o = document.createElement('option');
@@ -1560,15 +1831,79 @@ function buildMenu() {
 
   slider('specRatio', 'specRatioVal', (v) => `${v}%`,
     (v) => wf!.setSpecRatio(v / 100), 'specRatio');
+
+  // ── Waterfall ────────────────────────────────────────────────────────────
+  // Coarse: AUTO auto-ranges the display window; MANUAL pins it to min/max dB.
+  const coarseBtns = Array.from($('wfCoarse').children) as HTMLButtonElement[];
+  const applyCoarse = (mode: string) => {
+    const manual = mode === 'manual';
+    for (const b of coarseBtns) b.classList.toggle('on', b.dataset.coarse === mode);
+    $('rowAutoContrast').hidden = manual;
+    $('rowMinDb').hidden = !manual;
+    $('rowMaxDb').hidden = !manual;
+    wf!.applySettings(manual
+      ? { manualRange: { minDb: Number($<HTMLInputElement>('minDb').value),
+                         maxDb: Number($<HTMLInputElement>('maxDb').value) } }
+      : { manualRange: null });
+    savePref('wfCoarse', mode);
+  };
+  for (const b of coarseBtns) b.onclick = () => applyCoarse(b.dataset.coarse!);
+
+  slider('autoContrast', 'autoContrastVal', (v) => String(v),
+    (v) => wf!.applySettings({ autoContrast: v }), 'autoContrast');
+  const pushManual = () => {
+    const lo = Number($<HTMLInputElement>('minDb').value);
+    const hi = Number($<HTMLInputElement>('maxDb').value);
+    if (($('rowMinDb') as HTMLElement).hidden) return;
+    wf!.applySettings({ manualRange: { minDb: Math.min(lo, hi - 1), maxDb: hi } });
+  };
+  slider('minDb', 'minDbVal', (v) => String(v), () => pushManual(), 'minDb');
+  slider('maxDb', 'maxDbVal', (v) => String(v), () => pushManual(), 'maxDb');
+
   slider('bright', 'brightVal', (v) => String(v),
     (v) => wf!.applySettings({ wfBrightness: v }), 'wfBrightness');
   slider('contrast', 'contrastVal', (v) => String(v),
     (v) => wf!.applySettings({ wfContrast: v }), 'wfContrast');
   slider('sharp', 'sharpVal', (v) => String(v),
     (v) => wf!.applySettings({ wfSharpness: v }), 'wfSharpness');
+  toggle('spatialSmooth', (on) => wf!.applySettings({ spatialSmooth: on }), 'spatialSmooth', true);
+
+  // ── Spectrum trace ───────────────────────────────────────────────────────
+  const showBtn = $<HTMLButtonElement>('specShow');
+  const savedShow = prefs().specShow;
+  let specOn = typeof savedShow === 'boolean' ? savedShow : true;
+  const applyShow = () => {
+    wf!.showSpec = specOn;
+    showBtn.classList.toggle('on', specOn);
+    showBtn.textContent = specOn ? 'SHOW' : 'HIDE';
+  };
+  showBtn.onclick = () => { specOn = !specOn; applyShow(); savePref('specShow', specOn); };
+  applyShow();
+
   slider('smooth', 'smoothVal', (v) => String(v),
     (v) => wf!.applySettings({ smoothingFrames: v }), 'smoothingFrames');
+  slider('specFloor', 'specFloorVal', (v) => String(v),
+    (v) => wf!.applySettings({ specFloor: v }), 'specFloor');
+  slider('specPeak', 'specPeakVal', (v) => `${(v / 10).toFixed(1)}×`,
+    (v) => wf!.applySettings({ specPeakScale: v }), 'specPeakScale');
+  slider('specAlpha', 'specAlphaVal', (v) => `${v}%`,
+    (v) => { wf!.specAlpha = v / 100; }, 'specAlpha');
   toggle('peakHold', (on) => wf!.applySettings({ peakHold: on }), 'peakHold', true);
+
+  applyCoarse((prefs().wfCoarse as string) || 'auto');
+
+  // Back to the app's defaults, without hunting every slider.
+  $('dispReset').onclick = () => {
+    for (const k of ['autoContrast', 'minDb', 'maxDb', 'wfBrightness', 'wfContrast',
+                     'wfSharpness', 'smoothingFrames', 'specFloor', 'specPeakScale',
+                     'specAlpha', 'specRatio', 'spatialSmooth', 'peakHold', 'specShow',
+                     'wfCoarse', 'palette']) {
+      const p = prefs();
+      delete p[k];
+      localStorage.setItem(LS_PREFS, JSON.stringify(p));
+    }
+    location.reload();
+  };
 
   // ── VFO (needle + acrylic sidebands), as in the app ──────────────────────
   const colEl = $<HTMLInputElement>('vfoColor');
@@ -1672,7 +2007,7 @@ function setMode(m: SDRMode, send: boolean) {
   }
   if (m !== 'wfm') {
     $('stereo').classList.remove('on');
-    rdsName = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = '';
+    rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = '';
   }
   updateVts();
   syncBw();
@@ -1807,15 +2142,18 @@ function syncStep() {
   $('stepBtn').textContent = formatStep(step);
 }
 
-/** Never let the VFO walk down to DC — 0 Hz is not a frequency, and once there
- *  the display reads 0.000 and nothing sensible can be tuned. */
+// Tuner limits. These are the RADIO's range, NOT the current view — an earlier
+// version derived the ceiling from centerFreq + maxBandwidth, which capped tuning
+// to the window you happened to be looking at (typing 96.6 while parked at 89 MHz
+// landed you at ~91 MHz). The window follows the VFO; it does not constrain it.
+//
+// R820T/R860 tuners reach ~1.7 GHz, and direct sampling gets down to HF, so the
+// only honest bounds are the tuner's own. The shim retunes the dongle to follow.
 const MIN_TUNE_HZ = 10_000;
+const MAX_TUNE_HZ = 1_800_000_000;
 
 function clampTune(hz: number): number {
-  const max = spec?.cfg.maxBandwidth
-    ? Math.max(30e6, spec.cfg.centerFreq + spec.cfg.maxBandwidth)
-    : 2e9;
-  return Math.max(MIN_TUNE_HZ, Math.min(max, Math.round(hz)));
+  return Math.max(MIN_TUNE_HZ, Math.min(MAX_TUNE_HZ, Math.round(hz)));
 }
 
 function nudge(hz: number) {
@@ -1960,22 +2298,44 @@ function initWaterfallInput() {
   const c = $<HTMLCanvasElement>('wf');
   let dragging = false;
   let moved = false;
-  let lastX = 0;
+  let startX = 0;
+  let startCenter = 0;   // view centre when the drag began
 
   c.addEventListener('pointerdown', (e) => {
-    dragging = true; moved = false; lastX = e.clientX;
+    if (!spec) return;
+    dragging = true;
+    moved = false;
+    startX = e.clientX;
+    // Anchor to our PREDICTED view, not the rendered frame. wf.centerHz is the
+    // centre of the last frame the SERVER sent — it lags by a frame or two, so
+    // panning relative to it measures from a stale base, fights the frames still
+    // in flight, and snaps back when a config echo lands. That's the treacle.
+    startCenter = spec.viewCenterHz();
     c.setPointerCapture(e.pointerId);
     c.classList.add('panning');
   });
 
   c.addEventListener('pointermove', (e) => {
     if (!dragging || !spec || !wf) return;
-    const dx = e.clientX - lastX;
-    if (Math.abs(dx) < 1) return;
-    if (Math.abs(e.clientX - lastX) > 2) moved = true;
-    lastX = e.clientX;
-    // Drag the spectrum: moving right pulls lower frequencies into view.
-    spec.pan(wf.centerHz - dx * wf.hzPerPx());
+    const dx = e.clientX - startX;
+    if (!moved && Math.abs(dx) < 2) return;
+    moved = true;
+    // Absolute from the drag start — never accumulate, never read back from the
+    // display. Dragging right pulls lower frequencies into view.
+    let target = startCenter - dx * wf.hzPerPx();
+
+    // Don't let the view leave the reachable band; the server would clamp it
+    // anyway and the snap-back would look like a bug. Flash the edge so a drag
+    // that stops dead has a visible reason (the wall is usually off-screen when
+    // you're zoomed in).
+    const pan = spec.panSpan();
+    if (pan) {
+      if (target < pan.loHz) { target = pan.loHz; wf.wallHitAt = performance.now(); wf.wallHitSide = 'lo'; }
+      else if (target > pan.hiHz) { target = pan.hiHz; wf.wallHitAt = performance.now(); wf.wallHitSide = 'hi'; }
+    }
+
+    spec.pan(target);
+    updateViewOverlays();
   });
 
   c.addEventListener('pointerup', (e) => {
@@ -1993,8 +2353,13 @@ function initWaterfallInput() {
 
   c.addEventListener('wheel', (e) => {
     e.preventDefault();
-    if (!spec) return;
-    spec.zoomBy(e.deltaY < 0 ? 1.25 : 0.8);
+    if (!spec || !wf) return;
+    // Anchor on the CURSOR: the frequency under the pointer stays under the
+    // pointer, so you zoom into whatever you were looking at.
+    const rect = c.getBoundingClientRect();
+    const anchor = wf.xToHz(e.clientX - rect.left);
+    spec.zoomBy(e.deltaY < 0 ? 1.25 : 0.8, anchor);
+    updateViewOverlays();
   }, { passive: false });
 }
 
@@ -2010,8 +2375,8 @@ function initKeyboard() {
       case 'ArrowLeft':  nudge(-d); e.preventDefault(); break;
       case 'ArrowRight': nudge(d);  e.preventDefault(); break;
       case '[': case ']': cycleStep(); e.preventDefault(); break;
-      case 'ArrowUp':    spec.zoomBy(1.25); e.preventDefault(); break;
-      case 'ArrowDown':  spec.zoomBy(0.8);  e.preventDefault(); break;
+      case 'ArrowUp':    spec.zoomBy(1.25); updateViewOverlays(); e.preventDefault(); break;
+      case 'ArrowDown':  spec.zoomBy(0.8);  updateViewOverlays(); e.preventDefault(); break;
       case 'm': audio!.muted = !audio!.muted; $('muteBtn').classList.toggle('on', audio!.muted); break;
       default: {
         // Mode letter keys: first mode whose name starts with the key.

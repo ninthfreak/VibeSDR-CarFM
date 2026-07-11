@@ -1,5 +1,7 @@
 import { NativeModules, Platform } from 'react-native';
 import { loadActiveEibi } from './eibi';
+import { getUserLocation } from './instancesApi';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // VibeServer: share this device's USB dongle with server-side DSP (compressed
 // audio + waterfall over a WebSocket, ~25x lighter than raw RTL-TCP IQ). The
@@ -66,6 +68,7 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
   // Hand the web client's search its station list. Fire-and-forget: the server is
   // already up and useful without it, and this can involve a network fetch.
   void publishStations();
+  void publishLocation();
   return info;
 }
 
@@ -90,6 +93,55 @@ export async function publishStations(): Promise<void> {
   } catch {
     // Offline or EiBi unreachable — the web client degrades to bookmarks + band
     // plan, which are both local. Not worth surfacing.
+  }
+}
+
+/** Where the host has manually said the receiver is (city picker fallback). */
+const LOC_KEY = 'lsv_server_location';
+
+export type ServerLocation = { lat: number; lon: number; label?: string };
+
+export async function setManualServerLocation(loc: ServerLocation | null): Promise<void> {
+  if (loc) await AsyncStorage.setItem(LOC_KEY, JSON.stringify(loc));
+  else await AsyncStorage.removeItem(LOC_KEY);
+  await publishLocation();
+}
+
+export async function getManualServerLocation(): Promise<ServerLocation | null> {
+  try {
+    const raw = await AsyncStorage.getItem(LOC_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+/**
+ * Publish the RECEIVER's position (GET /location on the shim).
+ *
+ * This is the SERVER's location, deliberately — NOT the client's. A VibeServer
+ * might be left at a relative's house in another town, and once it can be public
+ * it could be listened to from anywhere. Spot distances, map centring and the ITU
+ * REGION are all properties of the ANTENNA: computing them from the listener's
+ * position gives nonsense distances and, worse, the wrong region's band edges
+ * (80m is 3.5–3.8 MHz in R1 but 3.5–4.0 in R2).
+ *
+ * Coarse location if the host has granted it; otherwise whatever city they picked.
+ * Neither = no location, and the client simply does without distances.
+ */
+export async function publishLocation(): Promise<void> {
+  if (!Local?.setLocationJson) return;
+  try {
+    const manual = await getManualServerLocation();
+    const loc = manual ?? await getUserLocation();
+    if (!loc) return;
+    // Coarsened to ~1 km — enough for distances, rings and the ITU region, and
+    // nowhere near enough to point at a house. It is served to every client.
+    const lat = Math.round(loc.lat * 100) / 100;
+    const lon = Math.round(loc.lon * 100) / 100;
+    Local.setLocationJson(JSON.stringify({
+      lat, lon, label: (manual as ServerLocation | null)?.label ?? undefined,
+    }));
+  } catch {
+    // No permission, no city picked — the client degrades to no distances.
   }
 }
 

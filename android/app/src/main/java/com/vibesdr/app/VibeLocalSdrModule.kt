@@ -318,6 +318,12 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun setStationsJson(json: String) { VibeLocalSDR.setStationsJson(json) }
 
+    /** Publish the RECEIVER's coarse location (GET /location). Clients compute
+     *  spot distances, map centring and the ITU region from the ANTENNA's
+     *  position — not from wherever the listener happens to be. */
+    @ReactMethod
+    fun setLocationJson(json: String) { VibeLocalSDR.setLocationJson(json) }
+
     @ReactMethod
     fun getVibeServerStatus(promise: Promise) {
         try {

@@ -370,6 +370,15 @@ static std::atomic<double> g_vsMaxFftRate{0.0};        // <=0 = server default (
 // UberSDR: the server presents the stations, the client just renders them.
 static std::mutex  g_stationsMtx;
 static std::string g_stationsJson;
+
+// RECEIVER location, served at GET /location. It is the SERVER's location, not the
+// client's — a VibeServer might be left at a relative's house, or (once public) be
+// listened to from anywhere in the world. Distances, map centring and the ITU
+// REGION all have to be computed from where the ANTENNA is; using the viewer's
+// position would give nonsense distances and, worse, the wrong region's band edges
+// (80m is 3.5-3.8 in R1 but 3.5-4.0 in R2).
+static std::mutex  g_locMtx;
+static std::string g_locJson;
 static std::atomic<bool>   g_vsCompressAudio{true};
 
 // Nonce ledger (single-use, 30 s TTL) + per-IP failure backoff. Small maps: a
@@ -675,13 +684,43 @@ struct LocalSdrShim::Impl {
     // match the JS client (UberSDRClient panSpan / rfCenter derivation).
     double viewDongleMargin() { return std::max(sampleRate * 0.10, 60000.0); }
 
-    // Dongle (RTL) centre for a requested DISPLAY centre: the dongle follows the
-    // view, but is clamped so the VFO never leaves the usable capture — at which
-    // point it "locks" and the view keeps panning across the captured band.
-    double dongleForView(double view) {
-        double lim = sampleRate / 2.0 - viewDongleMargin();
-        double v = audioFreq.load();
-        return std::min(v + lim, std::max(v - lim, view));
+    // Dongle (RTL) centre for a requested DISPLAY centre.
+    //
+    // MINIMAL MOVEMENT: the dongle STAYS PUT unless it actually has to move. It
+    // moves only when the VFO would fall out of the usable capture, or when the
+    // requested view window would run off the edge of the captured band.
+    //
+    // The old rule was `clamp(view, vfo±lim)` — i.e. the dongle FOLLOWED the view
+    // exactly whenever the view sat within the limit. That made every pan a
+    // physical RTL retune (PLL relock) plus an FFT recentre, so panning steered
+    // the hardware instead of sliding a window over spectrum we already had. It
+    // felt like dragging through treacle, and the RF centre chased the pan.
+    //
+    // `viewSpan` is the width of the crop being displayed; pass 0 when unknown.
+    double dongleForView(double view, double viewSpan) {
+        const double lim = sampleRate / 2.0 - viewDongleMargin();
+        const double vfo = audioFreq.load();
+        const double cur = rtlCenter.load();
+
+        // The VFO must stay inside the usable capture.
+        double lo = vfo - lim;
+        double hi = vfo + lim;
+
+        // ...and so must the whole visible window, or we'd be showing the band
+        // edge / rolloff. (Half-span, less the same anti-alias margin.)
+        if (viewSpan > 0.0) {
+            const double halfRoom = std::max(0.0,
+                sampleRate / 2.0 - viewSpan / 2.0 - viewDongleMargin() * 0.5);
+            lo = std::max(lo, view - halfRoom);
+            hi = std::min(hi, view + halfRoom);
+        }
+
+        // A span wider than the capture can't satisfy both — keep the VFO captured.
+        if (lo > hi) return std::min(vfo + lim, std::max(vfo - lim, view));
+
+        // Stay exactly where we are if that's still legal: no retune, no PLL
+        // relock, and the pan becomes a pure crop of spectrum we already have.
+        return std::min(hi, std::max(lo, cur));
     }
 
     // Tune the radio to (logical centre + HW_OFFSET_HZ).
@@ -1515,7 +1554,11 @@ struct LocalSdrShim::Impl {
                 // reads a consistent audioFreq and there is one hardware tune at a time.
                 std::lock_guard<std::recursive_mutex> lk(modeMtx);
                 viewCenter.store(v);
-                double dongle = dongleForView(v);
+                double bb = 0.0;
+                double viewSpan = jsonNum(msg, "binBandwidth", bb) && bb > 0
+                    ? bb * (double)OUT_BINS
+                    : displaySpan() / zoomFactor.load();
+                double dongle = dongleForView(v, viewSpan);
                 bool moved = std::fabs(dongle - rtlCenter.load()) > 1.0;
                 if (moved) {
                     rtlCenter.store(dongle);
@@ -1734,6 +1777,18 @@ struct LocalSdrShim::Impl {
             std::string body = "{\"allowed\":true}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
+        } else if (reqLine.rfind("GET /location", 0) == 0) {
+            // The RECEIVER's coarse position (or a city the host picked). Clients
+            // use it for spot distances, map centring and the ITU region — all of
+            // which are properties of the ANTENNA, not the listener.
+            std::string body;
+            { std::lock_guard<std::mutex> lk(g_locMtx); body = g_locJson; }
+            if (body.empty()) body = "{}";
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Access-Control-Allow-Origin: *\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
         } else if (reqLine.rfind("GET /stations", 0) == 0) {
@@ -2157,6 +2212,11 @@ void LocalSdrShim::setStationsJson(const std::string& json) {
     std::lock_guard<std::mutex> lk(g_stationsMtx);
     g_stationsJson = json;
     LOGI("stations list set (%zu bytes)", json.size());
+}
+void LocalSdrShim::setLocationJson(const std::string& json) {
+    std::lock_guard<std::mutex> lk(g_locMtx);
+    g_locJson = json;
+    LOGI("receiver location set (%zu bytes)", json.size());
 }
 
 LocalSdrShim& LocalSdrShim::instance() { static LocalSdrShim inst; return inst; }

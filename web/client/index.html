@@ -156,6 +156,17 @@ html, body {
    under the search box above it and the two rows line up. */
 .pushRight { margin-left: auto; }
 #sig { position: relative; height: 0.62em; border-radius: 0.31em; background: var(--meter-track); overflow: hidden; }
+/* A fault takes over the WHOLE meter: that's where you're already looking when
+   you wonder why there's no sound, and a long message in the status line just ran
+   off the edge of the screen. */
+#sig.fault { height: 1.6em; background: rgba(224,80,80,0.18); border: 1px solid var(--red); }
+#sig.fault #sigFill, #sig.fault #sigPeak { display: none; }
+#sigFault {
+  display: none; position: absolute; inset: 0; align-items: center; justify-content: center;
+  color: var(--red); font-size: 0.75em; letter-spacing: 0.12em; white-space: nowrap;
+  animation: recPulse 1.6s ease-in-out infinite;
+}
+#sigFault.show { display: flex; }
 #sigFill { position: absolute; inset: 0 auto 0 0; width: 0%; background: linear-gradient(90deg, var(--green), var(--amber), var(--red)); }
 #sigPeak { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--peak-line); left: 0; }
 #sigLabel { margin-top: 4px; font-size: 10px; color: var(--text-dim); letter-spacing: 1px; }
@@ -297,10 +308,17 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #decImage.on { display: block; }
 #decText.off { display: none; }
 #spotList { margin-top: 10px; }
+/* Active buttons in the panels. NB: an earlier edit spliced a
+   `button.btn[hidden] { display: none }` rule INTO this selector list, which made
+   every ACTIVE button in the decoder/audio panels display:none — switch one on and
+   it vanished, with no way to switch it back off. */
 #decodersPanel button.btn.on,
 #audioPanel button.btn.on,
-#recordingsPanel button.btn[hidden] { display: none; }
-button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active-bdr); }
+#recordingsPanel button.btn.on {
+  background: var(--btn-active-bg);
+  border-color: var(--btn-active-bdr);
+  color: var(--btn-active-tx);
+}
 
 
 /* ── Decoder output box (persistent, bottom-left) ─────────────────────────── */
@@ -349,7 +367,7 @@ button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active
   border: 1px solid var(--bar-border); border-radius: 8px;
   background: rgba(0,0,0,0.3);
 }
-.subPanel .seg { flex-wrap: wrap; justify-content: flex-end; }
+.subPanel .seg { justify-content: flex-end; }
 
 
 /* Mirrored bandwidth sliders. */
@@ -378,7 +396,7 @@ button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active
 #vts {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
   z-index: 44; display: none; align-items: baseline; gap: 10px;
-  max-width: min(60vw, 520px); padding: 6px 16px;
+  max-width: min(82vw, 900px); padding: 6px 16px;
   background: rgba(8,6,2,0.92); border: 1px solid var(--btn-border);
   border-radius: 999px; box-shadow: 0 8px 26px rgba(0,0,0,0.55);
   font-size: 13px; letter-spacing: 1px; color: var(--btn-text); white-space: nowrap;
@@ -394,11 +412,52 @@ button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active
 }
 #vtsSrc.show { display: inline; }
 #vtsFlag { font-size: 15px; }
-#vtsOffset { color: var(--unit); font-size: 11px; }
+/* RDS RadioText — the scrolling message the station sends. Ellipsised rather than
+   marquee'd: a looping animation over a live waterfall is exactly the kind of
+   thing that pegs a render thread for no benefit. */
+/* RadioText scrolls when it's too long — a station's message is usually longer
+   than any bar. CSS transform only: it's GPU-composited and triggers no layout,
+   unlike the RN animation that once pegged the JS thread. */
+#vtsRt {
+  display: none; position: relative; flex: 1 1 auto; min-width: 0;
+  overflow: hidden; white-space: nowrap;
+  border-left: 1px solid var(--bar-border); padding-left: 10px;
+  mask-image: linear-gradient(90deg, #000 0, #000 92%, transparent 100%);
+}
+#vtsRt.show { display: inline-block; }
+#vtsRtInner {
+  display: inline-block; color: rgba(255,184,51,0.7); font-size: 11px;
+  will-change: transform;
+}
+#vtsRtInner.scroll { animation: rtScroll linear infinite; }
+@keyframes rtScroll {
+  0%, 8%    { transform: translateX(0); }
+  92%, 100% { transform: translateX(var(--rtShift, 0)); }
+}
 #vts.on { border-color: rgba(51,204,68,0.6); }
 #vts.on #vtsName { color: #33cc44; }
-#vtsName { overflow: hidden; text-overflow: ellipsis; }
+/* The station NAME never truncates — it's the one thing you actually need to
+   read. The bar grows instead, and the RadioText gives up the space. */
+#vtsName { flex: 0 0 auto; white-space: nowrap; }
 #vtsBand { color: var(--unit); font-size: 11px; }
+
+
+/* Spot table — the app's columns: time / band / snr / call / country / distance */
+#spotFilters { display: none; gap: 3px; }
+#spotFilters.show { display: inline-flex; }
+#spotFilters .btn { padding: 2px 6px; font-size: 10px; }
+#spotList .sres.spot {
+  display: grid; grid-template-columns: 3.4em 3em 2.6em 1fr 2.6em 4.4em;
+  gap: 6px; align-items: baseline; font-size: 11px; padding: 4px 6px;
+}
+#spotList .t { color: var(--unit); font-variant-numeric: tabular-nums; }
+#spotList .band { color: var(--text-dim); }
+#spotList .snr { text-align: right; font-variant-numeric: tabular-nums; }
+#spotList .snr.pos { color: #55d98d; }
+#spotList .snr.neg { color: rgba(255,160,0,0.65); }
+#spotList .call { color: var(--freq); letter-spacing: 1px; }
+#spotList .cty { color: var(--text-dim); }
+#spotList .km { color: var(--unit); text-align: right; font-variant-numeric: tabular-nums; }
 
 /* Recordings. */
 #recsList .sres { flex-wrap: wrap; }
@@ -415,14 +474,18 @@ button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active
 #menuHead span { font-size: 13px; letter-spacing: 3px; color: var(--amber); }
 .mrow {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 10px; padding: 7px 0; font-size: 12px;
+  gap: 10px; padding: 7px 0; font-size: 12px; flex-wrap: wrap;
 }
 .mrow label { color: var(--btn-text); flex: 0 0 auto; }
 .mrow .val { color: var(--unit); font-size: 11px; min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
 .mrow input[type=range] { flex: 1 1 auto; width: auto; min-width: 90px; }
 .mrow select { flex: 1 1 auto; }
-.seg { display: flex; gap: 3px; }
-.seg button { padding: 5px 9px; font-size: 11px; }
+/* Segmented rows WRAP and never shrink. Flex items shrink below their content
+   by default, so a 5-button row (RTTY shift) in a 520px panel squeezed the
+   buttons to slivers — they looked like they'd vanished, and clicking where one
+   appeared to be actually hit its neighbour. */
+.seg { display: flex; gap: 3px; flex-wrap: wrap; justify-content: flex-end; }
+.seg button { padding: 5px 9px; font-size: 11px; flex: 0 0 auto; }
 select.btn { padding: 6px 8px; }
 
 #status { margin-left: auto; font-size: 10px; color: var(--text-dim); letter-spacing: 1px; text-align: right; }
@@ -470,7 +533,7 @@ select.btn { padding: 6px 8px; }
   <img id="vtsLogo" alt="">
   <span id="vtsFlag"></span>
   <span id="vtsName">—</span>
-  <span id="vtsOffset"></span>
+  <span id="vtsRt"><span id="vtsRtInner"></span></span>
   <span id="vtsBand"></span>
 </div>
 
@@ -479,6 +542,12 @@ select.btn { padding: 6px 8px; }
     <span class="dot" id="decDot"></span>
     <span id="decTitle">RTTY</span>
     <span id="decStatus"></span>
+    <!-- Spot filters — cyclers, as in the app's decoder-panel header. -->
+    <span id="spotFilters">
+      <button class="btn" id="sfMode" title="Mode filter">ALL</button>
+      <button class="btn" id="sfBand" title="Band filter">ALL</button>
+      <button class="btn" id="sfAge" title="Age filter">AGE</button>
+    </span>
     <button class="btn" id="decClr" title="Clear output">CLR</button>
     <button class="btn" id="decMin" title="Minimise">–</button>
     <button class="btn" id="decHide" title="Stop and close">&#10005;</button>
@@ -557,7 +626,7 @@ select.btn { padding: 6px 8px; }
            purposes, and the signal meter spans exactly their combined width. -->
       <div class="stack" id="rightCol">
         <div id="sigWrap">
-          <div id="sig"><div id="sigFill"></div><div id="sigPeak"></div></div>
+          <div id="sig"><div id="sigFill"></div><div id="sigPeak"></div><span id="sigFault"></span></div>
           <div id="sigLine">
             <span id="sigLabel">—</span>
             <span id="linkStats">
@@ -712,6 +781,19 @@ select.btn { padding: 6px 8px; }
     </div>
   </div>
 
+  <h2>RECEIVER LOCATION</h2>
+  <div class="lbl" id="rxLoc">Not published by this server</div>
+  <div class="mrow" id="gridRow">
+    <label for="myGrid">GRID</label>
+    <input id="myGrid" class="btn" placeholder="IO91wm" spellcheck="false"
+           style="max-width:9em; text-align:center">
+  </div>
+  <div class="lbl" style="margin-bottom:6px">
+    Distances and the band plan are measured from the RECEIVER, not from you —
+    the server may be in another town. Set a grid here only if the server hasn't
+    published its own location.
+  </div>
+
   <h2>DECODED SPOTS</h2>
   <div class="btnRow">
     <button class="btn" id="spotsBtn">DIGITAL SPOTS</button>
@@ -789,13 +871,41 @@ select.btn { padding: 6px 8px; }
 
   <h2>DISPLAY</h2>
   <div class="mrow">
-    <label for="palette">PALETTE</label>
+    <label for="palette">COLOUR MAP</label>
     <select id="palette" class="btn"></select>
   </div>
   <div class="mrow">
-    <label for="specRatio">SPECTRUM</label>
+    <label for="specRatio">SPECTRUM / WATERFALL</label>
     <input type="range" id="specRatio" min="0" max="60" value="25">
     <span class="val" id="specRatioVal">25%</span>
+  </div>
+  <div class="mrow">
+    <label>RESET</label>
+    <div class="seg"><button class="btn" id="dispReset">↺ DEFAULTS</button></div>
+  </div>
+
+  <h2>WATERFALL</h2>
+  <div class="mrow">
+    <label>RANGE</label>
+    <div class="seg" id="wfCoarse">
+      <button class="btn on" data-coarse="auto">AUTO</button>
+      <button class="btn" data-coarse="manual">MANUAL</button>
+    </div>
+  </div>
+  <div class="mrow" id="rowAutoContrast">
+    <label for="autoContrast">AUTO CONTRAST</label>
+    <input type="range" id="autoContrast" min="0" max="20" value="10">
+    <span class="val" id="autoContrastVal">10</span>
+  </div>
+  <div class="mrow" id="rowMinDb" hidden>
+    <label for="minDb">MIN dB</label>
+    <input type="range" id="minDb" min="-160" max="-60" value="-120">
+    <span class="val" id="minDbVal">−120</span>
+  </div>
+  <div class="mrow" id="rowMaxDb" hidden>
+    <label for="maxDb">MAX dB</label>
+    <input type="range" id="maxDb" min="-100" max="0" value="-20">
+    <span class="val" id="maxDbVal">−20</span>
   </div>
   <div class="mrow">
     <label for="bright">BRIGHTNESS</label>
@@ -813,9 +923,34 @@ select.btn { padding: 6px 8px; }
     <span class="val" id="sharpVal">0</span>
   </div>
   <div class="mrow">
+    <label>SPATIAL SMOOTH</label>
+    <div class="seg"><button class="btn on" id="spatialSmooth">ON</button></div>
+  </div>
+
+  <h2>SPECTRUM</h2>
+  <div class="mrow">
+    <label>TRACE</label>
+    <div class="seg"><button class="btn on" id="specShow">SHOW</button></div>
+  </div>
+  <div class="mrow">
     <label for="smooth">SMOOTHING</label>
     <input type="range" id="smooth" min="1" max="10" value="5">
     <span class="val" id="smoothVal">5</span>
+  </div>
+  <div class="mrow">
+    <label for="specFloor">FLOOR</label>
+    <input type="range" id="specFloor" min="-20" max="20" value="0">
+    <span class="val" id="specFloorVal">0</span>
+  </div>
+  <div class="mrow">
+    <label for="specPeak">PEAK SCALE</label>
+    <input type="range" id="specPeak" min="1" max="30" value="10">
+    <span class="val" id="specPeakVal">1.0×</span>
+  </div>
+  <div class="mrow">
+    <label for="specAlpha">FILL OPACITY</label>
+    <input type="range" id="specAlpha" min="10" max="100" value="85">
+    <span class="val" id="specAlphaVal">85%</span>
   </div>
   <div class="mrow">
     <label>PEAK HOLD</label>

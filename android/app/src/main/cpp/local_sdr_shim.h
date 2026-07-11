@@ -52,6 +52,10 @@ public:
      *  search. Supplied by the app, which already downloads + caches EiBi — a
      *  browser can't fetch eibispace.de itself (it sends no CORS headers). */
     static void setStationsJson(const std::string& json);
+    /** RECEIVER coarse location, served at GET /location: {"lat":..,"lon":..,"label":".."}.
+     *  It's the SERVER's position — distances, map centring and the ITU region are
+     *  properties of the antenna, not of whoever happens to be listening. */
+    static void setLocationJson(const std::string& json);
 
     // SpyServer-compatible backend. Mirrors startTcp(): network IQ into the same
     // DSP pipeline, so demod/decoders/NR/audio all work unchanged — and, like

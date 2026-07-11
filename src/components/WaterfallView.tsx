@@ -1199,6 +1199,42 @@ function WaterfallView({
           </Text>
         )}
 
+        {/* Wall labels — an unlabelled line is just clutter: say WHICH edge of the
+            captured band it is, and at what frequency. (Web-client parity.) */}
+        {wallOverlay?.loX != null && (
+          <Text pointerEvents="none"
+                style={[styles.tickLabel, {
+                  fontFamily, color: 'rgba(255,200,80,0.95)',
+                  left: Math.max(2, wallOverlay.loX + 3), top: specTop + 16,
+                  width: 130, textAlign: 'left', fontSize: 9,
+                }]}>
+            {'LOWER LIMIT: ' + fmtHz(panLoHz as number)}
+          </Text>
+        )}
+        {wallOverlay?.hiX != null && (
+          <Text pointerEvents="none"
+                style={[styles.tickLabel, {
+                  fontFamily, color: 'rgba(255,200,80,0.95)',
+                  left: Math.max(2, wallOverlay.hiX - 133), top: specTop + 16,
+                  width: 130, textAlign: 'right', fontSize: 9,
+                }]}>
+            {'UPPER LIMIT: ' + fmtHz(panHiHz as number)}
+          </Text>
+        )}
+
+        {/* The needle's own label. With an RF-centre marker on screen too, an
+            unlabelled needle is ambiguous — which line am I listening to? */}
+        {needle && showCenterMarker && (
+          <Text pointerEvents="none"
+                style={[styles.tickLabel, {
+                  fontFamily, color: needleColor,
+                  left: Math.min(width - 96, needle.nX + 3), top: specTop + 29,
+                  width: 96, textAlign: 'left', fontSize: 9,
+                }]}>
+            {'LISTEN: ' + fmtHz(tuneHz)}
+          </Text>
+        )}
+
         {/* dB axis — amber, left edge of spectrum */}
         {dbLabels.map((d, i) => (
           <Text key={'db' + i} pointerEvents="none"

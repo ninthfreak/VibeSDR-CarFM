@@ -163,6 +163,14 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetStationsJson(JNIEnv* env, jobject, js
     if (json && s) env->ReleaseStringUTFChars(json, s);
 }
 
+// The RECEIVER's coarse location, served at GET /location.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetLocationJson(JNIEnv* env, jobject, jstring json) {
+    const char* s = json ? env->GetStringUTFChars(json, nullptr) : nullptr;
+    vibe::LocalSdrShim::setLocationJson(s ? s : "");
+    if (json && s) env->ReleaseStringUTFChars(json, s);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeStopSpectrum(JNIEnv* /*env*/, jobject /*thiz*/) {
     // Tear down on a detached thread so the JS/bridge caller never blocks if the

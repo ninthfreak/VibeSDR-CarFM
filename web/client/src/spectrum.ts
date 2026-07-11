@@ -60,6 +60,8 @@ export interface SpectrumCallbacks {
   onRds?:    (meta: RdsMeta) => void;
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
   onRtt?:    (ms: number) => void;
+  /** Bytes received on the spectrum socket — the BIGGER half of the link. */
+  onBytes?:  (n: number) => void;
 }
 
 export class SpectrumClient {
@@ -120,8 +122,14 @@ export class SpectrumClient {
     };
 
     ws.onmessage = (e) => {
-      if (typeof e.data === 'string') this._handleText(e.data);
-      else this._handleBinary(e.data as ArrayBuffer);
+      if (typeof e.data === 'string') {
+        this.cb.onBytes?.(e.data.length);
+        this._handleText(e.data);
+      } else {
+        const buf = e.data as ArrayBuffer;
+        this.cb.onBytes?.(buf.byteLength);
+        this._handleBinary(buf);
+      }
     };
 
     ws.onerror = () => this.cb.onStatus?.('error', 'websocket error');
@@ -302,10 +310,35 @@ export class SpectrumClient {
     this._sendView(this.view.centerHz, bb);
   }
 
-  /** Zoom by a factor about the current centre (>1 = zoom in). */
-  zoomBy(factor: number) {
-    const bb = (this.view.binBandwidth || this.cfg.binBandwidth) / factor;
-    this.zoom(this.viewCenterHz(), bb);
+  /**
+   * Zoom by a factor about an ANCHOR frequency (>1 = zoom in). The anchor stays
+   * pinned under the same screen position, so wheel-zooming homes in on whatever
+   * you pointed at.
+   *
+   * Zooming about the VIEW CENTRE (the old behaviour) meant that when locked —
+   * where the view centre IS the VFO — every zoom felt welded to the RF centre and
+   * you couldn't zoom in on anything else.
+   *
+   * Omit the anchor to zoom about the VFO, which is what the +/- buttons want:
+   * the thing you're listening to stays put and the span closes in around it.
+   */
+  zoomBy(factor: number, anchorHz?: number) {
+    const bb = this.view.binBandwidth || this.cfg.binBandwidth;
+    if (!bb) return;
+    const n = this.cfg.binCount || 4096;
+
+    // Clamp FIRST, so the anchor maths uses the span we'll actually get —
+    // otherwise, at the zoom limit, the centre would keep sliding towards the
+    // anchor while the span refused to change.
+    const spanCap = this.cfg.maxBandwidth > 0 ? this.cfg.maxBandwidth : 30e6;
+    const newBb = Math.max(MIN_SPAN_HZ / n, Math.min(bb / factor, spanCap / n));
+    const actual = bb / newBb;               // the zoom we're really applying
+
+    const anchor = anchorHz ?? this.frequency ?? this.viewCenterHz();
+    const centre = this.viewCenterHz();
+    const newCentre = anchor - (anchor - centre) / actual;
+
+    this.zoom(newCentre, newBb);
   }
 
   pan(frequency: number) {

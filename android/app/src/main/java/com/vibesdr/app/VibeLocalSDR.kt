@@ -127,10 +127,13 @@ object VibeLocalSDR {
      *  search. The app supplies it — it already downloads + caches EiBi, and a
      *  browser can't fetch eibispace.de itself (that host sends no CORS headers). */
     fun setStationsJson(json: String) { ensureLoaded(); nativeSetStationsJson(json) }
+    /** Receiver coarse location, served at GET /location. */
+    fun setLocationJson(json: String) { ensureLoaded(); nativeSetLocationJson(json) }
     private external fun nativeSetVibeServerAuth(secret: String)
     private external fun nativeSetVibeServerLimits(maxBwHz: Double, maxFftRate: Double)
     private external fun nativeSetVibeServerCompressAudio(on: Boolean)
     private external fun nativeSetStationsJson(json: String)
+    private external fun nativeSetLocationJson(json: String)
 
     private external fun nativeGetNetStatus(): String
     private external fun nativeHello(): String
