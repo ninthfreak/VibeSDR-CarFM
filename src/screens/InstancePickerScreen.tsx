@@ -44,6 +44,20 @@ import { vibeServerNeedsPin } from '../services/vibeAuth';
  * as the scheme), which is the single most likely thing to be typed into the box.
  * When no port is given we fall back to the backend's default, or 80/443.
  */
+/** How each backend is named in the UI. 'auto' = let the probe decide. */
+const PROTO_LABEL: Record<BackendType, string> = {
+  vibeserver: 'VibeServer', ubersdr: 'UberSDR', owrx: 'OpenWebRX',
+  kiwi: 'KiwiSDR', fmdx: 'FM-DX', rtltcp: 'rtl_tcp', spyserver: 'SpyServer',
+};
+/** Offered in the add-server modal. AUTO first — it's right almost always; the
+ *  explicit choices exist for raw-TCP servers on non-standard ports, which cannot
+ *  be auto-detected (no HTTP to sniff). */
+const PROTO_CHOICES: Array<[BackendType | 'auto', string]> = [
+  ['auto', 'Auto'], ['vibeserver', 'VibeServer'], ['rtltcp', 'rtl_tcp'],
+  ['spyserver', 'SpyServer'], ['owrx', 'OpenWebRX'], ['kiwi', 'KiwiSDR'],
+  ['ubersdr', 'UberSDR'], ['fmdx', 'FM-DX'],
+];
+
 function parseHostPort(raw: string, hint?: BackendType): { host: string; port: number } | null {
   let s = raw.trim()
     .replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
@@ -130,7 +144,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const [tcpPort,     setTcpPort]       = useState('1234');
   // Which protocol the manual-add modal speaks. rtl_tcp = raw full-rate IQ;
   // spyserver = server-side decimation (far less bandwidth, works over cellular).
-  const [tcpProto,    setTcpProto]      = useState<'rtltcp' | 'spyserver'>('rtltcp');
+  const [tcpProto,    setTcpProto]      = useState<BackendType | 'auto'>('auto');
   // null = directory CHOOSER (favourites + directory cards); set = that
   // directory's instance list.
   const [selectedDir, setSelectedDir]   = useState<DirectoryId | null>(null);
@@ -523,36 +537,51 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // to the SpyServer proto — Airspy's map hands out copy-text, so paste must work
   // where tapping can't). Returns the detected proto so the connect routing below
   // doesn't depend on the async setTcpProto having landed yet.
-  const parseTcpEntry = useCallback((): { host: string; port: number; proto: 'rtltcp' | 'spyserver' } | null => {
+  const parseTcpEntry = useCallback((): { host: string; port: number; proto: BackendType | 'auto' } | null => {
     let h = tcpHost.trim();
-    let forcedSpy = false;
+    let proto: BackendType | 'auto' = tcpProto;
     const schemeM = /^(sdr|spyserver):\/\//i.exec(h);
     if (schemeM) {
       h = h.slice(schemeM[0].length).replace(/[/?#].*$/, '');   // drop scheme + any path/query junk
-      forcedSpy = true;
+      proto = 'spyserver';
       if (tcpProto !== 'spyserver') setTcpProto('spyserver');   // flip the toggle for feedback
     }
+    // The port field is a fallback — a port typed into the HOST field wins, since
+    // that's the natural way to paste "host:8073".
     let p = parseInt(tcpPort.trim(), 10);
-    if (h.includes(':')) { const [hh, pp] = h.split(':'); h = hh.trim(); if (pp) p = parseInt(pp.trim(), 10); }
-    if (!h) return null;
-    const spy = forcedSpy || tcpProto === 'spyserver';
-    if (!Number.isFinite(p) || p <= 0 || p > 65535) p = spy ? 5555 : 1234;
-    return { host: h, port: p, proto: spy ? 'spyserver' : 'rtltcp' };
+    const u = parseHostPort(h, proto === 'auto' ? undefined : proto);
+    if (!u) return null;
+    h = u.host;
+    if (/:\d+$/.test(tcpHost.trim()) || !Number.isFinite(p) || p <= 0 || p > 65535) p = u.port;
+    return { host: h, port: p, proto };
   }, [tcpHost, tcpPort, tcpProto]);
 
-  const tcpModalConnect = useCallback((save: boolean) => {
+  const tcpModalConnect = useCallback(async (save: boolean) => {
     const parsed = parseTcpEntry();
-    if (!parsed) { Alert.alert('RTL-TCP', 'Enter a host (and optional :port).'); return; }
+    if (!parsed) { Alert.alert('Custom server', 'Enter a host (and optional :port).'); return; }
     const name = tcpName.trim() || `${parsed.host}:${parsed.port}`;
+
+    // On AUTO, probe before saving — so the favourite remembers what it actually is
+    // and reconnects straight to the right backend next time, with no second probe.
+    let type: BackendType | null = parsed.proto === 'auto' ? null : parsed.proto;
+    if (!type) {
+      setConnecting(true);
+      type = await probeServer(parsed.host, parsed.port, null);
+      setConnecting(false);
+      if (!type) {
+        Alert.alert('Custom server',
+          `Nothing answered at ${parsed.host}:${parsed.port}.\n\nIf it's an rtl_tcp or SpyServer on a non-standard port, pick the type instead of Auto — raw TCP can't be detected.`);
+        return;
+      }
+    }
     if (save) {
       const next = [...tcpFavs.filter(f => !(f.host === parsed.host && f.port === parsed.port)),
-                    { name, host: parsed.host, port: parsed.port, proto: parsed.proto }];
+                    { name, host: parsed.host, port: parsed.port, proto: type }];
       setTcpFavs(next); saveTcpFavs(next).catch(() => {});
     }
-    setTcpModal(false); setTcpName(''); setTcpHost(''); setTcpPort('1234');
-    if (parsed.proto === 'spyserver') connectSpy(parsed.host, parsed.port, name);
-    else connectTcp(parsed.host, parsed.port, name);
-  }, [parseTcpEntry, tcpName, tcpFavs, connectTcp, connectSpy]);
+    setTcpModal(false); setTcpName(''); setTcpHost(''); setTcpPort('');
+    connectDetected(type, parsed.host, parsed.port, name);
+  }, [parseTcpEntry, tcpName, tcpFavs, connectDetected]);
 
   const removeTcpFav = useCallback((fav: TcpFav) => {
     const next = tcpFavs.filter(f => !(f.host === fav.host && f.port === fav.port));
@@ -892,30 +921,42 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       <Modal visible={tcpModal} transparent animationType="fade" onRequestClose={() => setTcpModal(false)}>
         <View style={styles.tcpBackdrop}>
           <View style={[styles.tcpCard, { borderColor: C.amber }]}>
-            <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, letterSpacing: 1, marginBottom: 10 }}>ADD A SERVER</Text>
-            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
-              {([['rtltcp', 'RTL-TCP'], ['spyserver', 'SpyServer']] as const).map(([id, label]) => (
-                <TouchableOpacity key={id} onPress={() => { setTcpProto(id); setTcpPort(id === 'spyserver' ? '5555' : '1234'); }}
-                  style={[styles.tcpBtnAlt, { flex: 1, alignItems: 'center',
+            <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, letterSpacing: 1, marginBottom: 10 }}>CUSTOM SERVER</Text>
+            {/* AUTO is the default and handles almost everything — the probe reads the
+                server's own landing page. The explicit choices exist for rtl_tcp and
+                SpyServer on NON-STANDARD ports: they're raw TCP with no HTTP to sniff,
+                so nothing can identify them but the user. */}
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+              {PROTO_CHOICES.map(([id, label]) => (
+                <TouchableOpacity key={id} onPress={() => {
+                    setTcpProto(id);
+                    if (id !== 'auto') setTcpPort(String(DEFAULT_PORT[id as BackendType]));
+                  }}
+                  style={[styles.tcpBtnAlt, { alignItems: 'center',
                           borderColor: tcpProto === id ? C.amber : C.border,
                           backgroundColor: tcpProto === id ? C.amber + '22' : 'transparent' }]}>
-                  <Text style={{ fontFamily: F, fontSize: fs(13), color: tcpProto === id ? C.amber : C.textDim }}>{label}</Text>
+                  <Text style={{ fontFamily: F, fontSize: fs(12), color: tcpProto === id ? C.amber : C.textDim }}>{label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
             <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, marginBottom: 10 }}>
-              {tcpProto === 'spyserver'
+              {tcpProto === 'auto'
+                ? 'We probe the address and work out what it is. Leave this on Auto unless you\'re adding an rtl_tcp or SpyServer on an unusual port — those speak raw TCP and can\'t be detected.'
+                : tcpProto === 'spyserver'
                 ? 'Low bandwidth — works over hotspots and mobile data. Speaks the SpyServer protocol used by SDR# and SDR++.'
-                : 'Raw full-rate IQ — needs a fast local network. Works with virtually all SDR software.'}
+                : tcpProto === 'rtltcp'
+                ? 'Raw full-rate IQ — needs a fast local network. Works with virtually all SDR software.'
+                : `Connect as ${PROTO_LABEL[tcpProto as BackendType]}, without probing.`}
             </Text>
             <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
               placeholder="Name (e.g. Shack Pi)" placeholderTextColor={C.textDim}
               value={tcpName} onChangeText={setTcpName} autoCorrect={false} />
             <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
-              placeholder="Host or IP (e.g. 192.168.1.50)" placeholderTextColor={C.textDim}
+              placeholder="Host, IP or URL (e.g. stuey3d.freemyip.com)" placeholderTextColor={C.textDim}
               value={tcpHost} onChangeText={setTcpHost} autoCapitalize="none" autoCorrect={false} keyboardType="url" />
             <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
-              placeholder={tcpProto === 'spyserver' ? 'Port (default 5555)' : 'Port (default 1234)'} placeholderTextColor={C.textDim}
+              placeholder={tcpProto === 'auto' ? 'Port' : `Port (default ${DEFAULT_PORT[tcpProto as BackendType]})`}
+              placeholderTextColor={C.textDim}
               value={tcpPort} onChangeText={setTcpPort} keyboardType="number-pad" />
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 8, flexWrap: 'wrap' }}>
               <TouchableOpacity style={styles.tcpBtnAlt} onPress={() => setTcpModal(false)}>
@@ -1128,45 +1169,51 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
             ListHeaderComponent={
               <View style={{ marginBottom: 4 }}>
-                {/* Local USB hardware — Android only (iOS has no USB host SDR). */}
+                {/* RTL-SDR — the dongle plugged into THIS phone. Two things you can do
+                    with it, so it reads as one heading with two choices rather than a
+                    "Local Hardware" row with a share action bolted underneath.
+                    Android only: iOS has no USB host SDR. */}
                 {Platform.OS === 'android' && (<>
-                  <SectionHeader label="LOCAL HARDWARE" fs={fs} F={F} C={C} />
+                  <SectionHeader label="RTL-SDR" fs={fs} F={F} C={C} />
                   <TouchableOpacity
                     style={[styles.row, { borderColor: C.amber }]}
                     onPress={() => connectLocal()}
                   >
                     <View style={styles.rowMain}>
-                      <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>Local Hardware</Text>
+                      <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>Listen</Text>
                       <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
-                        RTL-SDR plugged into this phone (USB-C OTG)
+                        tune the dongle plugged into this phone (USB-C OTG)
                       </Text>
                     </View>
                     <View style={{ marginLeft: 4 }}><UsbSdrIcon size={26} color={C.amber} strokeWidth={2.4} /></View>
                     <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>
                   </TouchableOpacity>
-                  {/* Share the plugged-in dongle over the network (RTL-TCP server). */}
                   {rtlTcpServerSupported && (
                     <TouchableOpacity
-                      style={[styles.row, { borderColor: C.goldDim, borderStyle: 'dashed' }]}
+                      style={[styles.row, { borderColor: C.amber }]}
                       onPress={() => navigation.navigate('ServerMode', {})}
                     >
                       <View style={styles.rowMain}>
-                        <Text style={{ fontFamily: F, fontSize: fs(15), color: C.gold }} numberOfLines={1}>⇆ Share over network</Text>
+                        <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>⇆ Use as server</Text>
                         <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
                           serve this dongle to other devices on your Wi-Fi
                         </Text>
                       </View>
+                      <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>
                     </TouchableOpacity>
                   )}
                 </>)}
 
-                {/* RTL-TCP — networked rtl_tcp server; works on both platforms. */}
+                {/* CUSTOM SERVER — any address you type. The probe works out what's
+                    actually listening (VibeServer, OWRX, Kiwi, UberSDR, FM-DX,
+                    rtl_tcp, SpyServer), so one box reaches every backend. */}
                 <View style={{ marginTop: Platform.OS === 'android' ? 10 : 0 }}>
-                  <SectionHeader label="RTL-TCP" fs={fs} F={F} C={C} />
+                  <SectionHeader label="CUSTOM SERVER" fs={fs} F={F} C={C} />
                   {tcpFavs.map((f) => (
                     <TouchableOpacity key={`${f.host}:${f.port}`}
                       style={[styles.row, { borderColor: C.amber }]}
-                      onPress={() => (f.proto === 'spyserver' ? connectSpy : connectTcp)(f.host, f.port, f.name)}
+                      onPress={() => connectDetected(
+                        (f.proto ?? 'rtltcp') as BackendType, f.host, f.port, f.name)}
                       onLongPress={() => Alert.alert(f.name, `${f.host}:${f.port}`, [
                         { text: 'Cancel', style: 'cancel' },
                         { text: 'Delete', style: 'destructive', onPress: () => removeTcpFav(f) },
@@ -1177,7 +1224,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                       <View style={styles.rowMain}>
                         <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>{f.name}</Text>
                         <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
-                          {f.proto === 'spyserver' ? 'SpyServer' : 'rtl_tcp'} · {f.host}:{f.port}
+                          {PROTO_LABEL[(f.proto ?? 'rtltcp') as BackendType] ?? 'auto'} · {f.host}:{f.port}
                         </Text>
                       </View>
                       <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -1194,9 +1241,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     onPress={() => setTcpModal(true)}
                   >
                     <View style={styles.rowMain}>
-                      <Text style={{ fontFamily: F, fontSize: fs(15), color: C.gold }} numberOfLines={1}>+ Add RTL-TCP server</Text>
+                      <Text style={{ fontFamily: F, fontSize: fs(15), color: C.gold }} numberOfLines={1}>+ Add custom server</Text>
                       <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
-                        host:port of an rtl_tcp server on your network
+                        name + address of any SDR server — we work out the type
                       </Text>
                     </View>
                   </TouchableOpacity>

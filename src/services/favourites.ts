@@ -34,7 +34,7 @@ const TCP_KEY = 'vsdr_rtltcp_favs';
 
 // `proto` is optional for backwards compatibility: favourites saved before
 // SpyServer support existed have no field and must keep resolving to rtl_tcp.
-export type TcpFav = { name: string; host: string; port: number; proto?: 'rtltcp' | 'spyserver' };
+export type TcpFav = { name: string; host: string; port: number; proto?: BackendType };
 
 export async function getTcpFavs(): Promise<TcpFav[]> {
   try {
