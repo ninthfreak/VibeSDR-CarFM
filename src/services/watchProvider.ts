@@ -36,6 +36,7 @@ const Native = NativeModules.VibeWatchModule as
       sendFmdx(json: string): void;
       sendStations(json: string): void;
       sendDab(json: string): void;
+      sendAircraft(json: string): void;
       sendLogo(b64: string): void;
       sendSettings(lutB64: string, smoothing: number, needle: string,
                    needleIntensity: number, sharpness: number): void;
@@ -87,6 +88,10 @@ const STATE_MS = 250;
 /** FM-DX state echoes. RDS text changes constantly; 4/sec reads as live and stays
  *  well clear of the WCSession backlog the row feed taught us about. */
 const FMDX_MS = 250;
+
+/** ADS-B tables churn — a couple of dozen aircraft, re-sent every few seconds. One
+ *  per second is plenty for a wrist and can never build a WCSession backlog. */
+const AIR_MS = 1000;
 
 /** Span = demod bandwidth x this. Lands a signal on ~25 of the 256 bins: wide
  *  enough to read as a blob rather than a 2-bin hairline, tight enough to leave
@@ -163,6 +168,9 @@ class WatchProvider {
   private lastFmdxAt = 0;
   private pendingFmdx: string | null = null;
   private fmdxTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastAir = '';
+  private lastAirAt = 0;
+  private airTimer: ReturnType<typeof setTimeout> | null = null;
   private lastDab = '';
   private sentDab = '\u0000';
   private lastStations = '';
@@ -310,6 +318,28 @@ class WatchProvider {
     this.pendingFmdx = null;
     this.lastFmdxAt = Date.now();
     Native!.sendFmdx(j);
+  }
+
+  /** OWRX ADS-B: the live aircraft table.
+   *
+   *  Like DAB, this is a LIST, not a continuum — the profile IS the content and there
+   *  is nothing to tune. Unlike DAB it CHURNS (a 20-aircraft table, re-sent every few
+   *  seconds), so it's throttled like the meter rather than sent on change: WCSession
+   *  queues rather than drops, and a wedged downlink is the price of forgetting that. */
+  sendAircraft(list: unknown[]) {
+    if (!this.isActive) return;
+    this.lastAir = JSON.stringify(list);
+    const wait = this.lastAirAt + AIR_MS - Date.now();
+    if (wait <= 0) { this.flushAir(); return; }
+    if (!this.airTimer) {
+      this.airTimer = setTimeout(() => { this.airTimer = null; this.flushAir(); }, wait);
+    }
+  }
+
+  private flushAir() {
+    if (!this.isActive || !this.lastAir) return;
+    this.lastAirAt = Date.now();
+    Native!.sendAircraft(this.lastAir);
   }
 
   /** The DAB multiplex: the ensemble, its services, and which one is playing.

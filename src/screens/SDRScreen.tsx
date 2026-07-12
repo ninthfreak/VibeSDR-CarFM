@@ -66,7 +66,7 @@ import { watchProvider } from '../services/watchProvider';
  *  watch gets a STEADY 10fps locked or awake. Headroom is what buys steadiness
  *  here; the frames we drop cost nothing, and the ones we keep are on time. */
 const WATCH_BG_DIVISOR = 1;
-import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme } from '../services/SDRBackend';
+import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme, type Aircraft } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind,
@@ -105,6 +105,7 @@ import RecordingsOverlay from '../components/RecordingsOverlay';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import { resolveStationLogo } from '../services/stationLogoCache';
 import { tidyStationName } from '../services/stationLogo';
+import { isWholeProfileMode } from '../services/dataModes';
 import { isoToFlag, validIso } from '../services/rdsCountry';
 import CenterVfoButton from '../components/CenterVfoButton';
 import PasswordModal from '../components/PasswordModal';
@@ -707,6 +708,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [dabProgrammes, setDabProgrammes] = useState<DabProgramme[]>([]);  // OWRX DAB ensemble
   const [activeDabId, setActiveDabId] = useState<number>(0);
   const [dabEnsemble, setDabEnsemble] = useState('');
+  /** OWRX ADS-B: the live aircraft table. Structured — it used to be flattened to
+   *  text on arrival, which is why nothing but the decoder panel could use it. */
+  const [aircraft, setAircraft] = useState<Aircraft[]>([]);
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
   const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; badge?: string; countryIso?: string; pi?: string }>({});
@@ -1398,7 +1402,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const mediaStepSkipRef = useRef<((dir: 'left' | 'right') => void) | null>(null);
   mediaStepSkipRef.current = (dir: 'left' | 'right') => {
     const c = client.current; if (!c) return;
-    if (String(c.getStatus().mode) === 'dab') return;   // DAB locked to its ensemble
+    // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
+    // thing a VFO can do is drag you OFF the block and kill the decode.
+    if (isWholeProfileMode(String(c.getStatus().mode))) return;
     const s = stepRef.current; if (!(s > 0)) return;
     const cur = c.getStatus().frequency;
     const snapped = dir === 'right'
@@ -2027,6 +2033,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         // UberSDR's fetched bookmarks: VTS station readout + search bar.
         if (!destroyed.current) setServerBookmarks(list.map((b) => ({ name: b.name, frequency: b.frequency, mode: b.mode, repeater: b.repeater, source: 'server' as const })));
       },
+      onAircraft: (list) => { if (!destroyed.current) setAircraft(list); },
+
       onDecoderText: (line, replace) => {
         // OWRX server-side text decoders (Packet/POCSAG/ADSB/…) → the decoder
         // text panel. `replace` (ADS-B live list) supersedes the buffer.
@@ -2612,9 +2620,12 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onVfoDelta = useCallback((pxDelta: number) => {
     const c = client.current; if (!c) return;
-    // DAB is locked to its ensemble block — VFO tuning just knocks it off the mux
-    // (kills the decode, and the block is hard to re-find). Ignore drum input.
-    if (String(c.getStatus().mode) === 'dab') return;
+    // Whole-profile data modes are locked to their block — VFO tuning just knocks
+    // you off it (kills the decode, and the block is a nuisance to re-find). DAB had
+    // this guard; ADS-B did NOT, so the drum would happily drag you off 1090 MHz and
+    // stop every aircraft decoding. One predicate now, so the next data mode can't
+    // fall through the same gap. Ignore drum input.
+    if (isWholeProfileMode(String(c.getStatus().mode))) return;
     markInteract();
     const s = stepRef.current;
     // Velocity-adaptive sensitivity: EMA of |px|/dt. A gesture gap resets to
@@ -2803,7 +2814,9 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onWfTapTune = useCallback((hz: number) => {
     const c = client.current; if (!c) return;
-    if (String(c.getStatus().mode) === 'dab') return;   // DAB locked to its ensemble block
+    // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
+    // thing a VFO can do is drag you OFF the block and kill the decode.
+    if (isWholeProfileMode(String(c.getStatus().mode))) return;
     markInteract();
     const [loHz, hiHz] = c.caps.freqRange;
     const clamped = Math.max(loHz, Math.min(hiHz, hz));
@@ -2999,7 +3012,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     watchProvider.attach({
       onTuneDelta: (delta: number) => {
         const c = client.current; if (!c || !delta) return;
-        if (String(c.getStatus().mode) === 'dab') return;   // locked to its ensemble
+        if (isWholeProfileMode(String(c.getStatus().mode))) return;   // locked to its ensemble
         const s = stepRef.current; if (!(s > 0)) return;
         const cur = c.getStatus().frequency;
         // Snap to the step grid first, exactly like the media-control skip: a
@@ -3095,6 +3108,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       .catch(() => { if (!cancelled) watchProvider.sendLogo(''); });
     return () => { cancelled = true; };
   }, [dabProgrammes, activeDabId]);
+
+  // ADS-B on the watch: aircraft, not a waterfall. 1090 MHz is a whole-profile mode —
+  // there is nothing to tune, and its spectrum is a slab of noise.
+  useEffect(() => { watchProvider.sendAircraft(aircraft); }, [aircraft]);
 
   // Mode/step: rare, so send immediately.
   useEffect(() => {
@@ -3834,6 +3851,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <DecoderPanel
           activeDecoder={activeDecoder}
           decoderText={decoderText}
+          aircraft={aircraft}
           decoderStatus={decoderStatus}
           decoding={decoding}
           bottomOffset={pillBottom + 8}
@@ -4106,11 +4124,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       <MenuSheet
         visible={menuOpen}
         serverType={route.params.serverType ?? 'ubersdr'}
-        profiles={profiles}
-        activeProfileId={activeProfileId}
-        sdrUsage={sdrUsage}
-        clientCount={clientCount}
-        onSelectProfile={(id) => { client.current?.selectProfile?.(id); setActiveProfileId(id); }}
         dabProgrammes={dabProgrammes}
         activeDabId={activeDabId}
         onSelectDab={(id) => { client.current?.setAudioServiceId?.(id); setActiveDabId(id); }}
@@ -4435,6 +4448,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         minHz={client.current?.caps.freqRange[0]}
         maxHz={client.current?.caps.freqRange[1]}
         onShare={isLocal ? undefined : onShareStation}
+        profiles={profiles}
+        activeProfileId={activeProfileId}
+        sdrUsage={sdrUsage}
+        clientCount={clientCount}
+        onSelectProfile={(id) => { client.current?.selectProfile?.(id); setActiveProfileId(id); }}
       />
 
       {/* Chat drawer */}

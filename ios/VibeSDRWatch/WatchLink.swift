@@ -77,6 +77,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// refuses to tune in DAB — a nudge knocks you off the ensemble block, killing the
   /// decode, and the block is hard to re-find.)
   @Published var dab: DabState? = nil
+  /// OWRX ADS-B. Same shape of thing as DAB: the profile IS the content (1090 MHz),
+  /// so there is nothing to tune and a waterfall of it is a slab of noise.
+  @Published var aircraft: [Aircraft] = []
   @Published var logo: Data? = nil
   /// The phone's dial memory, mirrored — station names pinned to frequencies, learned
   /// from RDS as you tune. The wrist draws the same dial rather than inventing one.
@@ -90,6 +93,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   var screen: Screen {
     if isFmdx { return .fmdx }
     if mode == "dab", let d = dab, !d.list.isEmpty { return .dab }
+    if mode == "adsb" || !aircraft.isEmpty { return .adsb }
     return .sdr
   }
 
@@ -97,7 +101,24 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// these two can never both be true.
   @Published var isFmdx = false
 
-  enum Screen { case sdr, fmdx, dab }
+  enum Screen { case sdr, fmdx, dab, adsb }
+
+  struct Aircraft: Codable, Equatable, Identifiable {
+    var icao = ""
+    var flight: String? = nil     // callsign
+    var reg: String? = nil        // registration
+    var ccode: String? = nil      // ISO country of REGISTRY (not of departure)
+    var country: String? = nil
+    var altitude: Double? = nil   // ft
+    var speed: Double? = nil      // kt
+    var vspeed: Double? = nil     // ft/min
+    var course: Double? = nil
+    var squawk: String? = nil
+    var rssi: Double? = nil
+    var distKm: Double? = nil
+    var bearing: Double? = nil
+    var id: String { icao }
+  }
 
   struct DabService: Codable, Equatable, Identifiable {
     var id = 0            // audio_service_id — what you send to switch
@@ -134,11 +155,6 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     var level: Double = 0     // 0..1 bar fill
   }
 
-  // Diagnostics for the "link up but no rows" case: a row of the wrong length is
-  // DROPPED SILENTLY by WaterfallBuffer, which looks identical to no row at all.
-  @Published var rxRows     = 0     // row messages received
-  @Published var rxAny      = 0     // messages of ANY kind received
-  @Published var lastLen    = 0     // payload length of the last row
   /// Filter edges as Hz offsets from the carrier. NOT symmetric: LSB is entirely
   /// below (both negative), USB entirely above, CW offset. Drawing a single width
   /// about the centre would render every mode as AM.
@@ -368,8 +384,6 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
     DispatchQueue.main.async {
       self.waterfall.push(row: row)
-      self.rxRows += 1
-      self.lastLen = row.count
       self.lastRowAt = Date()
       // Only count a row we can actually DRAW. WaterfallBuffer drops any row of
       // the wrong length silently, so flagging everGotRow on arrival hid the
@@ -392,12 +406,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   }
 
   private func apply(_ m: [String: Any]) {
-    rxAny += 1
     switch m[WK.kind] as? String {
     case "row":
       if let d = m[WK.row] as? Data {
-        rxRows += 1
-        lastLen = d.count
         waterfall.push(row: [UInt8](d))
         if d.count == WaterfallBuffer.width { everGotRow = true }
       }
@@ -410,7 +421,26 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
     case "state":
       if let f = m[WK.freq] as? Double, !tuning { frequency = f }
-      if let md = m[WK.mode] as? String { mode = md }
+      if let md = m[WK.mode] as? String {
+        mode = md
+        // A STATE MESSAGE MUST BE ABLE TO CONTRADICT THE CURRENT SCREEN, not just
+        // confirm it. The screen is computed from facts — but nothing ever cleared
+        // the facts, so they went stale and outvoted reality.
+        //
+        // Symptom: force-quit the phone app with the watch open on ADS-B. The watch
+        // relaunches the phone (as a background process), the phone comes up on its
+        // default UberSDR instance — and the watch sits there STILL SHOWING THE
+        // AIRCRAFT LIST, because it was still holding the last aircraft table and
+        // routing on it. It was faithfully rendering a radio that no longer exists.
+        //
+        // The phone always announces its mode, so let the mode retire whatever it
+        // isn't: leaving ADS-B clears the aircraft, leaving DAB clears the mux.
+        if md != "adsb" { aircraft = [] }
+        if md != "dab"  { dab = nil }
+        // Only the SDR screen sends `state` at all — FM-DX sends its own blob — so
+        // receiving one is itself proof we are no longer on an FM-DX server.
+        isFmdx = false
+      }
       if let st = m[WK.step] as? Double { step = st }
       if let mt = m[WK.meter] as? String { meter = mt }
       if let lv = m[WK.level] as? Double { level = lv }
@@ -423,6 +453,12 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
         isFmdx = true
         lastRowAt = Date()        // "the phone is talking to us" — same staleness clock
         everGotRow = true
+      }
+
+    case "air":
+      if let j = m[WK.json] as? String, let d = j.data(using: .utf8),
+         let list = try? JSONDecoder().decode([Aircraft].self, from: d) {
+        aircraft = list
       }
 
     case "dab":

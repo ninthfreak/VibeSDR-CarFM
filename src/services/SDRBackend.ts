@@ -68,6 +68,34 @@ export interface ProfileInfo {
   bwHz?:     number;
 }
 
+/** One aircraft from an OWRX ADS-B list.
+ *
+ *  Fields are the server's own (verified on-air against a live 1090MHz profile).
+ *  `country`/`ccode` come FROM THE SERVER — no ICAO-range table needed — and are the
+ *  aircraft's REGISTRY, not where the flight departed: a Ryanair 737 is Irish wherever
+ *  it took off from. */
+export interface Aircraft {
+  icao:      string;      // 24-bit address, hex — the only field always present
+  flight?:   string;      // callsign, e.g. RYR4KL
+  reg?:      string;      // registration, e.g. D-AENE (the server calls it `aircraft`)
+  ccode?:    string;      // ISO country of REGISTRY
+  country?:  string;
+  altitude?: number;      // ft
+  speed?:    number;      // kt (ground)
+  vspeed?:   number;      // ft/min — climbing/descending
+  course?:   number;      // degrees
+  squawk?:   string;
+  rssi?:     number;      // dB
+  msgs?:     number;
+  lat?:      number;
+  lon?:      number;
+  /** Great-circle km from the RECEIVER (computed here — the server sends position,
+   *  not distance). Absent when the aircraft hasn't sent a position yet: plenty of
+   *  records carry altitude and speed with no lat/lon at all. */
+  distKm?:   number;
+  bearing?:  number;      // degrees from the receiver
+}
+
 /** A demodulator the backend offers (OWRX reports these; UI gates the picker). */
 export interface BackendMode {
   id:    string;            // wire modulation name (usb, wfm, dmr, dab…)
@@ -255,6 +283,14 @@ export interface BackendCallbacks extends SDRCallbacks {
    *  ACARS/ADSB/WSJT…), one formatted line per record. `replace` true = a live
    *  snapshot (ADS-B list) that supersedes the previous block rather than appends. */
   onDecoderText?: (line: string, replace?: boolean) => void;
+
+  /** OWRX ADS-B: the live aircraft table, STRUCTURED.
+   *
+   *  The same records also become a text blob for the decoder panel — but flattening
+   *  them to text on arrival is why nothing else in the app could ever use them. The
+   *  server sends a rich record (registration country, altitude, speed, vertical
+   *  rate, position, squawk); keep it. */
+  onAircraft?: (list: Aircraft[]) => void;
   /** OWRX: the server/profile's own preset DSP defaults (config `initial_squelch_level`
    *  / `initial_nr_level`), pushed on connect and every profile switch. The adapter
    *  has already applied them to the demod; this just lets the UI sliders reflect the

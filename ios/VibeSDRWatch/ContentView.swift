@@ -499,14 +499,6 @@ struct ContentView: View {
         .foregroundStyle(.secondary)
         .multilineTextAlignment(.center)
 
-      // Diagnostic: a row of the wrong LENGTH is dropped silently, which looks
-      // identical to no row at all. This distinguishes "phone is sending nothing"
-      // (msg 0) from "phone is sending rows we're throwing away" (row > 0).
-      Text("msg \(link.rxAny) · row \(link.rxRows) · len \(link.lastLen)/\(WaterfallBuffer.width)")
-        .font(.system(size: 9, design: .monospaced))
-        .foregroundStyle(link.lastLen > 0 && link.lastLen != WaterfallBuffer.width
-                         ? .red : .secondary)
-        .multilineTextAlignment(.center)
     }
     .padding(.horizontal, 12)
   }

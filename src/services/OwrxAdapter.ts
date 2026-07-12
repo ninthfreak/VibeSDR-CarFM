@@ -17,7 +17,7 @@
 
 import type { SDRMode, SDRStatus } from './UberSDRClient';
 import type {
-  SDRBackend, BackendCallbacks, BackendCapabilities, BackendKind, ProfileInfo,
+  SDRBackend, BackendCallbacks, BackendCapabilities, BackendKind, ProfileInfo, Aircraft,
 } from './SDRBackend';
 import { NativeModules } from 'react-native';
 import { decodeOwrxFftFrame, OwrxAudioDecoder } from './imaAdpcm';
@@ -147,6 +147,26 @@ interface OwrxConfig {
   audioCompression: 'none' | 'adpcm';
 }
 
+/** Great-circle distance, km. Aircraft send POSITION; range is ours to compute. */
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) ** 2;
+  return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+}
+
+/** Initial bearing from the receiver to the aircraft, degrees. */
+function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const p1 = lat1 * Math.PI / 180, p2 = lat2 * Math.PI / 180;
+  const dl = (lon2 - lon1) * Math.PI / 180;
+  const y = Math.sin(dl) * Math.cos(p2);
+  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  return Math.round((Math.atan2(y, x) * 180 / Math.PI + 360) % 360);
+}
+
 export class OwrxAdapter implements SDRBackend {
   readonly kind: BackendKind = 'owrx';
   // Per-instance copy so freqRange can be refined to the active profile window
@@ -211,7 +231,8 @@ export class OwrxAdapter implements SDRBackend {
 
   private started = false;
   private specPaused = false;   // background/lock: skip FFT processing, keep audio
-  private lonSent = false;      // receiver longitude emitted once
+  private lonSent = false;
+  private receiverPos: { lat: number; lon: number } | null = null;      // receiver longitude emitted once
   private dspStarted = false;     // dspcontrol start re-asserted after demod (web-client order)
   private audioStarted = false;
   private audioDec = new OwrxAudioDecoder();    // type-2 (output_rate, 12k)
@@ -246,6 +267,12 @@ export class OwrxAdapter implements SDRBackend {
       // Receiver location → ITU region (MW 9/10 kHz). Emit once.
       const lon = j?.receiver?.gps?.lon;
       if (typeof lon === 'number' && !this.lonSent) { this.lonSent = true; this.cb.onReceiverLon?.(lon); }
+      // Keep the full position: ADS-B sends aircraft POSITIONS, not distances, so
+      // the range from the receiver has to be computed here.
+      const rlat = j?.receiver?.gps?.lat;
+      if (typeof rlat === 'number' && typeof lon === 'number') {
+        this.receiverPos = { lat: rlat, lon };
+      }
       const sdrs: any[] = Array.isArray(j?.sdrs) ? j.sdrs : [];
 
       // Group the WS profiles by sdrId (the id prefix).
@@ -400,6 +427,12 @@ export class OwrxAdapter implements SDRBackend {
         this.cb.onModes?.(this.serverModes.map((m) => ({ id: m.id, label: m.name, digital: m.digital })));
         // If the modes list lands after config (so the start_mod passband wasn't
         // known yet), apply it now and resend so the filter widens to match.
+        //
+        // AND finish setting up a start_mod DIGIMODE, which needs this list to know
+        // it must run as a secondary decoder. Without this the ADS-B profile loaded,
+        // said "ADSB", and decoded nothing at all until you opened the demodulator
+        // picker and re-selected it by hand.
+        if (this.pendingStartMod) this.applyStartMod(this.pendingStartMod);
         if (this.started) {
           this.applyModeBandpass();
           this.sendDemod();
@@ -438,6 +471,34 @@ export class OwrxAdapter implements SDRBackend {
     }
   }
 
+  /** Adopt a profile's default mode — e.g. the ADSB profile starts on `adsb`.
+   *
+   *  A digimode has to be set up as a SECONDARY decoder or the server decodes
+   *  nothing, and knowing that requires `serverModes` … which arrives AFTER `config`
+   *  on connect. So this used to silently fall through to "just set the mode": the
+   *  ADS-B profile loaded, showed ADSB, and produced no aircraft at all until you
+   *  went into the demodulator picker and re-selected it (by which time the modes
+   *  list had arrived). Remember the mode and re-apply it when the list lands. */
+  private pendingStartMod: string | null = null;
+
+  private applyStartMod(id: string): void {
+    const sm = this.serverModes.find((m) => m.id === id);
+    if (!sm) {
+      // Modes haven't arrived yet — replay this the moment they do.
+      this.pendingStartMod = id;
+      this.mode = id as SDRMode;
+      return;
+    }
+    this.pendingStartMod = null;
+    if (sm.type === 'digimode' && sm.underlying?.length) {
+      this.secondaryDecoder = id;
+      const real = sm.underlying.filter((u) => u !== 'empty');
+      this.mode = (real[0] ?? id) as SDRMode;
+    } else {
+      this.mode = id as SDRMode;
+    }
+  }
+
   private onConfig(c: any): void {
     const profileSwitch = 'sdr_id' in c || 'profile_id' in c;
     if ('allow_chat' in c) this.cb.onChatEnabled?.(!!c.allow_chat);
@@ -447,19 +508,8 @@ export class OwrxAdapter implements SDRBackend {
     if ('fft_size' in c)          this.cfg.fftSize = c.fft_size;
     if ('fft_compression' in c)   this.cfg.fftCompression = c.fft_compression;
     if ('audio_compression' in c) this.cfg.audioCompression = c.audio_compression;
-    if ('start_mod' in c && c.start_mod) {
-      // A profile can default to a digimode (e.g. the ADSB profile starts on adsb).
-      // Set it up as a secondary decoder so it auto-decodes on profile load, with
-      // a real underlying carrier where one applies (else keep the digimode itself).
-      const sm = this.serverModes.find((m) => m.id === c.start_mod);
-      if (sm?.type === 'digimode' && sm.underlying?.length) {
-        this.secondaryDecoder = c.start_mod;
-        const real = sm.underlying.filter((u) => u !== 'empty');
-        this.mode = (real[0] ?? c.start_mod) as SDRMode;
-      } else {
-        this.mode = c.start_mod as SDRMode;
-      }
-    }
+    const startMod = ('start_mod' in c && c.start_mod) ? String(c.start_mod) : null;
+    if (startMod) this.applyStartMod(startMod);
     if ('start_offset_freq' in c && this.cfg.centerFreq) this.freq = this.cfg.centerFreq + c.start_offset_freq;
 
     // Server/profile preset DSP defaults (mirrors the OWRX web client: a profile
@@ -500,7 +550,16 @@ export class OwrxAdapter implements SDRBackend {
         this.audioDec.reset(); this.hdAudioDec.reset();   // ADPCM restarts per profile
         this.gapHist = []; this.lastFrameAt = 0;          // frame rate may change — reset link timing
         this.audioServiceId = 0; this.dabProgrammes = []; this.dabEnsemble = ''; this.lastDabSig = ''; this.rdsPs = ''; this.lastVoiceSpeaker = '';  // new ensemble/station
-        this.secondaryDecoder = null;                      // decoder doesn't carry across profiles
+        // A decoder you turned on BY HAND doesn't carry across profiles.
+        //
+        // But this ran AFTER the new profile's start_mod was adopted and BEFORE the
+        // demod was sent — so it also wiped the profile's OWN default decoder. The
+        // ADS-B profile therefore loaded, said "ADSB", and sent secondary_mod=false:
+        // the server decoded nothing at all until you opened the demodulator picker
+        // and re-selected it by hand (which sets it again, with nothing left to clear
+        // it). Clear the carried-over decoder, then re-assert the profile's own.
+        this.secondaryDecoder = null;
+        if (startMod) this.applyStartMod(startMod);
         this.cb.onMetadata?.({ programmes: [] });          // clear stale RDS/DAB labels + picker
       }
     }
@@ -760,6 +819,35 @@ export class OwrxAdapter implements SDRBackend {
         return { text: j(hhmmss(v.timestamp), v.flight ?? v.aircraft ?? v.icao, v.type, v.message ?? v.data) };
       case 'ADSB-LIST': {                                          // live aircraft table → replace
         if (!Array.isArray(v.aircraft)) return null;
+
+        // Emit the STRUCTURED list too. Flattening these to text on arrival is why
+        // nothing but the decoder panel could ever use them — and the records are
+        // rich: registry country, altitude, vertical rate, position, squawk.
+        // Distance/bearing are ours to compute: the server sends POSITION, not range.
+        this.cb.onAircraft?.(v.aircraft.map((a: any): Aircraft => {
+          const lat = typeof a.lat === 'number' ? a.lat : undefined;
+          const lon = typeof a.lon === 'number' ? a.lon : undefined;
+          const rp = this.receiverPos;
+          const hasPos = lat != null && lon != null && rp != null;
+          return {
+            icao:     String(a.icao ?? ''),
+            flight:   a.flight ? String(a.flight).trim() : undefined,
+            reg:      a.aircraft ? String(a.aircraft).trim() : undefined,
+            ccode:    a.ccode ? String(a.ccode) : undefined,
+            country:  a.country ? String(a.country) : undefined,
+            altitude: typeof a.altitude === 'number' ? a.altitude : undefined,
+            speed:    typeof a.speed === 'number' ? a.speed : undefined,
+            vspeed:   typeof a.vspeed === 'number' ? a.vspeed : undefined,
+            course:   typeof a.course === 'number' ? a.course : undefined,
+            squawk:   a.squawk ? String(a.squawk) : undefined,
+            rssi:     typeof a.rssi === 'number' ? a.rssi : undefined,
+            msgs:     typeof a.msgs === 'number' ? a.msgs : undefined,
+            lat, lon,
+            distKm:  hasPos ? haversineKm(rp!.lat, rp!.lon, lat!, lon!) : undefined,
+            bearing: hasPos ? bearingDeg(rp!.lat, rp!.lon, lat!, lon!) : undefined,
+          };
+        }));
+
         const rows = v.aircraft.map((a: any) =>
           j(a.flight ?? a.aircraft ?? a.icao ?? '?',
             a.altitude != null ? a.altitude + 'ft' : '',
@@ -1055,6 +1143,11 @@ export class OwrxAdapter implements SDRBackend {
   }
 
   setMode(mode: SDRMode): void {
+    // Leaving ADS-B: clear the aircraft table. The watch routes on the presence of
+    // that table (the wire mode is `empty`+secondary, so the mode string can't be
+    // trusted), so a stale list would strand it on the aircraft screen.
+    if (String(mode) !== 'adsb' && String(this.mode) === 'adsb') this.cb.onAircraft?.([]);
+
     const sel = this.serverModes.find((m) => m.id === String(mode));
     // ALL digimodes are SECONDARY demods (DIG dropdown) — verified on the wire:
     // ADSB needs mod=empty + secondary_mod=adsb (mod=adsb alone decodes nothing).

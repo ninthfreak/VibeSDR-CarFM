@@ -142,6 +142,14 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     s.sendMessage(["k": "fmdx", "j": json], replyHandler: nil, errorHandler: nil)
   }
 
+  /// OWRX ADS-B — the live aircraft table. A LIST, not a band: the profile IS the
+  /// content (1090 MHz), and there is nothing to tune.
+  @objc(sendAircraft:)
+  func sendAircraft(_ json: String) {
+    guard let s = session, linkAlive else { return }
+    s.sendMessage(["k": "air", "j": json], replyHandler: nil, errorHandler: nil)
+  }
+
   /// The DAB multiplex — ensemble, services, and which one is playing. DAB is a
   /// LIST, not a continuum: you switch service, you never tune.
   @objc(sendDab:)

@@ -19,6 +19,7 @@ struct VibeSDRWatchApp: App {
           case .sdr:  ContentView()
           case .fmdx: FmdxView()
           case .dab:  DabView()
+          case .adsb: AircraftView()
           }
         }
         .environmentObject(link)

@@ -24,6 +24,8 @@ RCT_EXTERN_METHOD(sendStations : (NSString *)json)
 
 RCT_EXTERN_METHOD(sendDab : (NSString *)json)
 
+RCT_EXTERN_METHOD(sendAircraft : (NSString *)json)
+
 RCT_EXTERN_METHOD(sendState
                   : (nonnull NSNumber *)freq mode
                   : (NSString *)mode step

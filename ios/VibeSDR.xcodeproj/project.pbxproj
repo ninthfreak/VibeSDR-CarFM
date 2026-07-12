@@ -27,6 +27,7 @@
 		AA000002000000000000DA17 /* NumpadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DA07 /* NumpadView.swift */; };
 		AA000002000000000000DA19 /* FmdxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DA09 /* FmdxView.swift */; };
 		AA000002000000000000DA1A /* DabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DA0A /* DabView.swift */; };
+		AA000002000000000000DA1B /* AircraftView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DA0B /* AircraftView.swift */; };
 		AA000002000000000000DA18 /* ControlMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DA08 /* ControlMenu.swift */; };
 		AA000002000000000000DA15 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000DA05 /* Assets.xcassets */; };
 		AA000002000000000000EE13 /* VibeWatchModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000EE11 /* VibeWatchModule.swift */; };
@@ -58,6 +59,7 @@
 		AA000002000000000000DA07 /* NumpadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NumpadView.swift; sourceTree = "<group>"; };
 		AA000002000000000000DA09 /* FmdxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FmdxView.swift; sourceTree = "<group>"; };
 		AA000002000000000000DA0A /* DabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DabView.swift; sourceTree = "<group>"; };
+		AA000002000000000000DA0B /* AircraftView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftView.swift; sourceTree = "<group>"; };
 		AA000002000000000000DA08 /* ControlMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlMenu.swift; sourceTree = "<group>"; };
 		AA000002000000000000EE11 /* VibeWatchModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VibeWatchModule.swift; path = VibeSDR/VibeWatchModule.swift; sourceTree = "<group>"; };
 		AA000002000000000000EE12 /* VibeWatchModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = VibeWatchModule.m; path = VibeSDR/VibeWatchModule.m; sourceTree = "<group>"; };
@@ -194,6 +196,7 @@
 				AA000002000000000000DA07 /* NumpadView.swift */,
 				AA000002000000000000DA09 /* FmdxView.swift */,
 				AA000002000000000000DA0A /* DabView.swift */,
+				AA000002000000000000DA0B /* AircraftView.swift */,
 				AA000002000000000000DA08 /* ControlMenu.swift */,
 				AA000002000000000000DA02 /* WatchLink.swift */,
 				AA000002000000000000DA03 /* WaterfallBuffer.swift */,
@@ -497,6 +500,7 @@
 				AA000002000000000000DA17 /* NumpadView.swift in Sources */,
 				AA000002000000000000DA19 /* FmdxView.swift in Sources */,
 				AA000002000000000000DA1A /* DabView.swift in Sources */,
+				AA000002000000000000DA1B /* AircraftView.swift in Sources */,
 				AA000002000000000000DA18 /* ControlMenu.swift in Sources */,
 				AA000002000000000000DA12 /* WatchLink.swift in Sources */,
 				AA000002000000000000DA13 /* WaterfallBuffer.swift in Sources */,
