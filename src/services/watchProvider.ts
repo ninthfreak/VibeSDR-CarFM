@@ -63,8 +63,16 @@ const WATCH_BINS = 256;
  *  it, forever. Far outside its design envelope — and that is what kept wedging it,
  *  backing it up, and leaving it silently ONE-WAY after a transport hop.
  *
- *  100ms + 2 rows per message = FIVE messages a second instead of sixteen. Same data,
- *  no rows lost.
+ *  THE MIDDLE POSITION. 60ms + 2 rows per message = EIGHT messages a second instead of
+ *  sixteen: the channel is still driven half as hard (which is what was wedging it),
+ *  but full temporal resolution is restored and a pair now completes in 60ms rather
+ *  than 100ms.
+ *
+ *  100ms + batching (5 msgs/sec) was tried and the LAG WAS VISIBLE — a voice would
+ *  start and the trace would lift a moment later. The audio never crosses the watch
+ *  link, so it always arrives first; every millisecond we add to the picture widens
+ *  that gap. Halving the message rate buys most of the reliability; the second halving
+ *  cost more than it was worth.
  *
  *  Original note follows, still true:
  *  Row cadence: ~10fps of REAL data.
@@ -94,7 +102,7 @@ const WATCH_BINS = 256;
  *
  *  At 60ms: the locked 100ms feed passes EVERY frame with room for jitter, and
  *  the awake 50ms feed still halves cleanly to ~10fps. */
-const MIN_ROW_MS = 100;
+const MIN_ROW_MS = 60;
 
 /** Frequency echoes: ≤1 per this, trailing edge always delivered. 4/sec keeps the
  *  wrist tracking a phone-side tune without ever building a WCSession backlog. */

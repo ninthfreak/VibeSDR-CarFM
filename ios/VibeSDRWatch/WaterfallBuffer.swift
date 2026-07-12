@@ -164,7 +164,19 @@ final class WaterfallBuffer {
   private(set) var peakRow: [Double] = []
   var peakHold = true { didSet { if !peakHold { peakRow = [] } } }
   private let peakDecayPerSec = 32.0
-  private let specAlpha = 0.22   // ~5-frame EMA at our sub-row rate
+  /// Trace smoothing.
+  ///
+  /// Raised from 0.22. The rows now arrive at 10/sec (batched two to a message, to stop
+  /// us over-driving WCSession) instead of 16 — so the trace sees 60% of the real
+  /// samples it used to, and every one of them is being smoothed just as hard. The
+  /// result reads as SLUGGISH: the waterfall still looks right, because it's a
+  /// scrolling texture and the eye integrates it happily, but a LINE redrawn from
+  /// fewer samples with the same lag is the thing you notice — most of all while
+  /// ZOOMING, where the whole trace has to re-settle.
+  ///
+  /// The smoothing exists because a trace drawn from raw bins 20x/sec is unreadable
+  /// noise. It does not need to be this heavy at a lower sample rate. Track faster.
+  private let specAlpha = 0.4
 
   // Diagnostics — is the render loop actually ticking, and is the queue healthy?
   private(set) var renderFps: Double = 0
@@ -295,11 +307,51 @@ final class WaterfallBuffer {
   }
 
   /// Advance the scroll clock. Called every redraw (~30fps), NOT on arrival.
+  /// Advance the trace and the peak line ON THE RENDER CLOCK, every frame.
+  ///
+  /// The trace's EMA used to run inside blit(), i.e. only when a ROW ARRIVED. So at 10
+  /// rows/sec it stepped ten times a second no matter that we were redrawing at 20fps:
+  /// the DRAWING was smooth and the VALUE was stepping, which reads as a low frame rate.
+  /// (It got worse when we batched rows to protect the link — fewer, lumpier arrivals.)
+  ///
+  /// Advancing it here instead means the line eases toward the newest row EVERY FRAME,
+  /// between arrivals — the same averaging, twice the motion, and completely decoupled
+  /// from the message rate. Interpolation is exactly what the waterfall already does
+  /// with its sub-rows; the trace simply never got the same treatment.
+  private func advanceTrace(dt: CFTimeInterval) {
+    guard !liveRow.isEmpty, specRow.count == liveRow.count else { return }
+
+    // Time-based, so the feel doesn't change if the render rate does.
+    //
+    // 0.10, not 0.18. The trace's own smoothing was adding as much delay as the batching
+    // does — and it is the one part of the chain that costs nothing to shorten. You can
+    // SEE the total: a voice starts and the trace lifts a moment later. The rest of that
+    // delay is structural (the WCSession hop, the batch, the jitter buffer); the AUDIO
+    // never crosses the watch link at all, so it will always arrive first.
+    //
+    // The averaging still has to exist — a line redrawn from raw bins is unreadable
+    // noise — but it is now advanced every FRAME rather than every row, so a short time
+    // constant no longer makes it jittery.
+    let tc = 0.10                                    // seconds to close ~63% of the gap
+    let a = min(1, max(0, dt / tc))
+    for i in 0..<specRow.count {
+      specRow[i] += (Double(liveRow[i]) - specRow[i]) * a
+    }
+
+    guard peakHold else { return }
+    if peakRow.count != specRow.count { peakRow = specRow; return }
+    let fall = peakDecayPerSec * dt
+    for i in 0..<peakRow.count {
+      peakRow[i] = specRow[i] > peakRow[i] ? specRow[i] : max(0, peakRow[i] - fall)
+    }
+  }
+
   func tick(at now: CFTimeInterval) {
     defer { lastTick = now }
     guard lastTick > 0, interval > 0 else { return }
     let dt = min(0.25, now - lastTick)   // a long gap (app resumed) must not fling
     if dt > 0 { renderFps += 0.1 * (1.0 / dt - renderFps) }
+    advanceTrace(dt: dt)
 
     // Hold still until the buffer has banked enough to drain smoothly.
     if prefilling {
@@ -357,30 +409,10 @@ final class WaterfallBuffer {
   private func blit(_ row: [UInt8]) {
     liveRow = row
 
-    if specRow.count != row.count {
-      specRow = row.map(Double.init)          // prime from real data, no settle-in
-    } else {
-      for i in 0..<row.count {
-        specRow[i] += (Double(row[i]) - specRow[i]) * specAlpha
-      }
-    }
+    // Prime the trace from the first real row (no settle-in from zero). It is then
+    // advanced on the RENDER clock — see advanceTrace() — NOT here.
+    if specRow.count != row.count { specRow = row.map(Double.init) }
 
-    // Peak hold: rise to the trace, else decay. Seeded from the first real row so it
-    // doesn't spend its first second climbing up from zero.
-    if peakHold {
-      if peakRow.count != specRow.count {
-        peakRow = specRow
-      } else {
-        // Decay is applied on the ROW clock, not the render clock: rows are what
-        // carry new information, and it keeps the fall rate independent of fps.
-        let dt = interval > 0 ? interval : 0.1
-        let fall = peakDecayPerSec * dt
-        for i in 0..<peakRow.count {
-          peakRow[i] = specRow[i] > peakRow[i] ? specRow[i]
-                                               : max(0, peakRow[i] - fall)
-        }
-      }
-    }
 
     let stride = Self.width * 4
     // Scroll DOWN one row, then paint the newest along the TOP edge.
