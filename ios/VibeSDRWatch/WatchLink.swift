@@ -17,6 +17,7 @@ enum WK {
   static let freq    = "f"   // Double, Hz — VFO centre (the row is centred on it)
   static let span    = "sp"  // Double, Hz — width the 128 bins cover
   static let snr     = "s"   // Double, dB
+  static let level   = "lv"  // Double, 0..1 — the phone's own smoothed meter fill
   static let mode    = "m"   // String
   static let step    = "st"  // Double, Hz
   static let lut     = "l"   // Data, 1024 bytes RGBA x256
@@ -31,7 +32,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   @Published var frequency  = 0.0
   @Published var span       = 0.0
   @Published var snr        = 0.0
+  @Published var level      = 0.0
   @Published var mode       = ""
+  @Published var step       = 0.0
   @Published var reachable  = false
   @Published var everGotRow = false
 
@@ -76,10 +79,12 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if let f = m[WK.freq] as? Double { frequency = f }
       if let sp = m[WK.span] as? Double { span = sp }
       if let s = m[WK.snr] as? Double { snr = s }
+      if let lv = m[WK.level] as? Double { level = lv }
 
     case "state":
       if let f = m[WK.freq] as? Double { frequency = f }
       if let md = m[WK.mode] as? String { mode = md }
+      if let st = m[WK.step] as? Double { step = st }
 
     case "settings":
       if let l = m[WK.lut] as? Data, l.count == 1024 { waterfall.setLUT([UInt8](l)) }

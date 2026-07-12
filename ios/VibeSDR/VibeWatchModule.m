@@ -11,7 +11,8 @@ RCT_EXTERN_METHOD(sendRow
                   : (NSString *)rowB64 freq
                   : (nonnull NSNumber *)freq span
                   : (nonnull NSNumber *)span snr
-                  : (nonnull NSNumber *)snr)
+                  : (nonnull NSNumber *)snr level
+                  : (nonnull NSNumber *)level)
 
 RCT_EXTERN_METHOD(sendState
                   : (nonnull NSNumber *)freq mode

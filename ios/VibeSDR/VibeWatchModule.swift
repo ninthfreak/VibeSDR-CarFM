@@ -42,14 +42,15 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
 
   /// One waterfall row, already cropped to the VFO-centred window and quantised
   /// to 0-255 with the phone's brightness/contrast/gain baked in.
-  @objc(sendRow:freq:span:snr:)
-  func sendRow(_ rowB64: String, freq: NSNumber, span: NSNumber, snr: NSNumber) {
+  @objc(sendRow:freq:span:snr:level:)
+  func sendRow(_ rowB64: String, freq: NSNumber, span: NSNumber, snr: NSNumber, level: NSNumber) {
     guard let s = session, s.isReachable,
           let row = Data(base64Encoded: rowB64) else { return }
     // Fire-and-forget: a dropped row is invisible on a scrolling waterfall,
     // whereas a queue that backs up turns into visible lag.
     s.sendMessage(
-      ["k": "row", "r": row, "f": freq.doubleValue, "sp": span.doubleValue, "s": snr.doubleValue],
+      ["k": "row", "r": row, "f": freq.doubleValue, "sp": span.doubleValue,
+       "s": snr.doubleValue, "lv": level.doubleValue],
       replyHandler: nil,
       errorHandler: nil
     )

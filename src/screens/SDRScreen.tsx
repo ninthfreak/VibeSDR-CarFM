@@ -2122,7 +2122,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (sm.level >= sm.peak)   { sm.peak = sm.level; sm.hold = 15; }
           else if (sm.hold > 0)      { sm.hold--; }
           else                       { sm.peak = Math.max(0, sm.peak - 0.02); }
-          watchProvider.setSnr(snrDb);
+          watchProvider.setSignal(snrDb, sm.level);
           meterBus.current.emit({
             level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
             active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,

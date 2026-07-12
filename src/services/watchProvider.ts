@@ -20,7 +20,7 @@ import { getColorLUT } from '../assets/colormapUtils';
 const Native = NativeModules.VibeWatchModule as
   | {
       isReachable(): Promise<boolean>;
-      sendRow(rowB64: string, freq: number, span: number, snr: number): void;
+      sendRow(rowB64: string, freq: number, span: number, snr: number, level: number): void;
       sendState(freq: number, mode: string, step: number): void;
       sendSettings(lutB64: string, smoothing: number): void;
     }
@@ -80,6 +80,7 @@ class WatchProvider {
   private lastRowAt = 0;
   private lastPalette = '';
   private snr = 0;
+  private level = 0;
   private out = new Uint8Array(WATCH_BINS);
   private emitter: NativeEventEmitter | null = null;
   private subs: { remove(): void }[] = [];
@@ -128,8 +129,10 @@ class WatchProvider {
     this.reachable = false;
   }
 
-  /** Latest signal level, mirrored from the meter bus. */
-  setSnr(snr: number) { this.snr = snr; }
+  /** Latest signal, mirrored from the meter bus. `level` is the already-smoothed,
+   *  already-compressed 0..1 fill the phone's own meter draws — send it rather than
+   *  the raw dB so the wrist bar and the phone bar move identically. */
+  setSignal(snr: number, level: number) { this.snr = snr; this.level = level; }
 
   sendState(freq: number, mode: string, step: number) {
     if (!this.isActive) return;
@@ -182,7 +185,7 @@ class WatchProvider {
       this.out[x] = peak;
     }
 
-    Native!.sendRow(toBase64(this.out), ctx.tuneHz, span, this.snr);
+    Native!.sendRow(toBase64(this.out), ctx.tuneHz, span, this.snr, this.level);
   }
 }
 
