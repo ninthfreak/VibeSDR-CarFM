@@ -77,8 +77,9 @@ struct ContentView: View {
       .padding(.horizontal, 6)
       .padding(.bottom, 4)
     }
+    // No NavigationStack: its title bar collided with the top row of keys.
     .sheet(isPresented: $showNumpad) {
-      NavigationStack { NumpadView().environmentObject(link) }
+      NumpadView().environmentObject(link)
     }
     .ignoresSafeArea()
     .focusable(true)
