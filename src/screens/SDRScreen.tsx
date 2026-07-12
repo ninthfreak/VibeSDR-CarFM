@@ -50,11 +50,22 @@ import { setReceiverIso } from '../services/rdsCountry';
 import { watchProvider } from '../services/watchProvider';
 
 /** FFT rate divisor while the phone is backgrounded but the watch is watching.
- *  The watch consumes ~10fps of REAL data (interpolation smooths the scroll but
- *  invents no information — see MIN_ROW_MS), so half rate is what it needs and no
- *  more. Nothing else is looking at these frames, so we don't pay for the other
- *  half: fewer bytes off the radio, less parse on the thread feeding the audio. */
-const WATCH_BG_DIVISOR = 2;
+ *
+ *  ONE — i.e. don't throttle at all.
+ *
+ *  Half rate looked like free battery: the watch only draws ~10fps, so why send
+ *  20? Because a 10fps SOURCE cannot reliably yield 10fps of ROWS. Every frame
+ *  then has to survive the send gate, the JS thread's background scheduling and
+ *  WCSession's own jitter — and iOS throttles a backgrounded JS thread, so frames
+ *  slip. Miss one and the next row is 200ms late. The result was a ragged feed
+ *  full of holes, which the jitter buffer and the trace's EMA smoothed over: on
+ *  the wrist it read as the averaging being cranked right up the moment the phone
+ *  locked.
+ *
+ *  A 20fps source gives the gate a frame to choose from whenever it opens, so the
+ *  watch gets a STEADY 10fps locked or awake. Headroom is what buys steadiness
+ *  here; the frames we drop cost nothing, and the ones we keep are on time. */
+const WATCH_BG_DIVISOR = 1;
 import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,

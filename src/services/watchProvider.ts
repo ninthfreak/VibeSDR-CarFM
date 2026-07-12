@@ -61,10 +61,19 @@ const WATCH_BINS = 256;
  *  that's essentially stationary. Hunting SSB conversations is the opposite case,
  *  and that is what the watch is FOR.)
  *
- *  Kept just BELOW the true frame interval: at exactly 100ms, a frame arriving
- *  1ms early fails the gate and the next row lands 200ms later instead — a
- *  visible stutter caused by the throttle itself. */
-const MIN_ROW_MS = 90;
+ *  MUST SIT WELL CLEAR OF BOTH SOURCE INTERVALS, not just under one.
+ *
+ *  It was 90ms — just under the ~100ms of the LOCKED feed (half-rate FFT). Any
+ *  jitter (a frame landing 85ms after the last) failed the gate, so that row was
+ *  dropped and the next one didn't arrive for 200ms. Locked, that gave an
+ *  irregular ~8fps full of 200ms holes, which the jitter buffer and the trace's
+ *  EMA then smoothed over — and it read exactly as "the averaging has been
+ *  cranked right up". Awake (20fps source) a frame was always ready the instant
+ *  the gate opened, so it was a rock-steady 10fps. Same gate, two behaviours.
+ *
+ *  At 60ms: the locked 100ms feed passes EVERY frame with room for jitter, and
+ *  the awake 50ms feed still halves cleanly to ~10fps. */
+const MIN_ROW_MS = 60;
 
 /** Span = demod bandwidth x this. Lands a signal on ~25 of the 256 bins: wide
  *  enough to read as a blob rather than a 2-bin hairline, tight enough to leave
