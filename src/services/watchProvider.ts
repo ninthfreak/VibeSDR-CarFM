@@ -2,7 +2,7 @@
  * Apple Watch remote-view provider.
  *
  * The watch is a thin client. This module owns the whole phone->watch view path:
- * raw dBFS bins in, a VFO-centred 128-byte row out over WCSession.
+ * raw dBFS bins in, a VFO-centred 256-byte row out over WCSession.
  *
  * IT RUNS OFF THE RAW SPECTRUM, NOT OFF THE WATERFALL COMPONENT. That is
  * deliberate and load-bearing: the PRIMARY use case is the phone locked in a
@@ -37,8 +37,14 @@ const Native = NativeModules.VibeWatchModule as
     }
   | undefined;
 
-/** Watch waterfall width. Must match WaterfallBuffer.width on the watch. */
-const WATCH_BINS = 128;
+/** Watch waterfall width. MUST MATCH WaterfallBuffer.width on the watch — the
+ *  watch drops any row of the wrong length, so a mismatch is a blank waterfall.
+ *
+ *  256, not 128: the Ultra's screen is ~205pt wide, so 128 columns were being
+ *  UPSCALED 1.6x before they even reached your eye — a self-inflicted blur that
+ *  no amount of sharpening can undo. Above native width the image is downscaled
+ *  instead, which is sharp. It costs 256 bytes a row (~1.3KB/s at 5fps). */
+const WATCH_BINS = 256;
 
 /** Row cadence: ~5fps.
  *
@@ -54,7 +60,7 @@ const WATCH_BINS = 128;
  *  visible stutter caused by the throttle itself. */
 const MIN_ROW_MS = 180;
 
-/** Span = demod bandwidth x this. Lands a signal on ~13 of the 128 bins: wide
+/** Span = demod bandwidth x this. Lands a signal on ~25 of the 256 bins: wide
  *  enough to read as a blob rather than a 2-bin hairline, tight enough to leave
  *  room for its neighbours. */
 const SPAN_MULT = 10;
@@ -64,7 +70,7 @@ const DEFAULT_SPAN_HZ = 125_000;
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
-/** RN has no dependable global btoa; 128 bytes makes this trivial anyway. */
+/** RN has no dependable global btoa; a 256-byte row makes this trivial anyway. */
 function toBase64(bytes: Uint8Array): string {
   let out = '';
   const n = bytes.length;
@@ -114,13 +120,18 @@ class WatchProvider {
   private colormap = 'gqrx';
   private onReachable: ((r: boolean) => void) | null = null;
 
-  /** Is the phone drawing its own waterfall right now? If so we BORROW the row it
-   *  already computed instead of running a second SignalProcessor over 4096 bins
-   *  on the same JS thread — that duplicate pass made the phone's own waterfall
-   *  visibly jerky. We only do our own DSP when the phone is asleep and there is
-   *  no row to borrow. */
-  private phoneRendering = false;
-  setPhoneRendering(v: boolean) { this.phoneRendering = v; }
+  /** When the phone's renderer last handed us a row.
+   *
+   *  This REPLACES a "phoneRendering" flag driven by AppState. A flag can desync
+   *  — one resume path forgot to set it back to true, so the provider kept doing
+   *  its own DSP while the phone was rendering, and both fought over the JS
+   *  thread: the phone's waterfall went slow and jerky after every screen wake.
+   *
+   *  Recency can't desync. A row arriving from the renderer IS the proof that the
+   *  renderer is alive; if none has arrived lately, the phone is asleep and we do
+   *  our own DSP. Self-healing, no state machine. */
+  private lastBorrowAt = 0;
+  private get borrowing() { return Date.now() - this.lastBorrowAt < 1000; }
 
   /** The phone's acrylic-VFO settings, mirrored so the wrist needle is the same
    *  one the user configured — a hairline is invisible over a bright palette. */
@@ -214,10 +225,13 @@ class WatchProvider {
   /**
    * A row the phone's renderer ALREADY computed. Free to forward — no DSP — and
    * pixel-identical to what's on the phone screen. Used whenever the phone is
-   * drawing (see setPhoneRendering).
+   * drawing (see `borrowing`).
    */
   pushProcessedRow(row: Uint8Array, ctx: WatchFrameCtx) {
-    if (!this.isActive || !this.phoneRendering) return;
+    // Stamp BEFORE the isActive gate: this is how we know the renderer is alive,
+    // and that must hold whether or not a watch is currently listening.
+    this.lastBorrowAt = Date.now();
+    if (!this.isActive) return;
     this.sendRow(row, ctx);
   }
 
@@ -227,7 +241,7 @@ class WatchProvider {
    * our own DSP. Safe to call while backgrounded — no Skia, worklet or React work.
    */
   onSpectrum(bins: Float32Array, ctx: WatchFrameCtx) {
-    if (!this.isActive || this.phoneRendering) return;   // borrow instead
+    if (!this.isActive || this.borrowing) return;   // renderer is feeding us
     if (!bins || bins.length < 2 || !ctx.bwHz) return;
 
     // Cheap gate FIRST: don't pay for a 4096-bin pass on a frame we'd only drop.
@@ -259,7 +273,7 @@ class WatchProvider {
     // ...but NEVER crop below the source resolution. The watch can't be sharper
     // than the phone's bins: with the phone zoomed out each bin covers a lot of
     // Hz, so a narrow window may hold only ~20 real bins, and stretching those
-    // across 128 columns just invents pixels — which is the blur, and no amount
+    // across 256 columns just invents pixels — which is the blur, and no amount
     // of sharpening recovers detail that was never sampled. Better to show a
     // WIDER span that is genuinely sharp than a narrow one that is mush.
     const floorSpan = WATCH_BINS * binHz;
@@ -271,7 +285,7 @@ class WatchProvider {
     const step      = (halfBins * 2) / WATCH_BINS;
 
     // Peak-preserving decimation: a narrow carrier must survive the squeeze to
-    // 128 columns. Averaging would bury a CW tone in its own noise floor.
+    // 256 columns. Averaging would bury a CW tone in its own noise floor.
     for (let x = 0; x < WATCH_BINS; x++) {
       const s0 = start + x * step;
       const s1 = s0 + step;

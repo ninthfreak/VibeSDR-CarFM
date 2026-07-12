@@ -2378,8 +2378,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         // parse on the thread that feeds the audio DSP. The Skia tree is still
         // unmounted and every animation driver still cancelled — only the plain
         // JS path stays alive.
-        // Renderer is gone: the watch must now do its own DSP from the raw frame.
-        watchProvider.setPhoneRendering(false);
         if (watchProvider.isActive) {
           specPausedByBgRef.current = false;
           client.current?.setRate(WATCH_BG_DIVISOR);
@@ -2459,11 +2457,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (specPausedByBgRef.current) {
             specPausedByBgRef.current = false;
             client.current?.resumeSpectrum();
-          } else {
-            client.current?.setRate(1);
           }
-          // Renderer is back: stop doing our own DSP and borrow its row again.
-          watchProvider.setPhoneRendering(true);
+          // ALWAYS restore full rate on wake, on every path. If the watch held the
+          // socket open through the lock we dropped the feed to quarter rate for
+          // it; failing to undo that anywhere leaves the phone's own waterfall
+          // crawling at 5fps.
+          idleActiveRef.current = false;
+          client.current?.setRate(1);
         }, 1200);
       }
     });
@@ -2968,9 +2968,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   //    single source of truth for step size and band limits, and the watch just
   //    mirrors whatever we echo back.
   useEffect(() => {
-    // Mounted = the phone is drawing, so borrow its rows rather than duplicating
-    // the DSP. Flipped to false on background, where the renderer is torn down.
-    watchProvider.setPhoneRendering(true);
     watchProvider.attach({
       onTuneDelta: (delta: number) => {
         const c = client.current; if (!c || !delta) return;

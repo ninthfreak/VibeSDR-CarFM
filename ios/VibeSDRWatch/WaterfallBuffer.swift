@@ -17,11 +17,14 @@ import CoreGraphics
 ///     synthesise `subRows` blended rows between each pair of received rows, so
 ///     the waterfall still scrolls at ~15 rows/sec. This is what lets VibeServer
 ///     look fine at 5fps too.
-///  3. **The image is tiny** (128 bins x 89 rows, stretched to the screen).
-///     Fix: bilinear on the way up — smooths row banding AND the fat bins you
-///     get when the phone is zoomed out.
+///  3. **Scaling.** 256 bins is ABOVE the watch's ~205pt width, so the image is
+///     DOWNscaled — sharp. (It was 128, which meant upscaling every column 1.6x:
+///     a self-inflicted blur no sharpening can undo.) Bilinear still smooths the
+///     row banding vertically, and the fat bins from a zoomed-out phone.
 final class WaterfallBuffer {
-  static let width  = 128
+  /// MUST MATCH WATCH_BINS in watchProvider.ts — rows of any other length are
+  /// dropped, so a mismatch shows as a blank waterfall.
+  static let width  = 256
   /// One row of headroom beyond what's shown: the newest row lives just ABOVE the
   /// visible edge and slides down into view, which is what makes the scroll a
   /// glide rather than a step.
@@ -46,7 +49,7 @@ final class WaterfallBuffer {
   /// The watch NEEDS its own: the phone applies sharpness in its SkSL shader, not
   /// in SignalProcessor, so the row we borrow arrives unsharpened — and we then
   /// bilinear-upscale it, which softens it further. An SSB signal is only ~12 of
-  /// the 128 bins wide, so it loses the most and goes mushy.
+  /// the 256 bins wide, so it loses the most and goes mushy.
   var sharpness: Double = 0.0
 
   private var pixels: [UInt8]
