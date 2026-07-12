@@ -1363,8 +1363,6 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  alive, so the foreground path knows not to re-open a live socket. */
   const specPausedByBgRef = useRef(false);
 
-  /** Volume the watch's crown drives (0..1) — the phone's decode gain. */
-  const watchVolRef = useRef(1);
   /** Late-bound: zoomBy is declared further down. */
   const zoomByRef = useRef<((factor: number) => void) | null>(null);
 
@@ -3006,25 +3004,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       onMode: (m: string) => { if (m) onModeRef.current?.(m as SDRMode); },
       onStep: (hz: number) => { if (hz > 0) setStep(hz); },
 
-      // Crown in VOLUME mode. This is the phone's decode gain, so it lands on
-      // whatever you're actually listening to — speaker, Bluetooth or AirPods.
-      onVolumeDelta: (delta: number) => {
-        if (!delta) return;
-        const v = Math.max(0, Math.min(1, watchVolRef.current + delta * 0.04));
-        if (v === watchVolRef.current) return;
-        watchVolRef.current = v;
-        (NativeModules.VibePowerModule as { setVolume?: (v: number) => void })?.setVolume?.(v);
-
-        // Read the frequency from the CLIENT, never from `status` — this effect
-        // runs once, so `status` here is frozen at whatever it was when the screen
-        // mounted. Sending that stale value made the watch's readout flash the
-        // mount-time frequency on every volume click (the next row corrected it
-        // 100ms later, so it looked like a display glitch — which it was).
-        const c = client.current; if (!c) return;
-        const s = c.getStatus();
-        watchProvider.sendState(s.frequency, String(s.mode), stepRef.current, v);
-      },
-
       // Crown in ZOOM mode. Drives the SAME client.zoom() the phone's zoom drum
       // drives — so it moves the real waterfall, and the watch gets genuinely
       // finer bins rather than a magnified crop of coarse ones.
@@ -3039,8 +3018,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onHello: () => {
         const c = client.current; if (!c) return;
         const s = c.getStatus();
-        watchProvider.sendState(s.frequency, String(s.mode), stepRef.current,
-                                watchVolRef.current);
+        watchProvider.sendState(s.frequency, String(s.mode), stepRef.current);
       },
 
       // The watch app is usually opened AFTER the phone is already locked in a
@@ -3065,14 +3043,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => watchProvider.detach();
   }, []);
 
-  // Mode/step only — NOT frequency. Every row already carries the frequency, and
-  // while you tune, status.frequency changes many times a second: firing a state
-  // message on each one floods WCSession (an interactive-message channel, not a
-  // pipe) on top of the 10fps row stream. It queues, delivers in bursts, and the
-  // watch's frequency readout stops tracking.
+  // Mode/step: rare, so send immediately.
   useEffect(() => {
-    watchProvider.sendState(status.frequency, String(status.mode), step, watchVolRef.current);
+    watchProvider.sendState(status.frequency, String(status.mode), step);
   }, [status.mode, step]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Frequency: the AUTHORITATIVE echo, throttled to 4/sec with the last value
+  // always delivered. The watch no longer reads the frequency off the row stream —
+  // rows are lossy and can back up in WCSession, so a busy link served the wrist a
+  // frequency from seconds ago (it lurched backwards mid-tune, then crawled
+  // forward as the queue drained). Throttled state messages can't build a backlog,
+  // and the trailing edge means the wrist always lands on the truth.
+  useEffect(() => {
+    watchProvider.sendFreq(status.frequency, String(status.mode), step);
+  }, [status.frequency]);    // eslint-disable-line react-hooks/exhaustive-deps
 
   // Mirror the phone's own render settings into the watch's processor, so the
   // wrist keeps looking like a shrunk phone waterfall (it runs its own

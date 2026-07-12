@@ -55,14 +55,26 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// single reply is slow. Two in flight hides that without letting a queue build
   /// — the backlog we're guarding against took THIRTY seconds to drain, and two
   /// rows is 0.2s.
-  private static let maxInFlight = 2
-  private var inFlight = 0
-  private var oldestSentAt = Date.distantPast
-
-  private func clearIfStuck() {
-    // If replies never come (watch app killed mid-send), don't wedge the feed.
-    if inFlight > 0, Date().timeIntervalSince(oldestSentAt) > 2.0 { inFlight = 0 }
-  }
+  // ── NO ACK-BASED BACKPRESSURE. Rows are FIRE-AND-FORGET. ─────────────────────
+  //
+  // This was tried, defended for two hours, and REVERTED. Don't put it back.
+  //
+  // The reasoning was sound and the result was awful. Requiring an acknowledgement
+  // before sending the next row makes the send rate a hostage to the WCSession
+  // round trip, and every variant degraded: 1 slot gave a 1fps waterfall; 2 slots
+  // healing after 2s degraded into "send 2, block, wait, send 2" — a throttle that
+  // punishes a slow link by making it slower; widening it further only made the
+  // connection thrash and take seconds to establish.
+  //
+  // It was added to cure ONE incident — a 30-second backlog after a numpad tune —
+  // and the cure was permanently worse than the disease. Fire-and-forget is the
+  // configuration that measured ~240ms between rows and that the user called
+  // "lovely and responsive".
+  //
+  // If the backlog ever returns, fix it where it belongs: throttle at SOURCE
+  // (MIN_ROW_MS in watchProvider), and let the watch's own jitter buffer drop what
+  // it can't use. Do NOT try to make WCSession behave like a flow-controlled pipe.
+  // It isn't one.
 
   override init() {
     super.init()
@@ -106,10 +118,6 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     guard let s = session, linkAlive,
           let row = Data(base64Encoded: rowB64) else { return }
 
-    clearIfStuck()
-    // Too many still in flight — drop this row rather than queue it behind them.
-    guard inFlight < Self.maxInFlight else { return }
-
     var blob = Data(capacity: 1 + 8 * 6 + row.count)
     blob.append(1)                                   // kind: row
     for v in [freq, span, snr, level, lo, hi] {
@@ -118,21 +126,15 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     }
     blob.append(row)
 
-    if inFlight == 0 { oldestSentAt = Date() }
-    inFlight += 1
-    s.sendMessageData(
-      blob,
-      replyHandler: { [weak self] _ in self?.inFlight = max(0, (self?.inFlight ?? 1) - 1) },
-      errorHandler: { [weak self] _ in self?.inFlight = max(0, (self?.inFlight ?? 1) - 1) }
-    )
+    // Fire-and-forget: a dropped row is invisible on a scrolling waterfall.
+    s.sendMessageData(blob, replyHandler: nil, errorHandler: nil)
   }
 
-  @objc(sendState:mode:step:volume:)
-  func sendState(_ freq: NSNumber, mode: String, step: NSNumber, volume: NSNumber) {
+  @objc(sendState:mode:step:)
+  func sendState(_ freq: NSNumber, mode: String, step: NSNumber) {
     guard let s = session, linkAlive else { return }
     s.sendMessage(
-      ["k": "state", "f": freq.doubleValue, "m": mode, "st": step.doubleValue,
-       "vol": volume.doubleValue],
+      ["k": "state", "f": freq.doubleValue, "m": mode, "st": step.doubleValue],
       replyHandler: nil,
       errorHandler: nil
     )

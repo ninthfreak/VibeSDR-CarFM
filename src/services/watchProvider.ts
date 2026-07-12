@@ -31,7 +31,7 @@ const Native = NativeModules.VibeWatchModule as
       isReachable(): Promise<boolean>;
       sendRow(rowB64: string, freq: number, span: number, snr: number, level: number,
               lo: number, hi: number): void;
-      sendState(freq: number, mode: string, step: number, volume: number): void;
+      sendState(freq: number, mode: string, step: number): void;
       sendSettings(lutB64: string, smoothing: number, needle: string,
                    needleIntensity: number, sharpness: number): void;
     }
@@ -75,6 +75,10 @@ const WATCH_BINS = 256;
  *  the awake 50ms feed still halves cleanly to ~10fps. */
 const MIN_ROW_MS = 60;
 
+/** Frequency echoes: ≤1 per this, trailing edge always delivered. 4/sec keeps the
+ *  wrist tracking a phone-side tune without ever building a WCSession backlog. */
+const STATE_MS = 250;
+
 /** Span = demod bandwidth x this. Lands a signal on ~25 of the 256 bins: wide
  *  enough to read as a blob rather than a 2-bin hairline, tight enough to leave
  *  room for its neighbours. */
@@ -115,8 +119,6 @@ export interface WatchCommandHandlers {
   onTuneHz(hz: number): void;
   onMode(mode: string): void;
   onStep(hz: number): void;
-  /** Crown in volume mode. Delta in detents; phone owns the 0..1 level. */
-  onVolumeDelta(delta: number): void;
   /** Crown in zoom mode. Drives the REAL server zoom, so the watch gets finer
    *  bins rather than a magnified crop — the only thing that beats the
    *  bin-resolution ceiling. */
@@ -135,6 +137,9 @@ class WatchProvider {
   private available = Platform.OS === 'ios' && !!Native;
   private reachable = false;
   private lastRowAt = 0;
+  private lastStateAt = 0;
+  private pendingState: { freq: number; mode: string; step: number } | null = null;
+  private stateTimer: ReturnType<typeof setTimeout> | null = null;
   private lastPalette = '';
   private snr = 0;
   private level = 0;
@@ -204,7 +209,6 @@ class WatchProvider {
           case 'freq': handlers.onTuneHz(Number(e.val ?? 0)); break;
           case 'mode': handlers.onMode(String(e.val ?? '')); break;
           case 'step': handlers.onStep(Number(e.val ?? 0)); break;
-          case 'vol':  handlers.onVolumeDelta(Number(e.delta ?? 0)); break;
           case 'zoom': handlers.onZoomDelta(Number(e.delta ?? 0)); break;
           case 'ping': handlers.onHello(); break;
         }
@@ -246,9 +250,46 @@ class WatchProvider {
    *  the raw dB so the wrist bar and the phone bar move identically. */
   setSignal(snr: number, level: number) { this.snr = snr; this.level = level; }
 
-  sendState(freq: number, mode: string, step: number, volume: number) {
+  sendState(freq: number, mode: string, step: number) {
     if (!this.isActive) return;
-    Native!.sendState(freq, mode, step, volume);
+    this.lastStateAt = Date.now();
+    Native!.sendState(freq, mode, step);
+  }
+
+  /**
+   * The FREQUENCY echo — throttled, trailing-edge, exactly like
+   * UberSDRClient._sendView.
+   *
+   * The watch used to read the frequency off the ROWS, on the reasoning that every
+   * row already carries it, so a separate echo would be redundant traffic. That is
+   * true right up until the link is busy — and then it is badly wrong. Rows are
+   * fire-and-forget at ~16/sec, and WCSession QUEUES rather than drops: spin the
+   * crown and rows pile up behind the tune commands. The watch then reads its
+   * frequency out of a row that is SECONDS old, so the readout lurches backwards
+   * and then walks forward again as the backlog drains. (Backpressuring the rows to
+   * stop that was tried and reverted — it made the waterfall 1fps. The rows are
+   * right to be lossy; they are pixels. The frequency is not pixels.)
+   *
+   * So the frequency gets its own channel: a small state message, sent at most
+   * once per STATE_MS, with the final value ALWAYS delivered on the trailing edge.
+   * Because it is throttled it can never build a backlog, and because it is
+   * trailing-edge the last thing the watch hears is always the truth.
+   */
+  sendFreq(freq: number, mode: string, step: number) {
+    if (!this.isActive) return;
+    this.pendingState = { freq, mode, step };
+    const wait = this.lastStateAt + STATE_MS - Date.now();
+    if (wait <= 0) { this.flushState(); return; }
+    if (!this.stateTimer) {
+      this.stateTimer = setTimeout(() => { this.stateTimer = null; this.flushState(); }, wait);
+    }
+  }
+
+  private flushState() {
+    const p = this.pendingState;
+    if (!p) return;
+    this.pendingState = null;
+    this.sendState(p.freq, p.mode, p.step);
   }
 
   /**

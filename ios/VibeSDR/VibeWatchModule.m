@@ -19,8 +19,7 @@ RCT_EXTERN_METHOD(sendRow
 RCT_EXTERN_METHOD(sendState
                   : (nonnull NSNumber *)freq mode
                   : (NSString *)mode step
-                  : (nonnull NSNumber *)step volume
-                  : (nonnull NSNumber *)volume)
+                  : (nonnull NSNumber *)step)
 
 RCT_EXTERN_METHOD(sendSettings
                   : (NSString *)lutB64 smoothing

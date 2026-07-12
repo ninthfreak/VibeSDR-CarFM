@@ -56,6 +56,21 @@ struct ContentView: View {
   /// What the crown does. Explicit and persistent — never a timed-out HUD, because
   /// on a wrist you must always know what a turn is about to do.
   @State private var crownMode: CrownMode = .tune
+
+  /// Detents per tune step. The crown's detent rate is FIXED by watchOS, but the
+  /// step size isn't: at a 9kHz step a normal wrist flick throws you across half a
+  /// band, which is unusable on SW. So we divide — one step per `crownDivisor`
+  /// detents.
+  ///
+  /// Deliberately NOT SwiftUI's `sensitivity:` (.low/.medium/.high): that changes
+  /// how many detents a rotation produces, so it also changes the HAPTIC feel, and
+  /// it only offers three coarse settings. Dividing leaves the fidget-spinner
+  /// detents exactly as they are and gives a real range.
+  @AppStorage("crownDivisor") private var crownDivisor = 1
+  /// Leftover detents between steps. Kept so slow turning still gets there: without
+  /// it, at a divisor of 4, three detents would round to nothing and be discarded,
+  /// and the crown would feel dead rather than fine.
+  @State private var detentAccum = 0
   /// The ONE knob that matters. Smoothness vs battery, nothing else — the Canvas
   /// repaints everything (waterfall, trace, VFO) on every tick regardless.
   private let driver = Timer.publish(every: 1.0 / 20.0, on: .main, in: .common).autoconnect()
@@ -77,19 +92,21 @@ struct ContentView: View {
 
       if link.everGotRow { waterfall } else { placeholder }
 
-      // The phone went away. Without this the last waterfall just sits there
-      // forever, and a dead link is indistinguishable from a frozen picture —
-      // which is exactly how it read when the phone app was closed.
-      if link.everGotRow && !link.reachable {
+      // THREE states, not two. The phone can be unreachable (app closed), or it can
+      // be right there and simply not sending — which happens whenever the SDR
+      // screen isn't up: the instance picker, a disconnect, or an FM-DX instance
+      // (a different screen entirely, with no spectrum at all). Without this the
+      // watch sat on its last frame, which is indistinguishable from a lock-up.
+      if link.everGotRow, let msg = stalledMessage {
         VStack(spacing: 4) {
-          Image(systemName: "iphone.slash").font(.title3)
-          Text("iPhone not reachable")
+          Image(systemName: msg.icon).font(.title3)
+          Text(msg.text)
             .font(.caption2)
             .multilineTextAlignment(.center)
         }
         .foregroundStyle(.white)
         .padding(10)
-        .background(.black.opacity(0.72))
+        .background(.black.opacity(0.78))
         .clipShape(RoundedRectangle(cornerRadius: 10))
       }
 
@@ -140,9 +157,17 @@ struct ContentView: View {
       lastDetent = detent
 
       switch crownMode {
-      case .tune:   link.tune(delta: delta)
-      case .volume: link.volume(delta: delta)
-      case .zoom:   link.zoom(delta: delta)
+      case .tune:
+        // Divide the detents, carrying the remainder (see crownDivisor).
+        let div = max(1, crownDivisor)
+        detentAccum += delta
+        let steps = detentAccum / div          // truncates toward zero — sign-safe
+        if steps != 0 {
+          detentAccum -= steps * div
+          link.tune(delta: steps)
+        }
+      case .zoom:
+        link.zoom(delta: delta)                // zoom is already log-scaled; leave it
       }
     }
     // Long-press anywhere on the waterfall for the control grid.
@@ -429,18 +454,13 @@ struct ContentView: View {
     .frame(width: 5, height: 74)
   }
 
-  private var meterTint: Color {
-    crownMode == .volume ? .green : .cyan
-  }
+  private var meterTint: Color { .cyan }
 
-  /// Volume is a level, so it maps straight through. Zoom has no natural 0..1, so
-  /// we place the current span on a LOG scale between "as tight as it gets" and
-  /// "wide" — which is how zoom actually feels, and it's what the phone's own zoom
-  /// drum does in octaves.
+  /// Zoom has no natural 0..1, so we place the current span on a LOG scale between
+  /// "as tight as it gets" and "wide" — which is how zoom actually feels, and it's
+  /// what the phone's own zoom drum does in octaves.
   private var meterValue: Double {
     switch crownMode {
-    case .volume:
-      return min(1, max(0, link.volume))
     case .zoom:
       guard link.span > 0 else { return 0 }
       let lo = log2(2_000.0), hi = log2(4_000_000.0)
@@ -451,6 +471,22 @@ struct ContentView: View {
     }
   }
 
+
+  /// nil = healthy. Otherwise, WHY there's nothing moving.
+  ///
+  /// Driven by the frame clock, so it appears without needing its own timer.
+  private var stalledMessage: (icon: String, text: String)? {
+    if !link.reachable {
+      return ("iphone.slash", "Reconnecting to iPhone")
+    }
+    // Rows should arrive ~10x/sec. Two seconds of silence means the phone has
+    // stopped streaming — it isn't on the SDR screen, or there's no spectrum to
+    // send (FM-DX has none at all).
+    if let t = link.lastRowAt, Date().timeIntervalSince(t) > 2.0 {
+      return ("dot.radiowaves.left.and.right", "No spectrum from iPhone")
+    }
+    return nil
+  }
 
   private var placeholder: some View {
     VStack(spacing: 6) {

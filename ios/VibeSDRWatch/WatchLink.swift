@@ -42,9 +42,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   @Published var step       = 0.0
   @Published var reachable  = false
   @Published var everGotRow = false
-  /// Phone's audio level, 0..1 — mirrored so the volume meter shows the truth
-  /// rather than a number the watch invented.
-  @Published var volume     = 1.0
+
+  /// When a row last arrived. The watch used to know only two states — "iPhone not
+  /// reachable" or "fine" — but there is a THIRD: the phone is right there and
+  /// simply isn't sending. That happens whenever the SDR screen isn't up: the
+  /// instance picker, a disconnect, or an FM-DX instance (which routes to a
+  /// different screen entirely and has no spectrum at all). The watch just sat on
+  /// its last frame looking frozen, which is indistinguishable from a lock-up.
+  @Published var lastRowAt: Date? = nil
 
   // Diagnostics for the "link up but no rows" case: a row of the wrong length is
   // DROPPED SILENTLY by WaterfallBuffer, which looks identical to no row at all.
@@ -99,35 +104,128 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     // silently and the watch sits on "Waiting for signal" forever. The phone treats
     // any message from us as proof we're here, but that proof expires; without a
     // heartbeat it would only hold while the user happened to be turning the crown.
+    // .common mode, NOT the default. A Timer scheduled in default mode STOPS FIRING
+    // while the run loop is in tracking mode — i.e. exactly while you are turning
+    // the crown or touching the screen. The heartbeat would stall, the phone's
+    // 10-second linkAlive window would expire, and it would stop sending rows: the
+    // watch dropped to "waiting for connection" mid-use, for no reason but this.
     heartbeat?.invalidate()
-    heartbeat = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
-      self?.ping()
-    }
+    let t = Timer(timeInterval: 4, repeats: true) { [weak self] _ in self?.ping() }
+    RunLoop.main.add(t, forMode: .common)
+    heartbeat = t
   }
 
   // MARK: - Watch -> Phone
 
   /// Tune by `delta` steps. We send a DELTA, never an absolute frequency: the
   /// phone stays the single source of truth and multiplies by the current step.
-  func tune(delta: Int) { send(["cmd": "tune", "delta": delta]) }
+  // ── Crown commands are COALESCED ─────────────────────────────────────────────
+  //
+  // Every crown detent used to send its own WCSession message. Spin the crown and
+  // that's 40-60 messages/sec, fired from the main thread, on top of the row stream
+  // and its acknowledgements — and WCSession is an interactive-message channel that
+  // QUEUES under load rather than dropping (the same lesson the row feed already
+  // taught us). It saturates, and the app wedges: the watch locked up mid-tune.
+  //
+  // So: accumulate detents and flush at most ~16/sec. Deltas ADD, so nothing is
+  // lost — a fast spin arrives as one big delta instead of forty small ones, which
+  // is exactly what the phone wants anyway (it multiplies by the step size).
+  private var pendingTune = 0
+  private var pendingZoom = 0
+  private var flushScheduled = false
+
+  /// PREDICT while turning, ADOPT when still — the same pattern as the phone's own
+  /// view sender (UberSDRClient._sendView / _armSettle).
+  ///
+  /// The readout must move WITH THE CROWN, not with the radio. Anything the phone
+  /// sends us is a report of where the radio WAS, a WCSession hop ago at best.
+  /// Steering off it means steering off the past: you turn, nothing moves, you turn
+  /// further to compensate, and the number sails past what you wanted — laggy AND
+  /// overshooting, which is exactly what it was.
+  ///
+  /// So the crown owns the number while it is moving, and the phone's `state` echo
+  /// takes over once it stops. We must ignore state echoes DURING the turn too:
+  /// they are throttled to 4/sec, so mid-spin one carries a frequency we have
+  /// already tuned past, and adopting it yanks the readout backwards.
+  ///
+  /// The settle is generous — longer than the phone's echo throttle plus a hop —
+  /// because the echo is TRAILING-EDGE: once the crown is quiet the phone always
+  /// sends the final truth, and that truth is worth waiting for. It clamps to the
+  /// band edges and snaps to the step grid, and we may be wrong about either.
+  ///
+  /// The prediction MUST use the phone's grid-snap maths, or the adopted value
+  /// would visibly jump.
+  private var tuneSettle: DispatchWorkItem?
+  /// True while the readout is ours rather than the phone's.
+  private var tuning: Bool { tuneSettle != nil }
+
+  func tune(delta: Int) {
+    predictTune(delta: delta)
+    pendingTune += delta
+    scheduleFlush()
+  }
+
+  func zoom(delta: Int) { pendingZoom += delta; scheduleFlush() }
+
+  private func predictTune(delta: Int) {
+    guard step > 0, frequency > 0 else { return }   // nothing to predict from yet
+    // Same snap the phone applies (SDRScreen.onTuneDelta): a detent lands ON the
+    // step grid rather than offsetting the current fraction.
+    let base = delta > 0 ? floor(frequency / step) : ceil(frequency / step)
+    frequency = (base + Double(delta)) * step
+    armTuneSettle()
+  }
+
+  /// Hand the readout back to the phone once the crown has been still long enough
+  /// for the trailing-edge echo (≤250ms) plus a hop to land. Adopting early is what
+  /// produces the backwards yank.
+  private func armTuneSettle() {
+    tuneSettle?.cancel()
+    let work = DispatchWorkItem { [weak self] in self?.tuneSettle = nil }
+    tuneSettle = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+  }
+
+  /// DispatchQueue, NOT Timer.
+  ///
+  /// `Timer.scheduledTimer` installs on the main run loop in DEFAULT mode — and
+  /// while you are turning the crown or touching the screen, the run loop is in
+  /// TRACKING mode, where default-mode timers DO NOT FIRE. So the flush never ran
+  /// while the crown was moving, detents piled up, nothing was sent, and (because
+  /// `flushScheduled` stayed true) it never rescheduled: the crown went
+  /// permanently dead. The coalescing added to cure a hang caused a worse one.
+  ///
+  /// asyncAfter doesn't care what the run loop is doing.
+  private func scheduleFlush() {
+    guard !flushScheduled else { return }
+    flushScheduled = true
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+      self?.flushCrown()
+    }
+  }
+
+  private func flushCrown() {
+    flushScheduled = false
+    if pendingTune != 0 { send(["cmd": "tune", "delta": pendingTune]); pendingTune = 0 }
+    if pendingZoom != 0 { send(["cmd": "zoom", "delta": pendingZoom]); pendingZoom = 0 }
+  }
   func setMode(_ m: String) { send(["cmd": "mode", "val": m]) }
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
   func ping() { send(["cmd": "ping"]) }
 
-  /// Volume: the PHONE's decode gain, so it lands wherever you're actually
-  /// listening — speaker, Bluetooth or AirPods. (There is no way to route the
-  /// phone's audio to the watch speaker; that would mean the watch decoding the
-  /// stream itself, which is a different feature entirely.)
-  func volume(delta: Int) { send(["cmd": "vol", "delta": delta]) }
-
-  /// Zoom: drives the SAME client.zoom() the phone's zoom drum drives, so it moves
-  /// the real waterfall and the watch gets genuinely finer BINS — not a magnified
-  /// crop of coarse ones. This is the only thing that beats the resolution ceiling.
-  func zoom(delta: Int) { send(["cmd": "zoom", "delta": delta]) }
 
   /// Absolute tune, from the numpad. The one place the watch sends a frequency
   /// rather than a delta — the phone still clamps it to the receiver's range.
-  func tune(toHz hz: Double) { send(["cmd": "freq", "val": hz]) }
+  ///
+  /// Shows the typed frequency at once (you typed it; waiting a round trip to see
+  /// it is absurd), but ALSO drops the settle so the phone's answer is adopted as
+  /// soon as it lands — that answer may differ, because the phone clamps to the
+  /// band edges and we don't know where those are.
+  func tune(toHz hz: Double) {
+    send(["cmd": "freq", "val": hz])
+    frequency = hz
+    armTuneSettle()
+  }
 
   private func send(_ msg: [String: Any]) {
     guard let s = session, s.isReachable else { return }
@@ -144,20 +242,17 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// Rows arrive as a flat binary blob (see VibeWatchModule.sendRow) — dictionary
   /// messages cost a plist serialise per send, and at 10fps that flooded the
   /// channel into delivering in bursts.
-  /// Rows arrive WITH a reply handler: the phone sends one row at a time and waits
-  /// for this acknowledgement before sending the next. Without that backpressure it
-  /// buries WCSession, which QUEUES rather than drops — and the watch then renders
-  /// a view of the radio from half a minute ago.
-  ///
-  /// Reply FIRST, decode after: the ack is what keeps the feed flowing, so it must
-  /// not wait on our rendering.
-  func session(_ s: WCSession, didReceiveMessageData data: Data,
-               replyHandler: @escaping (Data) -> Void) {
-    replyHandler(Data())
+  func session(_ s: WCSession, didReceiveMessageData data: Data) {
     handleRow(data)
   }
 
-  func session(_ s: WCSession, didReceiveMessageData data: Data) {
+  /// Kept only in case the phone ever sends with a reply handler — answer at once
+  /// and never make the ack wait on rendering. (The phone does NOT do this: rows
+  /// are fire-and-forget. Ack-based backpressure was tried and reverted — it made
+  /// the send rate a hostage to the round trip and the link degraded badly.)
+  func session(_ s: WCSession, didReceiveMessageData data: Data,
+               replyHandler: @escaping (Data) -> Void) {
+    replyHandler(Data())
     handleRow(data)
   }
 
@@ -179,11 +274,18 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       self.waterfall.push(row: row)
       self.rxRows += 1
       self.lastLen = row.count
+      self.lastRowAt = Date()
       // Only count a row we can actually DRAW. WaterfallBuffer drops any row of
       // the wrong length silently, so flagging everGotRow on arrival hid the
       // placeholder (and its diagnostics) behind a permanently black canvas.
       if row.count == WaterfallBuffer.width { self.everGotRow = true }
-      self.frequency = f[0]
+      // NOTE: f[0] is the row's frequency, and we deliberately IGNORE it.
+      //
+      // Rows are fire-and-forget pixels — lossy by design, and WCSession QUEUES
+      // them, so on a busy link a row can be SECONDS old. Reading the readout off
+      // them made it lurch backwards mid-tune and then crawl forward as the backlog
+      // drained. The frequency now comes from the throttled `state` echo (which
+      // cannot build a backlog) and from our own prediction while the crown moves.
       self.span      = f[1]
       self.snr       = f[2]
       self.level     = f[3]
@@ -202,7 +304,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
         waterfall.push(row: [UInt8](d))
         if d.count == WaterfallBuffer.width { everGotRow = true }
       }
-      if let f = m[WK.freq] as? Double { frequency = f }
+      // Rows never set the frequency — see handleRow.
       if let sp = m[WK.span] as? Double { span = sp }
       if let s = m[WK.snr] as? Double { snr = s }
       if let lv = m[WK.level] as? Double { level = lv }
@@ -210,10 +312,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if let hh = m[WK.filtHi] as? Double { filtHi = hh }
 
     case "state":
-      if let f = m[WK.freq] as? Double { frequency = f }
+      if let f = m[WK.freq] as? Double, !tuning { frequency = f }
       if let md = m[WK.mode] as? String { mode = md }
       if let st = m[WK.step] as? Double { step = st }
-      if let v = m["vol"] as? Double { volume = v }
 
     case "settings":
       if let l = m[WK.lut] as? Data, l.count == 1024 { waterfall.setLUT([UInt8](l)) }
