@@ -142,6 +142,14 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     s.sendMessage(["k": "fmdx", "j": json], replyHandler: nil, errorHandler: nil)
   }
 
+  /// The DAB multiplex — ensemble, services, and which one is playing. DAB is a
+  /// LIST, not a continuum: you switch service, you never tune.
+  @objc(sendDab:)
+  func sendDab(_ json: String) {
+    guard let s = session, linkAlive else { return }
+    s.sendMessage(["k": "dab", "j": json], replyHandler: nil, errorHandler: nil)
+  }
+
   /// The dial's station memory — the same list the phone's dial draws.
   @objc(sendStations:)
   func sendStations(_ json: String) {

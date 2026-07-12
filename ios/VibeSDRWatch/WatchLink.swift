@@ -72,13 +72,43 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   // the phone never has to tell us which screen to be, because what it SENDS
   // already says: rows mean a spectrum, an fmdx blob means a station.
   @Published var fmdx: FmdxState? = nil
+  /// The DAB multiplex, when the phone is on a DAB profile. DAB is a LIST, not a
+  /// continuum: the crown SELECTS a service, it does not tune. (The phone already
+  /// refuses to tune in DAB — a nudge knocks you off the ensemble block, killing the
+  /// decode, and the block is hard to re-find.)
+  @Published var dab: DabState? = nil
   @Published var logo: Data? = nil
   /// The phone's dial memory, mirrored — station names pinned to frequencies, learned
   /// from RDS as you tune. The wrist draws the same dial rather than inventing one.
   @Published var stations: [FmdxStation] = []
-  @Published var screen: Screen = .sdr
+  /// Which screen the watch should be. COMPUTED, not "last message wins".
+  ///
+  /// FM-DX could be routed by arrival, because an FM-DX server sends no rows. DAB
+  /// cannot: the spectrum keeps streaming on a DAB profile, so a row would flip us
+  /// straight back to the waterfall. Route on the FACTS instead — what mode the phone
+  /// is in, and whether we have a multiplex to show.
+  var screen: Screen {
+    if isFmdx { return .fmdx }
+    if mode == "dab", let d = dab, !d.list.isEmpty { return .dab }
+    return .sdr
+  }
 
-  enum Screen { case sdr, fmdx }
+  /// Set by an FM-DX blob, cleared by a row — an FM-DX server has no spectrum, so
+  /// these two can never both be true.
+  @Published var isFmdx = false
+
+  enum Screen { case sdr, fmdx, dab }
+
+  struct DabService: Codable, Equatable, Identifiable {
+    var id = 0            // audio_service_id — what you send to switch
+    var name = ""
+  }
+
+  struct DabState: Codable, Equatable {
+    var ensemble = ""     // the multiplex label, e.g. "BBC National DAB"
+    var active = 0        // the audio_service_id currently decoding
+    var list: [DabService] = []
+  }
 
   struct FmdxStation: Codable, Equatable, Identifiable {
     var freqHz: Double = 0
@@ -271,6 +301,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     if pendingTune != 0 { send(["cmd": "tune", "delta": pendingTune]); pendingTune = 0 }
     if pendingZoom != 0 { send(["cmd": "zoom", "delta": pendingZoom]); pendingZoom = 0 }
   }
+  /// Pick a DAB service. NOT a tune — the phone calls setAudioServiceId(), which
+  /// re-sends the demod without touching the frequency.
+  func selectDab(_ id: Int) { send(["cmd": "dab", "val": id]) }
+
   func setMode(_ m: String) { send(["cmd": "mode", "val": m]) }
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
   func ping() { send(["cmd": "ping"]) }
@@ -341,7 +375,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       // the wrong length silently, so flagging everGotRow on arrival hid the
       // placeholder (and its diagnostics) behind a permanently black canvas.
       if row.count == WaterfallBuffer.width { self.everGotRow = true }
-      self.screen = .sdr        // a row means a spectrum — see `screen`
+      self.isFmdx = false       // a row means a spectrum — see `screen`
       // NOTE: f[0] is the row's frequency, and we deliberately IGNORE it.
       //
       // Rows are fire-and-forget pixels — lossy by design, and WCSession QUEUES
@@ -386,9 +420,16 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
          let d = j.data(using: .utf8),
          let st = try? JSONDecoder().decode(FmdxState.self, from: d) {
         fmdx = st
-        screen = .fmdx
+        isFmdx = true
         lastRowAt = Date()        // "the phone is talking to us" — same staleness clock
         everGotRow = true
+      }
+
+    case "dab":
+      if let j = m[WK.json] as? String,
+         let d = j.data(using: .utf8),
+         let st = try? JSONDecoder().decode(DabState.self, from: d) {
+        dab = st
       }
 
     case "stations":

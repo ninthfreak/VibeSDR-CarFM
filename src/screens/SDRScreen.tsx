@@ -104,6 +104,7 @@ import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import { resolveStationLogo } from '../services/stationLogoCache';
+import { tidyStationName } from '../services/stationLogo';
 import { isoToFlag, validIso } from '../services/rdsCountry';
 import CenterVfoButton from '../components/CenterVfoButton';
 import PasswordModal from '../components/PasswordModal';
@@ -705,6 +706,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // for the VTS resolver (reads in a debounced callback, avoids stale closures).
   const [dabProgrammes, setDabProgrammes] = useState<DabProgramme[]>([]);  // OWRX DAB ensemble
   const [activeDabId, setActiveDabId] = useState<number>(0);
+  const [dabEnsemble, setDabEnsemble] = useState('');
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
   const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; badge?: string; countryIso?: string; pi?: string }>({});
@@ -2069,6 +2071,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
         if (meta.programmes) {
           setDabProgrammes(meta.programmes);
+          if (meta.ensemble) setDabEnsemble(meta.ensemble);
           // Mirror the server's default (first programme) so the picker reflects
           // what's actually playing until the user picks another.
           setActiveDabId((cur) => meta.programmes!.some((p) => p.id === cur)
@@ -3016,6 +3019,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       // Crown in ZOOM mode. Drives the SAME client.zoom() the phone's zoom drum
       // drives — so it moves the real waterfall, and the watch gets genuinely
       // finer bins rather than a magnified crop of coarse ones.
+      // DAB: pick a service. NOT a tune — setAudioServiceId re-sends the demod
+      // without touching the frequency, so the ensemble lock is never disturbed.
+      onDabSelect: (id: number) => {
+        const c = client.current; if (!c || !id) return;
+        c.setAudioServiceId?.(id);
+        setActiveDabId(id);
+      },
+
       onZoomDelta: (delta: number) => {
         if (!delta) return;
         zoomByRef.current?.(Math.pow(2, -delta / 6));
@@ -3051,6 +3062,39 @@ export default function SDRScreen({ route, navigation }: Props) {
     });
     return () => watchProvider.detach();
   }, []);
+
+  // ── DAB on the watch: a LIST, not a band ───────────────────────────────────
+  //    A DAB multiplex is one wide block carrying a dozen services; there is nothing
+  //    to hunt in it and nothing to tune (the phone already refuses to — a nudge
+  //    knocks you off the ensemble and kills the decode). So the wrist gets the
+  //    services, and its crown becomes a SELECTOR.
+  useEffect(() => {
+    watchProvider.sendDab({
+      ensemble: dabEnsemble,
+      active: activeDabId,
+      list: dabProgrammes.map((p) => ({ id: p.id, name: p.name })),
+    });
+  }, [dabProgrammes, activeDabId, dabEnsemble]);
+
+  // The playing service's logo, for the wrist. DAB is the EASY case for the logo
+  // lookup: the label is a decoded station name rather than a truncated 8-character
+  // RDS PS, and the country is simply where the receiver is. The one catch is that
+  // the ensemble sends it UNSPACED ("BBC Radio2"), which matches nothing — hence
+  // tidyStationName.
+  useEffect(() => {
+    const name = dabProgrammes.find((p) => p.id === activeDabId)?.name;
+    if (!name) { watchProvider.sendLogo(''); return; }
+    let cancelled = false;
+    resolveStationLogo({ name: tidyStationName(name) })
+      .then((path) => {
+        if (cancelled) return;
+        if (!path) { watchProvider.sendLogo(''); return; }
+        return FileSystem.readAsStringAsync(path, { encoding: FileSystem.EncodingType.Base64 })
+          .then((b64) => { if (!cancelled) watchProvider.sendLogo(b64); });
+      })
+      .catch(() => { if (!cancelled) watchProvider.sendLogo(''); });
+    return () => { cancelled = true; };
+  }, [dabProgrammes, activeDabId]);
 
   // Mode/step: rare, so send immediately.
   useEffect(() => {

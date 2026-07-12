@@ -18,6 +18,7 @@ struct VibeSDRWatchApp: App {
           switch link.screen {
           case .sdr:  ContentView()
           case .fmdx: FmdxView()
+          case .dab:  DabView()
           }
         }
         .environmentObject(link)

@@ -13,7 +13,19 @@ const inflight = new Map<string, Promise<string | null>>();
 const HOST = 'https://de1.api.radio-browser.info';
 
 function norm(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return s.toLowerCase()
+    .replace(/([a-z])(\d)/g, '$1 $2')     // radio2 -> radio 2 (see tidyStationName)
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/** DAB service labels arrive UNSPACED — the ensemble sends "BBC Radio2", not
+ *  "BBC Radio 2" (verified on-air). radio-browser's byname query is a substring
+ *  match, so the unspaced form finds nothing at all, and the fuzzy scorer then
+ *  can't match the token "radio2" against "radio" + "2" either. Split the digits
+ *  back off before looking anything up. */
+export function tidyStationName(s: string): string {
+  return s.replace(/([A-Za-z])(\d)/g, '$1 $2').replace(/\s+/g, ' ').trim();
 }
 
 /** Resolve a station favicon URL by name (+ optional ISO country). Returns null

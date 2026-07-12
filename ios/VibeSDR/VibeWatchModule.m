@@ -22,6 +22,8 @@ RCT_EXTERN_METHOD(sendLogo : (NSString *)b64)
 
 RCT_EXTERN_METHOD(sendStations : (NSString *)json)
 
+RCT_EXTERN_METHOD(sendDab : (NSString *)json)
+
 RCT_EXTERN_METHOD(sendState
                   : (nonnull NSNumber *)freq mode
                   : (NSString *)mode step

@@ -35,6 +35,7 @@ const Native = NativeModules.VibeWatchModule as
                 level: number): void;
       sendFmdx(json: string): void;
       sendStations(json: string): void;
+      sendDab(json: string): void;
       sendLogo(b64: string): void;
       sendSettings(lutB64: string, smoothing: number, needle: string,
                    needleIntensity: number, sharpness: number): void;
@@ -139,6 +140,8 @@ export interface WatchCommandHandlers {
    *  before the user opens it — state messages otherwise only fire when something
    *  CHANGES, which left the pickers blank for a couple of seconds. */
   onHello(): void;
+  /** DAB: pick an audio service out of the multiplex. Not a tune — DAB is a list. */
+  onDabSelect?(id: number): void;
 }
 
 class WatchProvider {
@@ -160,6 +163,8 @@ class WatchProvider {
   private lastFmdxAt = 0;
   private pendingFmdx: string | null = null;
   private fmdxTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastDab = '';
+  private sentDab = '\u0000';
   private lastStations = '';
   private sentStations = '\u0000';
   private lastLogo = '';   // what we WANT the watch to have
@@ -231,7 +236,10 @@ class WatchProvider {
           case 'mode': handlers.onMode(String(e.val ?? '')); break;
           case 'step': handlers.onStep(Number(e.val ?? 0)); break;
           case 'zoom': handlers.onZoomDelta(Number(e.delta ?? 0)); break;
-          case 'ping': handlers.onHello(); this.flushLogo(); this.flushStations(); break;
+          case 'ping':
+            handlers.onHello(); this.flushLogo(); this.flushStations(); this.flushDab();
+            break;
+          case 'dab':  handlers.onDabSelect?.(Number(e.val ?? 0)); break;
         }
       }),
       this.emitter.addListener('VibeWatchState', (e: { reachable: boolean }) => {
@@ -256,7 +264,7 @@ class WatchProvider {
     this.reachable = r;
     if (r) this.lastPalette = '';   // re-send palette on (re)connect
     this.onReachable?.(r);
-    if (r) { this.flushLogo(); this.flushStations(); }   // the watch just arrived with nothing
+    if (r) { this.flushLogo(); this.flushStations(); this.flushDab(); }   // watch arrived with nothing
   }
 
   detach() {
@@ -302,6 +310,25 @@ class WatchProvider {
     this.pendingFmdx = null;
     this.lastFmdxAt = Date.now();
     Native!.sendFmdx(j);
+  }
+
+  /** The DAB multiplex: the ensemble, its services, and which one is playing.
+   *
+   *  DAB is a LIST, not a continuum — the services arrive as an id->name map from
+   *  the ensemble, and you switch with setAudioServiceId(), never by tuning. So the
+   *  watch gets a list and a selection, and the crown becomes a SELECTOR rather than
+   *  a tuning control. Sent on change only (the list changes when the mux does). */
+  sendDab(state: { ensemble: string; active: number;
+                   list: { id: number; name: string }[] }) {
+    if (!this.available) return;
+    this.lastDab = JSON.stringify(state);
+    this.flushDab();
+  }
+
+  private flushDab() {
+    if (!this.isActive || this.lastDab === this.sentDab) return;
+    this.sentDab = this.lastDab;
+    Native!.sendDab(this.lastDab);
   }
 
   /** The dial's station memory — the SAME list the phone's dial draws, so the wrist
