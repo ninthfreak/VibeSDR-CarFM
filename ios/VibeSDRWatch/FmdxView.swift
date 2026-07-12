@@ -92,7 +92,8 @@ struct FmdxView: View {
       // DISARMED = the crown does nothing at all. Not "does something smaller".
       guard armed else { return }
       disarmAt = Date().addingTimeInterval(Self.armSeconds)   // keep it alive while used
-      link.tune(delta: delta)
+      // The command carries the assertion — the PHONE enforces it (see tuneArmed).
+      link.tuneArmed(delta: delta)
     }
     .onReceive(driver) { _ in
       tick &+= 1

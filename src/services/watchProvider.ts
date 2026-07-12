@@ -32,11 +32,13 @@ const Native = NativeModules.VibeWatchModule as
       sendRow(rowB64: string, freq: number, span: number, snr: number, level: number,
               lo: number, hi: number, meter: string): void;
       sendState(freq: number, mode: string, step: number, meter: string,
-                level: number): void;
+                level: number, why: string): void;
       sendFmdx(json: string): void;
       sendStations(json: string): void;
       sendDab(json: string): void;
       sendAircraft(json: string): void;
+      sendFavourites(json: string): void;
+      sendPhone(status: string): void;
       sendLogo(b64: string): void;
       sendSettings(lutB64: string, smoothing: number, needle: string,
                    needleIntensity: number, sharpness: number, peakHold: boolean): void;
@@ -128,7 +130,10 @@ export interface WatchFrameCtx {
 }
 
 export interface WatchCommandHandlers {
-  onTuneDelta(delta: number): void;
+  /** `armed` is only ever true from the watch's FM-DX screen. A SHARED tuner must
+   *  REQUIRE it — the gate cannot live in the watch's UI alone, or any other watch
+   *  screen can tune the receiver out from under every listener on the server. */
+  onTuneDelta(delta: number, armed: boolean): void;
   /** Absolute tune from the watch numpad — the one non-delta command. */
   onTuneHz(hz: number): void;
   onMode(mode: string): void;
@@ -175,6 +180,23 @@ class WatchProvider {
   private sentDab = '\u0000';
   private lastStations = '';
   private sentStations = '\u0000';
+  private lastPingAt = 0;
+  /** What the PHONE is doing, told to the watch rather than left to be guessed.
+   *
+   *  'starting'  — cold-launched (by the watch) and connecting. Not a fault; a boot.
+   *  'ready'     — a session is live.
+   *  'pick'      — no default instance, but there ARE favourites: the wrist chooses.
+   *  'setup'     — no default AND no favourites. Nothing the watch can do; say so. */
+  private phoneStatus = 'ready';
+  /** Set by SDRScreen when it pauses the spectrum socket for power saving. */
+  private specPaused = false;
+  private lastFavs = '';
+  private sentFavs = '\u0000';
+  /** Handled OUTSIDE attach(), because it must work when NO SDR screen is mounted —
+   *  which is the whole point: the watch launches the phone, the phone lands on the
+   *  picker with no default instance, and the wrist is looking at nothing. */
+  private instanceHandler: ((url: string) => void) | null = null;
+  private instanceSub: { remove(): void } | null = null;
   private lastLogo = '';   // what we WANT the watch to have
   private sentLogo = '\u0000';  // what it actually has (sentinel: never sent)
   private out = new Uint8Array(WATCH_BINS);
@@ -184,6 +206,43 @@ class WatchProvider {
   private proc = new SignalProcessor();
   private colormap = 'gqrx';
   private onReachable: ((r: boolean) => void) | null = null;
+
+  /** WHICH SCREEN OWNS THE WATCH — and a token proving it.
+   *
+   *  Two screens can be alive at once. React Navigation's `navigate()` PUSHES and
+   *  leaves the old screen MOUNTED underneath, still connected and still streaming;
+   *  even a stack reset unmounts it asynchronously, so there is always a window where
+   *  the outgoing SDR screen is pushing spectrum ROWS while the incoming FM-DX screen
+   *  is pushing STATION blobs. The watch routes on what it receives, so it flips
+   *  between the waterfall and the station screen many times a second — and the
+   *  waterfall "wins" simply because rows arrive more often.
+   *
+   *  Fixing that in the navigator is whack-a-mole. Fix it at the SOURCE: the last
+   *  screen to claim the watch owns it, and anything sent by a screen that no longer
+   *  owns it is DROPPED. A stale screen cannot talk to the wrist, whatever the
+   *  navigator is doing.
+   *
+   *  The token matters for the same reason: the outgoing screen's cleanup runs AFTER
+   *  the incoming screen's setup, so a naive detach() would tear down the new owner's
+   *  claim. Only the current owner can release it. */
+  private owner = 0;
+  private ownerScreen: 'sdr' | 'fmdx' = 'sdr';
+
+  /** Claim the watch for this screen. Returns the token to release it with. */
+  claim(screen: 'sdr' | 'fmdx'): number {
+    this.owner += 1;
+    this.ownerScreen = screen;
+    return this.owner;
+  }
+
+  /** Release ONLY if still the owner — a late cleanup must not evict its successor. */
+  release(token: number) {
+    if (token === this.owner) this.owner = 0;
+  }
+
+  private owns(screen: 'sdr' | 'fmdx') {
+    return this.owner !== 0 && this.ownerScreen === screen;
+  }
 
   /** When the phone's renderer last handed us a row.
    *
@@ -246,15 +305,20 @@ class WatchProvider {
 
     this.emitter = new NativeEventEmitter(NativeModules.VibeWatchModule);
     this.subs.push(
-      this.emitter.addListener('VibeWatchCommand', (e: { cmd: string; delta?: number; val?: unknown }) => {
+      this.emitter.addListener('VibeWatchCommand', (e: { cmd: string; delta?: number; val?: unknown; armed?: boolean }) => {
         switch (e.cmd) {
-          case 'tune': handlers.onTuneDelta(Number(e.delta ?? 0)); break;
+          case 'tune': handlers.onTuneDelta(Number(e.delta ?? 0), e.armed === true); break;
           case 'freq': handlers.onTuneHz(Number(e.val ?? 0)); break;
           case 'mode': handlers.onMode(String(e.val ?? '')); break;
           case 'step': handlers.onStep(Number(e.val ?? 0)); break;
           case 'zoom': handlers.onZoomDelta(Number(e.delta ?? 0)); break;
           case 'ping':
-            handlers.onHello(); this.flushLogo(); this.flushStations(); this.flushDab();
+            // The watch pings on appear, on wake and every 4s. Treat the FIRST one
+            // after a gap as "it has nothing" — cheap, and it heals a watch that was
+            // force-quit and relaunched while the phone kept running.
+            handlers.onHello();
+            if (Date.now() - this.lastPingAt > 8000) this.flushAll();
+            this.lastPingAt = Date.now();
             break;
           case 'dab':  handlers.onDabSelect?.(Number(e.val ?? 0)); break;
         }
@@ -281,7 +345,7 @@ class WatchProvider {
     this.reachable = r;
     if (r) this.lastPalette = '';   // re-send palette on (re)connect
     this.onReachable?.(r);
-    if (r) { this.flushLogo(); this.flushStations(); this.flushDab(); }   // watch arrived with nothing
+    if (r) this.flushAll();   // the watch arrived (or came back) with nothing
   }
 
   detach() {
@@ -312,7 +376,7 @@ class WatchProvider {
     users: number; stereo: boolean; tx: string; meter: string; level: number;
     pty: string; city: string; dist: number; flag: string; rx: string;
   }) {
-    if (!this.isActive) return;
+    if (!this.isActive || !this.owns('fmdx')) return;
     this.pendingFmdx = JSON.stringify(state);
     const wait = this.lastFmdxAt + FMDX_MS - Date.now();
     if (wait <= 0) { this.flushFmdx(); return; }
@@ -406,6 +470,89 @@ class WatchProvider {
    *  never actually went out. The wrist showed a permanently empty background.
    *  Track what we WANT the watch to have separately from what it HAS, and flush
    *  whenever the link comes up. */
+  /** The watch just (re)appeared and has NOTHING — re-send everything that is sent
+   *  "on change".
+   *
+   *  Send-on-change + a peer that restarted = NEVER SENDS. The palette LUT is only
+   *  pushed when the colormap changes, so after the watch app was force-quit the
+   *  phone stayed silent and the wrist sat in its greyscale fallback: a black-and-
+   *  white waterfall with no way back. Same trap the logo hit. Forget what we think
+   *  the watch has; it has nothing. */
+  /** The user's FAVOURITE instances — a curated handful, not the full directory.
+   *
+   *  Bringing 2,000 receivers to a watch would be silly; bringing the five you
+   *  actually use is exactly right. They already carry serverType, so the phone can
+   *  go straight to the right screen with no detection round-trip. */
+  setSpecPaused(p: boolean) { this.specPaused = p; }
+
+  setPhoneStatus(st: string) {
+    if (st === this.phoneStatus) return;
+    this.phoneStatus = st;
+    this.flushPhone();
+  }
+
+  private flushPhone() {
+    // NOT gated on `reachable`: at cold boot that flag hasn't settled yet, so gating
+    // on it meant the watch never heard "starting" and sat on a stale "ready" — i.e.
+    // it reported a normal boot as a fault. The native side already refuses to send on
+    // a dead link, and flushAll() re-sends the moment the watch appears.
+    if (!this.available) return;
+    Native!.sendPhone(this.phoneStatus);
+  }
+
+  /** WHY the wrist has no waterfall — the phone knows, so it should SAY so.
+   *
+   *  "No spectrum from iPhone" is a symptom, not a diagnosis, and it sent us round
+   *  in circles: a paused socket, a stalled renderer and a dead link all look
+   *  identical from the watch. The state channel still works whenever this matters
+   *  (that's why the frequency kept updating), so it can carry the reason. */
+  private whyNoRows(): string {
+    if (this.specPaused) return 'paused';                      // socket closed for power
+    if (Date.now() - this.lastRowAt > 2000) return 'idle';     // nothing to send us rows
+    return 'live';
+  }
+
+  sendFavourites(list: { name: string; url: string; type?: string }[]) {
+    if (!this.available) return;
+    this.lastFavs = JSON.stringify(list);
+    this.flushFavs();
+  }
+
+  private flushFavs() {
+    if (!this.available || !this.reachable || this.lastFavs === this.sentFavs) return;
+    this.sentFavs = this.lastFavs;
+    Native!.sendFavourites(this.lastFavs);
+  }
+
+  /** Register the "switch to this instance" handler. Lives OUTSIDE attach/detach so
+   *  it survives screen changes — the command has to work from the picker, where no
+   *  SDR screen exists to have attached anything. */
+  setInstanceHandler(fn: (url: string) => void) {
+    if (!this.available) return;
+    this.instanceHandler = fn;
+    if (this.instanceSub) return;
+    this.emitter ??= new NativeEventEmitter(NativeModules.VibeWatchModule);
+    this.instanceSub = this.emitter.addListener(
+      'VibeWatchCommand',
+      (e: { cmd: string; val?: unknown }) => {
+        if (e.cmd === 'inst') this.instanceHandler?.(String(e.val ?? ''));
+      },
+    );
+  }
+
+  private flushAll() {
+    this.lastPalette = '';    // forces the settings/LUT resend on the next row
+    this.sentLogo = '\u0000';
+    this.sentStations = '\u0000';
+    this.sentDab = '\u0000';
+    this.sentFavs = '\u0000';
+    this.flushPhone();
+    this.flushLogo();
+    this.flushStations();
+    this.flushDab();
+    this.flushFavs();
+  }
+
   private flushLogo() {
     if (!this.isActive || this.lastLogo === this.sentLogo) return;
     this.sentLogo = this.lastLogo;
@@ -447,7 +594,7 @@ class WatchProvider {
   sendState(freq: number, mode: string, step: number) {
     if (!this.isActive) return;
     this.lastStateAt = Date.now();
-    Native!.sendState(freq, mode, step, this.meter, this.level);
+    Native!.sendState(freq, mode, step, this.meter, this.level, this.whyNoRows());
   }
 
   /**
@@ -516,6 +663,10 @@ class WatchProvider {
   }
 
   private sendRow(row: Uint8Array, ctx: WatchFrameCtx) {
+    // A screen that no longer owns the watch must not talk to it. The outgoing SDR
+    // screen stays mounted (and streaming) for a beat after the incoming one takes
+    // over, and its rows would drag the wrist back to the waterfall.
+    if (!this.owns('sdr')) return;
     const now = Date.now();
     if (now - this.lastRowAt < MIN_ROW_MS) return; // coalesce: newest wins
     this.lastRowAt = now;

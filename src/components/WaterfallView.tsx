@@ -594,8 +594,21 @@ function WaterfallView({
   // uniforms — with no GL context in the background that spins the native_modules
   // queue ("EGLConsumer is not attached to an OpenGL ES context" spam) and starves
   // the audio DSP. Unmounting is the only reliable stop; it rebuilds on resume.
-  const bgRef = useRef(false);
-  const [active, setActive] = useState(true);
+  // INITIALISED FROM AppState.currentState, not assumed foreground.
+  //
+  // A `change` event only fires on a TRANSITION. When iOS cold-launches the app
+  // straight into the BACKGROUND — which is exactly what the Apple Watch does when it
+  // wakes the phone — no transition ever happens, so these stayed `foreground` and the
+  // whole Skia tree mounted: four Canvases, GPU surfaces, the Reanimated glide. That
+  // is the "EGLConsumer is not attached to an OpenGL ES context" / starves-the-audio-
+  // DSP case described above, running with nobody looking at the screen.
+  //
+  // Ask what state we are ACTUALLY in. Then a headless launch mounts no renderer at
+  // all, and the watch is fed by the cheap raw-spectrum path that already exists for
+  // the locked phone.
+  const startedActive = AppState.currentState === 'active';
+  const bgRef = useRef(!startedActive);
+  const [active, setActive] = useState(startedActive);
   useEffect(() => {
     const sub = AppState.addEventListener('change', (s) => {
       const bg = s !== 'active';

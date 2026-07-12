@@ -163,6 +163,23 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     s.sendMessage(["k": "air", "j": json], replyHandler: nil, errorHandler: nil)
   }
 
+  /// What the PHONE is doing — a boot is not a fault, and the watch should say which.
+  @objc(sendPhone:)
+  func sendPhone(_ status: String) {
+    guard let s = session, linkAlive else { return }
+    s.sendMessage(["k": "phone", "st": status], replyHandler: nil, errorHandler: nil)
+  }
+
+  /// The user's FAVOURITE instances. A curated handful — not the 2,000-server
+  /// directory, which would be absurd on a wrist. This is what makes the watch
+  /// useful when it LAUNCHES the phone and the phone has no default instance: the
+  /// wrist can pick one instead of staring at nothing.
+  @objc(sendFavourites:)
+  func sendFavourites(_ json: String) {
+    guard let s = session, linkAlive else { return }
+    s.sendMessage(["k": "favs", "j": json], replyHandler: nil, errorHandler: nil)
+  }
+
   /// The DAB multiplex — ensemble, services, and which one is playing. DAB is a
   /// LIST, not a continuum: you switch service, you never tune.
   @objc(sendDab:)
@@ -197,13 +214,13 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// QUEUES rather than drops — and the DOWNLINK WEDGED. The uplink kept working
   /// (a message from the watch always wakes the phone), so the wrist could still
   /// tune while having gone completely deaf. One channel, one throttle.
-  @objc(sendState:mode:step:meter:level:)
+  @objc(sendState:mode:step:meter:level:why:)
   func sendState(_ freq: NSNumber, mode: String, step: NSNumber,
-                 meter: String, level: NSNumber) {
+                 meter: String, level: NSNumber, why: String) {
     guard let s = session, linkAlive else { return }
     s.sendMessage(
       ["k": "state", "f": freq.doubleValue, "m": mode, "st": step.doubleValue,
-       "mt": meter, "lv": level.doubleValue],
+       "mt": meter, "lv": level.doubleValue, "wy": why],
       replyHandler: nil,
       errorHandler: nil
     )

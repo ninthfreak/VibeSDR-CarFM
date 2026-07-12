@@ -25,6 +25,10 @@ RCT_EXTERN_METHOD(sendStations : (NSString *)json)
 
 RCT_EXTERN_METHOD(sendDab : (NSString *)json)
 
+RCT_EXTERN_METHOD(sendFavourites : (NSString *)json)
+
+RCT_EXTERN_METHOD(sendPhone : (NSString *)status)
+
 RCT_EXTERN_METHOD(sendAircraft : (NSString *)json)
 
 RCT_EXTERN_METHOD(sendState
@@ -32,7 +36,8 @@ RCT_EXTERN_METHOD(sendState
                   : (NSString *)mode step
                   : (nonnull NSNumber *)step meter
                   : (NSString *)meter level
-                  : (nonnull NSNumber *)level)
+                  : (nonnull NSNumber *)level why
+                  : (NSString *)why)
 
 RCT_EXTERN_METHOD(sendSettings
                   : (NSString *)lutB64 smoothing

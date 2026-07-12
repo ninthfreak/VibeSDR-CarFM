@@ -68,6 +68,18 @@ struct ContentView: View {
     CrownSens(rawValue: crownSens)?.sensitivity ?? .medium
   }
 
+  /// WATCH-LOCAL waterfall brightness/contrast, persisted.
+  ///
+  /// The phone's render settings are MIRRORED and stay the base — the wrist should look
+  /// like the phone. But the same numbers cannot serve both screens: a waterfall tuned
+  /// for a big phone held in front of you is often near-black on a wrist, glanced at
+  /// outdoors and at an angle. The alternative was blowing out the PHONE just to see the
+  /// WATCH, which is the wrong trade — so the wrist gets its own offsets on top.
+  ///
+  /// -1…+1, 0 = exactly what the phone shows. Saved, so you set them once.
+  @AppStorage("wfBright")   private var wfBright   = 0.0
+  @AppStorage("wfContrast") private var wfContrast = 0.0
+
   /// The ONE knob that matters. Smoothness vs battery, nothing else — the Canvas
   /// repaints everything (waterfall, trace, VFO) on every tick regardless.
   private let driver = Timer.publish(every: 1.0 / 20.0, on: .main, in: .common).autoconnect()
@@ -80,6 +92,25 @@ struct ContentView: View {
   }
 
   private static let detents = 1000.0
+
+  private func clamp(_ v: Double) -> Double { min(1, max(-1, v)) }
+
+  /// When the crown was last actually turned. A non-tune mode ENDS when you leave —
+  /// not while you're using it.
+  @State private var crownUsedAt = Date()
+
+  /// Idle timeout before the crown falls back to TUNE.
+  ///
+  /// The rule was "the mode is EXPLICIT and PERSISTENT, never a timed-out HUD" — and
+  /// that rule still holds for the case it was written about: a mode must not vanish
+  /// while you are USING it. But it also has to end when the SESSION does. Zoom, then
+  /// drop your wrist, then come back minutes later, and the crown was still on zoom:
+  /// the mode had outlived the interaction, and the next turn does something you
+  /// didn't ask for — which is the very thing "explicit" was supposed to prevent.
+  ///
+  /// So: any turn resets the clock, and the mode only lapses once you have genuinely
+  /// left it alone. Generous, because a short timeout WOULD be the HUD we rejected.
+  private static let crownIdleTimeout: TimeInterval = 30
 
 
 
@@ -127,7 +158,8 @@ struct ContentView: View {
       NumpadView().environmentObject(link)
     }
     .navigationDestination(isPresented: $showMenu) {
-      ControlMenu { mode in crownMode = mode }.environmentObject(link)
+      ControlMenu { mode in crownMode = mode; crownUsedAt = Date() }
+        .environmentObject(link)
     }
     .ignoresSafeArea()
     .focusable(true)
@@ -152,6 +184,7 @@ struct ContentView: View {
       if delta < -range / 2 { delta += range }
 
       lastDetent = detent
+      crownUsedAt = Date()          // in use — the idle timeout must not fire
 
       // THE CROWN KEEPS TUNING UNDERNEATH A PRESENTED SCREEN. Swallow it.
       //
@@ -169,6 +202,12 @@ struct ContentView: View {
       switch crownMode {
       case .tune: link.tune(delta: delta)
       case .zoom: link.zoom(delta: delta)
+      case .brightness:
+        wfBright = clamp(wfBright + Double(delta) * 0.04)
+        link.waterfall.brightness = wfBright
+      case .contrast:
+        wfContrast = clamp(wfContrast + Double(delta) * 0.04)
+        link.waterfall.contrast = wfContrast
       }
     }
     // Long-press anywhere on the waterfall for the control grid.
@@ -181,7 +220,11 @@ struct ContentView: View {
       link.ping()          // tell the phone we're here — see below
     }
     .onChange(of: scenePhase) { _, phase in
-      guard phase == .active else { return }
+      // YOU LEFT — the mode ends. This is the honest signal, and it's the case that
+      // actually bit: zoom, lower your wrist, come back later, and the crown was
+      // still zooming. A timeout is the backstop; this is the real trigger.
+      if phase != .active { crownMode = .tune; return }
+      crownUsedAt = Date()
       // Screen woke: the queued rows and the scroll clock are both stale. Draining
       // them as usual fast-forwards through old data and then runs dry — the
       // stutter you get for the first second after a wake. Start clean.
@@ -249,7 +292,15 @@ struct ContentView: View {
       drawVFO(ctx, size)   // through BOTH: the trace and its history stay aligned
     }
     .ignoresSafeArea()
-    .onReceive(driver) { _ in frame &+= 1 }
+    .onReceive(driver) { _ in
+      frame &+= 1
+      // Lapse back to TUNE once the crown has been left alone. Checked on the render
+      // clock we already run, rather than adding a timer of its own.
+      if crownMode != .tune,
+         Date().timeIntervalSince(crownUsedAt) > Self.crownIdleTimeout {
+        crownMode = .tune
+      }
+    }
   }
 
   /// A thin spectrum trace across the top.
@@ -454,15 +505,37 @@ struct ContentView: View {
     .padding(.vertical, 10)
   }
 
+  /// The way out — wrapped in a COUNTDOWN RING showing the mode's remaining life.
+  ///
+  /// The timeout has to be visible, or it's just the crown changing its mind behind
+  /// your back — which is exactly the "you must always know what a turn will do"
+  /// problem the explicit mode was introduced to solve. A ring that drains says
+  /// "this is about to end" without a word, and any turn of the crown refills it, so
+  /// the thing that keeps the mode alive is the thing you can see keeping it alive.
   private var exitButton: some View {
     Button { crownMode = .tune } label: {
-      Image(systemName: "xmark")
-        .font(.system(size: 15, weight: .bold))
-        .foregroundStyle(.white)
-        .frame(width: 32, height: 32)
-        .contentShape(Circle())
+      ZStack {
+        Circle()
+          .stroke(.white.opacity(0.18), lineWidth: 2)
+        Circle()
+          .trim(from: 0, to: crownRemaining)
+          .stroke(meterTint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+          .rotationEffect(.degrees(-90))          // drain from 12 o'clock
+        Image(systemName: "xmark")
+          .font(.system(size: 13, weight: .bold))
+          .foregroundStyle(.white)
+      }
+      .frame(width: 30, height: 30)
+      .contentShape(Circle())
     }
     .buttonStyle(.plain)
+  }
+
+  /// 1 → full life, 0 → about to lapse. Recomputed on the render clock we already run
+  /// (`frame` ticks at 20fps), so the ring drains smoothly without its own timer.
+  private var crownRemaining: CGFloat {
+    let left = Self.crownIdleTimeout - Date().timeIntervalSince(crownUsedAt)
+    return CGFloat(min(1, max(0, left / Self.crownIdleTimeout)))
   }
 
   private var glyph: some View {
@@ -482,13 +555,22 @@ struct ContentView: View {
     .frame(width: 5, height: 74)
   }
 
-  private var meterTint: Color { .cyan }
+  private var meterTint: Color {
+    switch crownMode {
+    case .brightness: return .yellow
+    case .contrast:   return .white
+    default:          return .cyan
+    }
+  }
 
   /// Zoom has no natural 0..1, so we place the current span on a LOG scale between
   /// "as tight as it gets" and "wide" — which is how zoom actually feels, and it's
   /// what the phone's own zoom drum does in octaves.
   private var meterValue: Double {
     switch crownMode {
+    // -1…+1 mapped onto the bar, so centre = "no change from the phone".
+    case .brightness: return (wfBright + 1) / 2
+    case .contrast:   return (wfContrast + 1) / 2
     case .zoom:
       guard link.span > 0 else { return 0 }
       let lo = log2(2_000.0), hi = log2(4_000_000.0)
@@ -503,29 +585,71 @@ struct ContentView: View {
   /// nil = healthy. Otherwise, WHY there's nothing moving.
   ///
   /// Driven by the frame clock, so it appears without needing its own timer.
+  /// nil = healthy. Otherwise, WHY there's nothing moving — and the phone TELLS us
+  /// which, rather than leaving us to guess from silence.
+  ///
+  /// "No spectrum from iPhone" was a symptom, not a diagnosis: a paused socket, a
+  /// stalled renderer, a wedged link and a stale build all produce exactly the same
+  /// blank screen, and that ambiguity cost hours of chasing. The state channel keeps
+  /// working in every one of those cases except the last (it's why the frequency kept
+  /// updating), so it carries the reason with it.
   private var stalledMessage: (icon: String, text: String)? {
     if !link.reachable {
       return ("iphone.slash", "Reconnecting to iPhone")
     }
-    // Rows should arrive ~10x/sec. Two seconds of silence means the phone has
-    // stopped streaming — it isn't on the SDR screen, or there's no spectrum to
-    // send (FM-DX has none at all).
-    if let t = link.lastRowAt, Date().timeIntervalSince(t) > 2.0 {
-      return ("dot.radiowaves.left.and.right", "No spectrum from iPhone")
+
+    // WHAT THE PHONE IS DOING. A cold launch is a BOOT, not a fault — reporting it as
+    // a missing waterfall was both wrong and useless. The watch WAKES the phone (iOS
+    // launches it straight into the background), so this state is normal, not an error.
+    switch link.phoneStatus {
+    case "starting":
+      return ("hourglass", "Starting VibeSDR…")
+    case "pick":
+      // No default instance — but there ARE favourites. The wrist can choose.
+      return ("star.fill", "Choose a server\nLong-press → Servers")
+    case "setup":
+      // Nothing to connect to. Say so plainly rather than showing a dead screen.
+      return ("iphone", "Open VibeSDR on iPhone\nand save a favourite server")
+    default:
+      break
     }
-    return nil
+    // Rows may never have arrived at all (a cold start) — the phone's own status
+    // above still applies, and is checked BEFORE this.
+    guard let t = link.lastRowAt, Date().timeIntervalSince(t) > 2.0 else { return nil }
+
+    // The phone is talking to us (state messages are arriving) but sending no rows.
+    let stateFresh = link.lastStateAt.map { Date().timeIntervalSince($0) < 6 } ?? false
+    if stateFresh {
+      switch link.why {
+      case "paused":
+        return ("pause.circle", "iPhone paused the spectrum")
+      case "idle":
+        return ("dot.radiowaves.left.and.right", "iPhone isn't receiving")
+      default:
+        break
+      }
+    }
+    return ("dot.radiowaves.left.and.right", "No spectrum from iPhone")
   }
 
+  /// Nothing has ever arrived — which, on a COLD start, is the normal state for the
+  /// first few seconds while the phone boots. So it says what the phone is DOING
+  /// (`stalledMessage` carries the phone's own status) rather than reporting a fault:
+  /// "Starting VibeSDR…", "Choose a server", "Open VibeSDR on iPhone and save a
+  /// favourite". A boot is not an error, and a wrist that cries wolf on every launch
+  /// teaches you to ignore it.
   private var placeholder: some View {
-    VStack(spacing: 6) {
-      Image(systemName: link.reachable ? "dot.radiowaves.left.and.right" : "iphone.slash")
+    let msg = stalledMessage
+      ?? (link.reachable ? ("dot.radiowaves.left.and.right", "Waiting for signal")
+                         : ("iphone.slash", "Open VibeSDR on iPhone"))
+    return VStack(spacing: 6) {
+      Image(systemName: msg.0)
         .font(.title3)
         .foregroundStyle(.secondary)
-      Text(link.reachable ? "Waiting for signal" : "Open VibeSDR on iPhone")
+      Text(msg.1)
         .font(.caption2)
         .foregroundStyle(.secondary)
         .multilineTextAlignment(.center)
-
     }
     .padding(.horizontal, 12)
   }

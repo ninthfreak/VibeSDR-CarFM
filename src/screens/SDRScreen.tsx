@@ -682,7 +682,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [connLost,   setConnLost]   = useState(false);   // UberSDR link down — auto-reconnecting
   const [connTimedOut, setConnTimedOut] = useState(false); // initial connect never completed
   const connLostTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const appActiveRef  = useRef(true);   // false while backgrounded — gates connLost
+  // Initialised from AppState.currentState — a cold launch INTO THE BACKGROUND (the
+  // watch waking the phone) fires no `change` event, so assuming foreground here made
+  // the app behave as though someone were looking at it.
+  const appActiveRef  = useRef(AppState.currentState === 'active');
   // Returning from the background: the spectrum was deliberately paused, so the
   // link reads 0 for a moment while the waterfall re-subscribes. Show a calm
   // "reinitialising" notice instead of the alarming "connection lost" one, and
@@ -1368,6 +1371,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** Did WE close the spectrum WS on background? False when the watch kept it
    *  alive, so the foreground path knows not to re-open a live socket. */
   const specPausedByBgRef = useRef(false);
+
+  /** Re-open the spectrum for a watch that is demonstrably there.
+   *
+   *  Called on every watch message (it heartbeats every 4s), so a spectrum that was
+   *  paused while the watch was actually watching heals itself rather than staying
+   *  dead until some flag happens to change. */
+  const wakeSpectrumForWatch = useCallback(() => {
+    if (appActiveRef.current) return;         // phone's own screen governs
+    const c = client.current; if (!c) return;
+    if (specPausedByBgRef.current) {
+      specPausedByBgRef.current = false;
+      c.resumeSpectrum();
+      c.setRate(WATCH_BG_DIVISOR);
+      watchProvider.setSpecPaused(false);
+    }
+  }, []);
 
   /** Late-bound: zoomBy is declared further down. */
   const zoomByRef = useRef<((factor: number) => void) | null>(null);
@@ -2420,6 +2439,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           specPausedByBgRef.current = true;
           client.current?.pauseSpectrum();
         }
+        watchProvider.setSpecPaused(specPausedByBgRef.current);
       } else if (dataSaverOffRef.current) {
         appActiveRef.current = true;
         // Opened the app after a data-saver disconnect (the Play event may not
@@ -3009,9 +3029,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   //    single source of truth for step size and band limits, and the watch just
   //    mirrors whatever we echo back.
   useEffect(() => {
+    // CLAIM the watch. Two screens can be alive at once (the outgoing one unmounts
+    // asynchronously), and a stale screen streaming rows drags the wrist back to a
+    // waterfall it has already left. Only the owner may send.
+    const token = watchProvider.claim('sdr');
     watchProvider.attach({
+      // No arming here: Kiwi/OWRX/UberSDR give every user their OWN VFO, so tuning
+      // disturbs nobody. Arming is an FM-DX rule, not a "shared backend" rule.
       onTuneDelta: (delta: number) => {
         const c = client.current; if (!c || !delta) return;
+        wakeSpectrumForWatch();   // a turning crown is proof the watch is watching
         if (isWholeProfileMode(String(c.getStatus().mode))) return;   // locked to its ensemble
         const s = stepRef.current; if (!(s > 0)) return;
         const cur = c.getStatus().frequency;
@@ -3050,6 +3077,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       // not from React state, which can lag a frame behind the radio.
       onHello: () => {
         const c = client.current; if (!c) return;
+        // ANY message from the watch is PROOF it is there and listening — better
+        // proof than a flag, because recency cannot desync. The watch pings every 4s,
+        // so this self-heals a paused spectrum within one heartbeat.
+        //
+        // It has to, because onReachableChange only fires on a CHANGE: if the flag
+        // was already true when we backgrounded and we paused anyway (or the pause
+        // and the flag ever disagree), NOTHING re-opens the socket. The wrist then
+        // sits there tuning perfectly — uplink alive, downlink dead — showing "No
+        // spectrum from iPhone" forever. Same class as the stale-isReachable bug;
+        // the flag is not the truth, the message is.
+        wakeSpectrumForWatch();
         const s = c.getStatus();
         watchProvider.sendState(s.frequency, String(s.mode), stepRef.current);
       },
@@ -3071,9 +3109,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           specPausedByBgRef.current = true;
           c.pauseSpectrum();
         }
+        watchProvider.setSpecPaused(specPausedByBgRef.current);
       },
     });
-    return () => watchProvider.detach();
+    return () => { watchProvider.release(token); watchProvider.detach(); };
   }, []);
 
   // ── DAB on the watch: a LIST, not a band ───────────────────────────────────

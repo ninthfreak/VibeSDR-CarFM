@@ -2,13 +2,18 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { Animated, ActivityIndicator, LogBox, Text, View } from 'react-native';
+import { Animated, ActivityIndicator, AppState, LogBox, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { TouchableOpacity } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFonts } from 'expo-font';
 LogBox.ignoreAllLogs();
 
+import { watchProvider } from './src/services/watchProvider';
+import { getFavourites } from './src/services/favourites';
+import { getViewMode } from './src/services/viewMode';
+import { getDefaultInstance } from './src/services/defaultInstance';
+import { watchTargetPending } from './src/services/watchBoot';
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import SDRScreen            from './src/screens/SDRScreen';
 import RtlTcpServerScreen   from './src/screens/RtlTcpServerScreen';
@@ -154,6 +159,126 @@ export default function App() {
   // Install the global JS crash guard once — flaky SDR servers must never abort
   // the whole app; recover to the picker with a server-attributed message.
   useEffect(() => { installCrashGuard(navigationRef); }, []);
+
+  // ── Apple Watch: run HEADLESS ──────────────────────────────────────────────
+  //
+  //    The watch can wake the phone by sending it a message — iOS cold-launches the
+  //    app straight INTO THE BACKGROUND. That is the whole point (phone in a pocket,
+  //    waterfall on your wrist) and it is not something we could switch off even if
+  //    we wanted to: WCSession wakes the counterpart app, full stop.
+  //
+  //    What was broken is that the app didn't KNOW. Every background gate defaulted to
+  //    "foreground" (a `change` event only fires on a TRANSITION, and a launch straight
+  //    into the background produces none), so the renderer mounted its whole Skia tree
+  //    and animation drivers with nobody looking — the stutter, and the audio-DSP
+  //    starvation the renderer itself warns about. Those gates now read
+  //    AppState.currentState, so a headless launch mounts no renderer at all and the
+  //    wrist is fed by the cheap raw-spectrum path built for the locked phone.
+  //
+  //    This handler is the other half: WHAT to connect to, with nobody to ask.
+  //      1. the instance the WATCH asked for   (explicit beats everything)
+  //      2. the DEFAULT instance               (the user's standing answer)
+  //      3. FAVOURITES → ask the wrist to pick (we have candidates; let them choose)
+  //      4. neither → tell them to open the phone and save one. Honest, not a fault.
+  useEffect(() => {
+    const startedInBackground = AppState.currentState !== 'active';
+
+    const pushFavs = () => {
+      getFavourites()
+        .then((favs) => watchProvider.sendFavourites(
+          favs.map((f) => ({ name: f.name, url: f.url, type: f.serverType })),
+        ))
+        .catch(() => {});
+    };
+    pushFavs();
+
+    /** Navigation does not exist for the first moment of a cold boot — we hold render
+     *  until the fonts load. Every reset() fired before that was silently DISCARDED,
+     *  which is why the headless boot resolved a default instance and then did nothing
+     *  at all: no screen, no connection, no audio. Wait for the navigator. */
+    const whenNavReady = () => new Promise<boolean>((resolve) => {
+      if (navigationRef.isReady()) { resolve(true); return; }
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        if (navigationRef.isReady()) { clearInterval(iv); resolve(true); }
+        else if (Date.now() - t0 > 15000) { clearInterval(iv); resolve(false); }
+      }, 50);
+    });
+
+    const goTo = async (f: { name: string; url: string; serverType?: string }, viewMode: ViewMode) => {
+      if (!(await whenNavReady())) { watchTargetPending.claimed = false; return; }
+      const target = f.serverType === 'fmdx'
+        ? { name: 'Tuner', params: { baseUrl: f.url, instanceName: f.name, viewMode } }
+        : { name: 'SDR', params: {
+              baseUrl: f.url, instanceName: f.name, viewMode,
+              serverType: (f.serverType ?? 'ubersdr') as 'ubersdr' | 'kiwi' | 'owrx',
+            } };
+      // RESET to the target ALONE. Do NOT navigate() (it pushes and leaves the old
+      // screen mounted and streaming), and do NOT leave the picker beneath it —
+      // InstancePicker AUTO-CONNECTS TO THE DEFAULT on mount, so it would immediately
+      // drag us back to the default and fight the switch we were making.
+      navigationRef.reset({ index: 0, routes: [target] } as never);
+      watchProvider.setPhoneStatus('ready');
+      // We got where we were going — the picker is free to behave normally again.
+      watchTargetPending.claimed = false;
+    };
+
+    const applyInstance = (url: string) => {
+      if (!url) return;
+      watchTargetPending.claimed = true;   // stop the picker auto-connecting past us
+      watchProvider.setPhoneStatus('starting');
+      Promise.all([getFavourites(), getViewMode()])
+        .then(([favs, viewMode]) => {
+          const f = favs.find((x) => x.url === url);
+          if (f) return goTo(f, viewMode);
+          watchTargetPending.claimed = false;   // unknown URL — don't hold the picker
+        })
+        .catch(() => { watchTargetPending.claimed = false; });
+    };
+    watchProvider.setInstanceHandler(applyInstance);
+
+    // Headless boot: decide what to connect to, with no user to ask.
+    if (startedInBackground) {
+      watchTargetPending.claimed = true;      // the picker must not race us
+      watchProvider.setPhoneStatus('starting');
+      Promise.all([getDefaultInstance(), getFavourites(), getViewMode()])
+        .then(([def, favs, viewMode]) => {
+          if (def) {
+            // DefaultInstance stores no serverType (the picker navigates without one).
+            // If the same server is also FAVOURITED we know its type — use it, so an
+            // OWRX or FM-DX default doesn't get mis-opened as UberSDR.
+            const known = favs.find((f) => f.url === def.url);
+            goTo({ name: def.name, url: def.url, serverType: known?.serverType }, viewMode);
+          } else if (favs.length) {
+            // We have candidates but no standing answer — let the wrist choose rather
+            // than picking one for them.
+            watchProvider.setPhoneStatus('pick');
+            watchTargetPending.claimed = false;
+          } else {
+            // Nothing to connect to. Say so plainly instead of showing a dead screen.
+            watchProvider.setPhoneStatus('setup');
+            watchTargetPending.claimed = false;
+          }
+        })
+        .catch(() => {
+          watchProvider.setPhoneStatus('setup');
+          watchTargetPending.claimed = false;
+        });
+    }
+
+    // Favourites change on the picker, not here — re-read on foreground rather than
+    // trying to observe a store we don't own.
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st !== 'active') return;
+      // The user has the phone in their hand — THEY drive now. Never let a stale
+      // watch claim keep the picker from auto-connecting to their default: that made
+      // the app stop connecting on a normal open, which is far worse than the bug it
+      // was guarding against.
+      watchTargetPending.claimed = false;
+      pushFavs();
+    });
+    return () => sub.remove();
+  }, []);
 
   const [fontsLoaded] = useFonts({
     'Nixie One':              require('./assets/fonts/NixieOne-Regular.ttf'),

@@ -31,6 +31,7 @@ enum WK {
   static let needleI = "ni"  // Double, 1..10 — needle intensity
   static let sharp   = "sh"  // Double, 0..10 — waterfall sharpness
   static let peak    = "pk"  // Bool — the phone's peak-hold setting, mirrored
+  static let why     = "wy"  // String — WHY there are no rows: live|paused|idle
 }
 
 final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
@@ -65,6 +66,11 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// different screen entirely and has no spectrum at all). The watch just sat on
   /// its last frame looking frozen, which is indistinguishable from a lock-up.
   @Published var lastRowAt: Date? = nil
+  /// WHY the phone isn't sending rows, straight from the phone. "No spectrum from
+  /// iPhone" is a symptom, not a diagnosis — a paused socket, a stalled renderer and
+  /// a dead link all look identical from here, and chasing that cost hours.
+  @Published var why = "live"
+  @Published var lastStateAt: Date? = nil
 
   // ── FM-DX ──────────────────────────────────────────────────────────────────
   //
@@ -85,6 +91,15 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// The phone's dial memory, mirrored — station names pinned to frequencies, learned
   /// from RDS as you tune. The wrist draws the same dial rather than inventing one.
   @Published var stations: [FmdxStation] = []
+  /// The user's FAVOURITE instances — a curated handful, not the 2,000-server
+  /// directory (which would be absurd on a wrist). This is what rescues the case
+  /// where the watch LAUNCHES the phone and the phone has no default instance: the
+  /// wrist can pick one instead of staring at nothing.
+  @Published var favourites: [Favourite] = []
+  /// What the PHONE is doing. A cold launch is a BOOT, not a fault — and the watch
+  /// should say which, rather than reporting a missing waterfall as an error.
+  /// starting | ready | pick | setup
+  @Published var phoneStatus = "ready"
   /// Which screen the watch should be. COMPUTED, not "last message wins".
   ///
   /// FM-DX could be routed by arrival, because an FM-DX server sends no rows. DAB
@@ -119,6 +134,13 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     var distKm: Double? = nil
     var bearing: Double? = nil
     var id: String { icao }
+  }
+
+  struct Favourite: Codable, Equatable, Identifiable {
+    var name = ""
+    var url = ""
+    var type: String? = nil      // ubersdr | kiwi | owrx | fmdx | …
+    var id: String { url }
   }
 
   struct DabService: Codable, Equatable, Identifiable {
@@ -268,6 +290,22 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     scheduleFlush()
   }
 
+  /// An ARMED tune, from the FM-DX screen.
+  ///
+  /// FM-DX has ONE shared receiver, so tuning it moves the frequency for every
+  /// listener — which is why the crown is disarmed by default there. But that gate
+  /// lived only in the watch's UI, and the phone accepted any tune command it was
+  /// given. When a navigation bug briefly left the watch on the WATERFALL screen
+  /// while the phone was on FM-DX, the waterfall's crown tuned the shared receiver
+  /// with no arming at all.
+  ///
+  /// So the assertion travels with the command: the watch says "this tune is armed",
+  /// and the phone REQUIRES that before it will touch a shared tuner. The gate no
+  /// longer depends on which screen the watch happens to be showing.
+  func tuneArmed(delta: Int) {
+    send(["cmd": "tune", "delta": delta, "armed": true])
+  }
+
   func zoom(delta: Int) { pendingZoom += delta; scheduleFlush() }
 
   private func predictTune(delta: Int) {
@@ -324,6 +362,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// Pick a DAB service. NOT a tune — the phone calls setAudioServiceId(), which
   /// re-sends the demod without touching the frequency.
   func selectDab(_ id: Int) { send(["cmd": "dab", "val": id]) }
+
+  /// Switch the PHONE to another instance. Handled outside the SDR screen on the
+  /// phone, because the whole point is that it works when no SDR screen is up.
+  func selectInstance(_ url: String) { send(["cmd": "inst", "val": url]) }
 
   func setMode(_ m: String) { send(["cmd": "mode", "val": m]) }
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
@@ -461,6 +503,8 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       }
       if let st = m[WK.step] as? Double { step = st }
       if let mt = m[WK.meter] as? String { meter = mt }
+      if let w = m[WK.why] as? String { why = w }
+      lastStateAt = Date()
       if let lv = m[WK.level] as? Double { level = lv }
 
     case "fmdx":
@@ -484,6 +528,16 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
          let d = j.data(using: .utf8),
          let st = try? JSONDecoder().decode(DabState.self, from: d) {
         dab = st
+      }
+
+    case "phone":
+      if let st = m["st"] as? String { phoneStatus = st }
+
+    case "favs":
+      if let j = m[WK.json] as? String,
+         let d = j.data(using: .utf8),
+         let list = try? JSONDecoder().decode([Favourite].self, from: d) {
+        favourites = list
       }
 
     case "stations":

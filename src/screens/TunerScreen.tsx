@@ -386,8 +386,15 @@ export default function TunerScreen({ route, navigation }: Props) {
   //    deliberate act, not a wrist twitch. The watch owns that latch; by the time a
   //    tune command reaches us the user has already armed it.
   useEffect(() => {
+    const token = watchProvider.claim('fmdx');
     watchProvider.attach({
-      onTuneDelta: (delta: number) => {
+      onTuneDelta: (delta: number, armed: boolean) => {
+        // A SHARED tuner: retuning moves the frequency for EVERY listener on this
+        // server. The watch disarms its crown by default for exactly that reason —
+        // but that gate must not live in the watch's UI alone, or any other watch
+        // screen (or a stale one, after a navigation bug) can tune the receiver out
+        // from under everyone. The phone REQUIRES the assertion.
+        if (!armed) return;
         if (!delta) return;
         const cur = latestStRef.current?.freqHz ?? 0;
         const st0 = stepRef.current;
@@ -416,7 +423,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         }
       },
     });
-    return () => watchProvider.detach();
+    return () => { watchProvider.release(token); watchProvider.detach(); };
   }, [armTarget]);
 
   // ── Drum tuning: velocity-adaptive accumulator, snapped to the step grid,

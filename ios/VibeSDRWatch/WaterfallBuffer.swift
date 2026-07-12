@@ -60,6 +60,39 @@ final class WaterfallBuffer {
   /// the 256 bins wide, so it loses the most and goes mushy.
   var sharpness: Double = 0.0
 
+  // ── WATCH-LOCAL BRIGHTNESS / CONTRAST ──────────────────────────────────────
+  //
+  // The phone's render settings are MIRRORED and stay the base — the wrist should
+  // look like the phone. But the same settings do not serve both screens: the phone
+  // is big, bright and looked at directly; the watch is small, often outdoors, often
+  // at an angle, and a waterfall that reads fine on a phone can be near-black on a
+  // wrist. Forcing one set of numbers to serve both means blowing out the phone just
+  // to see the watch — so the watch gets its OWN offsets, applied ON TOP.
+  //
+  // Applied at INGEST, through a 256-entry tone table, so the cost is one lookup per
+  // pixel and the waterfall, the spectrum trace and the peak line all agree (they're
+  // all derived from the same row).
+  var brightness: Double = 0 { didSet { buildTone() } }   // -1…+1
+  var contrast:   Double = 0 { didSet { buildTone() } }   // -1…+1
+  private var tone = [UInt8](repeating: 0, count: 256)
+
+  private func buildTone() {
+    for i in 0..<256 {
+      var v = Double(i) / 255
+      // Contrast: an S-curve about the midpoint, same shape as the phone's.
+      if contrast != 0 {
+        let k = contrast * 0.9                     // keep it short of a hard step
+        v = v < 0.5 ? pow(v * 2, 1 - k) / 2
+                    : 1 - pow((1 - v) * 2, 1 - k) / 2
+      }
+      // Brightness: a straight lift. Applied AFTER contrast so raising brightness
+      // lifts the floor rather than crushing the top.
+      v += brightness * 0.5
+      tone[i] = UInt8(max(0, min(255, (v * 255).rounded())))
+    }
+    cached = nil
+  }
+
   private var pixels: [UInt8]
   private var lut: [UInt8]
   private var cached: CGImage?
@@ -148,6 +181,7 @@ final class WaterfallBuffer {
       l[i * 4 + 0] = UInt8(i); l[i * 4 + 1] = UInt8(i); l[i * 4 + 2] = UInt8(i)
     }
     lut = l
+    buildTone()
   }
 
   func setLUT(_ newLUT: [UInt8]) {
@@ -208,7 +242,9 @@ final class WaterfallBuffer {
     }
     lastArrivalAt = now
 
-    queue.append(sharpen(row))
+    // Tone (watch-local brightness/contrast) applied ONCE, here — so the waterfall,
+    // the trace and the peak line all see the same numbers.
+    queue.append(sharpen(row).map { tone[Int($0)] })
     // If we somehow can't keep up, drop the OLDEST: the newest row is the one that
     // matters, and a growing queue is just latency. The cap was 8 — i.e. we were
     // willing to sit ~800ms behind the radio before throwing anything away, which is

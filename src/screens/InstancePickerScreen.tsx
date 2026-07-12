@@ -80,6 +80,7 @@ import {
 } from '../services/defaultInstance';
 import { isDeepLinkActive, whenInitialLinkChecked } from '../linking/deepLinkState';
 import { parseSdrUrl } from '../linking/SdrLinkHandler';
+import { watchTargetPending } from '../services/watchBoot';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
          repairVibeserverFavourites,
          TcpFav, getTcpFavs, saveTcpFavs } from '../services/favourites';
@@ -235,7 +236,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // picker could win, auto-connect to the default, and the link would arrive
       // too late (it opened the default instance instead of the scanned one).
       await whenInitialLinkChecked();
-      if (!cancelled && dEarly && !isDeepLinkActive()) {
+      // The WATCH is driving this boot — it has already chosen (or is choosing) a
+    // server, so auto-connecting to the default would drag the user straight back to
+    // it. Stand down.
+    if (watchTargetPending.claimed) return;
+    if (!cancelled && dEarly && !isDeepLinkActive()) {
         navigation.navigate('SDR', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: null });
       }
     }

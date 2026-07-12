@@ -7,12 +7,14 @@ import WatchKit
 /// must never be unsure what the crown is about to do: an accidental turn should
 /// be recoverable by knowing, not by guessing.
 enum CrownMode: Equatable {
-  case tune, zoom
+  case tune, zoom, brightness, contrast
 
   var glyph: String {
     switch self {
-    case .tune: return "dial.medium"
-    case .zoom: return "magnifyingglass"
+    case .tune:       return "dial.medium"
+    case .zoom:       return "magnifyingglass"
+    case .brightness: return "sun.max.fill"
+    case .contrast:   return "circle.lefthalf.filled"
     }
   }
 }
@@ -85,7 +87,12 @@ struct ControlMenu: View {
   @State private var showModes = false
   @State private var showSteps = false
   @State private var showCrown = false
+  @State private var showFavs = false
   @AppStorage("crownSens") private var crownSens = CrownSens.medium.rawValue
+  /// WATCH-LOCAL waterfall offsets — the same keys ContentView drives. Mirrored here
+  /// only so Reset can clear them.
+  @AppStorage("wfBright")   private var wfBright   = 0.0
+  @AppStorage("wfContrast") private var wfContrast = 0.0
 
   private let cols = Array(repeating: GridItem(.flexible(), spacing: 5), count: 2)
 
@@ -94,8 +101,15 @@ struct ControlMenu: View {
 
   var body: some View {
     Group {
-      let screenH = WKInterfaceDevice.current().screenBounds.height
-      let h = min(94, max(38, (screenH - closeH - 5 - 22) / 2))
+      // The menu SCROLLS — watchOS's own Control Centre does, so it's the native
+      // idiom and users already expect it. That means tiles no longer have to fight
+      // each other for a fixed screen's worth of height: they can be a comfortable
+      // size and the list can simply grow.
+      //
+      // Brightness and contrast are CROWN MODES, not sliders — same language as Zoom,
+      // and you adjust them while looking at the very waterfall you're adjusting,
+      // which a settings screen can't do.
+      let h: CGFloat = 66
 
       VStack(spacing: 5) {
         // A visible way OUT. Hiding the nav bar reclaimed the space the pad needed,
@@ -119,7 +133,8 @@ struct ControlMenu: View {
         .frame(height: closeH)
         .padding(.leading, 8)
 
-        LazyVGrid(columns: cols, spacing: 5) {
+        ScrollView {
+          LazyVGrid(columns: cols, spacing: 5) {
           tile(icon: "magnifyingglass", label: "Zoom", h: h) {
             dismiss(); onPickCrown(.zoom)
           }
@@ -127,17 +142,52 @@ struct ControlMenu: View {
           // "9k", or "USB") shows you the setting while leaving you to guess what
           // it's the setting FOR. The name makes the tile a control; the value makes
           // the menu double as a status readout. You need both.
+          // The WATCH's own brightness/contrast — the phone's settings are mirrored
+          // as the base, but the same numbers don't serve both screens: a waterfall
+          // that reads fine on a big bright phone can be near-black on a wrist held
+          // at an angle outdoors. These are watch-local and persist.
+          tile(icon: "sun.max.fill", label: "Bright", h: h) {
+            dismiss(); onPickCrown(.brightness)
+          }
+          tile(icon: "circle.lefthalf.filled", label: "Contrast", h: h) {
+            dismiss(); onPickCrown(.contrast)
+          }
           tile(name: "CROWN", value: crownLabel, h: h) { showCrown = true }
           tile(name: "STEP",  value: stepLabel(link.step), h: h) { showSteps = true }
           tile(name: "DEMOD", value: link.mode.uppercased(), h: h) { showModes = true }
+
+          // FAVOURITE INSTANCES. The watch can LAUNCH the phone app — but if there's
+          // no default instance the phone lands on the picker and the wrist is left
+          // looking at nothing. Bringing the whole directory over would be silly;
+          // bringing the handful you actually use is exactly right.
+          tile(icon: "star.fill", label: "Servers", h: h) { showFavs = true }
+
+          // A WAY BACK. Brightness and contrast are watch-local, so a user who
+          // cranks them until the waterfall is a white slab has no phone setting to
+          // undo it with — and no obvious way to tell that the WATCH is what they
+          // broke. Resets ONLY the watch's own offsets; the phone is untouched.
+          resetTile(h: h)
+        }
+        // Room to scroll the LAST row clear of the rounded corner — as content,
+        // not as a bar. Control Centre lets its tiles run off the bottom edge and
+        // simply keeps scrolling; a fixed bottom padding on the outer stack instead
+        // drew a hard black band across the screen, which reads as a broken layout
+        // rather than as "there is more below".
+        .padding(.bottom, 18)
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-      .padding(.bottom, 12)
     }
     .padding(.horizontal, 6)
-    .ignoresSafeArea(edges: .top)
+    .ignoresSafeArea(edges: [.top, .bottom])
     .toolbar(.hidden, for: .navigationBar)
+    .sheet(isPresented: $showFavs) {
+      FavouritesList(favs: link.favourites) { url in
+        link.selectInstance(url)
+        showFavs = false
+        dismiss()
+      }
+    }
     .sheet(isPresented: $showCrown) {
       CrownPicker(current: $crownSens) { showCrown = false; dismiss() }
     }
@@ -208,6 +258,36 @@ struct ControlMenu: View {
   static let modes = ["usb", "lsb", "am", "sam", "fm", "nfm", "cwu", "cwl"]
   static let steps: [Double] = [10, 100, 500, 1_000, 9_000, 10_000, 12_500, 25_000, 100_000]
 
+  /// Reset the WATCH's waterfall offsets. Disabled (and dimmed) when they're already
+  /// at default, so it reads as a status as much as a button.
+  private func resetTile(h: CGFloat) -> some View {
+    let dirty = wfBright != 0 || wfContrast != 0
+    return Button {
+      wfBright = 0
+      wfContrast = 0
+      link.waterfall.brightness = 0
+      link.waterfall.contrast = 0
+      WKInterfaceDevice.current().play(.success)
+    } label: {
+      VStack(spacing: 2) {
+        Image(systemName: "arrow.counterclockwise")
+          .font(.system(size: h * 0.26, weight: .semibold))
+        Text("Reset view")
+          .font(.system(size: h * 0.15, weight: .semibold, design: .rounded))
+          .lineLimit(1)
+          .minimumScaleFactor(0.6)
+      }
+      .foregroundStyle(dirty ? .white : .white.opacity(0.35))
+      .frame(maxWidth: .infinity)
+      .frame(height: h)
+      .background(RoundedRectangle(cornerRadius: h * 0.30)
+        .fill(.white.opacity(dirty ? 0.16 : 0.06)))
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .disabled(!dirty)
+  }
+
   private var crownLabel: String {
     CrownSens(rawValue: crownSens)?.label ?? "Normal"
   }
@@ -219,6 +299,44 @@ struct ControlMenu: View {
       return k == k.rounded() ? String(format: "%.0fk", k) : String(format: "%.1fk", k)
     }
     return String(format: "%.0fHz", hz)
+  }
+}
+
+/// The user's favourite instances, as a list. Tapping one switches the PHONE.
+struct FavouritesList: View {
+  let favs: [WatchLink.Favourite]
+  let onPick: (String) -> Void
+
+  var body: some View {
+    List {
+      if favs.isEmpty {
+        // Honest about WHY it's empty, and where to fix it. An empty list with no
+        // explanation reads as broken.
+        Text("No favourites yet.\nStar a server on the iPhone.")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .multilineTextAlignment(.center)
+          .frame(maxWidth: .infinity)
+      }
+      ForEach(favs) { f in
+        Button {
+          onPick(f.url)
+        } label: {
+          VStack(alignment: .leading, spacing: 1) {
+            Text(f.name.isEmpty ? f.url : f.name)
+              .font(.system(size: 15, weight: .semibold, design: .rounded))
+              .lineLimit(1)
+            if let t = f.type, !t.isEmpty {
+              Text(t.uppercased())
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundStyle(.cyan)
+            }
+          }
+        }
+        .buttonStyle(.plain)
+      }
+    }
+    .navigationTitle("Servers")
   }
 }
 
