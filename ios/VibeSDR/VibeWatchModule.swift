@@ -46,17 +46,22 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// showed 648kHz while the phone was on 4582, and "caught up" ~30s later. Nothing
   /// was stale at the source; we had simply buried the channel.
   ///
-  /// So: one row in flight at a time. If the previous hasn't landed, DROP the new
-  /// one rather than queue it. A dropped row is invisible on a scrolling waterfall;
-  /// a backed-up queue is thirty seconds of lag. (Exactly the rule the watch's own
-  /// jitter buffer already follows — the phone just wasn't obeying it.)
-  private var rowInFlight = false
-  private var rowSentAt = Date.distantPast
+  /// So: bound the number of rows in flight and DROP the rest rather than queue
+  /// them. A dropped row is invisible on a scrolling waterfall; a backed-up queue
+  /// is thirty seconds of lag.
+  ///
+  /// A small amount of PIPELINING (not one-at-a-time): the send rate would
+  /// otherwise equal the WCSession round trip exactly, leaving no headroom if a
+  /// single reply is slow. Two in flight hides that without letting a queue build
+  /// — the backlog we're guarding against took THIRTY seconds to drain, and two
+  /// rows is 0.2s.
+  private static let maxInFlight = 2
+  private var inFlight = 0
+  private var oldestSentAt = Date.distantPast
 
   private func clearIfStuck() {
-    // Belt and braces: if a reply never comes (watch app killed mid-send), don't
-    // wedge the feed forever.
-    if rowInFlight, Date().timeIntervalSince(rowSentAt) > 1.0 { rowInFlight = false }
+    // If replies never come (watch app killed mid-send), don't wedge the feed.
+    if inFlight > 0, Date().timeIntervalSince(oldestSentAt) > 2.0 { inFlight = 0 }
   }
 
   override init() {
@@ -102,8 +107,8 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
           let row = Data(base64Encoded: rowB64) else { return }
 
     clearIfStuck()
-    // The previous row hasn't landed — drop this one rather than queue it behind.
-    guard !rowInFlight else { return }
+    // Too many still in flight — drop this row rather than queue it behind them.
+    guard inFlight < Self.maxInFlight else { return }
 
     var blob = Data(capacity: 1 + 8 * 6 + row.count)
     blob.append(1)                                   // kind: row
@@ -113,20 +118,21 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     }
     blob.append(row)
 
-    rowInFlight = true
-    rowSentAt = Date()
+    if inFlight == 0 { oldestSentAt = Date() }
+    inFlight += 1
     s.sendMessageData(
       blob,
-      replyHandler: { [weak self] _ in self?.rowInFlight = false },
-      errorHandler: { [weak self] _ in self?.rowInFlight = false }
+      replyHandler: { [weak self] _ in self?.inFlight = max(0, (self?.inFlight ?? 1) - 1) },
+      errorHandler: { [weak self] _ in self?.inFlight = max(0, (self?.inFlight ?? 1) - 1) }
     )
   }
 
-  @objc(sendState:mode:step:)
-  func sendState(_ freq: NSNumber, mode: String, step: NSNumber) {
+  @objc(sendState:mode:step:volume:)
+  func sendState(_ freq: NSNumber, mode: String, step: NSNumber, volume: NSNumber) {
     guard let s = session, linkAlive else { return }
     s.sendMessage(
-      ["k": "state", "f": freq.doubleValue, "m": mode, "st": step.doubleValue],
+      ["k": "state", "f": freq.doubleValue, "m": mode, "st": step.doubleValue,
+       "vol": volume.doubleValue],
       replyHandler: nil,
       errorHandler: nil
     )

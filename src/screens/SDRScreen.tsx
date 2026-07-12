@@ -1363,6 +1363,11 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  alive, so the foreground path knows not to re-open a live socket. */
   const specPausedByBgRef = useRef(false);
 
+  /** Volume the watch's crown drives (0..1) — the phone's decode gain. */
+  const watchVolRef = useRef(1);
+  /** Late-bound: zoomBy is declared further down. */
+  const zoomByRef = useRef<((factor: number) => void) | null>(null);
+
   const onTuneHzRef    = useRef<((hz: number) => void) | null>(null);
   const onModeRef      = useRef<((m: SDRMode) => void) | null>(null);
   const onFilterBothRef = useRef<((low: number, high: number) => void) | null>(null);
@@ -2970,6 +2975,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     onTuneHzRef.current    = onTuneHz;
     onModeRef.current      = onMode;
+    zoomByRef.current      = zoomBy;
     onFilterBothRef.current = onFilterBoth;
     onVtsJumpRef.current   = onVtsJump;
     onSearchTuneRef.current = onSearchTune;
@@ -3000,6 +3006,43 @@ export default function SDRScreen({ route, navigation }: Props) {
       onMode: (m: string) => { if (m) onModeRef.current?.(m as SDRMode); },
       onStep: (hz: number) => { if (hz > 0) setStep(hz); },
 
+      // Crown in VOLUME mode. This is the phone's decode gain, so it lands on
+      // whatever you're actually listening to — speaker, Bluetooth or AirPods.
+      onVolumeDelta: (delta: number) => {
+        if (!delta) return;
+        const v = Math.max(0, Math.min(1, watchVolRef.current + delta * 0.04));
+        if (v === watchVolRef.current) return;
+        watchVolRef.current = v;
+        (NativeModules.VibePowerModule as { setVolume?: (v: number) => void })?.setVolume?.(v);
+
+        // Read the frequency from the CLIENT, never from `status` — this effect
+        // runs once, so `status` here is frozen at whatever it was when the screen
+        // mounted. Sending that stale value made the watch's readout flash the
+        // mount-time frequency on every volume click (the next row corrected it
+        // 100ms later, so it looked like a display glitch — which it was).
+        const c = client.current; if (!c) return;
+        const s = c.getStatus();
+        watchProvider.sendState(s.frequency, String(s.mode), stepRef.current, v);
+      },
+
+      // Crown in ZOOM mode. Drives the SAME client.zoom() the phone's zoom drum
+      // drives — so it moves the real waterfall, and the watch gets genuinely
+      // finer bins rather than a magnified crop of coarse ones.
+      onZoomDelta: (delta: number) => {
+        if (!delta) return;
+        zoomByRef.current?.(Math.pow(2, -delta / 6));
+      },
+
+      // The watch said hello. Answer with the current state so its menu already
+      // knows the mode and step BEFORE the user opens it. Read from the client,
+      // not from React state, which can lag a frame behind the radio.
+      onHello: () => {
+        const c = client.current; if (!c) return;
+        const s = c.getStatus();
+        watchProvider.sendState(s.frequency, String(s.mode), stepRef.current,
+                                watchVolRef.current);
+      },
+
       // The watch app is usually opened AFTER the phone is already locked in a
       // pocket — by which point we have already closed the spectrum WS. So the
       // watch coming into view has to be able to REOPEN it, and its going away
@@ -3028,7 +3071,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // pipe) on top of the 10fps row stream. It queues, delivers in bursts, and the
   // watch's frequency readout stops tracking.
   useEffect(() => {
-    watchProvider.sendState(status.frequency, String(status.mode), step);
+    watchProvider.sendState(status.frequency, String(status.mode), step, watchVolRef.current);
   }, [status.mode, step]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Mirror the phone's own render settings into the watch's processor, so the

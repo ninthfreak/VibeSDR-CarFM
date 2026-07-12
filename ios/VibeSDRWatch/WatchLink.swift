@@ -42,6 +42,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   @Published var step       = 0.0
   @Published var reachable  = false
   @Published var everGotRow = false
+  /// Phone's audio level, 0..1 — mirrored so the volume meter shows the truth
+  /// rather than a number the watch invented.
+  @Published var volume     = 1.0
 
   // Diagnostics for the "link up but no rows" case: a row of the wrong length is
   // DROPPED SILENTLY by WaterfallBuffer, which looks identical to no row at all.
@@ -110,6 +113,17 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   func setMode(_ m: String) { send(["cmd": "mode", "val": m]) }
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
   func ping() { send(["cmd": "ping"]) }
+
+  /// Volume: the PHONE's decode gain, so it lands wherever you're actually
+  /// listening — speaker, Bluetooth or AirPods. (There is no way to route the
+  /// phone's audio to the watch speaker; that would mean the watch decoding the
+  /// stream itself, which is a different feature entirely.)
+  func volume(delta: Int) { send(["cmd": "vol", "delta": delta]) }
+
+  /// Zoom: drives the SAME client.zoom() the phone's zoom drum drives, so it moves
+  /// the real waterfall and the watch gets genuinely finer BINS — not a magnified
+  /// crop of coarse ones. This is the only thing that beats the resolution ceiling.
+  func zoom(delta: Int) { send(["cmd": "zoom", "delta": delta]) }
 
   /// Absolute tune, from the numpad. The one place the watch sends a frequency
   /// rather than a delta — the phone still clamps it to the receiver's range.
@@ -199,6 +213,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if let f = m[WK.freq] as? Double { frequency = f }
       if let md = m[WK.mode] as? String { mode = md }
       if let st = m[WK.step] as? Double { step = st }
+      if let v = m["vol"] as? Double { volume = v }
 
     case "settings":
       if let l = m[WK.lut] as? Data, l.count == 1024 { waterfall.setLUT([UInt8](l)) }

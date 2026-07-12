@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import WatchKit
 
 
 /// Spectrum screen: full-bleed waterfall with chrome FLOATING over it.
@@ -30,7 +31,10 @@ struct ContentView: View {
   @State private var lastDetent = 0
   @FocusState private var crownFocused: Bool
 
-  /// Explicit 30fps redraw clock.
+  /// Explicit 20fps redraw clock — the same default the phone app runs at (30 is
+  /// its high-performance toggle). The glide is interpolating between rows that
+  /// arrive at ~10/sec, so 30fps bought very little for a third more redraws, each
+  /// of which rebuilds a 256x89 image. On a watch that's battery for nothing.
   ///
   /// We do NOT use `TimelineView(.animation)`: on watchOS its `minimumInterval` is
   /// a floor on the GAP, not a promise of cadence, and it proved free to update
@@ -39,11 +43,32 @@ struct ContentView: View {
   /// right at all while a second TimelineView — a debug overlay — happened to be
   /// forcing repaints.) The scroll glide and the jitter buffer both advance on
   /// this clock, so a cadence we don't control is a cadence we can't render on.
+  ///
+  /// Splitting the trace onto its own faster clock was tried and REVERTED: both
+  /// Canvases sat in the same view body observing the same @EnvironmentObject, so
+  /// ANY published change repainted BOTH. The clocks simply summed (12 + 25 + rows
+  /// ≈ 45 redraws/sec of everything) and CPU rose. The decoupling was imaginary;
+  /// only the cost was real. Doing it properly means giving each Canvas its own
+  /// View struct observing only what it needs — not worth it while 20fps looks fine.
   @State private var frame = 0
   @State private var showNumpad = false
-  private let driver = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
+  @State private var showMenu = false
+  /// What the crown does. Explicit and persistent — never a timed-out HUD, because
+  /// on a wrist you must always know what a turn is about to do.
+  @State private var crownMode: CrownMode = .tune
+  /// The ONE knob that matters. Smoothness vs battery, nothing else — the Canvas
+  /// repaints everything (waterfall, trace, VFO) on every tick regardless.
+  private let driver = Timer.publish(every: 1.0 / 20.0, on: .main, in: .common).autoconnect()
+
+  /// The crown can be on either side (it flips when the watch is worn on the other
+  /// wrist), so the meter goes BESIDE it and the X goes OPPOSITE it. Ask the
+  /// device rather than assuming.
+  private var crownOnRight: Bool {
+    WKInterfaceDevice.current().crownOrientation == .right
+  }
 
   private static let detents = 1000.0
+
 
 
   var body: some View {
@@ -76,6 +101,8 @@ struct ContentView: View {
       }
       .padding(.horizontal, 6)
       .padding(.bottom, 4)
+
+      if crownMode != .tune { crownOverlay }
     }
     // PUSHED, not presented as a sheet. A watchOS sheet comes with a big header —
     // the X, the clock and a grab handle — which ate ~100pt off the top before the
@@ -84,6 +111,9 @@ struct ContentView: View {
     // chevron instead, which leaves the pad the room it needs.
     .navigationDestination(isPresented: $showNumpad) {
       NumpadView().environmentObject(link)
+    }
+    .navigationDestination(isPresented: $showMenu) {
+      ControlMenu { mode in crownMode = mode }.environmentObject(link)
     }
     .ignoresSafeArea()
     .focusable(true)
@@ -108,7 +138,17 @@ struct ContentView: View {
       if delta < -range / 2 { delta += range }
 
       lastDetent = detent
-      link.tune(delta: delta)
+
+      switch crownMode {
+      case .tune:   link.tune(delta: delta)
+      case .volume: link.volume(delta: delta)
+      case .zoom:   link.zoom(delta: delta)
+      }
+    }
+    // Long-press anywhere on the waterfall for the control grid.
+    .onLongPressGesture(minimumDuration: 0.45) {
+      WKInterfaceDevice.current().play(.click)
+      showMenu = true
     }
     .onAppear {
       crownFocused = true
@@ -135,12 +175,22 @@ struct ContentView: View {
   /// queued rows at an even cadence and hands back a sub-row offset to glide by.
   /// Drawing on arrival — however you interpolate it — always lurches, because
   /// during a gap there is nothing to interpolate towards.
+  /// ONE Canvas, ONE clock.
+  ///
+  /// Splitting the trace onto its own faster clock was tried and REVERTED. It could
+  /// not work: both Canvases sat in the same view body observing the same
+  /// @EnvironmentObject, so ANY published change — a row landing, either clock —
+  /// invalidated the whole body and repainted BOTH. The clocks simply summed: a
+  /// 12fps waterfall clock plus a 25fps trace clock plus 10 rows/sec measured as 45
+  /// redraws/sec of everything, and CPU went 30% -> 42%. The decoupling was
+  /// imaginary; only the cost was real.
+  ///
+  /// (Doing it properly would mean giving each Canvas its own View struct with only
+  /// the state it needs, so SwiftUI can invalidate them independently. Worth it
+  /// only if the trace's smoothness at 20fps proves inadequate — and it doesn't.)
   private var waterfall: some View {
     Canvas { ctx, size in
-      // `frame` is read here purely so the Canvas content changes every tick and
-      // SwiftUI is obliged to redraw. See `driver` below for why we don't use
-      // TimelineView.
-      _ = frame
+      _ = frame        // read so SwiftUI must redraw; see `driver`
 
       let wf = link.waterfall
       wf.tick(at: ProcessInfo.processInfo.systemUptime)
@@ -148,8 +198,7 @@ struct ContentView: View {
       // The spectrum gets a BAND of its own — the top third — and the waterfall
       // takes the rest. A floating overlay was cheaper in pixels, but the trace has
       // to be readable as a HEIGHT: squashed into a strip it is just another
-      // texture. The system clock sits in this band and reads as a label there,
-      // rather like the receiver name UberSDR puts at the top.
+      // texture. The system clock sits in this band and reads as a label there.
       let specH = (size.height / 3).rounded()
 
       if let img = wf.makeImage() {
@@ -319,6 +368,89 @@ struct ContentView: View {
       lineWidth: 2.5
     )
   }
+
+  /// Crown is in Volume or Zoom: a meter up the edge BESIDE the crown, its glyph
+  /// beside it, and an X on the OPPOSITE edge to return to tuning.
+  ///
+  /// The meter sits next to the crown because that's the thing you're turning —
+  /// your eye shouldn't have to cross the screen to see the effect of your finger.
+  /// And the X goes opposite it so your hand isn't covering the way out.
+  private var crownOverlay: some View {
+    ZStack {
+      // X on the edge OPPOSITE the crown, so your hand isn't over the way out.
+      VStack {
+        HStack {
+          if crownOnRight { exitButton; Spacer() } else { Spacer(); exitButton }
+        }
+        Spacer()
+      }
+
+      // The meter hugs the crown's edge, vertically CENTRED and SHORT — the shape
+      // Apple uses for its own volume indicator. A full-height bar with the glyph
+      // stacked in a circle above it reads as furniture; this reads as an
+      // indicator. The glyph sits inline to its left, unadorned.
+      HStack {
+        if crownOnRight { Spacer() }
+        HStack(spacing: 5) {
+          if crownOnRight { glyph; bar } else { bar; glyph }
+        }
+        if !crownOnRight { Spacer() }
+      }
+    }
+    .padding(.horizontal, 8)
+    .padding(.vertical, 10)
+  }
+
+  private var exitButton: some View {
+    Button { crownMode = .tune } label: {
+      Image(systemName: "xmark")
+        .font(.system(size: 15, weight: .bold))
+        .foregroundStyle(.white)
+        .frame(width: 32, height: 32)
+        .contentShape(Circle())
+    }
+    .buttonStyle(.plain)
+  }
+
+  private var glyph: some View {
+    Image(systemName: crownMode.glyph)
+      .font(.system(size: 15, weight: .semibold))
+      .foregroundStyle(meterTint)
+  }
+
+  /// Short, edge-hugging, filling upward — the crown's own direction of travel.
+  private var bar: some View {
+    ZStack(alignment: .bottom) {
+      Capsule().fill(.white.opacity(0.22))
+      Capsule()
+        .fill(meterTint)
+        .frame(height: max(3, 74 * meterValue))
+    }
+    .frame(width: 5, height: 74)
+  }
+
+  private var meterTint: Color {
+    crownMode == .volume ? .green : .cyan
+  }
+
+  /// Volume is a level, so it maps straight through. Zoom has no natural 0..1, so
+  /// we place the current span on a LOG scale between "as tight as it gets" and
+  /// "wide" — which is how zoom actually feels, and it's what the phone's own zoom
+  /// drum does in octaves.
+  private var meterValue: Double {
+    switch crownMode {
+    case .volume:
+      return min(1, max(0, link.volume))
+    case .zoom:
+      guard link.span > 0 else { return 0 }
+      let lo = log2(2_000.0), hi = log2(4_000_000.0)
+      let t = (log2(link.span) - lo) / (hi - lo)
+      return min(1, max(0, 1 - t))     // full bar = zoomed right in
+    case .tune:
+      return 0
+    }
+  }
+
 
   private var placeholder: some View {
     VStack(spacing: 6) {

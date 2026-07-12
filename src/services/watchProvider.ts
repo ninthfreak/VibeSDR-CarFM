@@ -31,7 +31,7 @@ const Native = NativeModules.VibeWatchModule as
       isReachable(): Promise<boolean>;
       sendRow(rowB64: string, freq: number, span: number, snr: number, level: number,
               lo: number, hi: number): void;
-      sendState(freq: number, mode: string, step: number): void;
+      sendState(freq: number, mode: string, step: number, volume: number): void;
       sendSettings(lutB64: string, smoothing: number, needle: string,
                    needleIntensity: number, sharpness: number): void;
     }
@@ -115,9 +115,20 @@ export interface WatchCommandHandlers {
   onTuneHz(hz: number): void;
   onMode(mode: string): void;
   onStep(hz: number): void;
+  /** Crown in volume mode. Delta in detents; phone owns the 0..1 level. */
+  onVolumeDelta(delta: number): void;
+  /** Crown in zoom mode. Drives the REAL server zoom, so the watch gets finer
+   *  bins rather than a magnified crop — the only thing that beats the
+   *  bin-resolution ceiling. */
+  onZoomDelta(delta: number): void;
   /** Watch app opened/closed. Used to keep the spectrum WS alive while the phone
    *  is locked but the watch is actually looking at it. */
   onReachableChange(reachable: boolean): void;
+  /** The watch said hello (it pings on appear, on wake, and every 4s). Push the
+   *  current state straight back, so its menu already knows the mode and step
+   *  before the user opens it — state messages otherwise only fire when something
+   *  CHANGES, which left the pickers blank for a couple of seconds. */
+  onHello(): void;
 }
 
 class WatchProvider {
@@ -193,6 +204,9 @@ class WatchProvider {
           case 'freq': handlers.onTuneHz(Number(e.val ?? 0)); break;
           case 'mode': handlers.onMode(String(e.val ?? '')); break;
           case 'step': handlers.onStep(Number(e.val ?? 0)); break;
+          case 'vol':  handlers.onVolumeDelta(Number(e.delta ?? 0)); break;
+          case 'zoom': handlers.onZoomDelta(Number(e.delta ?? 0)); break;
+          case 'ping': handlers.onHello(); break;
         }
       }),
       this.emitter.addListener('VibeWatchState', (e: { reachable: boolean }) => {
@@ -232,9 +246,9 @@ class WatchProvider {
    *  the raw dB so the wrist bar and the phone bar move identically. */
   setSignal(snr: number, level: number) { this.snr = snr; this.level = level; }
 
-  sendState(freq: number, mode: string, step: number) {
+  sendState(freq: number, mode: string, step: number, volume: number) {
     if (!this.isActive) return;
-    Native!.sendState(freq, mode, step);
+    Native!.sendState(freq, mode, step, volume);
   }
 
   /**
