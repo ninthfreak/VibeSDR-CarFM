@@ -50,9 +50,10 @@ import { setReceiverIso } from '../services/rdsCountry';
 import { watchProvider } from '../services/watchProvider';
 
 /** FFT rate divisor while the phone is backgrounded but the watch is watching.
- *  The watch only draws ~10fps, so streaming the full 20 is wasted bytes and
- *  wasted parse on the thread that feeds the audio DSP. */
-const WATCH_BG_DIVISOR = 2;
+ *  The watch draws ~5fps (its glide + interpolation hide the rest), and nothing
+ *  else is looking at these frames, so a quarter-rate feed is all we need —
+ *  fewer bytes off the radio and less parse on the thread feeding the audio DSP. */
+const WATCH_BG_DIVISOR = 4;
 import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
@@ -2377,6 +2378,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         // parse on the thread that feeds the audio DSP. The Skia tree is still
         // unmounted and every animation driver still cancelled — only the plain
         // JS path stays alive.
+        // Renderer is gone: the watch must now do its own DSP from the raw frame.
+        watchProvider.setPhoneRendering(false);
         if (watchProvider.isActive) {
           specPausedByBgRef.current = false;
           client.current?.setRate(WATCH_BG_DIVISOR);
@@ -2459,6 +2462,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           } else {
             client.current?.setRate(1);
           }
+          // Renderer is back: stop doing our own DSP and borrow its row again.
+          watchProvider.setPhoneRendering(true);
         }, 1200);
       }
     });
@@ -2963,6 +2968,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   //    single source of truth for step size and band limits, and the watch just
   //    mirrors whatever we echo back.
   useEffect(() => {
+    // Mounted = the phone is drawing, so borrow its rows rather than duplicating
+    // the DSP. Flipped to false on background, where the renderer is torn down.
+    watchProvider.setPhoneRendering(true);
     watchProvider.attach({
       onTuneDelta: (delta: number) => {
         const c = client.current; if (!c || !delta) return;

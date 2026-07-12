@@ -1,4 +1,6 @@
 import SwiftUI
+import Combine
+
 
 /// Spectrum screen: full-bleed waterfall with chrome FLOATING over it.
 ///
@@ -14,6 +16,7 @@ import SwiftUI
 /// up there would collide with it.
 struct ContentView: View {
   @EnvironmentObject var link: WatchLink
+  @Environment(\.scenePhase) private var scenePhase
 
   /// Digital Crown position, in step-detents. We only ever read the DELTA out of
   /// this and hand it to the phone — the phone owns the frequency, multiplies by
@@ -27,7 +30,20 @@ struct ContentView: View {
   @State private var lastDetent = 0
   @FocusState private var crownFocused: Bool
 
+  /// Explicit 30fps redraw clock.
+  ///
+  /// We do NOT use `TimelineView(.animation)`: on watchOS its `minimumInterval` is
+  /// a floor on the GAP, not a promise of cadence, and it proved free to update
+  /// lazily — in practice it fired sometimes and not others, so the waterfall
+  /// scrolled smoothly for a few frames, stalled, then lurched. (It only looked
+  /// right at all while a second TimelineView — a debug overlay — happened to be
+  /// forcing repaints.) The scroll glide and the jitter buffer both advance on
+  /// this clock, so a cadence we don't control is a cadence we can't render on.
+  @State private var frame = 0
+  private let driver = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
+
   private static let detents = 1000.0
+
 
   var body: some View {
     ZStack {
@@ -69,14 +85,44 @@ struct ContentView: View {
       link.tune(delta: delta)
     }
     .onAppear { crownFocused = true }
+    .onChange(of: scenePhase) { _, phase in
+      // Screen woke: the queued rows and the scroll clock are both stale. Draining
+      // them as usual fast-forwards through old data and then runs dry — the
+      // stutter you get for the first second after a wake. Start clean.
+      if phase == .active { link.waterfall.reset() }
+    }
   }
 
   // ── Waterfall ──────────────────────────────────────────────────────────────
 
+  /// WCSession delivers rows in BURSTS, not on a clock. So the renderer owns the
+  /// scroll clock: it ticks the jitter buffer on a steady timeline, which drains
+  /// queued rows at an even cadence and hands back a sub-row offset to glide by.
+  /// Drawing on arrival — however you interpolate it — always lurches, because
+  /// during a gap there is nothing to interpolate towards.
   private var waterfall: some View {
     Canvas { ctx, size in
-      guard let img = link.waterfall.makeImage() else { return }
-      ctx.draw(Image(decorative: img, scale: 1), in: CGRect(origin: .zero, size: size))
+      // `frame` is read here purely so the Canvas content changes every tick and
+      // SwiftUI is obliged to redraw. See `driver` below for why we don't use
+      // TimelineView.
+      _ = frame
+
+      let wf = link.waterfall
+      wf.tick(at: ProcessInfo.processInfo.systemUptime)
+      guard let img = wf.makeImage() else { return }
+
+      let rowPx = size.height / Double(WaterfallBuffer.visible)
+      let p = wf.progress
+
+      // Newest row is index 0 (top) with one row of headroom above the visible
+      // edge. As p goes 0->1 the window walks from "newest not yet in" to "newest
+      // fully in at the top", exactly as the next row lands and resets p.
+      ctx.draw(
+        Image(decorative: img, scale: 1),
+        in: CGRect(x: 0, y: -(1 - p) * rowPx,
+                   width: size.width,
+                   height: rowPx * Double(WaterfallBuffer.height))
+      )
 
       // Centre marker — the VFO is always dead-centre, because the phone crops
       // the bin window around it. Crown-tune towards a signal and it slides in
@@ -89,6 +135,7 @@ struct ContentView: View {
       )
     }
     .ignoresSafeArea()
+    .onReceive(driver) { _ in frame &+= 1 }
   }
 
   private var placeholder: some View {

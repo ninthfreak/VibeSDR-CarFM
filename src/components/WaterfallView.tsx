@@ -72,6 +72,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { getColorLUT } from '../assets/colormapUtils';
 import type { SDRStatus } from '../services/UberSDRClient';
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
+import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN, type Band } from '../constants/bandPlan';
 
 // ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
@@ -620,6 +621,10 @@ function WaterfallView({
   frameCfg.current = { width, wfTop, specH, specShow, peakHold,
                        smoothTune, rowsPerFrame: ROWS_PER_FRAME };
 
+  // Geometry the watch needs to crop a VFO-centred slice out of the row.
+  const watchCfg = useRef({ tuneHz, filterLow, filterHigh });
+  watchCfg.current = { tuneHz, filterLow, filterHigh };
+
   const handleFrame = useCallback((fbins: Float32Array, fstatus: SDRStatus) => {
     // Backgrounded: audio keeps playing on its own native path, but the whole
     // visual frame path (Reanimated withTiming glide + reveal/tween setIntervals
@@ -633,6 +638,21 @@ function WaterfallView({
 
     // 1. M9PSY pipeline + UberSDR auto-range
     const frame = proc.current.process(fbins, fstatus.centerHz, fstatus.bwHz);
+
+    // While the phone is rendering, the watch BORROWS this row rather than
+    // running its own SignalProcessor over 4096 bins on this same thread — that
+    // duplicate pass stole the headroom the spectrum tween needs and showed up as
+    // a jerky trace. Forwarding a row we already have is nearly free, and it's
+    // pixel-identical to what's on screen. (Locked phone: no renderer, so
+    // watchProvider does its own DSP from SDRScreen.onSpectrum instead.)
+    const wc = watchCfg.current;
+    watchProvider.pushProcessedRow(frame.row, {
+      centerHz:   fstatus.centerHz,
+      bwHz:       fstatus.bwHz,
+      tuneHz:     wc.tuneHz,
+      filterLow:  wc.filterLow,
+      filterHigh: wc.filterHigh,
+    });
     // dB axis labels — 2dB HYSTERESIS, not just rounding: a noisy floor
     // hovering on a .5 boundary flipped the rounded value every few frames,
     // re-rendering the whole WaterfallView tree at up to 10Hz (profiled:

@@ -38,9 +38,19 @@ const Native = NativeModules.VibeWatchModule as
 /** Watch waterfall width. Must match WaterfallBuffer.width on the watch. */
 const WATCH_BINS = 128;
 
-/** Row cadence. A dropped row is invisible on a scrolling waterfall; a backed-up
- *  queue is visible lag — so we throttle at source rather than buffer. */
-const MIN_ROW_MS = 100; // ~10fps
+/** Row cadence: ~5fps.
+ *
+ *  The watch hides a low frame rate the same way VibeServer's web client does —
+ *  sub-row glide + bilinear interpolation — so 5fps looks like a continuous
+ *  waterfall, and halving the message rate buys real battery: fewer WCSession
+ *  wakeups, less burstiness at source (WCSession delivers in clumps, and the
+ *  fewer clumps the less the jitter buffer has to absorb), and a quarter-rate
+ *  FFT feed on the phone.
+ *
+ *  Kept just BELOW the true frame interval: at exactly 200ms, a frame arriving
+ *  1ms early fails the gate and the next row lands 400ms later instead — a
+ *  visible stutter caused by the throttle itself. */
+const MIN_ROW_MS = 180;
 
 /** Span = demod bandwidth x this. Lands a signal on ~13 of the 128 bins: wide
  *  enough to read as a blob rather than a 2-bin hairline, tight enough to leave
@@ -99,6 +109,14 @@ class WatchProvider {
   private proc = new SignalProcessor();
   private colormap = 'gqrx';
   private onReachable: ((r: boolean) => void) | null = null;
+
+  /** Is the phone drawing its own waterfall right now? If so we BORROW the row it
+   *  already computed instead of running a second SignalProcessor over 4096 bins
+   *  on the same JS thread — that duplicate pass made the phone's own waterfall
+   *  visibly jerky. We only do our own DSP when the phone is asleep and there is
+   *  no row to borrow. */
+  private phoneRendering = false;
+  setPhoneRendering(v: boolean) { this.phoneRendering = v; }
 
   /** True only when a watch app is actually in the foreground with a live link.
    *  Everything here no-ops otherwise, so a user with no watch pays nothing. */
@@ -168,12 +186,31 @@ class WatchProvider {
   }
 
   /**
-   * One raw dBFS spectrum frame, straight off the client. Safe to call while the
-   * phone is backgrounded — it does no Skia, worklet or React work.
+   * A row the phone's renderer ALREADY computed. Free to forward — no DSP — and
+   * pixel-identical to what's on the phone screen. Used whenever the phone is
+   * drawing (see setPhoneRendering).
+   */
+  pushProcessedRow(row: Uint8Array, ctx: WatchFrameCtx) {
+    if (!this.isActive || !this.phoneRendering) return;
+    this.sendRow(row, ctx);
+  }
+
+  /**
+   * One raw dBFS spectrum frame, straight off the client. This is the LOCKED-PHONE
+   * path: the renderer is torn down, so there's no row to borrow and we must do
+   * our own DSP. Safe to call while backgrounded — no Skia, worklet or React work.
    */
   onSpectrum(bins: Float32Array, ctx: WatchFrameCtx) {
-    if (!this.isActive) return;
+    if (!this.isActive || this.phoneRendering) return;   // borrow instead
+    if (!bins || bins.length < 2 || !ctx.bwHz) return;
 
+    // Cheap gate FIRST: don't pay for a 4096-bin pass on a frame we'd only drop.
+    if (Date.now() - this.lastRowAt < MIN_ROW_MS) return;
+
+    this.sendRow(this.proc.process(bins, ctx.centerHz, ctx.bwHz).row, ctx);
+  }
+
+  private sendRow(row: Uint8Array, ctx: WatchFrameCtx) {
     const now = Date.now();
     if (now - this.lastRowAt < MIN_ROW_MS) return; // coalesce: newest wins
     this.lastRowAt = now;
@@ -183,12 +220,8 @@ class WatchProvider {
       Native!.sendSettings(toBase64(getColorLUT(this.colormap)), 0.35);
     }
 
-    if (!bins || bins.length < 2 || !ctx.bwHz) return;
-
-    // Same pipeline the phone's own waterfall runs (auto-range, brightness,
-    // contrast, gain) -> 0-255. Only runs when a watch is actually watching.
-    const row = this.proc.process(bins, ctx.centerHz, ctx.bwHz).row;
     const n = row.length;
+    if (n < 2 || !ctx.bwHz) return;
 
     // Span follows the demod bandwidth so the signal is always a readable blob.
     const bw = Math.abs((ctx.filterHigh ?? 0) - (ctx.filterLow ?? 0));
