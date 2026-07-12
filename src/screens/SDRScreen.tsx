@@ -47,6 +47,7 @@ import { localSessionGen } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
          getLearnedBookmarksNow } from '../services/vibeServer';
 import { setReceiverIso } from '../services/rdsCountry';
+import { watchProvider } from '../services/watchProvider';
 import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
@@ -2121,6 +2122,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (sm.level >= sm.peak)   { sm.peak = sm.level; sm.hold = 15; }
           else if (sm.hold > 0)      { sm.hold--; }
           else                       { sm.peak = Math.max(0, sm.peak - 0.02); }
+          watchProvider.setSnr(snrDb);
           meterBus.current.emit({
             level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
             active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,
@@ -2902,6 +2904,35 @@ export default function SDRScreen({ route, navigation }: Props) {
     onVtsJumpRef.current   = onVtsJump;
     onSearchTuneRef.current = onSearchTune;
   });
+
+  // ── Apple Watch: crown/menu commands in, tuned state back out ─────────────
+  //    The watch sends DELTAS, never absolute frequencies — the phone stays the
+  //    single source of truth for step size and band limits, and the watch just
+  //    mirrors whatever we echo back.
+  useEffect(() => {
+    watchProvider.attach({
+      onTuneDelta: (delta: number) => {
+        const c = client.current; if (!c || !delta) return;
+        if (String(c.getStatus().mode) === 'dab') return;   // locked to its ensemble
+        const s = stepRef.current; if (!(s > 0)) return;
+        const cur = c.getStatus().frequency;
+        // Snap to the step grid first, exactly like the media-control skip: a
+        // crown detent should land on a channel, not offset the current fraction.
+        const base = delta > 0 ? Math.floor(cur / s) : Math.ceil(cur / s);
+        const [loHz, hiHz] = c.caps.freqRange;
+        const newHz = Math.max(loHz, Math.min(hiHz, (base + delta) * s));
+        if (newHz === cur) return;
+        onTuneHzRef.current?.(newHz);
+      },
+      onMode: (m: string) => { if (m) onModeRef.current?.(m as SDRMode); },
+      onStep: (hz: number) => { if (hz > 0) setStep(hz); },
+    });
+    return () => watchProvider.detach();
+  }, []);
+
+  useEffect(() => {
+    watchProvider.sendState(status.frequency, String(status.mode), step);
+  }, [status.frequency, status.mode, step]);
 
   // ── Share — deep link into this station (web-UI URL params; skin parity:
   //    the skin shared window.location.href which carries the same params) ──
