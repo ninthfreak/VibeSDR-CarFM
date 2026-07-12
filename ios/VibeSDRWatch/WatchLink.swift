@@ -57,7 +57,32 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   @Published var needle     = Color.white
   @Published var needleI    = 5.0
 
+  /// The unit the readout displays in — INPUT-AWARE, like the main app.
+  ///
+  /// Type 4582 in kHz and it reads back "4582.000 kHz", not "4.582 MHz". Rendering
+  /// everything ≥1MHz as MHz was technically right and practically wrong: it threw
+  /// away the frame of reference you were working in. Shortwave listeners think in
+  /// kHz, hams think in MHz, and the unit you just typed says which you are.
+  /// Crown-tuning keeps whatever you last chose.
+  @Published var displayUnit: DisplayUnit = .auto {
+    didSet { UserDefaults.standard.set(displayUnit.rawValue, forKey: "vibe.displayUnit") }
+  }
+
+  enum DisplayUnit: String {
+    case auto, hz, khz, mhz
+  }
+
   private var session: WCSession?
+
+  private var heartbeat: Timer?
+
+  override init() {
+    super.init()
+    if let raw = UserDefaults.standard.string(forKey: "vibe.displayUnit"),
+       let u = DisplayUnit(rawValue: raw) {
+      displayUnit = u
+    }
+  }
 
   func activate() {
     guard WCSession.isSupported() else { return }
@@ -65,6 +90,16 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     s.delegate = self
     s.activate()
     session = s
+
+    // HEARTBEAT. The phone's WCSession.isReachable goes stale and it then refuses
+    // to send, while our crown messages still get through — the downlink dies
+    // silently and the watch sits on "Waiting for signal" forever. The phone treats
+    // any message from us as proof we're here, but that proof expires; without a
+    // heartbeat it would only hold while the user happened to be turning the crown.
+    heartbeat?.invalidate()
+    heartbeat = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
+      self?.ping()
+    }
   }
 
   // MARK: - Watch -> Phone

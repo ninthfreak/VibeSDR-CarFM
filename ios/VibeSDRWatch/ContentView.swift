@@ -77,8 +77,12 @@ struct ContentView: View {
       .padding(.horizontal, 6)
       .padding(.bottom, 4)
     }
-    // No NavigationStack: its title bar collided with the top row of keys.
-    .sheet(isPresented: $showNumpad) {
+    // PUSHED, not presented as a sheet. A watchOS sheet comes with a big header —
+    // the X, the clock and a grab handle — which ate ~100pt off the top before the
+    // pad's own content began, pushing the bottom row clean off the screen (and
+    // hiding the readout behind the X). A navigation push gets a compact back
+    // chevron instead, which leaves the pad the room it needs.
+    .navigationDestination(isPresented: $showNumpad) {
       NumpadView().environmentObject(link)
     }
     .ignoresSafeArea()
@@ -106,12 +110,21 @@ struct ContentView: View {
       lastDetent = detent
       link.tune(delta: delta)
     }
-    .onAppear { crownFocused = true }
+    .onAppear {
+      crownFocused = true
+      link.ping()          // tell the phone we're here — see below
+    }
     .onChange(of: scenePhase) { _, phase in
+      guard phase == .active else { return }
       // Screen woke: the queued rows and the scroll clock are both stale. Draining
       // them as usual fast-forwards through old data and then runs dry — the
       // stutter you get for the first second after a wake. Start clean.
-      if phase == .active { link.waterfall.reset() }
+      link.waterfall.reset()
+      // ANNOUNCE OURSELVES. The phone's WCSession.isReachable goes stale and it
+      // then refuses to send anything, while the crown still tunes — the downlink
+      // dies silently. A message from us is proof we're here, so say so rather
+      // than waiting for the user to turn the crown before rows start flowing.
+      link.ping()
     }
   }
 
@@ -395,7 +408,7 @@ struct ContentView: View {
     // two figures pushed into opposite corners — the watch's rounded corners were
     // clipping them there.
     HStack(spacing: 8) {
-      Text(formatFreq(link.frequency, step: link.step))
+      Text(formatFreq(link.frequency, step: link.step, unit: link.displayUnit))
         .font(.system(size: 15, weight: .semibold, design: .rounded))
         .monospacedDigit()
         // Shrink to fit rather than scroll. A marquee would be an animation
@@ -427,14 +440,29 @@ struct ContentView: View {
     .clipShape(Capsule())
   }
 
-  /// PRECISION FOLLOWS THE STEP. Showing 3 decimals of MHz is 1kHz resolution —
-  /// on CW (1-10Hz steps) you literally cannot see what you are tuning, and the
-  /// digits that matter are the ones that move. So derive the decimal count from
-  /// the current step, and don't waste width on zeros that can never change.
-  private func formatFreq(_ hz: Double, step: Double) -> String {
+  /// Two rules, and they're independent.
+  ///
+  /// UNIT IS INPUT-AWARE: whatever you last entered on the numpad is what it reads
+  /// back in. Type 4582 kHz and you get "4582.000 kHz", not "4.582 MHz" —
+  /// rendering everything ≥1MHz as MHz was technically right and practically
+  /// wrong, because it threw away the frame of reference you were working in.
+  /// (.auto keeps the old size-based behaviour until you've told us otherwise.)
+  ///
+  /// PRECISION FOLLOWS THE STEP: 3 decimals of MHz is 1kHz resolution, so on CW
+  /// (1-10Hz steps) you literally could not see what you were tuning. The digits
+  /// you get are the ones that can actually move.
+  private func formatFreq(_ hz: Double, step: Double, unit: WatchLink.DisplayUnit) -> String {
     if hz <= 0 { return "—" }
 
-    if hz >= 1_000_000 {
+    let resolved: WatchLink.DisplayUnit = {
+      guard unit == .auto else { return unit }
+      if hz >= 1_000_000 { return .mhz }
+      if hz >= 1_000     { return .khz }
+      return .hz
+    }()
+
+    switch resolved {
+    case .mhz:
       let dp: Int
       switch step {
       case ..<10:    dp = 6      // 1Hz  — CW
@@ -443,12 +471,14 @@ struct ContentView: View {
       default:       dp = 3      // 1kHz+
       }
       return String(format: "%.\(dp)f MHz", hz / 1_000_000)
-    }
-    if hz >= 1_000 {
-      let dp = step < 100 ? 3 : (step < 1_000 ? 2 : 1)
+
+    case .khz:
+      let dp = step < 10 ? 3 : (step < 100 ? 2 : (step < 1_000 ? 1 : 0))
       return String(format: "%.\(dp)f kHz", hz / 1_000)
+
+    case .hz, .auto:
+      return String(format: "%.0f Hz", hz)
     }
-    return String(format: "%.0f Hz", hz)
   }
 }
 

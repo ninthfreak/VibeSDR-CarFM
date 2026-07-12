@@ -16,6 +16,28 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   private var session: WCSession?
   private var hasListeners = false
 
+  /// When the watch last sent us anything.
+  ///
+  /// `WCSession.isReachable` on the PHONE goes stale — most reliably after the app
+  /// is replaced under a live session — and the two directions are not symmetric:
+  /// a message FROM the watch wakes the phone regardless, but the phone only sends
+  /// when this flag says reachable. So one stale flag kills the entire downlink
+  /// while the crown carries on tuning, which is exactly what we saw.
+  ///
+  /// A command arriving from the watch is PROOF the watch is there and listening —
+  /// better proof than the flag. Same lesson as the lock-screen bug: recency beats
+  /// flags, because recency cannot desync.
+  private var lastWatchMsgAt = Date.distantPast
+
+  private var linkAlive: Bool {
+    if session?.isReachable == true { return true }
+    return Date().timeIntervalSince(lastWatchMsgAt) < 10
+  }
+
+  private func sawWatch() {
+    lastWatchMsgAt = Date()
+  }
+
   override init() {
     super.init()
     guard WCSession.isSupported() else { return }
@@ -37,7 +59,7 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// burns battery for pixels nobody sees, and Apple frowns on it.
   @objc(isReachable:rejecter:)
   func isReachable(_ resolve: RCTPromiseResolveBlock, rejecter reject: RCTPromiseRejectBlock) {
-    resolve(session?.isReachable ?? false)
+    resolve(linkAlive)
   }
 
   /// One waterfall row, already cropped to the VFO-centred window and quantised
@@ -55,7 +77,7 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   @objc(sendRow:freq:span:snr:level:lo:hi:)
   func sendRow(_ rowB64: String, freq: NSNumber, span: NSNumber, snr: NSNumber,
                level: NSNumber, lo: NSNumber, hi: NSNumber) {
-    guard let s = session, s.isReachable,
+    guard let s = session, linkAlive,
           let row = Data(base64Encoded: rowB64) else { return }
 
     var blob = Data(capacity: 1 + 8 * 6 + row.count)
@@ -73,7 +95,7 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
 
   @objc(sendState:mode:step:)
   func sendState(_ freq: NSNumber, mode: String, step: NSNumber) {
-    guard let s = session, s.isReachable else { return }
+    guard let s = session, linkAlive else { return }
     s.sendMessage(
       ["k": "state", "f": freq.doubleValue, "m": mode, "st": step.doubleValue],
       replyHandler: nil,
@@ -87,7 +109,7 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   @objc(sendSettings:smoothing:needle:needleIntensity:sharpness:)
   func sendSettings(_ lutB64: String, smoothing: NSNumber,
                     needle: String, needleIntensity: NSNumber, sharpness: NSNumber) {
-    guard let s = session, s.isReachable,
+    guard let s = session, linkAlive,
           let lut = Data(base64Encoded: lutB64) else { return }
     s.sendMessage(
       ["k": "settings", "l": lut, "sm": smoothing.doubleValue,
@@ -100,6 +122,7 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   // MARK: - Watch -> Phone
 
   func session(_ s: WCSession, didReceiveMessage message: [String: Any]) {
+    sawWatch()
     guard hasListeners, let cmd = message["cmd"] as? String else { return }
     var body: [String: Any] = ["cmd": cmd]
     if let d = message["delta"] { body["delta"] = d }
