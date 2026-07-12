@@ -11,6 +11,7 @@ import { RootStackParamList } from '../../App';
 import { createBackend } from '../services/UberSDRAdapter';
 import type { SDRBackend, FmdxState, FmdxServerInfo } from '../services/SDRBackend';
 import { resolveStationLogo } from '../services/stationLogoCache';
+import { getFavourites, toggleFavourite } from '../services/favourites';
 import { isoToFlag, ituToIso, validIso } from '../services/rdsCountry';
 import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
 import ControlsBar, { createMeterBus } from '../components/ControlsBar';
@@ -353,6 +354,29 @@ export default function TunerScreen({ route, navigation }: Props) {
     return () => { cancelled = true; };
   }, [logo]);
 
+  // ── Favourite this instance ────────────────────────────────────────────────
+  //    The SDR screen offers this from its menu sheet; FM-DX has no menu, so the
+  //    heart lives in the header — otherwise a good receiver you found mid-session
+  //    can only be favourited by going back and hunting for it in the picker.
+  //
+  //    serverType MUST be 'fmdx'. FM-DX isn't sniffable by detectServerType, and the
+  //    picker trusts the stored type — an untyped favourite would be re-detected and
+  //    mis-opened as an UberSDR waterfall (see InstancePickerScreen.connectFav).
+  const [isFavourite, setIsFavourite] = useState(false);
+  useEffect(() => {
+    getFavourites()
+      .then((favs) => setIsFavourite(favs.some((f) => f.url === baseUrl)))
+      .catch(() => {});
+  }, [baseUrl]);
+
+  const onToggleFavourite = useCallback(() => {
+    getFavourites()
+      .then((favs) => toggleFavourite(
+        { name: instanceName ?? baseUrl, url: baseUrl, serverType: 'fmdx' }, favs))
+      .then((next) => setIsFavourite(next.some((f) => f.url === baseUrl)))
+      .catch(() => {});
+  }, [baseUrl, instanceName]);
+
   // The wrist draws the SAME dial, from the same memory.
   useEffect(() => { watchProvider.sendStations(dialStations); }, [dialStations]);
 
@@ -524,6 +548,19 @@ export default function TunerScreen({ route, navigation }: Props) {
       {/* Header (Back lives in the control island's menu slot) */}
       <View style={[styles.header, { paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right }]}>
         <Text style={styles.title} numberOfLines={1}>{instanceName ?? 'FM-DX'}</Text>
+        {/* Favourite this receiver. Same ♥/♡ convention as the instance picker —
+            the app has no icon library, it uses Unicode glyphs throughout. */}
+        <TouchableOpacity
+          style={styles.favBtn}
+          onPress={onToggleFavourite}
+          accessibilityLabel={isFavourite ? 'Remove from favourites' : 'Add to favourites'}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.fav, isFavourite && styles.favOn]}>
+            {isFavourite ? '♥' : '♡'}
+          </Text>
+        </TouchableOpacity>
         {/* REC + recordings library moved into the AUDIO sheet (control island). */}
         {!!st && !paused && <Text style={styles.users}>{st.users} 👤</Text>}
       </View>
@@ -782,6 +819,9 @@ function makeStyles(t: ThemeTokens) {
     backTxt: { color: t.btnActiveText, fontFamily: F, fontSize: 15 },
     title: { flex: 1, color: t.freqColor, fontFamily: F, fontSize: 18, fontWeight: 'bold', letterSpacing: 1 },
     users: { color: t.snrColor, fontFamily: F, fontSize: 13 },
+    favBtn: { padding: 4 },
+    fav:   { color: t.sectionColor, fontSize: 20 },
+    favOn: { color: '#e5484d' },
     err: { color: '#ff8a8a', fontFamily: F, fontSize: 13, textAlign: 'center' },
     pausedBanner: {
       position: 'absolute', alignSelf: 'center', zIndex: 60,

@@ -46,11 +46,18 @@ struct FmdxView: View {
     ZStack {
       background
 
+      // A FIXED SKELETON. Every row that can change height is pinned, and only ONE
+      // region is allowed to flex.
+      //
+      // It was `Spacer / identity / Spacer`, and the identity block changes height
+      // constantly — RDS arrives, a PTY capsule appears, the transmitter resolves.
+      // Two springs either side of a growing box means every one of those turns into
+      // a reflow of the whole screen, so the layout visibly jumped and glitched as
+      // the station data trickled in.
       VStack(spacing: 0) {
         topBar
-        Spacer(minLength: 0)
         identity
-        Spacer(minLength: 0)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)   // the ONLY flexible row
         dial
         readouts
       }
@@ -101,8 +108,23 @@ struct FmdxView: View {
   ///
   /// The blur is STATIC: it recomputes only when the station changes, never per
   /// frame. Nothing animates behind it — the RadioText scrolls in the layer ABOVE.
+  /// ── `.clipped()` CLIPS DRAWING. IT DOES NOT CONSTRAIN LAYOUT. ────────────────
+  ///
+  /// This bit the layout hard: `Image.resizable().scaledToFill()` reports the
+  /// SCALED-UP image as its ideal size, a ZStack sizes to its largest child, and so
+  /// the instant a real logo arrived the background claimed a rectangle far bigger
+  /// than the screen. Everything else was then laid out against THAT — the listener
+  /// count drifted up into the corner curve and the signal bar fell off the bottom.
+  /// With no logo it looked perfect, because the drawn fallback has no intrinsic
+  /// size. So the bug appeared only once a station's logo actually loaded.
+  ///
+  /// The cure is to PIN the background to the hardware's rectangle, so it can never
+  /// have an opinion about how big this view is. Size off `screenBounds`, not
+  /// GeometryReader — the same rule the numpad already learned.
   private var background: some View {
-    ZStack {
+    let screen = WKInterfaceDevice.current().screenBounds
+
+    return ZStack {
       Color.black
       Group {
         if let d = link.logo, let img = UIImage(data: d) {
@@ -121,6 +143,7 @@ struct FmdxView: View {
           }
         }
       }
+      .frame(width: screen.width, height: screen.height)   // <- the load-bearing line
       .blur(radius: 18)
       .opacity(0.55)
       .clipped()
@@ -130,6 +153,8 @@ struct FmdxView: View {
       LinearGradient(colors: [.black.opacity(0.25), .black.opacity(0.85)],
                      startPoint: .top, endPoint: .bottom)
     }
+    .frame(width: screen.width, height: screen.height)
+    .clipped()
     .ignoresSafeArea()
   }
 
