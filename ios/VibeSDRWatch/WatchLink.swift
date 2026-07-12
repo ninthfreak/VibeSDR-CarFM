@@ -22,6 +22,11 @@ enum WK {
   static let step    = "st"  // Double, Hz
   static let lut     = "l"   // Data, 1024 bytes RGBA x256
   static let smooth  = "sm"  // Double, 0..1 row blend factor
+  static let filtLo  = "lo"  // Double, Hz offset from carrier (negative = below)
+  static let filtHi  = "hi"  // Double, Hz offset from carrier
+  static let needle  = "nc"  // String, "#rrggbb" — the phone's VFO colour
+  static let needleI = "ni"  // Double, 1..10 — needle intensity
+  static let sharp   = "sh"  // Double, 0..10 — waterfall sharpness
 }
 
 final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
@@ -37,6 +42,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   @Published var step       = 0.0
   @Published var reachable  = false
   @Published var everGotRow = false
+  /// Filter edges as Hz offsets from the carrier. NOT symmetric: LSB is entirely
+  /// below (both negative), USB entirely above, CW offset. Drawing a single width
+  /// about the centre would render every mode as AM.
+  @Published var filtLo     = 0.0
+  @Published var filtHi     = 0.0
+  /// The phone's acrylic-VFO settings, mirrored.
+  @Published var needle     = Color.white
+  @Published var needleI    = 5.0
 
   private var session: WCSession?
 
@@ -80,6 +93,8 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if let sp = m[WK.span] as? Double { span = sp }
       if let s = m[WK.snr] as? Double { snr = s }
       if let lv = m[WK.level] as? Double { level = lv }
+      if let l = m[WK.filtLo] as? Double { filtLo = l }
+      if let hh = m[WK.filtHi] as? Double { filtHi = hh }
 
     case "state":
       if let f = m[WK.freq] as? Double { frequency = f }
@@ -89,6 +104,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     case "settings":
       if let l = m[WK.lut] as? Data, l.count == 1024 { waterfall.setLUT([UInt8](l)) }
       if let sm = m[WK.smooth] as? Double { waterfall.smoothing = sm }
+      if let nc = m[WK.needle] as? String, let c = Color(hex: nc) { needle = c }
+      if let ni = m[WK.needleI] as? Double { needleI = ni }
+      if let sh = m[WK.sharp] as? Double { waterfall.sharpness = sh }
 
     default:
       break
@@ -103,5 +121,19 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
   func sessionReachabilityDidChange(_ s: WCSession) {
     DispatchQueue.main.async { self.reachable = s.isReachable }
+  }
+}
+
+extension Color {
+  /// "#rrggbb" as sent by the phone's VFO colour picker.
+  init?(hex: String) {
+    var s = hex.trimmingCharacters(in: .whitespaces)
+    if s.hasPrefix("#") { s.removeFirst() }
+    guard s.count == 6, let v = UInt32(s, radix: 16) else { return nil }
+    self.init(
+      red:   Double((v >> 16) & 0xff) / 255,
+      green: Double((v >>  8) & 0xff) / 255,
+      blue:  Double( v        & 0xff) / 255
+    )
   }
 }

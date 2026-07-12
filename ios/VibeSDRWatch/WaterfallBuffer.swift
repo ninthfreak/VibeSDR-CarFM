@@ -41,6 +41,14 @@ final class WaterfallBuffer {
   /// interpolation. 0 = rely on interpolation alone.
   var smoothing: Double = 0.0
 
+  /// 0-10, mirrors the phone's waterfall sharpness.
+  ///
+  /// The watch NEEDS its own: the phone applies sharpness in its SkSL shader, not
+  /// in SignalProcessor, so the row we borrow arrives unsharpened — and we then
+  /// bilinear-upscale it, which softens it further. An SSB signal is only ~12 of
+  /// the 128 bins wide, so it loses the most and goes mushy.
+  var sharpness: Double = 0.0
+
   private var pixels: [UInt8]
   private var lut: [UInt8]
   private var cached: CGImage?
@@ -111,10 +119,29 @@ final class WaterfallBuffer {
     }
     lastArrivalAt = now
 
-    queue.append(row)
+    queue.append(sharpen(row))
     // If we somehow can't keep up, drop the OLDEST: the newest row is the one
     // that matters, and a growing queue is just latency.
     if queue.count > 8 { queue.removeFirst(queue.count - 8) }
+  }
+
+  /// Unsharp mask across the bins: subtract a blurred copy of the row from itself,
+  /// which pulls a narrow carrier back up out of the smear that bilinear upscaling
+  /// puts it into. Horizontal only — blurring along TIME is what makes the scroll
+  /// look continuous, so we must not undo that.
+  private func sharpen(_ row: [UInt8]) -> [UInt8] {
+    guard sharpness > 0 else { return row }
+    let amt = sharpness / 10 * 1.6
+    var out = row
+    let n = row.count
+    for i in 0..<n {
+      let l = Double(row[max(0, i - 1)])
+      let m = Double(row[i])
+      let r = Double(row[min(n - 1, i + 1)])
+      let blur = (l + 2 * m + r) / 4          // 3-tap Gaussian
+      out[i] = UInt8(clamping: Int((m + amt * (m - blur)).rounded()))
+    }
+    return out
   }
 
   /// Screen woke / link came back. The queue holds stale rows and the clock is

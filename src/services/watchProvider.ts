@@ -29,9 +29,11 @@ import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalP
 const Native = NativeModules.VibeWatchModule as
   | {
       isReachable(): Promise<boolean>;
-      sendRow(rowB64: string, freq: number, span: number, snr: number, level: number): void;
+      sendRow(rowB64: string, freq: number, span: number, snr: number, level: number,
+              lo: number, hi: number): void;
       sendState(freq: number, mode: string, step: number): void;
-      sendSettings(lutB64: string, smoothing: number): void;
+      sendSettings(lutB64: string, smoothing: number, needle: string,
+                   needleIntensity: number, sharpness: number): void;
     }
   | undefined;
 
@@ -117,6 +119,27 @@ class WatchProvider {
    *  no row to borrow. */
   private phoneRendering = false;
   setPhoneRendering(v: boolean) { this.phoneRendering = v; }
+
+  /** The phone's acrylic-VFO settings, mirrored so the wrist needle is the same
+   *  one the user configured — a hairline is invisible over a bright palette. */
+  private needle = '#ffffff';
+  private needleIntensity = 5;
+  setNeedle(color: string, intensity: number) {
+    if (color === this.needle && intensity === this.needleIntensity) return;
+    this.needle = color;
+    this.needleIntensity = intensity;
+    this.lastPalette = '';   // force a settings resend
+  }
+
+  /** The phone applies sharpness in its SHADER, not in SignalProcessor — so the
+   *  row we hand the watch is unsharpened and it must do its own. Mirror the
+   *  setting so the two agree. */
+  private sharpness = 0;
+  setSharpness(v: number) {
+    if (v === this.sharpness) return;
+    this.sharpness = v;
+    this.lastPalette = '';   // force a settings resend
+  }
 
   /** True only when a watch app is actually in the foreground with a live link.
    *  Everything here no-ops otherwise, so a user with no watch pays nothing. */
@@ -217,17 +240,28 @@ class WatchProvider {
 
     if (this.colormap !== this.lastPalette) {
       this.lastPalette = this.colormap;
-      Native!.sendSettings(toBase64(getColorLUT(this.colormap)), 0.35);
+      Native!.sendSettings(toBase64(getColorLUT(this.colormap)), 0.35,
+                           this.needle, this.needleIntensity, this.sharpness);
     }
 
     const n = row.length;
     if (n < 2 || !ctx.bwHz) return;
 
+    const binHz = ctx.bwHz / n;
+
     // Span follows the demod bandwidth so the signal is always a readable blob.
     const bw = Math.abs((ctx.filterHigh ?? 0) - (ctx.filterLow ?? 0));
-    const span = Math.min(ctx.bwHz, (bw > 0 ? bw : DEFAULT_SPAN_HZ / SPAN_MULT) * SPAN_MULT);
+    const wanted = (bw > 0 ? bw : DEFAULT_SPAN_HZ / SPAN_MULT) * SPAN_MULT;
 
-    const binHz    = ctx.bwHz / n;
+    // ...but NEVER crop below the source resolution. The watch can't be sharper
+    // than the phone's bins: with the phone zoomed out each bin covers a lot of
+    // Hz, so a narrow window may hold only ~20 real bins, and stretching those
+    // across 128 columns just invents pixels — which is the blur, and no amount
+    // of sharpening recovers detail that was never sampled. Better to show a
+    // WIDER span that is genuinely sharp than a narrow one that is mush.
+    const floorSpan = WATCH_BINS * binHz;
+    const span = Math.min(ctx.bwHz, Math.max(wanted, floorSpan));
+
     const centreBin = (ctx.tuneHz - ctx.centerHz) / binHz + n / 2;
     const halfBins  = span / binHz / 2;
     const start     = centreBin - halfBins;
@@ -250,7 +284,11 @@ class WatchProvider {
       this.out[x] = peak;
     }
 
-    Native!.sendRow(toBase64(this.out), ctx.tuneHz, span, this.snr, this.level);
+    // Send the filter EDGES, not a width. The passband is only symmetric about
+    // the carrier on AM/FM — LSB sits entirely below it, USB entirely above, CW
+    // is offset — so a single bandwidth number would draw every mode as AM.
+    Native!.sendRow(toBase64(this.out), ctx.tuneHz, span, this.snr, this.level,
+                    ctx.filterLow ?? 0, ctx.filterHigh ?? 0);
   }
 }
 

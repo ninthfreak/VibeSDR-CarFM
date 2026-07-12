@@ -42,15 +42,17 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
 
   /// One waterfall row, already cropped to the VFO-centred window and quantised
   /// to 0-255 with the phone's brightness/contrast/gain baked in.
-  @objc(sendRow:freq:span:snr:level:)
-  func sendRow(_ rowB64: String, freq: NSNumber, span: NSNumber, snr: NSNumber, level: NSNumber) {
+  @objc(sendRow:freq:span:snr:level:lo:hi:)
+  func sendRow(_ rowB64: String, freq: NSNumber, span: NSNumber, snr: NSNumber,
+               level: NSNumber, lo: NSNumber, hi: NSNumber) {
     guard let s = session, s.isReachable,
           let row = Data(base64Encoded: rowB64) else { return }
     // Fire-and-forget: a dropped row is invisible on a scrolling waterfall,
     // whereas a queue that backs up turns into visible lag.
     s.sendMessage(
       ["k": "row", "r": row, "f": freq.doubleValue, "sp": span.doubleValue,
-       "s": snr.doubleValue, "lv": level.doubleValue],
+       "s": snr.doubleValue, "lv": level.doubleValue,
+       "lo": lo.doubleValue, "hi": hi.doubleValue],
       replyHandler: nil,
       errorHandler: nil
     )
@@ -69,12 +71,14 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// Palette + temporal smoothing. We ship the phone's own 256-entry RGBA LUT
   /// (1KB) rather than reimplementing 26 colour maps in Swift — the wrist can
   /// never drift from the phone, and new palettes work for free.
-  @objc(sendSettings:smoothing:)
-  func sendSettings(_ lutB64: String, smoothing: NSNumber) {
+  @objc(sendSettings:smoothing:needle:needleIntensity:sharpness:)
+  func sendSettings(_ lutB64: String, smoothing: NSNumber,
+                    needle: String, needleIntensity: NSNumber, sharpness: NSNumber) {
     guard let s = session, s.isReachable,
           let lut = Data(base64Encoded: lutB64) else { return }
     s.sendMessage(
-      ["k": "settings", "l": lut, "sm": smoothing.doubleValue],
+      ["k": "settings", "l": lut, "sm": smoothing.doubleValue,
+       "nc": needle, "ni": needleIntensity.doubleValue, "sh": sharpness.doubleValue],
       replyHandler: nil,
       errorHandler: nil
     )

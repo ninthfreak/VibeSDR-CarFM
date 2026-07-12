@@ -3019,13 +3019,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   // SignalProcessor precisely so it survives the Skia teardown on lock).
   useEffect(() => {
     watchProvider.setColormap(colormap);
+    watchProvider.setNeedle(vfoNeedle, vfoIntensity);
+    watchProvider.setSharpness(wfSharpness);
     watchProvider.setProcessorSettings({
       autoContrast, wfBrightness, wfContrast, wfSharpness,
       spatialSmooth, peakHold,
       manualRange: wfCoarse === 'manual' ? { minDb: dbMin, maxDb: dbMax } : null,
     });
   }, [colormap, autoContrast, wfBrightness, wfContrast, wfSharpness,
-      spatialSmooth, peakHold, wfCoarse, dbMin, dbMax]);
+      spatialSmooth, peakHold, wfCoarse, dbMin, dbMax, vfoNeedle, vfoIntensity]);
 
   // ── Share — deep link into this station (web-UI URL params; skin parity:
   //    the skin shared window.location.href which carries the same params) ──

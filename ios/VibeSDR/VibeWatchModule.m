@@ -12,7 +12,9 @@ RCT_EXTERN_METHOD(sendRow
                   : (nonnull NSNumber *)freq span
                   : (nonnull NSNumber *)span snr
                   : (nonnull NSNumber *)snr level
-                  : (nonnull NSNumber *)level)
+                  : (nonnull NSNumber *)level lo
+                  : (nonnull NSNumber *)lo hi
+                  : (nonnull NSNumber *)hi)
 
 RCT_EXTERN_METHOD(sendState
                   : (nonnull NSNumber *)freq mode
@@ -21,6 +23,9 @@ RCT_EXTERN_METHOD(sendState
 
 RCT_EXTERN_METHOD(sendSettings
                   : (NSString *)lutB64 smoothing
-                  : (nonnull NSNumber *)smoothing)
+                  : (nonnull NSNumber *)smoothing needle
+                  : (NSString *)needle needleIntensity
+                  : (nonnull NSNumber *)needleIntensity sharpness
+                  : (nonnull NSNumber *)sharpness)
 
 @end

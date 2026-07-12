@@ -124,18 +124,57 @@ struct ContentView: View {
                    height: rowPx * Double(WaterfallBuffer.height))
       )
 
-      // Centre marker — the VFO is always dead-centre, because the phone crops
-      // the bin window around it. Crown-tune towards a signal and it slides in
-      // and parks under this line.
-      let x = size.width / 2
-      ctx.stroke(
-        Path { $0.move(to: CGPoint(x: x, y: 0)); $0.addLine(to: CGPoint(x: x, y: size.height)) },
-        with: .color(.white.opacity(0.55)),
-        lineWidth: 1
-      )
+      drawVFO(ctx, size)
     }
     .ignoresSafeArea()
     .onReceive(driver) { _ in frame &+= 1 }
+  }
+
+  /// The VFO. Always dead-centre — the phone crops the bin window around it — so
+  /// this is a fixed mark and the signal slides under it as you tune.
+  ///
+  /// Deliberately NOT a port of the phone's acrylic pane. At ~184px wide a diffuse
+  /// tinted panel just reads as a smudge and buries the signal underneath it. On a
+  /// watch, crisp geometry beats soft geometry: a bright solid carrier, and the
+  /// passband edges as 1px DASHED lines, so you can see the filter width without
+  /// it competing with the waterfall for the same pixels.
+  ///
+  /// Colour and intensity come from the phone's own VFO settings, so the two
+  /// screens agree — but intensity drives BRIGHTNESS here, not glow spread.
+  /// Nothing is blurred: it would only smear the signal under the line, and it
+  /// would re-blur 30x/sec on the watch GPU for the privilege.
+  private func drawVFO(_ ctx: GraphicsContext, _ size: CGSize) {
+    let x = size.width / 2
+    let h = size.height
+    let c = link.needle
+    let k = max(0.2, link.needleI / 5)   // 1-10, 5 = the phone's stock look
+
+    // ── Passband edges: 1px dashed, drawn at their TRUE offsets from the carrier.
+    //    Not mirrored: on LSB both edges fall to the LEFT of the carrier, on USB
+    //    both to the right, and CW is offset — mirroring a single width would draw
+    //    every mode as AM.
+    if link.span > 0, link.filtHi != link.filtLo {
+      let hzToPx = size.width / link.span
+      let dash = StrokeStyle(lineWidth: 1, dash: [3, 3])
+      for edge in [link.filtLo, link.filtHi] {
+        let ex = x + edge * hzToPx
+        guard ex > 1, ex < size.width - 1 else { continue }   // off-span: skip
+        ctx.stroke(
+          Path { $0.move(to: CGPoint(x: ex, y: 0)); $0.addLine(to: CGPoint(x: ex, y: h)) },
+          with: .color(c.opacity(min(1, 0.75 * k))),
+          style: dash
+        )
+      }
+    }
+
+    // ── The carrier: bright, solid, crisp. NO glow, NO blur — on a watch those
+    //    only smear the signal sitting underneath the line. Intensity drives
+    //    brightness, not spread.
+    ctx.stroke(
+      Path { $0.move(to: CGPoint(x: x, y: 0)); $0.addLine(to: CGPoint(x: x, y: h)) },
+      with: .color(c.opacity(min(1, 0.55 + 0.09 * link.needleI))),
+      lineWidth: 2.5
+    )
   }
 
   private var placeholder: some View {
@@ -213,17 +252,19 @@ struct ContentView: View {
   // phone's own smoothed 0..1 level, drawn with the phone's own red->green ramp.
 
   private var readout: some View {
-    HStack(spacing: 6) {
+    // Hugs its content and centres, rather than stretching edge-to-edge with the
+    // two figures pushed into opposite corners — the watch's rounded corners were
+    // clipping them there.
+    HStack(spacing: 8) {
       Text(formatFreq(link.frequency))
         .font(.system(size: 15, weight: .semibold, design: .rounded))
         .monospacedDigit()
-      Spacer(minLength: 0)
       Text(link.snr > 0 ? String(format: "%.0f dB", link.snr) : "—")
         .font(.system(size: 11, weight: .semibold, design: .rounded))
         .monospacedDigit()
         .foregroundStyle(.white.opacity(0.9))
     }
-    .padding(.horizontal, 8)
+    .padding(.horizontal, 12)
     .padding(.vertical, 4)
     .background(alignment: .leading) {
       GeometryReader { geo in
