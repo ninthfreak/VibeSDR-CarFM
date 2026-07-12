@@ -181,7 +181,16 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// produces the backwards yank.
   private func armTuneSettle() {
     tuneSettle?.cancel()
-    let work = DispatchWorkItem { [weak self] in self?.tuneSettle = nil }
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.tuneSettle = nil
+      // ASK, don't wait. The phone only echoes the frequency when it CHANGES — so
+      // if our prediction ran past a band edge (or the phone rejected the tune),
+      // its frequency stopped moving, no echo was ever sent, and the watch would sit
+      // on a wrong prediction forever with no way back. A ping makes the phone state
+      // its truth unconditionally, so the wrist ALWAYS resyncs when the crown stops.
+      self.ping()
+    }
     tuneSettle = work
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
   }

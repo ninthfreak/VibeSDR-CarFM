@@ -57,20 +57,17 @@ struct ContentView: View {
   /// on a wrist you must always know what a turn is about to do.
   @State private var crownMode: CrownMode = .tune
 
-  /// Detents per tune step. The crown's detent rate is FIXED by watchOS, but the
-  /// step size isn't: at a 9kHz step a normal wrist flick throws you across half a
-  /// band, which is unusable on SW. So we divide — one step per `crownDivisor`
-  /// detents.
-  ///
-  /// Deliberately NOT SwiftUI's `sensitivity:` (.low/.medium/.high): that changes
-  /// how many detents a rotation produces, so it also changes the HAPTIC feel, and
-  /// it only offers three coarse settings. Dividing leaves the fidget-spinner
-  /// detents exactly as they are and gives a real range.
-  @AppStorage("crownDivisor") private var crownDivisor = 1
-  /// Leftover detents between steps. Kept so slow turning still gets there: without
-  /// it, at a divisor of 4, three detents would round to nothing and be discarded,
-  /// and the crown would feel dead rather than fine.
-  @State private var detentAccum = 0
+  /// How far you must turn for one step. watchOS's OWN sensitivity, not a divisor of
+  /// our own: it changes how many detents a rotation produces, so the HAPTIC CLICKS
+  /// STAY IN STEP WITH THE TUNING. (A divisor was tried — it kept 1 click = 1 detent
+  /// while silently swallowing 2 of every 3, so the crown clicked without doing
+  /// anything, which feels broken rather than fine.) `.low` = turn further per step,
+  /// which is what a 9kHz step needs: a flick used to cross half a band.
+  @AppStorage("crownSens") private var crownSens = CrownSens.medium.rawValue
+  private var crownSensitivity: DigitalCrownRotationalSensitivity {
+    CrownSens(rawValue: crownSens)?.sensitivity ?? .medium
+  }
+
   /// The ONE knob that matters. Smoothness vs battery, nothing else — the Canvas
   /// repaints everything (waterfall, trace, VFO) on every tick regardless.
   private let driver = Timer.publish(every: 1.0 / 20.0, on: .main, in: .common).autoconnect()
@@ -138,7 +135,7 @@ struct ContentView: View {
     .digitalCrownRotation(
       $crown,
       from: 0, through: Self.detents, by: 1,
-      sensitivity: .medium,
+      sensitivity: crownSensitivity,
       isContinuous: true,               // wraps at the ends
       isHapticFeedbackEnabled: true     // detents: the "fidget-spinner" feel
     )
@@ -156,18 +153,22 @@ struct ContentView: View {
 
       lastDetent = detent
 
+      // THE CROWN KEEPS TUNING UNDERNEATH A PRESENTED SCREEN. Swallow it.
+      //
+      // This view holds the crown focus, and pushing the numpad or the control menu
+      // does NOT take it away — so scrolling one of those lists with the crown was
+      // ALSO turning the VFO, invisibly, behind the screen you were looking at. It
+      // reads as the radio tuning itself: you pick a demod and the frequency has
+      // moved, or you turn the crown in the menu and come back somewhere else
+      // entirely. (It also made zoom and tune look like they were crossing over.)
+      //
+      // Swallow the delta but KEEP tracking lastDetent, or the accumulated rotation
+      // would be applied in one lump the moment the screen closes.
+      guard !showMenu && !showNumpad else { return }
+
       switch crownMode {
-      case .tune:
-        // Divide the detents, carrying the remainder (see crownDivisor).
-        let div = max(1, crownDivisor)
-        detentAccum += delta
-        let steps = detentAccum / div          // truncates toward zero — sign-safe
-        if steps != 0 {
-          detentAccum -= steps * div
-          link.tune(delta: steps)
-        }
-      case .zoom:
-        link.zoom(delta: delta)                // zoom is already log-scaled; leave it
+      case .tune: link.tune(delta: delta)
+      case .zoom: link.zoom(delta: delta)
       }
     }
     // Long-press anywhere on the waterfall for the control grid.

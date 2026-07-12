@@ -17,7 +17,44 @@ enum CrownMode: Equatable {
   }
 }
 
-/// Long-press menu: three large buttons, Control-Centre style.
+/// Crown sensitivity — watchOS's own, exposed as three named levels.
+///
+/// This maps straight onto SwiftUI's `sensitivity:`, which sets how many detents a
+/// rotation produces. Fine is the point: at a 9kHz step, High throws you across half
+/// a band on one flick. Because it's the SYSTEM setting, the haptic clicks stay in
+/// step with the tuning — one click, one step, whichever level you pick.
+enum CrownSens: String, CaseIterable {
+  case high, medium, low
+
+  var sensitivity: DigitalCrownRotationalSensitivity {
+    switch self {
+    case .high:   return .high      // most detents per turn — the twitchiest
+    case .medium: return .medium    // the original behaviour
+    case .low:    return .low       // turn furthest per step — finest control
+    }
+  }
+
+  /// Named for what the USER gets, which is the inverse of the detent count: `.low`
+  /// sensitivity is the FINEST tuning. Calling it "Low" and leaving it there would
+  /// read as "worse".
+  var label: String {
+    switch self {
+    case .high:   return "Coarse"
+    case .medium: return "Normal"
+    case .low:    return "Fine"
+    }
+  }
+
+  var detail: String {
+    switch self {
+    case .high:   return "Fastest — a flick crosses a band"
+    case .medium: return "Default"
+    case .low:    return "Turn further per step"
+    }
+  }
+}
+
+/// Long-press menu: four large buttons, Control-Centre style.
 ///
 /// Step and Demod open a SCROLLABLE LIST rather than cycling on tap. That matters:
 /// tap-to-cycle means walking THROUGH modes you didn't ask for — and landing on
@@ -47,11 +84,11 @@ struct ControlMenu: View {
 
   @State private var showModes = false
   @State private var showSteps = false
-
   @State private var showCrown = false
-  @AppStorage("crownDivisor") private var crownDivisor = 1
+  @AppStorage("crownSens") private var crownSens = CrownSens.medium.rawValue
 
   private let cols = Array(repeating: GridItem(.flexible(), spacing: 5), count: 2)
+
   /// Sits in the clock's band, so the X costs no height.
   private let closeH: CGFloat = 32
 
@@ -86,14 +123,10 @@ struct ControlMenu: View {
           tile(icon: "magnifyingglass", label: "Zoom", h: h) {
             dismiss(); onPickCrown(.zoom)
           }
-          // NAME the control, then show its VALUE. A tile reading just "High" (or
+          // NAME the control, then show its VALUE. A tile reading just "Fine" (or
           // "9k", or "USB") shows you the setting while leaving you to guess what
-          // it's the setting FOR. The name is what makes the tile a control; the
-          // value is what makes the menu double as a status readout. You need both.
-          //
-          // Crown sensitivity belongs here rather than on the phone: it's a property
-          // of the CROWN, and it's the wrist that has the problem — at a 9kHz step a
-          // normal flick throws you across half a band.
+          // it's the setting FOR. The name makes the tile a control; the value makes
+          // the menu double as a status readout. You need both.
           tile(name: "CROWN", value: crownLabel, h: h) { showCrown = true }
           tile(name: "STEP",  value: stepLabel(link.step), h: h) { showSteps = true }
           tile(name: "DEMOD", value: link.mode.uppercased(), h: h) { showModes = true }
@@ -106,7 +139,7 @@ struct ControlMenu: View {
     .ignoresSafeArea(edges: .top)
     .toolbar(.hidden, for: .navigationBar)
     .sheet(isPresented: $showCrown) {
-      CrownSensitivity(divisor: $crownDivisor, step: link.step)
+      CrownPicker(current: $crownSens) { showCrown = false; dismiss() }
     }
     .sheet(isPresented: $showModes) {
       PickerList(title: "Demod", items: Self.modes, current: link.mode) { m in
@@ -176,11 +209,7 @@ struct ControlMenu: View {
   static let steps: [Double] = [10, 100, 500, 1_000, 9_000, 10_000, 12_500, 25_000, 100_000]
 
   private var crownLabel: String {
-    switch crownDivisor {
-    case 2:  return "Med"
-    case 3:  return "Low"
-    default: return "High"
-    }
+    CrownSens(rawValue: crownSens)?.label ?? "Normal"
   }
 
   private func stepLabel(_ hz: Double) -> String {
@@ -193,43 +222,31 @@ struct ControlMenu: View {
   }
 }
 
-/// Crown sensitivity: how many detents make one tune step.
-///
-/// THREE NAMED LEVELS, not a slider. Same reasoning as Step and Demod being lists:
-/// on a wrist you want to tap the thing you want, and a slider asks you to drag a
-/// thumb precisely on a surface your finger is already covering. High is today's
-/// behaviour, so nobody's muscle memory breaks.
-///
-/// Each row shows the rate it actually PRODUCES at the current step, because that
-/// is the thing you feel: at a 9kHz step "Low" is abstract, "3 kHz / detent" isn't.
-struct CrownSensitivity: View {
-  @Binding var divisor: Int
-  let step: Double
-  @Environment(\.dismiss) private var dismiss
-
-  private static let levels: [(name: String, div: Int)] = [
-    ("High",   1),   // 1 detent = 1 step — how it has always behaved
-    ("Medium", 2),
-    ("Low",    3),
-  ]
+/// The crown-sensitivity picker. A list, like Step and Demod — you tap the thing you
+/// want, which is the right gesture on a surface your finger is already covering.
+struct CrownPicker: View {
+  @Binding var current: String
+  let onPick: () -> Void
 
   var body: some View {
     List {
-      ForEach(Self.levels, id: \.div) { level in
+      ForEach(CrownSens.allCases, id: \.rawValue) { s in
         Button {
-          divisor = level.div
-          dismiss()
+          current = s.rawValue
+          onPick()
         } label: {
           HStack {
             VStack(alignment: .leading, spacing: 1) {
-              Text(level.name)
+              Text(s.label)
                 .font(.system(size: 16, weight: .semibold, design: .rounded))
-              Text(rate(level.div))
+              Text(s.detail)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             }
             Spacer()
-            if divisor == level.div {
+            if current == s.rawValue {
               Image(systemName: "checkmark").foregroundStyle(.green)
             }
           }
@@ -238,18 +255,6 @@ struct CrownSensitivity: View {
       }
     }
     .navigationTitle("Crown")
-  }
-
-  /// The tuning rate a level actually produces at the current step.
-  private func rate(_ div: Int) -> String {
-    guard step > 0 else { return "—" }
-    let hz = step / Double(max(1, div))
-    if hz >= 1_000 {
-      let k = hz / 1_000
-      return k == k.rounded() ? String(format: "%.0f kHz / detent", k)
-                              : String(format: "%.1f kHz / detent", k)
-    }
-    return String(format: "%.0f Hz / detent", hz)
   }
 }
 
