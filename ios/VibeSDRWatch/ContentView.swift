@@ -606,10 +606,12 @@ struct ContentView: View {
       return ("hourglass", "Starting VibeSDR…")
     case "pick":
       // No default instance — but there ARE favourites. The wrist can choose.
-      return ("star.fill", "Choose a server\nLong-press → Servers")
+      return ("server.rack", "Choose a server\nLong-press → Servers")
     case "setup":
       // Nothing to connect to. Say so plainly rather than showing a dead screen.
-      return ("iphone", "Open VibeSDR on iPhone\nand save a favourite server")
+      // ♥ is FAVOURITE. ★ is DEFAULT. Getting that backwards in the one message a
+      // stranded user reads would send them to press the wrong button.
+      return ("iphone", "Open VibeSDR on iPhone\nand ♥ a server")
     default:
       break
     }

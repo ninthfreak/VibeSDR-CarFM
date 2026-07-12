@@ -29,7 +29,16 @@ import { useDeepLinks }     from './src/linking/useDeepLinks';
 export type RootStackParamList = {
   // autoSpy: set by an `sdr://host:port` deep link → the picker auto-runs
   // connectSpy() once, then clears the param (see InstancePickerScreen).
-  InstancePicker: { autoSpy?: { host: string; port: number } } | undefined;
+  InstancePicker: {
+    autoSpy?: { host: string; port: number };
+    /** Sit in the stack WITHOUT auto-connecting to the default.
+     *
+     *  A watch-driven boot resets to [InstancePicker, target] so that BACK still has
+     *  somewhere to go — but the picker auto-connects to the default the moment it
+     *  mounts, which would drag the user straight back off the server the watch just
+     *  chose. This says "be here, but don't take over". */
+    noAutoConnect?: boolean;
+  } | undefined;
   SDR: {
     baseUrl:         string;
     password?:       string;
@@ -183,6 +192,12 @@ export default function App() {
   useEffect(() => {
     const startedInBackground = AppState.currentState !== 'active';
 
+    // THE LINK IS THE APP'S, NOT A SCREEN'S. Start it before anything else: on a cold
+    // boot with no default instance NO screen ever mounts, and reachability used to be
+    // established inside a screen's attach() — so the wrist was told to choose a server
+    // and then shown an empty list, because nothing could be sent to it.
+    watchProvider.startLink();
+
     const pushFavs = () => {
       getFavourites()
         .then((favs) => watchProvider.sendFavourites(
@@ -213,11 +228,27 @@ export default function App() {
               baseUrl: f.url, instanceName: f.name, viewMode,
               serverType: (f.serverType ?? 'ubersdr') as 'ubersdr' | 'kiwi' | 'owrx',
             } };
-      // RESET to the target ALONE. Do NOT navigate() (it pushes and leaves the old
-      // screen mounted and streaming), and do NOT leave the picker beneath it —
-      // InstancePicker AUTO-CONNECTS TO THE DEFAULT on mount, so it would immediately
-      // drag us back to the default and fight the switch we were making.
-      navigationRef.reset({ index: 0, routes: [target] } as never);
+      // RESET, never navigate() — navigate PUSHES and leaves the old screen mounted
+      // and streaming (that's what made the wrist flash between the waterfall and the
+      // FM-DX screen).
+      //
+      // The picker sits BENEATH the target so BACK still goes somewhere: resetting to
+      // the target alone left the user stranded on a screen with nothing to pop to,
+      // and "Back to Instances" did nothing at all. It is passed noAutoConnect,
+      // because it auto-connects to the DEFAULT on mount and would otherwise drag us
+      // straight back off the server the watch just chose.
+      navigationRef.reset({
+        index: 1,
+        routes: [{ name: 'InstancePicker', params: { noAutoConnect: true } }, target],
+      } as never);
+
+      // DISMISS THE SPLASH. InstancePicker is the ONLY thing that ever dismissed it
+      // (splashBridge.dismiss() in its mount effect) — and a watch-driven boot goes
+      // STRAIGHT to the target and never mounts the picker at all. So the splash sat
+      // there spinning forever, with the FM-DX shared-tuner warning stacked on top of
+      // it. Whoever decides where we're going owns dismissing it.
+      splashBridge.dismiss();
+
       watchProvider.setPhoneStatus('ready');
       // We got where we were going — the picker is free to behave normally again.
       watchTargetPending.claimed = false;

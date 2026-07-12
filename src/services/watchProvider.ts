@@ -201,7 +201,10 @@ class WatchProvider {
   private sentLogo = '\u0000';  // what it actually has (sentinel: never sent)
   private out = new Uint8Array(WATCH_BINS);
   private emitter: NativeEventEmitter | null = null;
+  /** LINK subs (reachability) — owned by the app, live for its whole life. */
   private subs: { remove(): void }[] = [];
+  /** COMMAND subs — owned by the current SCREEN, torn down when it unmounts. */
+  private cmdSubs: { remove(): void }[] = [];
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private proc = new SignalProcessor();
   private colormap = 'gqrx';
@@ -299,12 +302,42 @@ class WatchProvider {
   setColormap(name: string) { this.colormap = name; }
 
   /** Wire watch commands into the screen's existing tune/mode/step handlers. */
+  /** THE LINK, independent of any screen.
+   *
+   *  Reachability used to be established inside attach() — which only runs when an SDR
+   *  or tuner screen MOUNTS. So on a cold boot with NO DEFAULT INSTANCE, no screen ever
+   *  mounts, `reachable` stayed false forever, and everything gated on it (the
+   *  favourites list, the phone status) was never sent: the wrist asked you to choose a
+   *  server and then showed you an empty list. Having a default "fixed" it only because
+   *  a default mounts a screen, which started the link as a side effect.
+   *
+   *  The link is a property of the APP, not of a screen. Idempotent; called from
+   *  App.tsx at startup and from attach(). */
+  startLink() {
+    if (!this.available || this.pollTimer) return;
+    this.emitter ??= new NativeEventEmitter(NativeModules.VibeWatchModule);
+    this.subs.push(
+      this.emitter.addListener('VibeWatchState', (e: { reachable: boolean }) => {
+        this.setReachable(!!e.reachable);
+      }),
+    );
+    // Reachability flips when the watch app foregrounds/backgrounds, and the delegate
+    // callback can be missed across an app relaunch — poll as a floor. A plain timer,
+    // no React/Skia work, so it is safe while the phone is locked (which is exactly
+    // when we need it: the watch app is usually opened AFTER the phone is pocketed).
+    void Native!.isReachable().then((r) => this.setReachable(r)).catch(() => {});
+    this.pollTimer = setInterval(() => {
+      Native!.isReachable().then((r) => this.setReachable(r)).catch(() => {});
+    }, 2000);
+  }
+
   attach(handlers: WatchCommandHandlers) {
     if (!this.available) return;
     this.detach();
+    this.startLink();
 
-    this.emitter = new NativeEventEmitter(NativeModules.VibeWatchModule);
-    this.subs.push(
+    this.emitter ??= new NativeEventEmitter(NativeModules.VibeWatchModule);
+    this.cmdSubs.push(
       this.emitter.addListener('VibeWatchCommand', (e: { cmd: string; delta?: number; val?: unknown; armed?: boolean }) => {
         switch (e.cmd) {
           case 'tune': handlers.onTuneDelta(Number(e.delta ?? 0), e.armed === true); break;
@@ -323,21 +356,8 @@ class WatchProvider {
           case 'dab':  handlers.onDabSelect?.(Number(e.val ?? 0)); break;
         }
       }),
-      this.emitter.addListener('VibeWatchState', (e: { reachable: boolean }) => {
-        this.setReachable(!!e.reachable);
-      }),
     );
     this.onReachable = handlers.onReachableChange;
-
-    // Reachability flips when the watch app foregrounds/backgrounds, and the
-    // delegate callback can be missed across an app relaunch — poll as a floor.
-    // This is a plain timer with no React/Skia work, so it is safe to keep
-    // running while the phone is locked (which is exactly when we need it: the
-    // watch app is usually opened AFTER the phone is already in a pocket).
-    void Native!.isReachable().then(r => this.setReachable(r)).catch(() => {});
-    this.pollTimer = setInterval(() => {
-      Native!.isReachable().then(r => this.setReachable(r)).catch(() => {});
-    }, 2000);
   }
 
   private setReachable(r: boolean) {
@@ -348,12 +368,17 @@ class WatchProvider {
     if (r) this.flushAll();   // the watch arrived (or came back) with nothing
   }
 
+  /** A SCREEN is going away — not the app.
+   *
+   *  This used to tear down the reachability listener and the poll timer as well, i.e.
+   *  the LINK ITSELF. That was invisible while a screen always existed, but it means an
+   *  app with no screen mounted (a cold boot with no default instance) has no link at
+   *  all: `reachable` never becomes true and nothing is ever sent to the wrist. The
+   *  link belongs to the app; only the command handlers belong to the screen. */
   detach() {
-    this.subs.forEach(s => s.remove());
-    this.subs = [];
-    this.emitter = null;
-    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
-    this.reachable = false;
+    this.cmdSubs.forEach((s) => s.remove());
+    this.cmdSubs = [];
+    this.onReachable = null;
   }
 
   /** Latest signal, mirrored from the meter bus. `level` is the already-smoothed,

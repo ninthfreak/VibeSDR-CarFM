@@ -29,6 +29,7 @@ struct FmdxView: View {
   private let driver = Timer.publish(every: 1.0 / 20.0, on: .main, in: .common).autoconnect()
   @State private var tick = 0
 
+  @State private var showFavs = false
   @State private var armed = false
   @State private var disarmAt: Date? = nil
   @State private var crown = 0.0
@@ -98,6 +99,12 @@ struct FmdxView: View {
     .onReceive(driver) { _ in
       tick &+= 1
       if let d = disarmAt, Date() >= d { armed = false; disarmAt = nil }
+    }
+    .sheet(isPresented: $showFavs) {
+      FavouritesList(favs: link.favourites) { url in
+        link.selectInstance(url)
+        showFavs = false
+      }
     }
     .onAppear { crownFocused = true; link.ping() }
   }
@@ -171,6 +178,7 @@ struct FmdxView: View {
         .foregroundStyle(.white.opacity(0.9))
 
       armButton
+      ServersButton(show: $showFavs)
 
       Spacer()
       Color.clear.frame(width: 62, height: 1)   // the clock's territory

@@ -252,6 +252,11 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     var body: [String: Any] = ["cmd": cmd]
     if let d = message["delta"] { body["delta"] = d }
     if let v = message["val"]   { body["val"] = v }
+    // `armed` is the FM-DX shared-tuner assertion. It was NOT forwarded, so every
+    // armed tune arrived at the phone looking unarmed and was refused — the crown
+    // did nothing even after you armed it. A whitelist that silently drops fields is
+    // exactly the kind of thing that looks like a logic bug three layers away.
+    if let a = message["armed"] { body["armed"] = a }
     sendEvent(withName: "VibeWatchCommand", body: body)
   }
 

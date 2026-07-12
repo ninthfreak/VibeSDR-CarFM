@@ -160,7 +160,7 @@ struct ControlMenu: View {
           // no default instance the phone lands on the picker and the wrist is left
           // looking at nothing. Bringing the whole directory over would be silly;
           // bringing the handful you actually use is exactly right.
-          tile(icon: "star.fill", label: "Servers", h: h) { showFavs = true }
+          tile(icon: "server.rack", label: "Servers", h: h) { showFavs = true }
 
           // A WAY BACK. Brightness and contrast are watch-local, so a user who
           // cranks them until the waterfall is a white slab has no phone setting to
@@ -302,6 +302,35 @@ struct ControlMenu: View {
   }
 }
 
+/// A WAY OUT, for every screen that has no long-press menu.
+///
+/// FM-DX, DAB and ADS-B are CARDS and LISTS, not control surfaces — there's nothing on
+/// them to zoom, step or demodulate, so none of them has a menu. Which meant that once
+/// the phone landed on one of those backends, the wrist had no way to reach another
+/// server: you had to take the phone out of your pocket, which is the one thing the
+/// watch exists to avoid.
+///
+/// A button, not an invented menu. It lives in the CLOCK'S BAND — watchOS reserves that
+/// strip whether we use it or not, so it costs no height — and it mirrors where the
+/// phone puts the same control.
+struct ServersButton: View {
+  @Binding var show: Bool
+
+  var body: some View {
+    Button { show = true } label: {
+      // A SERVER, not a star. A star says "favourite" — which is what the list holds,
+      // not what the button DOES. The button switches receivers.
+      Image(systemName: "server.rack")
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(.white)
+        .frame(width: 28, height: 26)      // the TAP TARGET is the frame, not the glyph
+        .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.14)))
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+  }
+}
+
 /// The user's favourite instances, as a list. Tapping one switches the PHONE.
 struct FavouritesList: View {
   let favs: [WatchLink.Favourite]
@@ -312,7 +341,9 @@ struct FavouritesList: View {
       if favs.isEmpty {
         // Honest about WHY it's empty, and where to fix it. An empty list with no
         // explanation reads as broken.
-        Text("No favourites yet.\nStar a server on the iPhone.")
+        // ♥ = favourite, ★ = default. Say the right one: this is the only instruction
+        // a user with an empty list ever gets.
+        Text("No favourites yet.\n♥ a server on the iPhone.")
           .font(.caption2)
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.center)

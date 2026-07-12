@@ -14,6 +14,7 @@ import WatchKit
 /// to switch TO — you're already receiving all of them at once.
 struct AircraftView: View {
   @EnvironmentObject var link: WatchLink
+  @State private var showFavs = false
 
   private var planes: [WatchLink.Aircraft] {
     // Nearest first, then by signal for the ones that haven't sent a position yet.
@@ -35,6 +36,12 @@ struct AircraftView: View {
       if planes.isEmpty { empty } else { list }
     }
     .background(Color.black.ignoresSafeArea())
+    .sheet(isPresented: $showFavs) {
+      FavouritesList(favs: link.favourites) { url in
+        link.selectInstance(url)
+        showFavs = false
+      }
+    }
     .onAppear { link.ping() }
   }
 
@@ -50,6 +57,9 @@ struct AircraftView: View {
       Text("aircraft")
         .font(.system(size: 10, weight: .medium))
         .foregroundStyle(.white.opacity(0.6))
+      // A way out: ADS-B has no menu (nothing to tune), so without this the wrist was
+      // stranded on whatever server the phone happened to be on.
+      ServersButton(show: $showFavs)
       Spacer(minLength: 0)
       Color.clear.frame(width: 58, height: 1)   // the clock's territory
     }

@@ -238,8 +238,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       await whenInitialLinkChecked();
       // The WATCH is driving this boot — it has already chosen (or is choosing) a
     // server, so auto-connecting to the default would drag the user straight back to
-    // it. Stand down.
-    if (watchTargetPending.claimed) return;
+    // it. Stand down. (`noAutoConnect` is the durable form: we sit BENEATH the
+    // watch's target so BACK works, but we must not take over.)
+    if (watchTargetPending.claimed || route.params?.noAutoConnect) return;
     if (!cancelled && dEarly && !isDeepLinkActive()) {
         navigation.navigate('SDR', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: null });
       }

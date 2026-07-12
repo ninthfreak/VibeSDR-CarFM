@@ -25,6 +25,7 @@ import WatchKit
 struct DabView: View {
   @EnvironmentObject var link: WatchLink
 
+  @State private var showFavs = false
   @State private var cursor = 0
   @State private var crown = 0.0
   @State private var lastDetent = 0
@@ -64,6 +65,12 @@ struct DabView: View {
       // at the top is disorienting when you can see the whole list at once.
       cursor = min(n - 1, max(0, cursor + delta))
     }
+    .sheet(isPresented: $showFavs) {
+      FavouritesList(favs: link.favourites) { url in
+        link.selectInstance(url)
+        showFavs = false
+      }
+    }
     .onAppear {
       crownFocused = true
       // Start on what's PLAYING, not at the top — you almost always want the thing
@@ -89,6 +96,9 @@ struct DabView: View {
           .foregroundStyle(.white)
           .lineLimit(1)
           .minimumScaleFactor(0.7)
+        // A way out: DAB has no menu (it's a list, not a control surface), so without
+        // this the wrist was stranded on whatever server the phone happened to be on.
+        ServersButton(show: $showFavs)
         Spacer(minLength: 0)
         Color.clear.frame(width: 58, height: 1)   // the clock's territory
       }

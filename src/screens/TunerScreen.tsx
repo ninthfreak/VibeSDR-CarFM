@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable, NativeEventEmitter, NativeModules, Alert, Platform } from 'react-native';
+import { AppState, View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable, NativeEventEmitter, NativeModules, Alert, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import AudioSheet from '../components/AudioSheet';
@@ -192,7 +192,29 @@ export default function TunerScreen({ route, navigation }: Props) {
   useEffect(() => {
     destroyed.current = false;
     AsyncStorage.getItem(CALLSIGN_KEY).then((cs) => { if (!destroyed.current && cs) setMyCallsign(cs); });
-    if (!fmdxNoticeShownThisSession) { fmdxNoticeShownThisSession = true; setShowNotice(true); }
+    // The shared-tuner notice must be SEEN, not merely fired.
+    //
+    // The watch can boot this screen HEADLESSLY (phone asleep in a pocket), and the
+    // notice was shown on mount and immediately marked as shown-this-session — so it
+    // was used up with nobody looking, and the user never got the one warning that
+    // says "retuning this server moves the frequency for everyone else on it". A
+    // notice nobody sees is worse than no notice, because we then believe they've had
+    // it. Wait until the app is actually IN FRONT OF THEM.
+    let noticeSub: { remove(): void } | null = null;
+    if (!fmdxNoticeShownThisSession) {
+      if (AppState.currentState === 'active') {
+        fmdxNoticeShownThisSession = true;
+        setShowNotice(true);
+      } else {
+        noticeSub = AppState.addEventListener('change', (st) => {
+          if (st !== 'active' || fmdxNoticeShownThisSession || destroyed.current) return;
+          fmdxNoticeShownThisSession = true;
+          setShowNotice(true);
+          noticeSub?.remove();
+          noticeSub = null;
+        });
+      }
+    }
     AsyncStorage.getItem(DIAL_KEY).then((raw) => {
       if (destroyed.current || !raw) return;
       try {
@@ -277,6 +299,7 @@ export default function TunerScreen({ route, navigation }: Props) {
 
     return () => {
       destroyed.current = true;
+      noticeSub?.remove();
       if (commitTimer.current) clearTimeout(commitTimer.current);
       if (convergeTimer.current) clearTimeout(convergeTimer.current);
       if (dialFlushTimer.current) clearTimeout(dialFlushTimer.current);
