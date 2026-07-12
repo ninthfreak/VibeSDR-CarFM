@@ -48,6 +48,11 @@ import { startBookmarkAutosave, stopBookmarkAutosave,
          getLearnedBookmarksNow } from '../services/vibeServer';
 import { setReceiverIso } from '../services/rdsCountry';
 import { watchProvider } from '../services/watchProvider';
+
+/** FFT rate divisor while the phone is backgrounded but the watch is watching.
+ *  The watch only draws ~10fps, so streaming the full 20 is wasted bytes and
+ *  wasted parse on the thread that feeds the audio DSP. */
+const WATCH_BG_DIVISOR = 2;
 import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
@@ -1341,6 +1346,10 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Handler refs — the decoder-client effect below builds its callbacks once
   // per connect, but tune/mode/filter handlers are declared later in the file
+  /** Did WE close the spectrum WS on background? False when the watch kept it
+   *  alive, so the foreground path knows not to re-open a live socket. */
+  const specPausedByBgRef = useRef(false);
+
   const onTuneHzRef    = useRef<((hz: number) => void) | null>(null);
   const onModeRef      = useRef<((m: SDRMode) => void) | null>(null);
   const onFilterBothRef = useRef<((low: number, high: number) => void) | null>(null);
@@ -2056,6 +2065,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         // Waterfall/spectrum render imperatively — no React state per frame.
         wfFrameSink.current?.(newBins, s);
+        // The watch feeds off the RAW frame, not the waterfall component: the
+        // primary use case is a locked phone in a pocket, and the Skia tree is
+        // unmounted by then. Plain JS + one bridge call, so it's safe to keep
+        // running while backgrounded. No-ops when no watch is watching.
+        watchProvider.onSpectrum(newBins, {
+          centerHz:   s.centerHz,
+          bwHz:       s.bwHz,
+          tuneHz:     s.frequency,
+          filterLow:  s.bandwidthLow,
+          filterHigh: s.bandwidthHigh,
+        });
         // Geometry/status drives the React overlay (band plan, readouts) —
         // only update when something actually changed (settled frames don't).
         // Epsilon gate: radiod's per-frame frequency stamps can jitter ±1Hz —
@@ -2123,11 +2143,17 @@ export default function SDRScreen({ route, navigation }: Props) {
           else if (sm.hold > 0)      { sm.hold--; }
           else                       { sm.peak = Math.max(0, sm.peak - 0.02); }
           watchProvider.setSignal(snrDb, sm.level);
-          meterBus.current.emit({
-            level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
-            active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,
-            link: meterBus.current.value.link,
-          });
+          // Backgrounded (watch-only) frames must NOT drive the meter bus: it
+          // re-renders a React leaf per frame, and per-frame React commits in the
+          // background are exactly what starved the audio DSP in v6. Nobody can
+          // see the phone's meter anyway — the watch gets its level above.
+          if (appActiveRef.current) {
+            meterBus.current.emit({
+              level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
+              active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,
+              link: meterBus.current.value.link,
+            });
+          }
         }
       },
       onError: (msg) => {
@@ -2344,7 +2370,20 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; }
         setReinit(false);
         setSpecFailed(false);
-        client.current?.pauseSpectrum();
+        // Keep the spectrum alive if the watch is currently showing it — a
+        // locked phone in a pocket IS the primary watch use case, so pausing
+        // here would kill the feature exactly when it matters. Half rate: the
+        // watch only draws ~10fps, so full rate is wasted bytes and wasted
+        // parse on the thread that feeds the audio DSP. The Skia tree is still
+        // unmounted and every animation driver still cancelled — only the plain
+        // JS path stays alive.
+        if (watchProvider.isActive) {
+          specPausedByBgRef.current = false;
+          client.current?.setRate(WATCH_BG_DIVISOR);
+        } else {
+          specPausedByBgRef.current = true;
+          client.current?.pauseSpectrum();
+        }
       } else if (dataSaverOffRef.current) {
         appActiveRef.current = true;
         // Opened the app after a data-saver disconnect (the Play event may not
@@ -2375,7 +2414,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // audio never stopped — so the watchdog only escalates to the real
         // "Connection lost" popup when AUDIO is also dead; while audio still
         // flows it keeps the calm notice and re-checks.
-        if ((route.params.serverType ?? 'ubersdr') === 'ubersdr') {
+        if ((route.params.serverType ?? 'ubersdr') === 'ubersdr' && specPausedByBgRef.current) {
           resumingRef.current = true;
           setReinit(true);
           setSpecFailed(false);
@@ -2409,7 +2448,18 @@ export default function SDRScreen({ route, navigation }: Props) {
           armReinitWatchdog();
         }
         if (resumeTimer) clearTimeout(resumeTimer);
-        resumeTimer = setTimeout(() => { resumeTimer = null; client.current?.resumeSpectrum(); }, 1200);
+        resumeTimer = setTimeout(() => {
+          resumeTimer = null;
+          // If the watch kept the socket alive through the lock there is nothing
+          // to re-subscribe — just restore full rate. Re-opening a live socket
+          // would drop frames and flash the "reinitialising" notice for nothing.
+          if (specPausedByBgRef.current) {
+            specPausedByBgRef.current = false;
+            client.current?.resumeSpectrum();
+          } else {
+            client.current?.setRate(1);
+          }
+        }, 1200);
       }
     });
     return () => {
@@ -2447,6 +2497,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
     idleActiveRef.current = false; // new client (baseUrl) starts at divisor 1
     const t = setInterval(() => {
+      // A watch showing the waterfall is an active viewer even though nobody is
+      // touching the phone — don't idle-slow the feed under it.
+      if (watchProvider.isActive) return;
       if (!idleActiveRef.current &&
           Date.now() - lastInteractRef.current > IDLE_SLOW_MS) {
         idleActiveRef.current = true;
@@ -2926,6 +2979,25 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onMode: (m: string) => { if (m) onModeRef.current?.(m as SDRMode); },
       onStep: (hz: number) => { if (hz > 0) setStep(hz); },
+
+      // The watch app is usually opened AFTER the phone is already locked in a
+      // pocket — by which point we have already closed the spectrum WS. So the
+      // watch coming into view has to be able to REOPEN it, and its going away
+      // has to close it again, entirely while the phone stays backgrounded.
+      onReachableChange: (reachable: boolean) => {
+        if (appActiveRef.current) return;   // phone's own screen governs
+        const c = client.current; if (!c) return;
+        if (reachable) {
+          if (specPausedByBgRef.current) {
+            specPausedByBgRef.current = false;
+            c.resumeSpectrum();
+          }
+          c.setRate(WATCH_BG_DIVISOR);
+        } else if (!specPausedByBgRef.current) {
+          specPausedByBgRef.current = true;
+          c.pauseSpectrum();
+        }
+      },
     });
     return () => watchProvider.detach();
   }, []);
@@ -2933,6 +3005,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     watchProvider.sendState(status.frequency, String(status.mode), step);
   }, [status.frequency, status.mode, step]);
+
+  // Mirror the phone's own render settings into the watch's processor, so the
+  // wrist keeps looking like a shrunk phone waterfall (it runs its own
+  // SignalProcessor precisely so it survives the Skia teardown on lock).
+  useEffect(() => {
+    watchProvider.setColormap(colormap);
+    watchProvider.setProcessorSettings({
+      autoContrast, wfBrightness, wfContrast, wfSharpness,
+      spatialSmooth, peakHold,
+      manualRange: wfCoarse === 'manual' ? { minDb: dbMin, maxDb: dbMax } : null,
+    });
+  }, [colormap, autoContrast, wfBrightness, wfContrast, wfSharpness,
+      spatialSmooth, peakHold, wfCoarse, dbMin, dbMax]);
 
   // ── Share — deep link into this station (web-UI URL params; skin parity:
   //    the skin shared window.location.href which carries the same params) ──

@@ -72,7 +72,6 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { getColorLUT } from '../assets/colormapUtils';
 import type { SDRStatus } from '../services/UberSDRClient';
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
-import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN, type Band } from '../constants/bandPlan';
 
 // ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
@@ -621,10 +620,6 @@ function WaterfallView({
   frameCfg.current = { width, wfTop, specH, specShow, peakHold,
                        smoothTune, rowsPerFrame: ROWS_PER_FRAME };
 
-  // Geometry the watch needs to crop a VFO-centred slice out of the row below.
-  const watchCfg = useRef({ tuneHz, filterLow, filterHigh, colormap });
-  watchCfg.current = { tuneHz, filterLow, filterHigh, colormap };
-
   const handleFrame = useCallback((fbins: Float32Array, fstatus: SDRStatus) => {
     // Backgrounded: audio keeps playing on its own native path, but the whole
     // visual frame path (Reanimated withTiming glide + reveal/tween setIntervals
@@ -638,19 +633,6 @@ function WaterfallView({
 
     // 1. M9PSY pipeline + UberSDR auto-range
     const frame = proc.current.process(fbins, fstatus.centerHz, fstatus.bwHz);
-
-    // Mirror the row to the watch BEFORE it goes to the GPU: this is the same
-    // 0-255 data the phone is about to draw, so the wrist can never diverge from
-    // what's on screen. No-ops unless a watch app is actually reachable.
-    const wc = watchCfg.current;
-    watchProvider.pushFrame(frame.row, {
-      centerHz:   fstatus.centerHz,
-      bwHz:       fstatus.bwHz,
-      tuneHz:     wc.tuneHz,
-      filterLow:  wc.filterLow,
-      filterHigh: wc.filterHigh,
-      colormap:   wc.colormap,
-    });
     // dB axis labels — 2dB HYSTERESIS, not just rounding: a noisy floor
     // hovering on a .5 boundary flipped the rounded value every few frames,
     // re-rendering the whole WaterfallView tree at up to 10Hz (profiled:

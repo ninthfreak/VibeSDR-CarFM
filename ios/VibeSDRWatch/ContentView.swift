@@ -18,9 +18,16 @@ struct ContentView: View {
   /// Digital Crown position, in step-detents. We only ever read the DELTA out of
   /// this and hand it to the phone — the phone owns the frequency, multiplies by
   /// its own step size, and echoes back what it actually landed on.
+  ///
+  /// The range is deliberately SMALL and wrapping. A huge from/through span with
+  /// `by: 1` makes watchOS materialise a detent map that size and tick haptics
+  /// across it — rotating then hangs the main thread and the watchdog SIGKILLs
+  /// the app (which reads as "the app bounced back to the app list").
   @State private var crown = 0.0
   @State private var lastDetent = 0
   @FocusState private var crownFocused: Bool
+
+  private static let detents = 1000.0
 
   var body: some View {
     ZStack {
@@ -41,16 +48,25 @@ struct ContentView: View {
     .focused($crownFocused)
     .digitalCrownRotation(
       $crown,
-      from: -1_000_000, through: 1_000_000, by: 1,
+      from: 0, through: Self.detents, by: 1,
       sensitivity: .medium,
-      isContinuous: true,
-      isHapticFeedbackEnabled: true   // detents: the "fidget-spinner" feel
+      isContinuous: true,               // wraps at the ends
+      isHapticFeedbackEnabled: true     // detents: the "fidget-spinner" feel
     )
     .onChange(of: crown) { _, new in
       let detent = Int(new.rounded())
       guard detent != lastDetent else { return }
-      link.tune(delta: detent - lastDetent)
+
+      // Unwrap: the crown is continuous, so crossing 0 <-> 999 is a step of one,
+      // not a leap of 999. Without this a single detent at the wrap point would
+      // fling the VFO across the band.
+      var delta = detent - lastDetent
+      let range = Int(Self.detents)
+      if delta >  range / 2 { delta -= range }
+      if delta < -range / 2 { delta += range }
+
       lastDetent = detent
+      link.tune(delta: delta)
     }
     .onAppear { crownFocused = true }
   }

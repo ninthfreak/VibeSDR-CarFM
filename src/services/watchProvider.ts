@@ -1,21 +1,30 @@
 /**
  * Apple Watch remote-view provider.
  *
- * The watch is a thin client. This module is the transport-facing seam: it takes
- * the SAME 0-255 waterfall row the phone just pushed to its own GPU — brightness,
- * contrast, gain and auto-range already baked in by SignalProcessor — crops a
- * VFO-centred window out of it, and ships it over WCSession. The wrist therefore
- * mirrors the phone pixel-for-pixel without re-deriving any DSP mapping, which is
- * the one thing guaranteed to drift if duplicated.
+ * The watch is a thin client. This module owns the whole phone->watch view path:
+ * raw dBFS bins in, a VFO-centred 128-byte row out over WCSession.
  *
- * The palette travels the same way: we send the phone's own 256-entry RGBA LUT
- * rather than reimplementing 26 colour maps in Swift.
+ * IT RUNS OFF THE RAW SPECTRUM, NOT OFF THE WATERFALL COMPONENT. That is
+ * deliberate and load-bearing: the PRIMARY use case is the phone locked in a
+ * pocket, and on lock the app unmounts the Skia canvases and cancels every
+ * animation driver, so anything hanging off WaterfallView is dead exactly when
+ * the watch matters most. We therefore keep our own SignalProcessor, fed the same
+ * settings the phone's renderer uses, so the wrist looks identical without
+ * depending on a component that is deliberately torn down.
+ *
+ * Everything here must stay in the "safe to run while backgrounded" class: plain
+ * JS plus one native bridge call. No Skia, no Reanimated/worklets, no per-frame
+ * React state — those are what starved the audio DSP in the v6 regression.
+ *
+ * The palette travels as data: the phone's own 256-entry RGBA LUT, rather than
+ * reimplementing 26 colour maps in Swift.
  *
  * Direction of truth: phone owns frequency/mode/step; the watch sends DELTAS and
  * mirrors whatever the phone echoes back.
  */
 import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
 import { getColorLUT } from '../assets/colormapUtils';
+import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
 
 const Native = NativeModules.VibeWatchModule as
   | {
@@ -65,13 +74,15 @@ export interface WatchFrameCtx {
   tuneHz:     number;
   filterLow?: number;
   filterHigh?: number;
-  colormap?:  string;
 }
 
 export interface WatchCommandHandlers {
   onTuneDelta(delta: number): void;
   onMode(mode: string): void;
   onStep(hz: number): void;
+  /** Watch app opened/closed. Used to keep the spectrum WS alive while the phone
+   *  is locked but the watch is actually looking at it. */
+  onReachableChange(reachable: boolean): void;
 }
 
 class WatchProvider {
@@ -85,8 +96,20 @@ class WatchProvider {
   private emitter: NativeEventEmitter | null = null;
   private subs: { remove(): void }[] = [];
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private proc = new SignalProcessor();
+  private colormap = 'gqrx';
+  private onReachable: ((r: boolean) => void) | null = null;
 
+  /** True only when a watch app is actually in the foreground with a live link.
+   *  Everything here no-ops otherwise, so a user with no watch pays nothing. */
   get isActive() { return this.available && this.reachable; }
+
+  /** Mirror the phone renderer's own settings so the wrist looks the same. */
+  setProcessorSettings(patch: Partial<SignalProcessorSettings>) {
+    this.proc.applySettings(patch);
+  }
+
+  setColormap(name: string) { this.colormap = name; }
 
   /** Wire watch commands into the screen's existing tune/mode/step handlers. */
   attach(handlers: WatchCommandHandlers) {
@@ -103,22 +126,27 @@ class WatchProvider {
         }
       }),
       this.emitter.addListener('VibeWatchState', (e: { reachable: boolean }) => {
-        this.reachable = !!e.reachable;
-        if (this.reachable) this.lastPalette = ''; // re-send palette on reconnect
+        this.setReachable(!!e.reachable);
       }),
     );
+    this.onReachable = handlers.onReachableChange;
 
     // Reachability flips when the watch app foregrounds/backgrounds, and the
     // delegate callback can be missed across an app relaunch — poll as a floor.
-    void Native!.isReachable().then(r => { this.reachable = r; }).catch(() => {});
+    // This is a plain timer with no React/Skia work, so it is safe to keep
+    // running while the phone is locked (which is exactly when we need it: the
+    // watch app is usually opened AFTER the phone is already in a pocket).
+    void Native!.isReachable().then(r => this.setReachable(r)).catch(() => {});
     this.pollTimer = setInterval(() => {
-      Native!.isReachable()
-        .then(r => {
-          if (r && !this.reachable) this.lastPalette = '';
-          this.reachable = r;
-        })
-        .catch(() => {});
+      Native!.isReachable().then(r => this.setReachable(r)).catch(() => {});
     }, 2000);
+  }
+
+  private setReachable(r: boolean) {
+    if (r === this.reachable) return;
+    this.reachable = r;
+    if (r) this.lastPalette = '';   // re-send palette on (re)connect
+    this.onReachable?.(r);
   }
 
   detach() {
@@ -140,23 +168,27 @@ class WatchProvider {
   }
 
   /**
-   * One processed waterfall row, straight off the phone's own render path.
-   * `row` is 0-255 intensity across the FULL span (`ctx.bwHz`, `ctx.centerHz`).
+   * One raw dBFS spectrum frame, straight off the client. Safe to call while the
+   * phone is backgrounded — it does no Skia, worklet or React work.
    */
-  pushFrame(row: Uint8Array, ctx: WatchFrameCtx) {
+  onSpectrum(bins: Float32Array, ctx: WatchFrameCtx) {
     if (!this.isActive) return;
 
     const now = Date.now();
     if (now - this.lastRowAt < MIN_ROW_MS) return; // coalesce: newest wins
     this.lastRowAt = now;
 
-    if (ctx.colormap && ctx.colormap !== this.lastPalette) {
-      this.lastPalette = ctx.colormap;
-      Native!.sendSettings(toBase64(getColorLUT(ctx.colormap)), 0.35);
+    if (this.colormap !== this.lastPalette) {
+      this.lastPalette = this.colormap;
+      Native!.sendSettings(toBase64(getColorLUT(this.colormap)), 0.35);
     }
 
+    if (!bins || bins.length < 2 || !ctx.bwHz) return;
+
+    // Same pipeline the phone's own waterfall runs (auto-range, brightness,
+    // contrast, gain) -> 0-255. Only runs when a watch is actually watching.
+    const row = this.proc.process(bins, ctx.centerHz, ctx.bwHz).row;
     const n = row.length;
-    if (n < 2 || !ctx.bwHz) return;
 
     // Span follows the demod bandwidth so the signal is always a readable blob.
     const bw = Math.abs((ctx.filterHigh ?? 0) - (ctx.filterLow ?? 0));
