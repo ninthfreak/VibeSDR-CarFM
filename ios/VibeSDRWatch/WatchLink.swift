@@ -130,7 +130,24 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// Rows arrive as a flat binary blob (see VibeWatchModule.sendRow) — dictionary
   /// messages cost a plist serialise per send, and at 10fps that flooded the
   /// channel into delivering in bursts.
+  /// Rows arrive WITH a reply handler: the phone sends one row at a time and waits
+  /// for this acknowledgement before sending the next. Without that backpressure it
+  /// buries WCSession, which QUEUES rather than drops — and the watch then renders
+  /// a view of the radio from half a minute ago.
+  ///
+  /// Reply FIRST, decode after: the ack is what keeps the feed flowing, so it must
+  /// not wait on our rendering.
+  func session(_ s: WCSession, didReceiveMessageData data: Data,
+               replyHandler: @escaping (Data) -> Void) {
+    replyHandler(Data())
+    handleRow(data)
+  }
+
   func session(_ s: WCSession, didReceiveMessageData data: Data) {
+    handleRow(data)
+  }
+
+  private func handleRow(_ data: Data) {
     let header = 1 + 8 * 6
     guard data.count > header, data[data.startIndex] == 1 else { return }
 

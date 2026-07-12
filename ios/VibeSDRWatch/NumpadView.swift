@@ -53,20 +53,20 @@ struct NumpadView: View {
       let screenH = WKInterfaceDevice.current().screenBounds.height
       let rows: CGFloat = 4
       let gaps: CGFloat = 5 * (rows - 1)
-      let free = screenH - readoutH - gaps - cornerInset * 2 - 5
+      let free = screenH - readoutH - gaps - cornerInset - bottomInset - 5
       let keyH = min(46, max(24, free / rows))
 
       VStack(spacing: 5) {
         readout
         LazyVGrid(columns: cols, spacing: 5) {
           ForEach(1...9, id: \.self) { d in key("\(d)", h: keyH) }
-          key(".", h: keyH)
+          key(".", h: keyH, round: true)   // bottom-left corner
           key("0", h: keyH)
-          tuneKey(h: keyH)
+          tuneKey(h: keyH)                 // bottom-right corner
         }
       }
       .padding(.top, cornerInset)
-      .padding(.bottom, cornerInset)
+      .padding(.bottom, bottomInset)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
     .padding(.horizontal, 6)
@@ -103,9 +103,16 @@ struct NumpadView: View {
   private let readoutH: CGFloat = 32
   /// Width kept clear on the right for the system clock, which we cannot move.
   private let clockReserve: CGFloat = 70
-  /// The display is a ROUNDED rectangle; the geometry we're handed is a plain one.
-  /// Everything must be inset from the curves or the corners eat it.
+  /// The display is a ROUNDED rectangle; the geometry we're handed is a plain one,
+  /// so anything in a corner gets shaved by the curve.
   private let cornerInset: CGFloat = 8
+  /// The bottom row sits hard against the screen's curve, and no amount of inset
+  /// quite killed the last sliver of clipping without shrinking every key. So we
+  /// stop fighting the curve and ECHO it: the two keys in the bottom corners
+  /// ("." and TUNE) are fully rounded, which reads as intentional shaping rather
+  /// than as something being cut off. The inset can then stay small and the keys
+  /// keep their size.
+  private let bottomInset: CGFloat = 8
 
   /// Sits in the clock's band: X, the frequency in a box, backspace — then the
   /// clock. The box matters: it says "this is the field you are editing", which a
@@ -165,7 +172,10 @@ struct NumpadView: View {
   /// what kept pushing the bottom row off the screen no matter how the maths was
   /// tuned. The arithmetic was right about the LABEL; the button was quietly
   /// bigger than the label. Owning the background means a 42pt key is 42pt.
-  private func key(_ k: String, h: CGFloat) -> some View {
+  /// `round` = the key sits in a bottom CORNER, so it takes the screen's own
+  /// radius. Echoing the curve makes it look shaped on purpose; fighting it just
+  /// looked like something had been cut off.
+  private func key(_ k: String, h: CGFloat, round: Bool = false) -> some View {
     Button { tap(k) } label: {
       Text(k)
         // The glyph scales with the key, so a smaller watch gets a smaller digit
@@ -174,7 +184,8 @@ struct NumpadView: View {
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
         .frame(height: h)
-        .background(RoundedRectangle(cornerRadius: h * 0.30).fill(.white.opacity(0.16)))
+        .background(RoundedRectangle(cornerRadius: round ? h * 0.5 : h * 0.30)
+          .fill(.white.opacity(0.16)))
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
@@ -188,7 +199,8 @@ struct NumpadView: View {
         .foregroundStyle(.black)
         .frame(maxWidth: .infinity)
         .frame(height: h)
-        .background(RoundedRectangle(cornerRadius: h * 0.30)
+        // Fully rounded: it's the bottom-right corner key.
+        .background(RoundedRectangle(cornerRadius: h * 0.5)
           .fill(entry.isEmpty ? Color.green.opacity(0.3) : Color.green))
         .contentShape(Rectangle())
     }

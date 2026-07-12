@@ -38,6 +38,27 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     lastWatchMsgAt = Date()
   }
 
+  /// BACKPRESSURE. Is a row still in flight?
+  ///
+  /// WCSession QUEUES what it can't deliver and drains the backlog later — it does
+  /// not drop. So firing rows at 10fps into a stalled link builds a queue, and the
+  /// watch then faithfully renders a view of the radio from half a minute ago: it
+  /// showed 648kHz while the phone was on 4582, and "caught up" ~30s later. Nothing
+  /// was stale at the source; we had simply buried the channel.
+  ///
+  /// So: one row in flight at a time. If the previous hasn't landed, DROP the new
+  /// one rather than queue it. A dropped row is invisible on a scrolling waterfall;
+  /// a backed-up queue is thirty seconds of lag. (Exactly the rule the watch's own
+  /// jitter buffer already follows — the phone just wasn't obeying it.)
+  private var rowInFlight = false
+  private var rowSentAt = Date.distantPast
+
+  private func clearIfStuck() {
+    // Belt and braces: if a reply never comes (watch app killed mid-send), don't
+    // wedge the feed forever.
+    if rowInFlight, Date().timeIntervalSince(rowSentAt) > 1.0 { rowInFlight = false }
+  }
+
   override init() {
     super.init()
     guard WCSession.isSupported() else { return }
@@ -80,6 +101,10 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     guard let s = session, linkAlive,
           let row = Data(base64Encoded: rowB64) else { return }
 
+    clearIfStuck()
+    // The previous row hasn't landed — drop this one rather than queue it behind.
+    guard !rowInFlight else { return }
+
     var blob = Data(capacity: 1 + 8 * 6 + row.count)
     blob.append(1)                                   // kind: row
     for v in [freq, span, snr, level, lo, hi] {
@@ -88,9 +113,13 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     }
     blob.append(row)
 
-    // Fire-and-forget: a dropped row is invisible on a scrolling waterfall,
-    // whereas a queue that backs up turns into visible lag.
-    s.sendMessageData(blob, replyHandler: nil, errorHandler: nil)
+    rowInFlight = true
+    rowSentAt = Date()
+    s.sendMessageData(
+      blob,
+      replyHandler: { [weak self] _ in self?.rowInFlight = false },
+      errorHandler: { [weak self] _ in self?.rowInFlight = false }
+    )
   }
 
   @objc(sendState:mode:step:)
