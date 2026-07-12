@@ -4,6 +4,29 @@ VibeSDR is free software under the **GNU GPL v3**. Source: https://github.com/St
 
 ---
 
+## v8.0.1 — Favourites fix (2026-07-12)
+
+### Fixed
+- **Saved favourites could start connecting as a VibeServer** instead of the UberSDR
+  receiver they actually are — and, worse, the wrong answer was then **written back onto
+  the favourite**, so it stayed wrong.
+
+  VibeSDR identifies a server by looking at its web page. It was treating the word
+  *VibeSDR* as evidence of a **VibeServer** — but that is the *client's* name, not the
+  server's, and UberSDR receivers carry an "open in VibeSDR" deep link of their own. So a
+  perfectly ordinary UberSDR looked like one of ours. (Reaching the same receiver through
+  the UberSDR directory still worked, because that route already knows the type and never
+  needs to guess — which is why it only bit favourites.)
+
+  VibeSDR now looks for a marker only a real VibeServer carries, and **repairs any
+  favourites that were mislabelled**. Favourites whose type is cleared are simply
+  re-identified the next time you connect.
+
+### Changed
+- The in-app **About** page listed the v7.1 changes under a "V8.0.0" heading and never
+  mentioned VibeServer at all. It now has a proper V8.0.0 section, and V7.1.0 has its own
+  again.
+
 ## v8.0.0 — Now introducing VibeServer (2026-07-12)
 
 > **Your phone is now the receiver — and anyone can listen to it in a browser.**

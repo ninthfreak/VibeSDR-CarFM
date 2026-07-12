@@ -49,6 +49,36 @@ export async function saveTcpFavs(favs: TcpFav[]): Promise<void> {
   await AsyncStorage.setItem(TCP_KEY, JSON.stringify(favs));
 }
 
+/**
+ * One-shot repair for the v8.0.0 mis-detection.
+ *
+ * detectServerType() matched "vibesdr" as well as "vibeserver" — but "vibesdr"
+ * is the CLIENT's name: UberSDR instances carry vibesdr:// deep-link banners, so
+ * genuine UberSDR pages matched the VibeServer rule. The picker treats detection
+ * as authoritative, so it wrote 'vibeserver' back over the saved favourite: the
+ * corruption is PERSISTED, and fixing the detector alone would not undo it.
+ *
+ * So: strip the type from any favourite v8 marked 'vibeserver'. We clear rather
+ * than force to 'ubersdr' because a few of them may be real VibeServers — the
+ * (now fixed) detector re-derives the correct type on the next connect, and an
+ * unreachable host falls back to 'ubersdr', which is right for the vast majority.
+ */
+const VIBESERVER_FIX_KEY = 'vsdr_fav_vibeserver_fix_v1';
+
+export async function repairVibeserverFavourites(): Promise<void> {
+  try {
+    if (await AsyncStorage.getItem(VIBESERVER_FIX_KEY)) return;   // already run
+    const favs = await getFavourites();
+    if (favs.some(f => f.serverType === 'vibeserver')) {
+      await saveFavourites(favs.map(f =>
+        f.serverType === 'vibeserver' ? { name: f.name, url: f.url } : f));
+    }
+    await AsyncStorage.setItem(VIBESERVER_FIX_KEY, '1');
+  } catch {
+    // Never block startup on the repair — a failed pass retries next launch.
+  }
+}
+
 /** Persist a learned serverType onto an existing favourite (after detection). */
 export async function setFavouriteServerType(url: string, serverType: BackendType): Promise<void> {
   const favs = await getFavourites();

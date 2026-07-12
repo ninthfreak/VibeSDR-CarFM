@@ -81,6 +81,7 @@ import {
 import { isDeepLinkActive, whenInitialLinkChecked } from '../linking/deepLinkState';
 import { parseSdrUrl } from '../linking/SdrLinkHandler';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
+         repairVibeserverFavourites,
          TcpFav, getTcpFavs, saveTcpFavs } from '../services/favourites';
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
 import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
@@ -250,7 +251,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // set/clear both, and returning here doesn't remount (stale star / missing
     // favourite otherwise).
     getDefaultInstance().then(d => setDefaultInst(d)).catch(() => {});
-    getFavourites().then(f => setFavourites(f)).catch(() => {});
+    // Undo the v8.0.0 mis-detection BEFORE reading them, or we'd show (and
+    // connect with) the corrupted 'vibeserver' type for one more session.
+    repairVibeserverFavourites()
+      .then(getFavourites)
+      .then(f => setFavourites(f))
+      .catch(() => {});
     getTcpFavs().then(f => setTcpFavs(f)).catch(() => {});
     // Skip the initial focus (loadAndInit owns the launch-time USB check — running
     // it here too would race the read-and-clear flag). On LATER focuses (returning
