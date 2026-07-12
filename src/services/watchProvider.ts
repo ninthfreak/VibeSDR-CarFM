@@ -54,7 +54,20 @@ const Native = NativeModules.VibeWatchModule as
  *  instead, which is sharp. It costs 256 bytes a row (~1.3KB/s at 5fps). */
 const WATCH_BINS = 256;
 
-/** Row cadence: ~10fps of REAL data.
+/** Row cadence — 10fps, and rows are BATCHED TWO TO A MESSAGE on the native side.
+ *
+ *  It was 60ms (~16/sec). The DATA was never the problem — a row is 317 bytes, so even
+ *  16/sec is ~5 KB/s and Bluetooth doesn't notice. THE MESSAGE RATE was the problem:
+ *  WCSession.sendMessage is an INTERACTIVE channel (individually framed and queued,
+ *  meant for occasional request/response), and we were making sixteen calls a second at
+ *  it, forever. Far outside its design envelope — and that is what kept wedging it,
+ *  backing it up, and leaving it silently ONE-WAY after a transport hop.
+ *
+ *  100ms + 2 rows per message = FIVE messages a second instead of sixteen. Same data,
+ *  no rows lost.
+ *
+ *  Original note follows, still true:
+ *  Row cadence: ~10fps of REAL data.
  *
  *  It was 5fps, on the theory that interpolation hides a low frame rate the way
  *  VibeServer's web client does. That conflated two different things:
@@ -81,7 +94,7 @@ const WATCH_BINS = 256;
  *
  *  At 60ms: the locked 100ms feed passes EVERY frame with room for jitter, and
  *  the awake 50ms feed still halves cleanly to ~10fps. */
-const MIN_ROW_MS = 60;
+const MIN_ROW_MS = 100;
 
 /** Frequency echoes: ≤1 per this, trailing edge always delivered. 4/sec keeps the
  *  wrist tracking a phone-side tune without ever building a WCSession backlog. */

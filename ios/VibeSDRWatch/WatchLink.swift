@@ -369,7 +369,26 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
   func setMode(_ m: String) { send(["cmd": "mode", "val": m]) }
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
-  func ping() { send(["cmd": "ping"]) }
+  func ping() {
+    send(["cmd": "ping"])
+
+    // ONE-WAY LINK RECOVERY, from this end.
+    //
+    // Our messages clearly reach the phone (the crown keeps tuning), and nothing comes
+    // back. WCSession can get stuck like that after a transport hop, and neither side is
+    // told. The phone re-activates when its sends start failing; do the same here, since
+    // a session the WATCH is holding wrong is not something the phone can fix.
+    //
+    // Re-activating an active session is a no-op, so this is safe — but rate-limit it,
+    // because it is a blunt instrument.
+    if let t = lastRowAt, Date().timeIntervalSince(t) > 12,
+       Date().timeIntervalSince(lastReviveAt) > 15 {
+      lastReviveAt = Date()
+      session?.activate()
+    }
+  }
+
+  private var lastReviveAt = Date.distantPast
 
   /// ASK FOR WHAT WE HAVEN'T GOT.
   ///
@@ -435,53 +454,60 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// VibeWatchModule.meterBytes, or the row is sliced at the wrong offset and every
   /// row is silently dropped for being the wrong length.
   private static let meterBytes = 12
+  /// One row's payload: 6 doubles + the meter field + the bins.
+  private static let blockSize = 8 * 6 + meterBytes + WaterfallBuffer.width
 
+  /// Rows arrive BATCHED — several in one message.
+  ///
+  /// Not an optimisation: a correction. `WCSession.sendMessage` is an INTERACTIVE
+  /// channel (individually framed and queued, meant for occasional request/response),
+  /// and we were making sixteen calls a second at it. The data was trivial — ~5 KB/s —
+  /// but the MESSAGE RATE was far outside what the channel is built for, and that is
+  /// what kept wedging it, backing it up, and leaving it one-way after a transport hop.
+  ///
+  /// Fewer, bigger messages. The jitter buffer already expects bursty arrivals, so a
+  /// pair landing together is exactly what it was designed for.
   private func handleRow(_ data: Data) {
-    let header = 1 + 8 * 6 + Self.meterBytes
-    guard data.count > header, data[data.startIndex] == 1 else { return }
+    guard data.count > 2, data[data.startIndex] == 2 else { return }
+    let count = Int(data[data.startIndex + 1])
+    guard count > 0, data.count >= 2 + count * Self.blockSize else { return }
 
+    var rows: [[UInt8]] = []
+    var meterText = ""
     var f = [Double](repeating: 0, count: 6)
-    for i in 0..<6 {
-      let lo = data.startIndex + 1 + i * 8
-      let bits = data[lo..<(lo + 8)].withUnsafeBytes { raw in
-        raw.loadUnaligned(as: UInt64.self)
+
+    for b in 0..<count {
+      let base = data.startIndex + 2 + b * Self.blockSize
+      for i in 0..<6 {
+        let lo = base + i * 8
+        let bits = data[lo..<(lo + 8)].withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) }
+        f[i] = Double(bitPattern: UInt64(littleEndian: bits))
       }
-      f[i] = Double(bitPattern: UInt64(littleEndian: bits))
+      let mStart = base + 8 * 6
+      let mBytes = data[mStart..<(mStart + Self.meterBytes)].prefix { $0 != 0 }
+      let t = String(decoding: mBytes, as: UTF8.self)
+      if !t.isEmpty { meterText = t }
+
+      let rStart = mStart + Self.meterBytes
+      rows.append([UInt8](data[rStart..<(rStart + WaterfallBuffer.width)]))
     }
 
-    // The meter text rides IN THE ROW — it must never have a message of its own.
-    // (It did, and the extra ~4/sec stream wedged the downlink while the phone was
-    // locked, which is the one case the watch exists for.)
-    let mStart = data.startIndex + 1 + 8 * 6
-    let mBytes = data[mStart..<(mStart + Self.meterBytes)].prefix { $0 != 0 }
-    let mText = String(decoding: mBytes, as: UTF8.self)
-
-    let row = [UInt8](data[(data.startIndex + header)...])
-
+    let latest = f   // the newest block's header wins — it IS the current state
     DispatchQueue.main.async {
-      self.waterfall.push(row: row)
+      for r in rows { self.waterfall.push(row: r) }
       self.lastRowAt = Date()
-      // Rows are flowing but we're still drawing in the fallback palette — the phone's
-      // one-shot settings message never landed. Ask for it.
       if !self.waterfall.hasLUT { self.requestMissing() }
-      if !mText.isEmpty { self.meter = mText }
-      // Only count a row we can actually DRAW. WaterfallBuffer drops any row of
-      // the wrong length silently, so flagging everGotRow on arrival hid the
-      // placeholder (and its diagnostics) behind a permanently black canvas.
-      if row.count == WaterfallBuffer.width { self.everGotRow = true }
+      if !meterText.isEmpty { self.meter = meterText }
+      if rows.first?.count == WaterfallBuffer.width { self.everGotRow = true }
       self.isFmdx = false       // a row means a spectrum — see `screen`
-      // NOTE: f[0] is the row's frequency, and we deliberately IGNORE it.
-      //
-      // Rows are fire-and-forget pixels — lossy by design, and WCSession QUEUES
-      // them, so on a busy link a row can be SECONDS old. Reading the readout off
-      // them made it lurch backwards mid-tune and then crawl forward as the backlog
-      // drained. The frequency now comes from the throttled `state` echo (which
-      // cannot build a backlog) and from our own prediction while the crown moves.
-      self.span      = f[1]
-      self.snr       = f[2]
-      self.level     = f[3]
-      self.filtLo    = f[4]
-      self.filtHi    = f[5]
+      // NOTE: the row's frequency is deliberately IGNORED — rows are lossy pixels and
+      // can be queued; the readout comes from the throttled `state` echo and from our
+      // own prediction while the crown moves.
+      self.span      = latest[1]
+      self.snr       = latest[2]
+      self.level     = latest[3]
+      self.filtLo    = latest[4]
+      self.filtHi    = latest[5]
     }
   }
 

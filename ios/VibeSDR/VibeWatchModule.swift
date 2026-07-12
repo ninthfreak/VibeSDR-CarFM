@@ -29,6 +29,46 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// flags, because recency cannot desync.
   private var lastWatchMsgAt = Date.distantPast
 
+  /// Consecutive phone->watch send failures.
+  ///
+  /// WCSession's interactive messages require `isReachable`, and when it is false they
+  /// are DROPPED SILENTLY — we passed no error handler, so the phone shouted into a
+  /// void and never learned. That is the ONE-WAY LINK: the watch's messages still wake
+  /// the phone (so the crown tunes perfectly), while nothing we send ever arrives.
+  ///
+  /// A transport hop can leave the session in that state. Count the failures, and once
+  /// it's clearly not a blip, REBUILD the session.
+  private var sendFails = 0
+  private var lastReviveAt = Date.distantPast
+
+  /// The link is one-way and it isn't recovering. Re-activate WCSession.
+  ///
+  /// Cheap and safe (activating an active session is a no-op), and it is the only lever
+  /// we have: there is no API to force reachability, and the delegate callback that
+  /// should have told us is exactly the one that lied.
+  private func reviveSession() {
+    guard Date().timeIntervalSince(lastReviveAt) > 5 else { return }
+    lastReviveAt = Date()
+    sendFails = 0
+    NSLog("[VibeWatch] link one-way — re-activating WCSession")
+    let s = WCSession.default
+    s.delegate = self
+    s.activate()
+    session = s
+  }
+
+  /// Only FAILURES are observable — `sendMessageData` has no success callback, so we
+  /// can't count successes. Instead the run decays: a failure long after the last one
+  /// starts a fresh count, so an occasional drop never accumulates into a false alarm,
+  /// while a genuinely one-way link piles up fast (we send ~16 rows a second).
+  private var lastFailAt = Date.distantPast
+  private func noteSendFailure() {
+    if Date().timeIntervalSince(lastFailAt) > 3 { sendFails = 0 }
+    lastFailAt = Date()
+    sendFails += 1
+    if sendFails >= 15 { reviveSession() }   // ~1s of solid failure at row rate
+  }
+
   private var linkAlive: Bool {
     if session?.isReachable == true { return true }
     return Date().timeIntervalSince(lastWatchMsgAt) < 10
@@ -67,6 +107,29 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// rows is 0.2s.
   /// Bytes reserved for the meter text inside each row blob.
   static let meterBytes = 12
+
+  // ── BATCHING: WE ARE ABUSING AN RPC CHANNEL AS A DATA PIPE ─────────────────
+  //
+  // The bandwidth was never the problem — a row is 317 bytes, so even at 16/sec that's
+  // ~5 KB/s, which Bluetooth doesn't notice. THE MESSAGE RATE is the problem.
+  // `WCSession.sendMessage` is Apple's INTERACTIVE messaging channel: individually
+  // framed, individually queued, meant for occasional request/response between two
+  // foregrounded apps. We were making SIXTEEN separate calls a second, forever.
+  //
+  // That is a long way outside its design envelope, and it explains everything we kept
+  // rediscovering: the 30-second backlog, the wedged sessions, the link that silently
+  // goes one-way after a transport hop. We kept finding new ways for it to break
+  // because we were over-driving it.
+  //
+  // So: send FEWER, BIGGER messages. Two rows per message at 10fps = 5 messages/sec
+  // instead of 16 — a third of the calls, the same data, no rows lost. The watch's
+  // jitter buffer was built to absorb bursty arrivals, so a pair landing together is
+  // exactly what it already expects.
+  //
+  // The cost is one row of latency (~100ms). That is a real cost — we spent tonight
+  // cutting lag — but a link that stays up is worth more than 100ms.
+  private static let rowsPerMessage = 2
+  private var pendingRows: [Data] = []
 
   // ── NO ACK-BASED BACKPRESSURE. Rows are FIRE-AND-FORGET. ─────────────────────
   //
@@ -137,8 +200,7 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     guard let s = session, linkAlive,
           let row = Data(base64Encoded: rowB64) else { return }
 
-    var blob = Data(capacity: 1 + 8 * 6 + Self.meterBytes + row.count)
-    blob.append(1)                                   // kind: row
+    var blob = Data(capacity: 8 * 6 + Self.meterBytes + row.count)
     for v in [freq, span, snr, level, lo, hi] {
       var d = v.doubleValue.bitPattern.littleEndian
       withUnsafeBytes(of: &d) { blob.append(contentsOf: $0) }
@@ -149,8 +211,25 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     blob.append(contentsOf: mt)
     blob.append(row)
 
-    // Fire-and-forget: a dropped row is invisible on a scrolling waterfall.
-    s.sendMessageData(blob, replyHandler: nil, errorHandler: nil)
+    // Hold it back until we have a pair (see rowsPerMessage).
+    pendingRows.append(blob)
+    guard pendingRows.count >= Self.rowsPerMessage else { return }
+
+    // kind 2 = a BATCH: [2][count][block][block…], each block being the same
+    // 6-doubles + meter + row layout a single row uses.
+    var batch = Data(capacity: 2 + pendingRows.reduce(0) { $0 + $1.count })
+    batch.append(2)
+    batch.append(UInt8(pendingRows.count))
+    for b in pendingRows { batch.append(b) }
+    pendingRows.removeAll(keepingCapacity: true)
+
+    // Fire-and-forget for the ROWS THEMSELVES (a dropped row is invisible on a
+    // scrolling waterfall — do NOT reintroduce ack-based backpressure, see above). But
+    // we DO listen for the error: a run of failures is how we discover the link has
+    // gone one-way, which is otherwise completely silent.
+    s.sendMessageData(batch, replyHandler: nil, errorHandler: { [weak self] _ in
+      self?.noteSendFailure()
+    })
   }
 
   /// FM-DX state, as JSON. A different SCREEN on the watch, not a variant of the
