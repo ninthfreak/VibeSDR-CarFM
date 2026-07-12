@@ -3089,6 +3089,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         // the flag is not the truth, the message is.
         wakeSpectrumForWatch();
         const s = c.getStatus();
+        // Answer EVERY ping with state — the watch uses the freshness of this to tell
+        // "the phone is dead" apart from "the phone is fine but rows are being lost",
+        // and those need completely different fixes.
         watchProvider.sendState(s.frequency, String(s.mode), stepRef.current);
       },
 

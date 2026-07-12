@@ -35,7 +35,17 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   }
 
   private func sawWatch() {
+    // A message from the watch is PROOF it is there — better proof than any flag. If
+    // the phone had written the link off (a stale isReachable, a Bluetooth<->Wi-Fi
+    // hop), that proof must REVIVE it IMMEDIATELY, not wait for the next poll to
+    // notice. This is what turned a momentary transport blip into a permanently dead
+    // downlink: the flag went false, nothing was obliged to flip it back, and the wrist
+    // sat there tuning perfectly with no waterfall.
+    let wasDead = !linkAlive
     lastWatchMsgAt = Date()
+    if wasDead, hasListeners {
+      sendEvent(withName: "VibeWatchState", body: ["reachable": true])
+    }
   }
 
   /// BACKPRESSURE. Is a row still in flight?
@@ -270,6 +280,20 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
 
   func sessionReachabilityDidChange(_ s: WCSession) {
     guard hasListeners else { return }
-    sendEvent(withName: "VibeWatchState", body: ["reachable": s.isReachable])
+    // linkAlive, NOT the raw `s.isReachable`.
+    //
+    // WE FIXED THE STALE-FLAG PROBLEM IN SWIFT AND THEN LEFT THE RAW FLAG AS THE
+    // MASTER SWITCH IN JAVASCRIPT. `isReachable` drops out for a moment whenever
+    // WCSession hops transport (Bluetooth <-> Wi-Fi), and this event pushed that blip
+    // straight up to JS — where `watchProvider.isActive` gates EVERYTHING on it. The
+    // phone then stops sending rows entirely, while the UPLINK keeps working (a message
+    // from the watch wakes the phone regardless), which is exactly the symptom we kept
+    // chasing: the crown tunes perfectly and the waterfall is dead.
+    //
+    // `linkAlive` is recency-based (reachable OR we heard from the watch < 10s ago), so
+    // it rides straight over a transport hop. The wrist is demonstrably there; a flag
+    // that says otherwise is wrong, not authoritative.
+    sendEvent(withName: "VibeWatchState", body: ["reachable": linkAlive])
   }
+
 }

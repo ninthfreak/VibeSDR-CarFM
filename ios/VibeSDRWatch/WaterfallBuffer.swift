@@ -184,7 +184,12 @@ final class WaterfallBuffer {
     buildTone()
   }
 
+  /// Have we ever been given the phone's real palette? Until then we draw in the
+  /// greyscale fallback — which is a working waterfall, but not the one the user chose.
+  private(set) var hasLUT = false
+
   func setLUT(_ newLUT: [UInt8]) {
+    hasLUT = true
     lut = newLUT
     cached = nil
   }

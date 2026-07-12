@@ -371,6 +371,23 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
   func ping() { send(["cmd": "ping"]) }
 
+  /// ASK FOR WHAT WE HAVEN'T GOT.
+  ///
+  /// The palette LUT is sent ONCE, when the colormap changes. If that single message
+  /// is dropped — very likely while WCSession is still settling right after a launch —
+  /// nothing ever sends it again, and the watch sits in its greyscale fallback until
+  /// something unrelated happens to trigger a resend. (It came back when the screen
+  /// woke, because that pings.)
+  ///
+  /// The watch KNOWS it has no palette. So it should say so rather than wait to be
+  /// noticed. Same principle as the heartbeat: recency beats hope.
+  private var lastNeedAt = Date.distantPast
+  func requestMissing() {
+    guard Date().timeIntervalSince(lastNeedAt) > 3 else { return }
+    lastNeedAt = Date()
+    send(["cmd": "need"])
+  }
+
 
   /// Absolute tune, from the numpad. The one place the watch sends a frequency
   /// rather than a delta — the phone still clamps it to the receiver's range.
@@ -444,6 +461,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     DispatchQueue.main.async {
       self.waterfall.push(row: row)
       self.lastRowAt = Date()
+      // Rows are flowing but we're still drawing in the fallback palette — the phone's
+      // one-shot settings message never landed. Ask for it.
+      if !self.waterfall.hasLUT { self.requestMissing() }
       if !mText.isEmpty { self.meter = mText }
       // Only count a row we can actually DRAW. WaterfallBuffer drops any row of
       // the wrong length silently, so flagging everGotRow on arrival hid the

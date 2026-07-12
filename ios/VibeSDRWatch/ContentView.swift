@@ -95,6 +95,17 @@ struct ContentView: View {
 
   private func clamp(_ v: Double) -> Double { min(1, max(-1, v)) }
 
+  /// Push the SAVED brightness/contrast at the buffer.
+  ///
+  /// @AppStorage remembers the VALUE across launches, but the WaterfallBuffer is built
+  /// fresh and starts at neutral — so the setting was saved and simply never applied:
+  /// it only appeared once you nudged the crown, because that's the one thing that
+  /// wrote it through. Persisting a setting and applying it are two different jobs.
+  private func applyTone() {
+    link.waterfall.brightness = wfBright
+    link.waterfall.contrast = wfContrast
+  }
+
   /// When the crown was last actually turned. A non-tune mode ENDS when you leave —
   /// not while you're using it.
   @State private var crownUsedAt = Date()
@@ -120,11 +131,31 @@ struct ContentView: View {
 
       if link.everGotRow { waterfall } else { placeholder }
 
-      // THREE states, not two. The phone can be unreachable (app closed), or it can
-      // be right there and simply not sending — which happens whenever the SDR
-      // screen isn't up: the instance picker, a disconnect, or an FM-DX instance
-      // (a different screen entirely, with no spectrum at all). Without this the
-      // watch sat on its last frame, which is indistinguishable from a lock-up.
+      // DEGRADE, DON'T BLOCK.
+      //
+      // A frozen picture with a black box over it is the worst of both worlds: you
+      // lose the data AND you learn nothing. The phone<->watch link is a RADIO link —
+      // it hops between Bluetooth and Wi-Fi, it drops out when you walk away from the
+      // router — so an interruption is a NORMAL condition, not a fault, and the app
+      // should behave like a radio: keep showing what it has and TELL YOU the signal
+      // is rough.
+      //
+      // So: a brief gap gets a small WARNING PILL and the waterfall keeps rendering
+      // whatever it's got. Only a genuinely dead link (or a phone that has told us
+      // it's doing something else) gets the full overlay.
+      if link.everGotRow, let warn = linkWarning {
+        VStack {
+          Text(warn)
+            .font(.system(size: 9, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(.orange.opacity(0.85), in: Capsule())
+            .padding(.top, 46)      // clear of the clock
+          Spacer()
+        }
+      }
+
       if link.everGotRow, let msg = stalledMessage {
         VStack(spacing: 4) {
           Image(systemName: msg.icon).font(.title3)
@@ -218,6 +249,7 @@ struct ContentView: View {
     .onAppear {
       crownFocused = true
       link.ping()          // tell the phone we're here — see below
+      applyTone()
     }
     .onChange(of: scenePhase) { _, phase in
       // YOU LEFT — the mode ends. This is the honest signal, and it's the case that
@@ -225,6 +257,7 @@ struct ContentView: View {
       // still zooming. A timeout is the backstop; this is the real trigger.
       if phase != .active { crownMode = .tune; return }
       crownUsedAt = Date()
+      applyTone()          // the buffer is reset on wake — re-assert our settings
       // Screen woke: the queued rows and the scroll clock are both stale. Draining
       // them as usual fast-forwards through old data and then runs dry — the
       // stutter you get for the first second after a wake. Start clean.
@@ -585,6 +618,21 @@ struct ContentView: View {
   /// nil = healthy. Otherwise, WHY there's nothing moving.
   ///
   /// Driven by the frame clock, so it appears without needing its own timer.
+  /// A ROUGH LINK, not a dead one — say so and keep drawing.
+  ///
+  /// The rows have gone quiet, but not for long enough to call the link dead, and the
+  /// phone is still answering. That is a bumpy radio link, which is a normal thing for
+  /// a watch on the end of Bluetooth. Show a pill, keep the waterfall on screen, and
+  /// let it resume when the rows come back — rather than throwing a black box over
+  /// perfectly good data.
+  private var linkWarning: String? {
+    guard stalledMessage == nil else { return nil }   // the hard overlay owns it
+    guard let t = link.lastRowAt else { return nil }
+    let gap = Date().timeIntervalSince(t)
+    guard gap > 1.2 else { return nil }
+    return "LINK ROUGH · SPECTRUM ERRATIC"
+  }
+
   /// nil = healthy. Otherwise, WHY there's nothing moving — and the phone TELLS us
   /// which, rather than leaving us to guess from silence.
   ///
@@ -619,8 +667,15 @@ struct ContentView: View {
     // above still applies, and is checked BEFORE this.
     guard let t = link.lastRowAt, Date().timeIntervalSince(t) > 2.0 else { return nil }
 
-    // The phone is talking to us (state messages are arriving) but sending no rows.
-    let stateFresh = link.lastStateAt.map { Date().timeIntervalSince($0) < 6 } ?? false
+    // SPLIT THE FALLBACK. "No spectrum from iPhone" covered two completely different
+    // faults and told us nothing:
+    //   - the phone isn't answering AT ALL (state messages aren't arriving either), or
+    //   - the phone says it IS sending rows, and they aren't reaching us.
+    // The phone answers every ping (we heartbeat at 4s), so a stale state message is
+    // itself a finding.
+    let stateFresh = link.lastStateAt.map { Date().timeIntervalSince($0) < 8 } ?? false
+
+    // The phone TOLD us it isn't sending — that's a fact, not a guess, so say it now.
     if stateFresh {
       switch link.why {
       case "paused":
@@ -631,7 +686,14 @@ struct ContentView: View {
         break
       }
     }
-    return ("dot.radiowaves.left.and.right", "No spectrum from iPhone")
+
+    // Otherwise it's the LINK. Be slow to call it dead: a bumpy Bluetooth link is
+    // normal, and until it has been quiet for a good while the warning pill (which
+    // leaves the waterfall on screen) is the better answer.
+    guard Date().timeIntervalSince(t) > 10 else { return nil }
+    return stateFresh
+      ? ("exclamationmark.triangle", "Watch link lost\nSpectrum stopped")
+      : ("iphone.slash", "iPhone not responding")
   }
 
   /// Nothing has ever arrived — which, on a COLD start, is the normal state for the

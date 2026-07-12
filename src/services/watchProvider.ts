@@ -354,6 +354,10 @@ class WatchProvider {
             this.lastPingAt = Date.now();
             break;
           case 'dab':  handlers.onDabSelect?.(Number(e.val ?? 0)); break;
+          // The watch is telling us it's missing something we only send ON CHANGE
+          // (the palette LUT, the logo, the station memory). It knows; we don't.
+          // Forget what we think it has.
+          case 'need': this.flushAll(); break;
         }
       }),
     );
