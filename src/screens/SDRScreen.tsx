@@ -2985,6 +2985,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (newHz === cur) return;
         onTuneHzRef.current?.(newHz);
       },
+      // Numpad entry. onTuneHz already clamps to the receiver's range, so a
+      // fat-fingered 999 MHz lands on the band edge rather than nowhere.
+      onTuneHz: (hz: number) => { if (hz > 0) onTuneHzRef.current?.(hz); },
       onMode: (m: string) => { if (m) onModeRef.current?.(m as SDRMode); },
       onStep: (hz: number) => { if (hz > 0) setStep(hz); },
 

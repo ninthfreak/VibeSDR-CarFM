@@ -40,6 +40,7 @@ struct ContentView: View {
   /// forcing repaints.) The scroll glide and the jitter buffer both advance on
   /// this clock, so a cadence we don't control is a cadence we can't render on.
   @State private var frame = 0
+  @State private var showNumpad = false
   private let driver = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
 
   private static let detents = 1000.0
@@ -54,10 +55,14 @@ struct ContentView: View {
       VStack(spacing: 2) {
         Spacer()
         ticker
-        readout
+        Button { showNumpad = true } label: { readout }
+          .buttonStyle(.plain)
       }
       .padding(.horizontal, 6)
       .padding(.bottom, 4)
+    }
+    .sheet(isPresented: $showNumpad) {
+      NavigationStack { NumpadView().environmentObject(link) }
     }
     .ignoresSafeArea()
     .focusable(true)
@@ -256,13 +261,19 @@ struct ContentView: View {
     // two figures pushed into opposite corners — the watch's rounded corners were
     // clipping them there.
     HStack(spacing: 8) {
-      Text(formatFreq(link.frequency))
+      Text(formatFreq(link.frequency, step: link.step))
         .font(.system(size: 15, weight: .semibold, design: .rounded))
         .monospacedDigit()
+        // Shrink to fit rather than scroll. A marquee would be an animation
+        // running behind the waterfall forever, for text that is only long in the
+        // CW case; scaling costs nothing and is always readable at a glance.
+        .lineLimit(1)
+        .minimumScaleFactor(0.55)
       Text(link.snr > 0 ? String(format: "%.0f dB", link.snr) : "—")
         .font(.system(size: 11, weight: .semibold, design: .rounded))
         .monospacedDigit()
         .foregroundStyle(.white.opacity(0.9))
+        .layoutPriority(-1)   // the frequency wins the space
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 4)
@@ -282,10 +293,27 @@ struct ContentView: View {
     .clipShape(Capsule())
   }
 
-  private func formatFreq(_ hz: Double) -> String {
+  /// PRECISION FOLLOWS THE STEP. Showing 3 decimals of MHz is 1kHz resolution —
+  /// on CW (1-10Hz steps) you literally cannot see what you are tuning, and the
+  /// digits that matter are the ones that move. So derive the decimal count from
+  /// the current step, and don't waste width on zeros that can never change.
+  private func formatFreq(_ hz: Double, step: Double) -> String {
     if hz <= 0 { return "—" }
-    if hz >= 1_000_000 { return String(format: "%.3f MHz", hz / 1_000_000) }
-    if hz >= 1_000     { return String(format: "%.1f kHz", hz / 1_000) }
+
+    if hz >= 1_000_000 {
+      let dp: Int
+      switch step {
+      case ..<10:    dp = 6      // 1Hz  — CW
+      case ..<100:   dp = 5      // 10Hz
+      case ..<1_000: dp = 4      // 100Hz
+      default:       dp = 3      // 1kHz+
+      }
+      return String(format: "%.\(dp)f MHz", hz / 1_000_000)
+    }
+    if hz >= 1_000 {
+      let dp = step < 100 ? 3 : (step < 1_000 ? 2 : 1)
+      return String(format: "%.\(dp)f kHz", hz / 1_000)
+    }
     return String(format: "%.0f Hz", hz)
   }
 }

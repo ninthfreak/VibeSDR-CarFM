@@ -70,6 +70,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
   func ping() { send(["cmd": "ping"]) }
 
+  /// Absolute tune, from the numpad. The one place the watch sends a frequency
+  /// rather than a delta — the phone still clamps it to the receiver's range.
+  func tune(toHz hz: Double) { send(["cmd": "freq", "val": hz]) }
+
   private func send(_ msg: [String: Any]) {
     guard let s = session, s.isReachable else { return }
     s.sendMessage(msg, replyHandler: nil, errorHandler: nil)

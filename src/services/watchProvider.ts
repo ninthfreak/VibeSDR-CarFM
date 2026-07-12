@@ -90,6 +90,8 @@ export interface WatchFrameCtx {
 
 export interface WatchCommandHandlers {
   onTuneDelta(delta: number): void;
+  /** Absolute tune from the watch numpad — the one non-delta command. */
+  onTuneHz(hz: number): void;
   onMode(mode: string): void;
   onStep(hz: number): void;
   /** Watch app opened/closed. Used to keep the spectrum WS alive while the phone
@@ -162,6 +164,7 @@ class WatchProvider {
       this.emitter.addListener('VibeWatchCommand', (e: { cmd: string; delta?: number; val?: unknown }) => {
         switch (e.cmd) {
           case 'tune': handlers.onTuneDelta(Number(e.delta ?? 0)); break;
+          case 'freq': handlers.onTuneHz(Number(e.val ?? 0)); break;
           case 'mode': handlers.onMode(String(e.val ?? '')); break;
           case 'step': handlers.onStep(Number(e.val ?? 0)); break;
         }
