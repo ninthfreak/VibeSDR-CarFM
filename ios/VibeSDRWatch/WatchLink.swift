@@ -372,8 +372,13 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     handleRow(data)
   }
 
+  /// Bytes the meter text occupies in the row blob — MUST match
+  /// VibeWatchModule.meterBytes, or the row is sliced at the wrong offset and every
+  /// row is silently dropped for being the wrong length.
+  private static let meterBytes = 12
+
   private func handleRow(_ data: Data) {
-    let header = 1 + 8 * 6
+    let header = 1 + 8 * 6 + Self.meterBytes
     guard data.count > header, data[data.startIndex] == 1 else { return }
 
     var f = [Double](repeating: 0, count: 6)
@@ -384,11 +389,20 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       }
       f[i] = Double(bitPattern: UInt64(littleEndian: bits))
     }
+
+    // The meter text rides IN THE ROW — it must never have a message of its own.
+    // (It did, and the extra ~4/sec stream wedged the downlink while the phone was
+    // locked, which is the one case the watch exists for.)
+    let mStart = data.startIndex + 1 + 8 * 6
+    let mBytes = data[mStart..<(mStart + Self.meterBytes)].prefix { $0 != 0 }
+    let mText = String(decoding: mBytes, as: UTF8.self)
+
     let row = [UInt8](data[(data.startIndex + header)...])
 
     DispatchQueue.main.async {
       self.waterfall.push(row: row)
       self.lastRowAt = Date()
+      if !mText.isEmpty { self.meter = mText }
       // Only count a row we can actually DRAW. WaterfallBuffer drops any row of
       // the wrong length silently, so flagging everGotRow on arrival hid the
       // placeholder (and its diagnostics) behind a permanently black canvas.

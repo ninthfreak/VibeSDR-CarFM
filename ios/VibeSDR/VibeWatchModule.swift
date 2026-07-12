@@ -55,6 +55,9 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// single reply is slow. Two in flight hides that without letting a queue build
   /// — the backlog we're guarding against took THIRTY seconds to drain, and two
   /// rows is 0.2s.
+  /// Bytes reserved for the meter text inside each row blob.
+  static let meterBytes = 12
+
   // ── NO ACK-BASED BACKPRESSURE. Rows are FIRE-AND-FORGET. ─────────────────────
   //
   // This was tried, defended for two hours, and REVERTED. Don't put it back.
@@ -112,18 +115,28 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   ///
   /// Layout (little-endian): u8 kind=1, then f64 freq, span, snr, level, lo, hi,
   /// then the row bytes.
-  @objc(sendRow:freq:span:snr:level:lo:hi:)
+  /// The meter text rides HERE, in the row, in a fixed 12-byte field.
+  ///
+  /// It had a message of its own and that wedged the downlink while the phone was
+  /// LOCKED — the text changes every frame, so it became a continuous ~4/sec stream
+  /// on top of the rows, and WCSession queues rather than drops. The row is already
+  /// going out every frame. 12 bytes, null-padded ("S9+40", "-72dB" — they're short).
+  @objc(sendRow:freq:span:snr:level:lo:hi:meter:)
   func sendRow(_ rowB64: String, freq: NSNumber, span: NSNumber, snr: NSNumber,
-               level: NSNumber, lo: NSNumber, hi: NSNumber) {
+               level: NSNumber, lo: NSNumber, hi: NSNumber, meter: String) {
     guard let s = session, linkAlive,
           let row = Data(base64Encoded: rowB64) else { return }
 
-    var blob = Data(capacity: 1 + 8 * 6 + row.count)
+    var blob = Data(capacity: 1 + 8 * 6 + Self.meterBytes + row.count)
     blob.append(1)                                   // kind: row
     for v in [freq, span, snr, level, lo, hi] {
       var d = v.doubleValue.bitPattern.littleEndian
       withUnsafeBytes(of: &d) { blob.append(contentsOf: $0) }
     }
+    // Fixed-width so the watch can slice the row off without a length field.
+    var mt = Array(meter.utf8.prefix(Self.meterBytes))
+    mt.append(contentsOf: [UInt8](repeating: 0, count: Self.meterBytes - mt.count))
+    blob.append(contentsOf: mt)
     blob.append(row)
 
     // Fire-and-forget: a dropped row is invisible on a scrolling waterfall.

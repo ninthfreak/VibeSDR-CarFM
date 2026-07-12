@@ -30,7 +30,7 @@ const Native = NativeModules.VibeWatchModule as
   | {
       isReachable(): Promise<boolean>;
       sendRow(rowB64: string, freq: number, span: number, snr: number, level: number,
-              lo: number, hi: number): void;
+              lo: number, hi: number, meter: string): void;
       sendState(freq: number, mode: string, step: number, meter: string,
                 level: number): void;
       sendFmdx(json: string): void;
@@ -431,12 +431,17 @@ class WatchProvider {
   setSignal(snr: number, level: number, meter: string) {
     this.snr = snr;
     this.level = level;
-    if (meter === this.meter) return;
     this.meter = meter;
-    // Ride the ONE state channel, at its ONE throttle — never open a second stream.
-    if (this.lastState) {
-      this.sendFreq(this.lastState.freq, this.lastState.mode, this.lastState.step);
-    }
+    // NO SEND HERE. The meter rides the ROW (see sendRow) — it must never get a
+    // message of its own.
+    //
+    // It did, briefly, and it broke the one thing the watch exists for. The meter
+    // text changes every frame, so scheduling a state message on each change added a
+    // continuous ~4/sec dictionary stream on top of the 16/sec rows. Awake, that was
+    // survivable. LOCKED — which is the primary use case, phone in a pocket — iOS
+    // throttles the JS thread, WCSession QUEUES rather than drops, and the downlink
+    // WEDGED: "No spectrum from iPhone" the moment the screen went off. The row is
+    // already going out; put the meter in it and the extra stream disappears.
   }
 
   sendState(freq: number, mode: string, step: number) {
@@ -566,7 +571,7 @@ class WatchProvider {
     // the carrier on AM/FM — LSB sits entirely below it, USB entirely above, CW
     // is offset — so a single bandwidth number would draw every mode as AM.
     Native!.sendRow(toBase64(this.out), ctx.tuneHz, span, this.snr, this.level,
-                    ctx.filterLow ?? 0, ctx.filterHigh ?? 0);
+                    ctx.filterLow ?? 0, ctx.filterHigh ?? 0, this.meter);
   }
 }
 

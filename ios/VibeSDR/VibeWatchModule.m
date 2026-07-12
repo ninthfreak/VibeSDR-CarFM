@@ -14,7 +14,8 @@ RCT_EXTERN_METHOD(sendRow
                   : (nonnull NSNumber *)snr level
                   : (nonnull NSNumber *)level lo
                   : (nonnull NSNumber *)lo hi
-                  : (nonnull NSNumber *)hi)
+                  : (nonnull NSNumber *)hi meter
+                  : (NSString *)meter)
 
 RCT_EXTERN_METHOD(sendFmdx : (NSString *)json)
 
