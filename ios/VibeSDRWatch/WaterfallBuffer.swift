@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import SwiftUI
 
 /// Scrolling RGBA pixel buffer for the wrist waterfall.
 ///
@@ -11,12 +12,14 @@ import CoreGraphics
 ///     no matter how you interpolate, because during a gap there is nothing to
 ///     interpolate towards. Fix: a JITTER BUFFER — queue arrivals, drain on a
 ///     steady clock (`tick`). Same medicine as the rtl_tcp client buffer.
-///  2. **The feed is only ~5fps**, deliberately (halving the message rate buys
-///     real battery, and the phone can then run a quarter-rate FFT). At one row
-///     per frame that is a slow march of fat bands. Fix: INTERPOLATE UP —
-///     synthesise `subRows` blended rows between each pair of received rows, so
-///     the waterfall still scrolls at ~15 rows/sec. This is what lets VibeServer
-///     look fine at 5fps too.
+///  2. **The feed is ~10fps**, so one row per frame is a slow march of fat bands.
+///     Fix: INTERPOLATE UP — synthesise `subRows` blended rows between each pair
+///     of received rows, so the waterfall scrolls at ~20 rows/sec.
+///     But know what this buys: interpolation hides a low FRAME RATE, it does NOT
+///     recover MISSING DATA. We tried 5fps and it read as mush — on SSB speech the
+///     energy changes on a ~100ms timescale, so half the syllables were simply
+///     never sampled, and no blend brings them back. Smooth is not the same as
+///     legible.
 ///  3. **Scaling.** 256 bins is ABOVE the watch's ~205pt width, so the image is
 ///     DOWNscaled — sharp. (It was 128, which meant upscaling every column 1.6x:
 ///     a self-inflicted blur no sharpening can undo.) Bilinear still smooths the
@@ -37,8 +40,13 @@ final class WaterfallBuffer {
   static let height  = 89
   static let visible = 88
 
-  /// Synthesised rows per received row. 3 x 5fps = ~15 rows/sec of scroll.
-  private let subRows = 3
+  /// Synthesised rows per received row. 2 x 10fps = ~20 rows/sec of scroll.
+  ///
+  /// Fewer than before, deliberately: the feed went back to 10fps of REAL data,
+  /// so there is less to invent. Synthesised rows smooth the scroll but carry no
+  /// information — the fewer of them between real samples, the more of what you
+  /// see is something the receiver actually heard.
+  private let subRows = 2
 
   /// 0..1 extra temporal blend from the phone's settings, on top of the
   /// interpolation. 0 = rely on interpolation alone.
@@ -66,8 +74,9 @@ final class WaterfallBuffer {
   private var accum: Double = 0
   private var lastTick: CFTimeInterval = 0
   private var lastArrivalAt: CFTimeInterval = 0
-  /// Measured arrival cadence of RECEIVED rows (not sub-rows).
-  private var interval: CFTimeInterval = 0.2
+  /// Measured arrival cadence of RECEIVED rows (not sub-rows). Seeded at the
+  /// expected 10fps so the first few frames don't glide against a wrong guess.
+  private var interval: CFTimeInterval = 0.1
   private var arrivals = 0
   private let targetDepth = 2.0
 
@@ -80,6 +89,21 @@ final class WaterfallBuffer {
 
   /// Sub-row offset for the renderer, 0..1.
   var progress: Double { min(1, max(0, accum)) }
+
+  /// The most recently drawn row — i.e. exactly what the top of the waterfall is
+  /// showing. The waterfall wants this raw.
+  private(set) var liveRow: [UInt8] = []
+
+  /// The spectrum trace's own copy, TIME-SMOOTHED.
+  ///
+  /// The raw row is what the waterfall should show — every twitch of it is real
+  /// data, and the waterfall's job is to record it. But a trace redrawn from raw
+  /// bins 20x a second is unreadable noise: the eye can't integrate a jittering
+  /// line the way it integrates a scrolling texture. The phone solves this with a
+  /// 5-frame EMA on its spectrum (SignalProcessor.smoothingFrames) while feeding
+  /// the waterfall unsmoothed — so we do the same, and for the same reason.
+  private(set) var specRow: [Double] = []
+  private let specAlpha = 0.22   // ~5-frame EMA at our sub-row rate
 
   // Diagnostics — is the render loop actually ticking, and is the queue healthy?
   private(set) var renderFps: Double = 0
@@ -101,6 +125,40 @@ final class WaterfallBuffer {
   func setLUT(_ newLUT: [UInt8]) {
     lut = newLUT
     cached = nil
+  }
+
+  /// A colour from the phone's own palette. The spectrum trace is drawn in these
+  /// rather than in white: white fights the system clock for attention, and a
+  /// trace coloured out of the same LUT as the waterfall reads as part of it.
+  func lutColor(_ v: Int, opacity: Double = 1) -> Color {
+    let i = min(255, max(0, v)) * 4
+    return Color(
+      red:   Double(lut[i    ]) / 255,
+      green: Double(lut[i + 1]) / 255,
+      blue:  Double(lut[i + 2]) / 255
+    ).opacity(opacity)
+  }
+
+  /// The trace's hue: the palette's colour, but never bright enough to fight the
+  /// system clock.
+  ///
+  /// watchOS draws the time itself and gives us no way to recolour or hide it, so
+  /// the palette has to yield rather than the clock. Most palettes are well under
+  /// the cap and come through untouched — but Greyscale and Black Hot top out at
+  /// pure WHITE, which is exactly the clock's colour. Those get held down to a
+  /// mid-tone: still perfectly legible as a trace, no longer competing.
+  func traceColor(_ v: Int = 205, opacity: Double = 1) -> Color {
+    let i = min(255, max(0, v)) * 4
+    var r = Double(lut[i]) / 255, g = Double(lut[i + 1]) / 255, b = Double(lut[i + 2]) / 255
+
+    // Rec. 709 relative luminance — how bright it actually LOOKS, not its max channel.
+    let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    let cap = 0.62
+    if lum > cap {
+      let k = cap / lum
+      r *= k; g *= k; b *= k
+    }
+    return Color(red: r, green: g, blue: b).opacity(opacity)
   }
 
   /// A row arrived. Queue it — do NOT draw here.
@@ -222,6 +280,16 @@ final class WaterfallBuffer {
   }
 
   private func blit(_ row: [UInt8]) {
+    liveRow = row
+
+    if specRow.count != row.count {
+      specRow = row.map(Double.init)          // prime from real data, no settle-in
+    } else {
+      for i in 0..<row.count {
+        specRow[i] += (Double(row[i]) - specRow[i]) * specAlpha
+      }
+    }
+
     let stride = Self.width * 4
     // Scroll DOWN one row, then paint the newest along the TOP edge.
     pixels.withUnsafeMutableBytes { raw in

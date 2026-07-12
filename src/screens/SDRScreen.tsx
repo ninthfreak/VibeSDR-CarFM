@@ -50,10 +50,11 @@ import { setReceiverIso } from '../services/rdsCountry';
 import { watchProvider } from '../services/watchProvider';
 
 /** FFT rate divisor while the phone is backgrounded but the watch is watching.
- *  The watch draws ~5fps (its glide + interpolation hide the rest), and nothing
- *  else is looking at these frames, so a quarter-rate feed is all we need —
- *  fewer bytes off the radio and less parse on the thread feeding the audio DSP. */
-const WATCH_BG_DIVISOR = 4;
+ *  The watch consumes ~10fps of REAL data (interpolation smooths the scroll but
+ *  invents no information — see MIN_ROW_MS), so half rate is what it needs and no
+ *  more. Nothing else is looking at these frames, so we don't pay for the other
+ *  half: fewer bytes off the radio, less parse on the thread feeding the audio. */
+const WATCH_BG_DIVISOR = 2;
 import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
@@ -3010,9 +3011,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => watchProvider.detach();
   }, []);
 
+  // Mode/step only — NOT frequency. Every row already carries the frequency, and
+  // while you tune, status.frequency changes many times a second: firing a state
+  // message on each one floods WCSession (an interactive-message channel, not a
+  // pipe) on top of the 10fps row stream. It queues, delivers in bursts, and the
+  // watch's frequency readout stops tracking.
   useEffect(() => {
     watchProvider.sendState(status.frequency, String(status.mode), step);
-  }, [status.frequency, status.mode, step]);
+  }, [status.mode, step]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Mirror the phone's own render settings into the watch's processor, so the
   // wrist keeps looking like a shrunk phone waterfall (it runs its own

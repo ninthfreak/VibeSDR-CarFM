@@ -52,6 +52,22 @@ struct ContentView: View {
 
       if link.everGotRow { waterfall } else { placeholder }
 
+      // The phone went away. Without this the last waterfall just sits there
+      // forever, and a dead link is indistinguishable from a frozen picture —
+      // which is exactly how it read when the phone app was closed.
+      if link.everGotRow && !link.reachable {
+        VStack(spacing: 4) {
+          Image(systemName: "iphone.slash").font(.title3)
+          Text("iPhone not reachable")
+            .font(.caption2)
+            .multilineTextAlignment(.center)
+        }
+        .foregroundStyle(.white)
+        .padding(10)
+        .background(.black.opacity(0.72))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+      }
+
       VStack(spacing: 2) {
         Spacer()
         ticker
@@ -114,25 +130,133 @@ struct ContentView: View {
 
       let wf = link.waterfall
       wf.tick(at: ProcessInfo.processInfo.systemUptime)
-      guard let img = wf.makeImage() else { return }
 
-      let rowPx = size.height / Double(WaterfallBuffer.visible)
-      let p = wf.progress
+      // The spectrum gets a BAND of its own — the top third — and the waterfall
+      // takes the rest. A floating overlay was cheaper in pixels, but the trace has
+      // to be readable as a HEIGHT: squashed into a strip it is just another
+      // texture. The system clock sits in this band and reads as a label there,
+      // rather like the receiver name UberSDR puts at the top.
+      let specH = (size.height / 3).rounded()
 
-      // Newest row is index 0 (top) with one row of headroom above the visible
-      // edge. As p goes 0->1 the window walks from "newest not yet in" to "newest
-      // fully in at the top", exactly as the next row lands and resets p.
-      ctx.draw(
-        Image(decorative: img, scale: 1),
-        in: CGRect(x: 0, y: -(1 - p) * rowPx,
-                   width: size.width,
-                   height: rowPx * Double(WaterfallBuffer.height))
-      )
+      if let img = wf.makeImage() {
+        let rowPx = (size.height - specH) / Double(WaterfallBuffer.visible)
+        let p = wf.progress
 
-      drawVFO(ctx, size)
+        // Newest row is index 0 (top) with one row of headroom above the visible
+        // edge. As p goes 0->1 the window walks from "newest not yet in" to "newest
+        // fully in at the top", exactly as the next row lands and resets p.
+        var wctx = ctx
+        wctx.clip(to: Path(CGRect(x: 0, y: specH,
+                                  width: size.width, height: size.height - specH)))
+        wctx.draw(
+          Image(decorative: img, scale: 1),
+          in: CGRect(x: 0, y: specH - (1 - p) * rowPx,
+                     width: size.width,
+                     height: rowPx * Double(WaterfallBuffer.height))
+        )
+      }
+
+      drawSpectrum(ctx, size, wf.specRow, height: specH)
+      drawVFO(ctx, size)   // through BOTH: the trace and its history stay aligned
     }
     .ignoresSafeArea()
     .onReceive(driver) { _ in frame &+= 1 }
+  }
+
+  /// A thin spectrum trace across the top.
+  ///
+  /// The waterfall is a TIME view: judging how strong a signal is *right now* means
+  /// eyeballing brightness, which is hard work on a small screen. A trace turns
+  /// that into a height you can read at a glance.
+  ///
+  /// It renders the row the waterfall's top edge is currently showing, so the two
+  /// are the same instant — spectrum on top, its own history flowing down beneath
+  /// it. That only works because we scroll top-down.
+  ///
+  /// Occupies the top third. The clock lives up here too and reads as a label.
+  private func drawSpectrum(_ ctx: GraphicsContext, _ size: CGSize, _ row: [Double],
+                            height h: CGFloat) {
+    let n = row.count
+
+    // Solid black ground — the trace's own baseline, and what makes a thin line
+    // read at a glance.
+    ctx.fill(Path(CGRect(x: 0, y: 0, width: size.width, height: h)),
+             with: .color(.black))
+
+    guard n > 1 else { return }
+
+    // Peak-preserving downsample to pixels: a narrow carrier must not fall
+    // between two samples and vanish — the whole point is to SEE it spike.
+    let cols = max(2, Int(size.width))
+    var pts: [CGPoint] = []
+    pts.reserveCapacity(cols)
+    for c in 0..<cols {
+      let a = n * c / cols
+      let b = max(a + 1, n * (c + 1) / cols)
+      var peak: Double = 0
+      for i in a..<min(b, n) where row[i] > peak { peak = row[i] }
+      let y = h - (CGFloat(peak) / 255) * (h - 2) - 1
+      pts.append(CGPoint(x: CGFloat(c) * size.width / CGFloat(cols), y: y))
+    }
+
+    // ONE hue, taken from the palette, so the trace belongs to the same instrument
+    // as the waterfall. Not white: white fights the system clock, which sits in
+    // this band. The fill fades DOWNWARD, so it is at its most transparent where
+    // the clock is — the clock stays legible over it and the trace stays readable
+    // underneath.
+    // The APP's spectrum colouring, ported: a 9-stop gradient sampled from the LUT
+    // at index 90->235, hot at the top. It starts at 90, not 0, because black-based
+    // palettes (Sonar) are near-invisible below that — so the fill's baseline
+    // begins where the palette has actually picked up colour, and weak signals stay
+    // visible while the trace still inherits the waterfall's hue.
+    //
+    // Uncapped brightness: the clock has its own scrim now, so even a near-white
+    // palette can't be mistaken for it, and no palette has to be dimmed.
+    let wf = link.waterfall
+    let stops = (0...8).map { gi -> Gradient.Stop in
+      let idx = Int((90 + (Double(gi) / 8) * 145).rounded())
+      return .init(color: wf.lutColor(idx), location: 1 - Double(gi) / 8)
+    }.reversed()
+
+    var fill = Path()
+    fill.move(to: CGPoint(x: 0, y: h))
+    pts.forEach { fill.addLine(to: $0) }
+    fill.addLine(to: CGPoint(x: size.width, y: h))
+    fill.closeSubpath()
+    ctx.fill(fill, with: .linearGradient(
+      Gradient(stops: Array(stops)),
+      startPoint: CGPoint(x: 0, y: 0), endPoint: CGPoint(x: 0, y: h)))
+
+    // The outline is what you actually read a peak off — the palette's hot end.
+    var line = Path()
+    line.addLines(pts)
+    ctx.stroke(line, with: .color(wf.lutColor(235)), lineWidth: 1.2)
+
+    // Scrim behind the system CLOCK, same as the ticker and the frequency pill.
+    //
+    // watchOS draws the time itself and gives us no way to recolour or hide it — so
+    // rather than dimming the trace to avoid clashing with white text (which would
+    // punish every palette for the sake of Greyscale and Black Hot), give the clock
+    // a dark backing of its own. It then stays legible over ANY trace colour, and
+    // the trace keeps the palette's full brightness. Same scrim-not-glass logic as
+    // the rest of the chrome.
+    // Sits BELOW the top edge: the clock is not flush to the bezel, and a scrim
+    // starting at y=2 cut through the digits about halfway down.
+    let cw = size.width * 0.42
+    let ch: CGFloat = 30
+    ctx.fill(
+      Path(roundedRect: CGRect(x: size.width - cw - 4, y: 11, width: cw, height: ch),
+           cornerRadius: 9),
+      with: .color(.black.opacity(0.55))
+    )
+
+    // Hairline under the band, so the trace's baseline and the waterfall's top
+    // edge don't bleed into one another.
+    ctx.stroke(
+      Path { $0.move(to: CGPoint(x: 0, y: h)); $0.addLine(to: CGPoint(x: size.width, y: h)) },
+      with: .color(.white.opacity(0.18)),
+      lineWidth: 1
+    )
   }
 
   /// The VFO. Always dead-centre — the phone crops the bin window around it — so
@@ -190,6 +314,15 @@ struct ContentView: View {
       Text(link.reachable ? "Waiting for signal" : "Open VibeSDR on iPhone")
         .font(.caption2)
         .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+
+      // Diagnostic: a row of the wrong LENGTH is dropped silently, which looks
+      // identical to no row at all. This distinguishes "phone is sending nothing"
+      // (msg 0) from "phone is sending rows we're throwing away" (row > 0).
+      Text("msg \(link.rxAny) · row \(link.rxRows) · len \(link.lastLen)/\(WaterfallBuffer.width)")
+        .font(.system(size: 9, design: .monospaced))
+        .foregroundStyle(link.lastLen > 0 && link.lastLen != WaterfallBuffer.width
+                         ? .red : .secondary)
         .multilineTextAlignment(.center)
     }
     .padding(.horizontal, 12)

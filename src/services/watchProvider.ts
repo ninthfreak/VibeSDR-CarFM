@@ -46,19 +46,25 @@ const Native = NativeModules.VibeWatchModule as
  *  instead, which is sharp. It costs 256 bytes a row (~1.3KB/s at 5fps). */
 const WATCH_BINS = 256;
 
-/** Row cadence: ~5fps.
+/** Row cadence: ~10fps of REAL data.
  *
- *  The watch hides a low frame rate the same way VibeServer's web client does —
- *  sub-row glide + bilinear interpolation — so 5fps looks like a continuous
- *  waterfall, and halving the message rate buys real battery: fewer WCSession
- *  wakeups, less burstiness at source (WCSession delivers in clumps, and the
- *  fewer clumps the less the jitter buffer has to absorb), and a quarter-rate
- *  FFT feed on the phone.
+ *  It was 5fps, on the theory that interpolation hides a low frame rate the way
+ *  VibeServer's web client does. That conflated two different things:
+ *  interpolation hides a low FRAME RATE, it cannot recover MISSING DATA. The
+ *  synthesised in-between rows are linear blends of two real rows — they smooth
+ *  the scroll but carry no information. At 5fps half the spectrum frames were
+ *  simply discarded, and on SSB speech the energy genuinely changes on a ~100ms
+ *  timescale: a syllable peeking up between two sampled frames was gone for good.
+ *  The result looked fluid and read as mush.
  *
- *  Kept just BELOW the true frame interval: at exactly 200ms, a frame arriving
- *  1ms early fails the gate and the next row lands 400ms later instead — a
+ *  (VibeServer gets away with 5fps because you're watching a broadcast signal
+ *  that's essentially stationary. Hunting SSB conversations is the opposite case,
+ *  and that is what the watch is FOR.)
+ *
+ *  Kept just BELOW the true frame interval: at exactly 100ms, a frame arriving
+ *  1ms early fails the gate and the next row lands 200ms later instead — a
  *  visible stutter caused by the throttle itself. */
-const MIN_ROW_MS = 180;
+const MIN_ROW_MS = 90;
 
 /** Span = demod bandwidth x this. Lands a signal on ~25 of the 256 bins: wide
  *  enough to read as a blob rather than a 2-bin hairline, tight enough to leave

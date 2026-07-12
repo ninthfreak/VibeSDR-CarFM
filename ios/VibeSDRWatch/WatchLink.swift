@@ -42,6 +42,12 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   @Published var step       = 0.0
   @Published var reachable  = false
   @Published var everGotRow = false
+
+  // Diagnostics for the "link up but no rows" case: a row of the wrong length is
+  // DROPPED SILENTLY by WaterfallBuffer, which looks identical to no row at all.
+  @Published var rxRows     = 0     // row messages received
+  @Published var rxAny      = 0     // messages of ANY kind received
+  @Published var lastLen    = 0     // payload length of the last row
   /// Filter edges as Hz offsets from the carrier. NOT symmetric: LSB is entirely
   /// below (both negative), USB entirely above, CW offset. Drawing a single width
   /// about the centre would render every mode as AM.
@@ -86,12 +92,49 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     DispatchQueue.main.async { self.apply(message) }
   }
 
+  /// Rows arrive as a flat binary blob (see VibeWatchModule.sendRow) — dictionary
+  /// messages cost a plist serialise per send, and at 10fps that flooded the
+  /// channel into delivering in bursts.
+  func session(_ s: WCSession, didReceiveMessageData data: Data) {
+    let header = 1 + 8 * 6
+    guard data.count > header, data[data.startIndex] == 1 else { return }
+
+    var f = [Double](repeating: 0, count: 6)
+    for i in 0..<6 {
+      let lo = data.startIndex + 1 + i * 8
+      let bits = data[lo..<(lo + 8)].withUnsafeBytes { raw in
+        raw.loadUnaligned(as: UInt64.self)
+      }
+      f[i] = Double(bitPattern: UInt64(littleEndian: bits))
+    }
+    let row = [UInt8](data[(data.startIndex + header)...])
+
+    DispatchQueue.main.async {
+      self.waterfall.push(row: row)
+      self.rxRows += 1
+      self.lastLen = row.count
+      // Only count a row we can actually DRAW. WaterfallBuffer drops any row of
+      // the wrong length silently, so flagging everGotRow on arrival hid the
+      // placeholder (and its diagnostics) behind a permanently black canvas.
+      if row.count == WaterfallBuffer.width { self.everGotRow = true }
+      self.frequency = f[0]
+      self.span      = f[1]
+      self.snr       = f[2]
+      self.level     = f[3]
+      self.filtLo    = f[4]
+      self.filtHi    = f[5]
+    }
+  }
+
   private func apply(_ m: [String: Any]) {
+    rxAny += 1
     switch m[WK.kind] as? String {
     case "row":
       if let d = m[WK.row] as? Data {
+        rxRows += 1
+        lastLen = d.count
         waterfall.push(row: [UInt8](d))
-        everGotRow = true
+        if d.count == WaterfallBuffer.width { everGotRow = true }
       }
       if let f = m[WK.freq] as? Double { frequency = f }
       if let sp = m[WK.span] as? Double { span = sp }

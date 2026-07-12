@@ -42,20 +42,33 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
 
   /// One waterfall row, already cropped to the VFO-centred window and quantised
   /// to 0-255 with the phone's brightness/contrast/gain baked in.
+  /// Rows go as RAW BINARY, not as a dictionary.
+  ///
+  /// WCSession is an interactive-message channel, not a pipe. A dictionary message
+  /// has to be plist-serialised on every send; at 10fps that cost is real, and
+  /// flooding the channel makes it queue and then deliver in BURSTS — which showed
+  /// up as the watch's frequency freezing while the phone tuned. sendMessageData
+  /// hands over a flat blob and skips all of it.
+  ///
+  /// Layout (little-endian): u8 kind=1, then f64 freq, span, snr, level, lo, hi,
+  /// then the row bytes.
   @objc(sendRow:freq:span:snr:level:lo:hi:)
   func sendRow(_ rowB64: String, freq: NSNumber, span: NSNumber, snr: NSNumber,
                level: NSNumber, lo: NSNumber, hi: NSNumber) {
     guard let s = session, s.isReachable,
           let row = Data(base64Encoded: rowB64) else { return }
+
+    var blob = Data(capacity: 1 + 8 * 6 + row.count)
+    blob.append(1)                                   // kind: row
+    for v in [freq, span, snr, level, lo, hi] {
+      var d = v.doubleValue.bitPattern.littleEndian
+      withUnsafeBytes(of: &d) { blob.append(contentsOf: $0) }
+    }
+    blob.append(row)
+
     // Fire-and-forget: a dropped row is invisible on a scrolling waterfall,
     // whereas a queue that backs up turns into visible lag.
-    s.sendMessage(
-      ["k": "row", "r": row, "f": freq.doubleValue, "sp": span.doubleValue,
-       "s": snr.doubleValue, "lv": level.doubleValue,
-       "lo": lo.doubleValue, "hi": hi.doubleValue],
-      replyHandler: nil,
-      errorHandler: nil
-    )
+    s.sendMessageData(blob, replyHandler: nil, errorHandler: nil)
   }
 
   @objc(sendState:mode:step:)
