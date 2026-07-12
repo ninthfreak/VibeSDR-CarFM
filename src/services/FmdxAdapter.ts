@@ -305,7 +305,10 @@ export class FmdxAdapter implements SDRBackend {
           antennas.push({ id, name: String(v.name ?? k) });
         }
       }
-      this.cb.onFmdxInfo?.({ antennas, bwSwitch: !!j?.bwSwitch });
+      // tunerName = where the RECEIVER is. Every txInfo distance is measured from
+      // here, so without it "46 km" is a number with no origin.
+      const tunerName = j?.tunerName != null ? String(j.tunerName).trim() : undefined;
+      this.cb.onFmdxInfo?.({ antennas, bwSwitch: !!j?.bwSwitch, tunerName });
     }).catch(() => {});
   }
 

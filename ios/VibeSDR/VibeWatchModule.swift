@@ -130,11 +130,51 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     s.sendMessageData(blob, replyHandler: nil, errorHandler: nil)
   }
 
-  @objc(sendState:mode:step:)
-  func sendState(_ freq: NSNumber, mode: String, step: NSNumber) {
+  /// FM-DX state, as JSON. A different SCREEN on the watch, not a variant of the
+  /// waterfall — FM-DX has no spectrum at all, so the station is the content.
+  ///
+  /// JSON rather than a dozen bridge arguments: this payload will keep growing
+  /// (PTY, TA, AF...) and a blob absorbs that without touching this signature or
+  /// the .m every time.
+  @objc(sendFmdx:)
+  func sendFmdx(_ json: String) {
+    guard let s = session, linkAlive else { return }
+    s.sendMessage(["k": "fmdx", "j": json], replyHandler: nil, errorHandler: nil)
+  }
+
+  /// The dial's station memory — the same list the phone's dial draws.
+  @objc(sendStations:)
+  func sendStations(_ json: String) {
+    guard let s = session, linkAlive else { return }
+    s.sendMessage(["k": "stations", "j": json], replyHandler: nil, errorHandler: nil)
+  }
+
+  /// The station logo, as bytes — the phone has already resolved and drawn it, so
+  /// the wrist shows the SAME image rather than fetching a URL it can't reach.
+  /// Sent only on change (tens of KB, changes when the station does).
+  @objc(sendLogo:)
+  func sendLogo(_ b64: String) {
+    guard let s = session, linkAlive else { return }
+    // Empty = "no logo" — the watch falls back to the app icon, so that the glass
+    // never sits on nothing (which reads as a broken grey box).
+    let data = Data(base64Encoded: b64) ?? Data()
+    s.sendMessage(["k": "logo", "img": data], replyHandler: nil, errorHandler: nil)
+  }
+
+  /// State: frequency, mode, step AND the meter the phone is drawing — ONE message.
+  ///
+  /// The meter had a stream of its own, and that was a mistake: two dictionary
+  /// streams at 4/sec each, on top of the 16/sec rows, flooded WCSession — which
+  /// QUEUES rather than drops — and the DOWNLINK WEDGED. The uplink kept working
+  /// (a message from the watch always wakes the phone), so the wrist could still
+  /// tune while having gone completely deaf. One channel, one throttle.
+  @objc(sendState:mode:step:meter:level:)
+  func sendState(_ freq: NSNumber, mode: String, step: NSNumber,
+                 meter: String, level: NSNumber) {
     guard let s = session, linkAlive else { return }
     s.sendMessage(
-      ["k": "state", "f": freq.doubleValue, "m": mode, "st": step.doubleValue],
+      ["k": "state", "f": freq.doubleValue, "m": mode, "st": step.doubleValue,
+       "mt": meter, "lv": level.doubleValue],
       replyHandler: nil,
       errorHandler: nil
     )

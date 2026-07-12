@@ -16,10 +16,18 @@ RCT_EXTERN_METHOD(sendRow
                   : (nonnull NSNumber *)lo hi
                   : (nonnull NSNumber *)hi)
 
+RCT_EXTERN_METHOD(sendFmdx : (NSString *)json)
+
+RCT_EXTERN_METHOD(sendLogo : (NSString *)b64)
+
+RCT_EXTERN_METHOD(sendStations : (NSString *)json)
+
 RCT_EXTERN_METHOD(sendState
                   : (nonnull NSNumber *)freq mode
                   : (NSString *)mode step
-                  : (nonnull NSNumber *)step)
+                  : (nonnull NSNumber *)step meter
+                  : (NSString *)meter level
+                  : (nonnull NSNumber *)level)
 
 RCT_EXTERN_METHOD(sendSettings
                   : (NSString *)lutB64 smoothing

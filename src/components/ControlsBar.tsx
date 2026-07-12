@@ -132,7 +132,14 @@ function dbfsToSMeter(dbfs: number): string {
   return `S${s}`;
 }
 
-function meterText(mode: 'snr' | 'smeter' | 'dbfs', m: MeterValues): string {
+/** Exported so the WATCH can mirror the phone's meter verbatim rather than picking
+ *  its own metric. It used to render SNR specifically — which OWRX, Kiwi and FM-DX
+ *  do not have (they send an absolute S-meter / dBf and no noise reference), so the
+ *  wrist showed a permanent "—" on those backends while the bar moved fine beneath
+ *  it. Sending the TEXT means the watch can never disagree with the phone, and a
+ *  future backend with some other metric works for free. Same reasoning as shipping
+ *  the palette as a LUT instead of reimplementing the colour maps in Swift. */
+export function meterText(mode: 'snr' | 'smeter' | 'dbfs', m: MeterValues): string {
   if (mode === 'smeter') return dbfsToSMeter(m.dbfs);
   if (mode === 'dbfs')   return `${Math.round(m.dbfs)}dB`;
   return isFinite(m.snr) ? `${Math.round(m.snr)}db` : '';

@@ -55,6 +55,10 @@ export interface FmdxState {
 export interface FmdxServerInfo {
   antennas: { id: number; name: string }[];
   bwSwitch: boolean;
+  /** The RECEIVER's name/location, from /static_data `tunerName`. Needed wherever a
+   *  txInfo distance is shown: `dist` is measured from the SERVER's QTH, so "46 km"
+   *  is meaningless without saying 46 km from WHERE. */
+  tunerName?: string;
 }
 
 export interface ProfileInfo {

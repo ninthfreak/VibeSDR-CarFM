@@ -81,7 +81,7 @@ import { getFavourites, toggleFavourite }              from '../services/favouri
 import { useTheme }                                     from '../contexts/ThemeContext';
 
 import WaterfallView   from '../components/WaterfallView';
-import ControlsBar, { createMeterBus } from '../components/ControlsBar';
+import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
@@ -2158,7 +2158,16 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (sm.level >= sm.peak)   { sm.peak = sm.level; sm.hold = 15; }
           else if (sm.hold > 0)      { sm.hold--; }
           else                       { sm.peak = Math.max(0, sm.peak - 0.02); }
-          watchProvider.setSignal(snrDb, sm.level);
+          // Send the meter TEXT THE PHONE DRAWS, not a metric of the watch's choosing.
+          // OWRX/Kiwi have no SNR (snrDb is hardcoded 0 on them), so a wrist that
+          // rendered SNR showed a permanent "—" while its bar moved perfectly well.
+          watchProvider.setSignal(
+            snrDb, sm.level,
+            meterText(signalModeRef.current, {
+              level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
+              active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6, link: 0,
+            }),
+          );
           // Backgrounded (watch-only) frames must NOT drive the meter bus: it
           // re-renders a React leaf per frame, and per-frame React commits in the
           // background are exactly what starved the audio DSP in v6. Nobody can

@@ -585,7 +585,9 @@ struct ContentView: View {
         // CW case; scaling costs nothing and is always readable at a glance.
         .lineLimit(1)
         .minimumScaleFactor(0.55)
-      Text(link.snr > 0 ? String(format: "%.0f dB", link.snr) : "—")
+      // Whatever the phone's meter says — S-meter, dBFS, SNR or FM-DX's dBf. We
+      // do not choose the metric here; see WatchLink.meter.
+      Text(link.meter.isEmpty ? "—" : link.meter)
         .font(.system(size: 11, weight: .semibold, design: .rounded))
         .monospacedDigit()
         .foregroundStyle(.white.opacity(0.9))

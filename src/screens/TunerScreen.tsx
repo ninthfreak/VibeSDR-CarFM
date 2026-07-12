@@ -15,6 +15,7 @@ import { isoToFlag, ituToIso, validIso } from '../services/rdsCountry';
 import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
 import ControlsBar, { createMeterBus } from '../components/ControlsBar';
 import { VibePowerModule } from '../components/AudioPlayer';
+import { watchProvider } from '../services/watchProvider';
 import ChatDrawer, { type ChatMessage } from '../components/ChatDrawer';
 import FreqModal from '../components/FreqModal';
 import FmdxDial, { type DialStation } from '../components/FmdxDial';
@@ -25,6 +26,30 @@ import FmdxDial, { type DialStation } from '../components/FmdxDial';
 // bottom so it reads as native VibeSDR. Chat is first-class (shared tuning).
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Tuner'>;
+
+/** What the WATCH gets. One builder, so the live frame and the hello reply can
+ *  never drift apart. `dBf` is FM-DX's own unit — the watch prints whatever string
+ *  we hand it and so can never disagree with the phone about the signal. */
+function watchFmdxPayload(s: FmdxState, level: number, rx: string) {
+  const iso = ituToIso(s.tx?.itu) || s.countryIso;
+  return {
+    freq: s.freqHz,
+    ps: s.ps ?? '',
+    rt: s.rt ?? '',
+    pi: s.pi ?? '',
+    sig: s.sig,
+    users: s.users ?? 0,
+    stereo: !!s.stereo,
+    tx: s.tx?.tx ?? '',
+    city: s.tx?.city ?? '',
+    dist: Math.round(s.tx?.dist ?? 0),      // km from the SERVER's QTH, not ours
+    rx,                                     // ...which is HERE. A distance needs an origin.
+    pty: PTY[s.pty] ?? '',
+    flag: validIso(iso) ? isoToFlag(iso) : '',
+    meter: `${Math.round(s.sig)} dBf`,
+    level,
+  };
+}
 
 const PTY = [
   'None', 'News', 'Current Affairs', 'Information', 'Sport', 'Education', 'Drama',
@@ -104,6 +129,13 @@ export default function TunerScreen({ route, navigation }: Props) {
   // doesn't spam retunes for everyone. When not dragging, the server frame drives it.
   const [displayFreq, setDisplayFreq] = useState(95_000_000);
   const [step, setStep] = useState(100_000);
+  /** Mirror of `step` for callbacks that outlive a render (the watch handlers are
+   *  attached once). */
+  const stepRef = useRef(step);
+  useEffect(() => { stepRef.current = step; }, [step]);
+  /** Where the RECEIVER is (from /static_data). Every txInfo distance is measured
+   *  from here, so the watch needs it to make "46 km" mean anything. */
+  const rxNameRef = useRef('');
   const [freqModalOpen, setFreqModalOpen] = useState(false);
   const [dialView, setDialView] = useState({ lo: FM_LO, hi: FM_HI });
   const [bottomH, setBottomH] = useState(0);   // measured VTS+island height → ScrollView bottom padding
@@ -177,7 +209,11 @@ export default function TunerScreen({ route, navigation }: Props) {
       onConnect:  () => { if (!destroyed.current) { setConnected(true); setError(null); } },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
       onServerLost: () => { if (!destroyed.current) setError('Server stopped responding'); },
-      onFmdxInfo: (info) => { if (!destroyed.current) setServerInfo(info); },
+      onFmdxInfo: (info) => {
+        if (destroyed.current) return;
+        setServerInfo(info);
+        rxNameRef.current = info.tunerName ?? '';
+      },
       onFmdxState: (s) => {
         if (destroyed.current) return;
         // Commit to React state at ~5 Hz (trailing) — NOT per frame. The dial +
@@ -194,6 +230,11 @@ export default function TunerScreen({ route, navigation }: Props) {
         const sn = Math.min(1, Math.max(0, s.sig / 70));
         lastSigNorm.current = sn;
         meterBus.emit({ level: sn, peak: sn, snr: 0, dbfs: s.sig, active: true, link: 3 });
+        // The wrist gets the same frame. Throttled inside the provider (4/sec) —
+        // RDS RadioText changes constantly and WCSession queues rather than drops.
+        // `dBf` is FM-DX's own unit; the watch prints whatever string we send, so
+        // it can never disagree with us about the signal.
+        watchProvider.sendFmdx(watchFmdxPayload(s, sn, rxNameRef.current));
         if (s.rds && s.ps) learnStation(s.freqHz, s.ps);  // pin RDS name to the dial
         // Lock-screen card: "STATION · 89.2" (freq beside the RDS name), or just
         // the frequency until RDS locks. Deduped so we don't spam the card.
@@ -298,6 +339,61 @@ export default function TunerScreen({ route, navigation }: Props) {
 
   // Inlay the resolved station logo on the lock-screen artwork.
   useEffect(() => { (VibePowerModule as any)?.setStationLogo?.(logo ?? ''); }, [logo]);
+
+  // …and send the SAME image to the watch, as bytes. The phone has already resolved
+  // it to a local file, so the wrist shows exactly what the phone shows rather than
+  // fetching a URL it has no network path to. Empty = no logo, and the watch then
+  // falls back to the app icon (glass over nothing reads as a broken grey box).
+  useEffect(() => {
+    let cancelled = false;
+    if (!logo) { watchProvider.sendLogo(''); return; }
+    FileSystem.readAsStringAsync(logo, { encoding: FileSystem.EncodingType.Base64 })
+      .then((b64) => { if (!cancelled) watchProvider.sendLogo(b64); })
+      .catch(() => { if (!cancelled) watchProvider.sendLogo(''); });
+    return () => { cancelled = true; };
+  }, [logo]);
+
+  // The wrist draws the SAME dial, from the same memory.
+  useEffect(() => { watchProvider.sendStations(dialStations); }, [dialStations]);
+
+  // ── Apple Watch: FM-DX is its own screen on the wrist (no spectrum to show). ──
+  //    The crown is DISARMED there by default — this server has ONE receiver and
+  //    retuning it moves the frequency for EVERY listener, so tuning must be a
+  //    deliberate act, not a wrist twitch. The watch owns that latch; by the time a
+  //    tune command reaches us the user has already armed it.
+  useEffect(() => {
+    watchProvider.attach({
+      onTuneDelta: (delta: number) => {
+        if (!delta) return;
+        const cur = latestStRef.current?.freqHz ?? 0;
+        const st0 = stepRef.current;
+        if (!(cur > 0) || !(st0 > 0)) return;
+        // Snap to the step grid first, like the phone's own drum: a detent should
+        // land on a channel, not offset the current fraction.
+        const base = delta > 0 ? Math.floor(cur / st0) : Math.ceil(cur / st0);
+        const f = (base + delta) * st0;
+        armTarget(f);
+        backendRef.current?.tune(f);
+      },
+      onTuneHz: (hz: number) => {
+        if (hz > 0) { armTarget(hz); backendRef.current?.tune(hz); }
+      },
+      onMode: () => {},          // FM-DX is WFM only — no demod choice to make
+      onStep: (hz: number) => { if (hz > 0) setStep(hz); },
+      onZoomDelta: () => {},     // no spectrum, nothing to zoom
+      onReachableChange: () => {},
+      onHello: () => {
+        const s0 = latestStRef.current;
+        if (s0) {
+          watchProvider.sendFmdx(
+            watchFmdxPayload(s0, Math.min(1, Math.max(0, s0.sig / 70)),
+                             rxNameRef.current),
+          );
+        }
+      },
+    });
+    return () => watchProvider.detach();
+  }, [armTarget]);
 
   // ── Drum tuning: velocity-adaptive accumulator, snapped to the step grid,
   //    committed once on settle (shared tuner — don't spam retunes). ───────────

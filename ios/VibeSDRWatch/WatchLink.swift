@@ -12,7 +12,10 @@ import WatchConnectivity
 ///
 /// Keys are terse because every row rides this dictionary at ~10fps.
 enum WK {
-  static let kind    = "k"   // "row" | "state" | "settings" | "pong"
+  static let kind    = "k"   // "row" | "state" | "fmdx" | "logo" | "settings" | "pong"
+  static let meter   = "mt"  // String — the meter text the PHONE is drawing
+  static let json    = "j"   // String — FM-DX state blob
+  static let image   = "img" // Data — station logo PNG/JPEG bytes
   static let row     = "r"   // Data, 128 bytes, 0-255 intensity
   static let freq    = "f"   // Double, Hz — VFO centre (the row is centred on it)
   static let span    = "sp"  // Double, Hz — width the 128 bins cover
@@ -37,6 +40,17 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   @Published var frequency  = 0.0
   @Published var span       = 0.0
   @Published var snr        = 0.0
+  /// The meter text the PHONE is drawing, mirrored verbatim ("S9+10", "-72dB",
+  /// "18db"). NOT derived here.
+  ///
+  /// The watch used to format SNR itself from the row header — but OWRX, Kiwi and
+  /// FM-DX have no SNR to give (they send an absolute S-meter or dBf, with no noise
+  /// reference), so the phone sent 0 and this readout was a permanent "—" on those
+  /// backends, while the bar beneath it moved perfectly well. Mirroring the phone's
+  /// own string means the two can never disagree, and a backend with some other
+  /// metric works for free. (Same reasoning as shipping the palette as a LUT rather
+  /// than reimplementing the colour maps here.)
+  @Published var meter      = ""
   @Published var level      = 0.0
   @Published var mode       = ""
   @Published var step       = 0.0
@@ -50,6 +64,45 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// different screen entirely and has no spectrum at all). The watch just sat on
   /// its last frame looking frozen, which is indistinguishable from a lock-up.
   @Published var lastRowAt: Date? = nil
+
+  // ── FM-DX ──────────────────────────────────────────────────────────────────
+  //
+  // A SECOND SCREEN, not a variant of the waterfall: FM-DX has no spectrum at all,
+  // so the STATION is the content. We route on whichever message arrived last —
+  // the phone never has to tell us which screen to be, because what it SENDS
+  // already says: rows mean a spectrum, an fmdx blob means a station.
+  @Published var fmdx: FmdxState? = nil
+  @Published var logo: Data? = nil
+  /// The phone's dial memory, mirrored — station names pinned to frequencies, learned
+  /// from RDS as you tune. The wrist draws the same dial rather than inventing one.
+  @Published var stations: [FmdxStation] = []
+  @Published var screen: Screen = .sdr
+
+  enum Screen { case sdr, fmdx }
+
+  struct FmdxStation: Codable, Equatable, Identifiable {
+    var freqHz: Double = 0
+    var name = ""
+    var id: Double { freqHz }
+  }
+
+  struct FmdxState: Codable, Equatable {
+    var freq: Double = 0      // Hz
+    var ps = ""               // RDS station name
+    var rt = ""               // RadioText
+    var pi = ""               // PI code (hex)
+    var sig: Double = 0       // dBf
+    var users = 0             // listeners on the SERVER — see FmdxView
+    var stereo = false
+    var tx = ""               // transmitter / station name
+    var city = ""             // transmitter site
+    var dist: Double = 0      // km from the SERVER's QTH (not the listener's)
+    var pty = ""              // programme type, already resolved by the phone
+    var flag = ""             // country flag emoji
+    var rx = ""               // where the RECEIVER is — `dist` is measured from HERE
+    var meter = ""            // the phone's meter text, mirrored
+    var level: Double = 0     // 0..1 bar fill
+  }
 
   // Diagnostics for the "link up but no rows" case: a row of the wrong length is
   // DROPPED SILENTLY by WaterfallBuffer, which looks identical to no row at all.
@@ -288,6 +341,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       // the wrong length silently, so flagging everGotRow on arrival hid the
       // placeholder (and its diagnostics) behind a permanently black canvas.
       if row.count == WaterfallBuffer.width { self.everGotRow = true }
+      self.screen = .sdr        // a row means a spectrum — see `screen`
       // NOTE: f[0] is the row's frequency, and we deliberately IGNORE it.
       //
       // Rows are fire-and-forget pixels — lossy by design, and WCSession QUEUES
@@ -324,6 +378,30 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if let f = m[WK.freq] as? Double, !tuning { frequency = f }
       if let md = m[WK.mode] as? String { mode = md }
       if let st = m[WK.step] as? Double { step = st }
+      if let mt = m[WK.meter] as? String { meter = mt }
+      if let lv = m[WK.level] as? Double { level = lv }
+
+    case "fmdx":
+      if let j = m[WK.json] as? String,
+         let d = j.data(using: .utf8),
+         let st = try? JSONDecoder().decode(FmdxState.self, from: d) {
+        fmdx = st
+        screen = .fmdx
+        lastRowAt = Date()        // "the phone is talking to us" — same staleness clock
+        everGotRow = true
+      }
+
+    case "stations":
+      if let j = m[WK.json] as? String,
+         let d = j.data(using: .utf8),
+         let list = try? JSONDecoder().decode([FmdxStation].self, from: d) {
+        stations = list
+      }
+
+    case "logo":
+      // Empty = no logo found. Keep it nil so the view falls back to the app icon:
+      // glass over nothing reads as a broken grey box.
+      if let d = m[WK.image] as? Data { logo = d.isEmpty ? nil : d }
 
     case "settings":
       if let l = m[WK.lut] as? Data, l.count == 1024 { waterfall.setLUT([UInt8](l)) }

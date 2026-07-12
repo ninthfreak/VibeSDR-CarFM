@@ -31,7 +31,11 @@ const Native = NativeModules.VibeWatchModule as
       isReachable(): Promise<boolean>;
       sendRow(rowB64: string, freq: number, span: number, snr: number, level: number,
               lo: number, hi: number): void;
-      sendState(freq: number, mode: string, step: number): void;
+      sendState(freq: number, mode: string, step: number, meter: string,
+                level: number): void;
+      sendFmdx(json: string): void;
+      sendStations(json: string): void;
+      sendLogo(b64: string): void;
       sendSettings(lutB64: string, smoothing: number, needle: string,
                    needleIntensity: number, sharpness: number): void;
     }
@@ -78,6 +82,10 @@ const MIN_ROW_MS = 60;
 /** Frequency echoes: ≤1 per this, trailing edge always delivered. 4/sec keeps the
  *  wrist tracking a phone-side tune without ever building a WCSession backlog. */
 const STATE_MS = 250;
+
+/** FM-DX state echoes. RDS text changes constantly; 4/sec reads as live and stays
+ *  well clear of the WCSession backlog the row feed taught us about. */
+const FMDX_MS = 250;
 
 /** Span = demod bandwidth x this. Lands a signal on ~25 of the 256 bins: wide
  *  enough to read as a blob rather than a 2-bin hairline, tight enough to leave
@@ -139,10 +147,23 @@ class WatchProvider {
   private lastRowAt = 0;
   private lastStateAt = 0;
   private pendingState: { freq: number; mode: string; step: number } | null = null;
+  /** Last state we were asked to send — so a meter update can reuse it rather than
+   *  opening a stream of its own. */
+  private lastState: { freq: number; mode: string; step: number } | null = null;
   private stateTimer: ReturnType<typeof setTimeout> | null = null;
   private lastPalette = '';
   private snr = 0;
+  /** The meter string the PHONE is drawing right now (e.g. "S9+10", "-72dB",
+   *  "18db"). Mirrored verbatim — see setSignal. */
+  private meter = '';
   private level = 0;
+  private lastFmdxAt = 0;
+  private pendingFmdx: string | null = null;
+  private fmdxTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastStations = '';
+  private sentStations = '\u0000';
+  private lastLogo = '';   // what we WANT the watch to have
+  private sentLogo = '\u0000';  // what it actually has (sentinel: never sent)
   private out = new Uint8Array(WATCH_BINS);
   private emitter: NativeEventEmitter | null = null;
   private subs: { remove(): void }[] = [];
@@ -210,7 +231,7 @@ class WatchProvider {
           case 'mode': handlers.onMode(String(e.val ?? '')); break;
           case 'step': handlers.onStep(Number(e.val ?? 0)); break;
           case 'zoom': handlers.onZoomDelta(Number(e.delta ?? 0)); break;
-          case 'ping': handlers.onHello(); break;
+          case 'ping': handlers.onHello(); this.flushLogo(); this.flushStations(); break;
         }
       }),
       this.emitter.addListener('VibeWatchState', (e: { reachable: boolean }) => {
@@ -235,6 +256,7 @@ class WatchProvider {
     this.reachable = r;
     if (r) this.lastPalette = '';   // re-send palette on (re)connect
     this.onReachable?.(r);
+    if (r) { this.flushLogo(); this.flushStations(); }   // the watch just arrived with nothing
   }
 
   detach() {
@@ -248,12 +270,113 @@ class WatchProvider {
   /** Latest signal, mirrored from the meter bus. `level` is the already-smoothed,
    *  already-compressed 0..1 fill the phone's own meter draws — send it rather than
    *  the raw dB so the wrist bar and the phone bar move identically. */
-  setSignal(snr: number, level: number) { this.snr = snr; this.level = level; }
+  // ── FM-DX ────────────────────────────────────────────────────────────────
+  //
+  // A DIFFERENT SCREEN, not a variant of the waterfall: FM-DX has no spectrum at
+  // all, so on this backend the STATION is the content. The watch routes on the
+  // message it last received, so nothing here needs to know about screens.
+  //
+  // Throttled + trailing, like the frequency and the meter. RDS RadioText changes
+  // constantly and WCSession queues rather than drops.
+
+  /** The whole FM-DX state as JSON. A string, not 12 bridge args: this shape will
+   *  keep growing (PTY, TA, AF...), and a JSON blob absorbs that without touching
+   *  the native bridge or the .m signature every time. It's ~200 bytes at 4/sec. */
+  sendFmdx(state: {
+    freq: number; ps: string; rt: string; pi: string; sig: number;
+    users: number; stereo: boolean; tx: string; meter: string; level: number;
+    pty: string; city: string; dist: number; flag: string; rx: string;
+  }) {
+    if (!this.isActive) return;
+    this.pendingFmdx = JSON.stringify(state);
+    const wait = this.lastFmdxAt + FMDX_MS - Date.now();
+    if (wait <= 0) { this.flushFmdx(); return; }
+    if (!this.fmdxTimer) {
+      this.fmdxTimer = setTimeout(() => { this.fmdxTimer = null; this.flushFmdx(); }, wait);
+    }
+  }
+
+  private flushFmdx() {
+    const j = this.pendingFmdx;
+    if (!j || !this.isActive) return;
+    this.pendingFmdx = null;
+    this.lastFmdxAt = Date.now();
+    Native!.sendFmdx(j);
+  }
+
+  /** The dial's station memory — the SAME list the phone's dial draws, so the wrist
+   *  is a mirror rather than a second implementation. Tiny and rarely changes (a new
+   *  entry when RDS names a station you tuned), so it goes on change only, with the
+   *  same want-vs-have tracking as the logo: the watch usually arrives AFTER the
+   *  list was built, and a list marked sent before the watch was there is a list
+   *  that never arrives. */
+  sendStations(list: { freqHz: number; name: string }[]) {
+    if (!this.available) return;
+    this.lastStations = JSON.stringify(list);
+    this.flushStations();
+  }
+
+  private flushStations() {
+    if (!this.isActive || this.lastStations === this.sentStations) return;
+    this.sentStations = this.lastStations;
+    Native!.sendStations(this.lastStations);
+  }
+
+  /** The station logo, as bytes. The phone has ALREADY resolved it to a local file
+   *  (stationLogoCache) and drawn it — so we ship the same image rather than making
+   *  the watch fetch a URL it has no network path to. Only on change: it's tens of
+   *  KB, and the station changes about as often as you tune. */
+  sendLogo(b64: string) {
+    if (!this.available) return;
+    this.lastLogo = b64;
+    this.flushLogo();
+  }
+
+  /** Send the logo only once the watch is actually THERE.
+   *
+   *  It used to mark the logo as sent before checking reachability — so a station
+   *  that resolved before the watch connected (the normal case: the phone has been
+   *  tuned for a while, you then raise your wrist) was recorded as delivered and
+   *  never actually went out. The wrist showed a permanently empty background.
+   *  Track what we WANT the watch to have separately from what it HAS, and flush
+   *  whenever the link comes up. */
+  private flushLogo() {
+    if (!this.isActive || this.lastLogo === this.sentLogo) return;
+    this.sentLogo = this.lastLogo;
+    Native!.sendLogo(this.lastLogo);
+  }
+
+  /**
+   * MIRROR THE PHONE'S METER — don't pick a metric on the watch.
+   *
+   * The wrist used to render SNR specifically, and OWRX / Kiwi / FM-DX have no SNR
+   * to give (they send an absolute S-meter or dBf, with no noise reference), so
+   * SDRScreen sent a hardcoded 0 and the watch showed a permanent "—" — while the
+   * bar underneath moved perfectly well, which is what made it look like a display
+   * bug rather than a missing metric. So the phone sends the STRING IT IS ALREADY
+   * DRAWING, and the watch prints it.
+   *
+   * It rides the SAME throttled state message as the frequency. It had its own, and
+   * that was a mistake: two dict streams at 4/sec each, on top of the 16/sec rows,
+   * flooded WCSession — which QUEUES rather than drops — and the DOWNLINK WEDGED.
+   * (The uplink still worked, because a message from the watch always wakes the
+   * phone: the wrist could tune but had gone deaf.) ONE channel, one throttle.
+   */
+  setSignal(snr: number, level: number, meter: string) {
+    this.snr = snr;
+    this.level = level;
+    if (meter === this.meter) return;
+    this.meter = meter;
+    // Ride the ONE state channel, at its ONE throttle — never open a second stream.
+    if (this.lastState) {
+      this.sendFreq(this.lastState.freq, this.lastState.mode, this.lastState.step);
+    }
+  }
 
   sendState(freq: number, mode: string, step: number) {
     if (!this.isActive) return;
     this.lastStateAt = Date.now();
-    Native!.sendState(freq, mode, step);
+    Native!.sendState(freq, mode, step, this.meter, this.level);
   }
 
   /**
@@ -277,6 +400,7 @@ class WatchProvider {
    */
   sendFreq(freq: number, mode: string, step: number) {
     if (!this.isActive) return;
+    this.lastState = { freq, mode, step };
     this.pendingState = { freq, mode, step };
     const wait = this.lastStateAt + STATE_MS - Date.now();
     if (wait <= 0) { this.flushState(); return; }
@@ -289,7 +413,7 @@ class WatchProvider {
     const p = this.pendingState;
     if (!p) return;
     this.pendingState = null;
-    this.sendState(p.freq, p.mode, p.step);
+    this.sendState(p.freq, p.mode, p.step);   // carries the meter too
   }
 
   /**
