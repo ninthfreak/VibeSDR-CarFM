@@ -199,14 +199,16 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// Palette + temporal smoothing. We ship the phone's own 256-entry RGBA LUT
   /// (1KB) rather than reimplementing 26 colour maps in Swift — the wrist can
   /// never drift from the phone, and new palettes work for free.
-  @objc(sendSettings:smoothing:needle:needleIntensity:sharpness:)
+  @objc(sendSettings:smoothing:needle:needleIntensity:sharpness:peakHold:)
   func sendSettings(_ lutB64: String, smoothing: NSNumber,
-                    needle: String, needleIntensity: NSNumber, sharpness: NSNumber) {
+                    needle: String, needleIntensity: NSNumber, sharpness: NSNumber,
+                    peakHold: Bool) {
     guard let s = session, linkAlive,
           let lut = Data(base64Encoded: lutB64) else { return }
     s.sendMessage(
       ["k": "settings", "l": lut, "sm": smoothing.doubleValue,
-       "nc": needle, "ni": needleIntensity.doubleValue, "sh": sharpness.doubleValue],
+       "nc": needle, "ni": needleIntensity.doubleValue, "sh": sharpness.doubleValue,
+       "pk": peakHold],
       replyHandler: nil,
       errorHandler: nil
     )

@@ -78,13 +78,26 @@ final class WaterfallBuffer {
   /// expected 10fps so the first few frames don't glide against a wrong guess.
   private var interval: CFTimeInterval = 0.1
   private var arrivals = 0
-  private let targetDepth = 2.0
+
+  /// How many rows to bank before drawing — i.e. how much LATENCY we deliberately
+  /// accept to insure against a late row.
+  ///
+  /// This was 2, and 2 rows at ~10fps is ~200ms of delay ON TOP of the WCSession hop
+  /// (~240ms). That total is invisible while you're just watching a signal, but it is
+  /// very visible while you TUNE — most of all on WFM at 100kHz steps, where each
+  /// detent moves the whole picture and you can see it arrive late.
+  ///
+  /// 1 row halves our half of it. The insurance is worth less than it was: the row
+  /// feed is far healthier now than when 2 was chosen (it was picked back when rows
+  /// were being dropped by a too-tight send gate). If a row does arrive late we drop
+  /// back to prefilling, which is the same recovery as before — just entered slightly
+  /// more often.
+  private let targetDepth = 1.0
 
   /// PREFILL. A jitter buffer that starts draining while empty alternates between
   /// running dry and catching up — which is a stutter, and it's why the first
   /// second after launch (and after a screen wake) looked rough. Hold still until
-  /// a couple of rows are banked, then drain; drop back to holding if we ever run
-  /// dry. Costs a fraction of a second of latency at the start, once.
+  /// the buffer is banked, then drain; drop back to holding if we ever run dry.
   private var prefilling = true
 
   /// Sub-row offset for the renderer, 0..1.
@@ -103,6 +116,21 @@ final class WaterfallBuffer {
   /// 5-frame EMA on its spectrum (SignalProcessor.smoothingFrames) while feeding
   /// the waterfall unsmoothed — so we do the same, and for the same reason.
   private(set) var specRow: [Double] = []
+
+  /// PEAK HOLD, mirrored from the phone.
+  ///
+  /// Same behaviour as the phone's SignalProcessor: rise instantly to the current
+  /// value, then decay. The phone decays in dB (10 dB/s) — we can't, because the rows
+  /// arrive ALREADY NORMALISED to 0-255 with the dB range baked in, so there is no dB
+  /// scale here to decay along. The equivalent rate over a typical 80 dB window is
+  /// ~32 units/sec, which is what this is: the same fall, expressed in the only units
+  /// the wrist has.
+  ///
+  /// It tracks the SMOOTHED trace (specRow), not the raw row — the peak of a line
+  /// that jitters is just noise held up on a stick.
+  private(set) var peakRow: [Double] = []
+  var peakHold = true { didSet { if !peakHold { peakRow = [] } } }
+  private let peakDecayPerSec = 32.0
   private let specAlpha = 0.22   // ~5-frame EMA at our sub-row rate
 
   // Diagnostics — is the render loop actually ticking, and is the queue healthy?
@@ -181,9 +209,11 @@ final class WaterfallBuffer {
     lastArrivalAt = now
 
     queue.append(sharpen(row))
-    // If we somehow can't keep up, drop the OLDEST: the newest row is the one
-    // that matters, and a growing queue is just latency.
-    if queue.count > 8 { queue.removeFirst(queue.count - 8) }
+    // If we somehow can't keep up, drop the OLDEST: the newest row is the one that
+    // matters, and a growing queue is just latency. The cap was 8 — i.e. we were
+    // willing to sit ~800ms behind the radio before throwing anything away, which is
+    // most of the lag we're trying to remove. 4 is still ample slack for a hiccup.
+    if queue.count > 4 { queue.removeFirst(queue.count - 4) }
   }
 
   /// Unsharp mask across the bins: subtract a blurred copy of the row from itself,
@@ -204,6 +234,10 @@ final class WaterfallBuffer {
     }
     return out
   }
+
+  /// Peak hold off (or a fresh view) — drop what's held. A stale peak line would sit
+  /// there implying a signal that isn't there any more.
+  func clearPeaks() { peakRow = [] }
 
   /// Screen woke / link came back. The queue holds stale rows and the clock is
   /// stale, so drain-as-usual would fast-forward through old data and then run
@@ -287,6 +321,23 @@ final class WaterfallBuffer {
     } else {
       for i in 0..<row.count {
         specRow[i] += (Double(row[i]) - specRow[i]) * specAlpha
+      }
+    }
+
+    // Peak hold: rise to the trace, else decay. Seeded from the first real row so it
+    // doesn't spend its first second climbing up from zero.
+    if peakHold {
+      if peakRow.count != specRow.count {
+        peakRow = specRow
+      } else {
+        // Decay is applied on the ROW clock, not the render clock: rows are what
+        // carry new information, and it keeps the fall rate independent of fps.
+        let dt = interval > 0 ? interval : 0.1
+        let fall = peakDecayPerSec * dt
+        for i in 0..<peakRow.count {
+          peakRow[i] = specRow[i] > peakRow[i] ? specRow[i]
+                                               : max(0, peakRow[i] - fall)
+        }
       }
     }
 

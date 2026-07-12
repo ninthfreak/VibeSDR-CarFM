@@ -39,7 +39,7 @@ const Native = NativeModules.VibeWatchModule as
       sendAircraft(json: string): void;
       sendLogo(b64: string): void;
       sendSettings(lutB64: string, smoothing: number, needle: string,
-                   needleIntensity: number, sharpness: number): void;
+                   needleIntensity: number, sharpness: number, peakHold: boolean): void;
     }
   | undefined;
 
@@ -213,9 +213,18 @@ class WatchProvider {
    *  row we hand the watch is unsharpened and it must do its own. Mirror the
    *  setting so the two agree. */
   private sharpness = 0;
+  private peakHold = true;
   setSharpness(v: number) {
     if (v === this.sharpness) return;
     this.sharpness = v;
+    this.lastPalette = '';   // force a settings resend
+  }
+
+  /** Peak hold, mirrored from the phone — the wrist must not decide this for itself.
+   *  Rides the (rare) settings message; toggling it forces a resend. */
+  setPeakHold(on: boolean) {
+    if (on === this.peakHold) return;
+    this.peakHold = on;
     this.lastPalette = '';   // force a settings resend
   }
 
@@ -509,7 +518,8 @@ class WatchProvider {
     if (this.colormap !== this.lastPalette) {
       this.lastPalette = this.colormap;
       Native!.sendSettings(toBase64(getColorLUT(this.colormap)), 0.35,
-                           this.needle, this.needleIntensity, this.sharpness);
+                           this.needle, this.needleIntensity, this.sharpness,
+                           this.peakHold);
     }
 
     const n = row.length;

@@ -30,6 +30,7 @@ enum WK {
   static let needle  = "nc"  // String, "#rrggbb" — the phone's VFO colour
   static let needleI = "ni"  // Double, 1..10 — needle intensity
   static let sharp   = "sh"  // Double, 0..10 — waterfall sharpness
+  static let peak    = "pk"  // Bool — the phone's peak-hold setting, mirrored
 }
 
 final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
@@ -163,6 +164,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// The phone's acrylic-VFO settings, mirrored.
   @Published var needle     = Color.white
   @Published var needleI    = 5.0
+  /// Peak hold — MIRRORED from the phone, never decided here. The wrist showing peaks
+  /// while the phone doesn't (or the reverse) would be two instruments disagreeing.
+  @Published var peakHold   = true
 
   /// The unit the readout displays in — INPUT-AWARE, like the main app.
   ///
@@ -486,6 +490,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if let nc = m[WK.needle] as? String, let c = Color(hex: nc) { needle = c }
       if let ni = m[WK.needleI] as? Double { needleI = ni }
       if let sh = m[WK.sharp] as? Double { waterfall.sharpness = sh }
+      if let pk = m[WK.peak] as? Bool {
+        peakHold = pk
+        waterfall.peakHold = pk   // clears what's held when turned off
+      }
 
     default:
       break

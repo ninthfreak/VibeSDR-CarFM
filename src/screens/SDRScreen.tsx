@@ -3135,6 +3135,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     watchProvider.setColormap(colormap);
     watchProvider.setNeedle(vfoNeedle, vfoIntensity);
     watchProvider.setSharpness(wfSharpness);
+    watchProvider.setPeakHold(peakHold);
     watchProvider.setProcessorSettings({
       autoContrast, wfBrightness, wfContrast, wfSharpness,
       spatialSmooth, peakHold,

@@ -38,6 +38,7 @@ RCT_EXTERN_METHOD(sendSettings
                   : (nonnull NSNumber *)smoothing needle
                   : (NSString *)needle needleIntensity
                   : (nonnull NSNumber *)needleIntensity sharpness
-                  : (nonnull NSNumber *)sharpness)
+                  : (nonnull NSNumber *)sharpness peakHold
+                  : (BOOL)peakHold)
 
 @end

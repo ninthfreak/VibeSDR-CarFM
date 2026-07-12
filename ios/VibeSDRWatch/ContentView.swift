@@ -245,7 +245,7 @@ struct ContentView: View {
         )
       }
 
-      drawSpectrum(ctx, size, wf.specRow, height: specH)
+      drawSpectrum(ctx, size, wf.specRow, peaks: wf.peakRow, height: specH)
       drawVFO(ctx, size)   // through BOTH: the trace and its history stay aligned
     }
     .ignoresSafeArea()
@@ -264,7 +264,7 @@ struct ContentView: View {
   ///
   /// Occupies the top third. The clock lives up here too and reads as a label.
   private func drawSpectrum(_ ctx: GraphicsContext, _ size: CGSize, _ row: [Double],
-                            height h: CGFloat) {
+                            peaks: [Double], height h: CGFloat) {
     let n = row.count
 
     // Solid black ground — the trace's own baseline, and what makes a thin line
@@ -320,6 +320,33 @@ struct ContentView: View {
     var line = Path()
     line.addLines(pts)
     ctx.stroke(line, with: .color(wf.lutColor(235)), lineWidth: 1.2)
+
+    // PEAK HOLD — mirrored from the phone, in the VFO's colour (same as the phone).
+    //
+    // Drawn ON TOP of the trace, and in a DIFFERENT hue to it: the trace takes its
+    // colour from the palette, so a peak line in the same family would read as part
+    // of the same curve. The VFO colour is already the app's "this is a marker, not
+    // the signal" colour, and the user picked it — so the peaks belong to the same
+    // language as the needle rather than inventing another one.
+    //
+    // Peak-preserving downsample, same as the trace: a peak that falls between two
+    // sample columns and vanishes is precisely the thing peak-hold exists to stop.
+    if link.peakHold, peaks.count == n {
+      var pk: [CGPoint] = []
+      pk.reserveCapacity(cols)
+      for c in 0..<cols {
+        let a = n * c / cols
+        let b = max(a + 1, n * (c + 1) / cols)
+        var hi: Double = 0
+        for i in a..<min(b, n) where peaks[i] > hi { hi = peaks[i] }
+        let y = h - (CGFloat(hi) / 255) * (h - 2) - 1
+        pk.append(CGPoint(x: CGFloat(c) * size.width / CGFloat(cols), y: y))
+      }
+      var peakLine = Path()
+      peakLine.addLines(pk)
+      // Thinner than the trace: it's a reference mark, not the signal itself.
+      ctx.stroke(peakLine, with: .color(link.needle.opacity(0.9)), lineWidth: 0.9)
+    }
 
     // Scrim behind the system CLOCK, same as the ticker and the frequency pill.
     //
