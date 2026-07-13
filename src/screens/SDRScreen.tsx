@@ -3148,6 +3148,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })
           ?.setMuted?.(muted);
         setIsMuted(muted);
+        watchProvider.setMuted(muted);   // echo the truth back, don't leave the wrist guessing
       },
 
       // The watch said hello. Answer with the current state so its menu already

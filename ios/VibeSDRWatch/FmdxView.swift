@@ -39,6 +39,10 @@ struct FmdxView: View {
   /// dangerous, it is just a mode, and a mode that expires under you is worse than one
   /// you have to switch back.
   @State private var volumeMode = false
+
+  /// First-run coach. Its OWN flag — this screen's gestures are nothing like the
+  /// waterfall's, and someone who only ever opens FM-DX must still be taught it.
+  @AppStorage("coachSeenFmdx") private var coachSeen = false
   @State private var disarmAt: Date? = nil
   @State private var crown = 0.0
   @State private var lastDetent = 0
@@ -65,6 +69,7 @@ struct FmdxView: View {
       // the station data trickled in.
       VStack(spacing: 0) {
         topBar
+        controlRow
         identity
           .frame(maxWidth: .infinity, maxHeight: .infinity)   // the ONLY flexible row
         dial
@@ -78,6 +83,84 @@ struct FmdxView: View {
       .padding(.horizontal, 12)
       .padding(.top, 12)
       .padding(.bottom, 8)
+
+      // THE BATTERY, placed EXACTLY as the waterfall screen places it.
+      //
+      // It lived in this screen's top-bar HStack, which meant two screens were siting the
+      // same badge with two different sets of paddings — and it visibly JUMPED as you
+      // moved between them. A thing that appears on both screens must be positioned by
+      // one rule, not by two that happen to agree. (Same numbers as ContentView: the
+      // clock sits ~11pt down and owns the right corner.)
+      VStack {
+        HStack {
+          Spacer()
+          BatteryPill(level: link.battery)
+            .padding(.trailing, 62)
+            .padding(.top, 19)
+        }
+        Spacer()
+      }
+      .allowsHitTesting(false)
+
+      // VOLUME HUD. Without it the crown was moving a value the user could not see — you
+      // armed volume, turned, and nothing on screen changed, which reads as "broken"
+      // whether or not the phone heard you. A control with no feedback is not a control.
+      //
+      // Overlaid, NOT in the layout: it must not reflow the station identity as it comes
+      // and goes. Same visual language as the waterfall screen's crown overlay.
+      if volumeMode {
+        VStack {
+          Spacer()
+          HStack(spacing: 8) {
+            Image(systemName: link.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+              .font(.system(size: 14, weight: .semibold))
+              .foregroundStyle(link.muted ? .red : .green)
+            ZStack(alignment: .leading) {
+              Capsule().fill(.white.opacity(0.22))
+              Capsule()
+                .fill(link.muted ? Color.red : Color.green)
+                .frame(width: max(4, 90 * link.volume))
+            }
+            .frame(width: 90, height: 5)
+            Text("\(Int((link.volume * 100).rounded()))")
+              .font(.system(size: 13, weight: .semibold, design: .rounded))
+              .monospacedDigit()
+              .foregroundStyle(.white)
+          }
+          .padding(.horizontal, 12)
+          .padding(.vertical, 8)
+          .background(.black.opacity(0.78), in: Capsule())
+          .padding(.bottom, 26)
+        }
+        .allowsHitTesting(false)   // never steal a tap from the controls beneath
+        .transition(.opacity)
+      }
+
+      // THE COACH, once. This screen NEEDS one more than the waterfall does: its crown is
+      // DEAD by default, so a user who doesn't know about the latch turns it, nothing
+      // happens, and they conclude the app is broken. And the reason it's dead is the one
+      // thing they genuinely must be told — there is a real person at the other end of
+      // that receiver, and tuning it moves the dial for them too.
+      if link.fmdx != nil && !coachSeen {
+        CoachOverlay(
+          title: "FM-DX Tuner",
+          items: [
+            .init(glyph: "dial.medium",
+                  text: "Tap the dial button to arm the Crown, then turn it to tune"),
+            .init(glyph: "speaker.wave.2.fill",
+                  text: "Tap the speaker to give the Crown your iPhone's volume"),
+            .init(glyph: "timer",
+                  text: "The Crown disarms itself after a few seconds"),
+            .init(glyph: "server.rack",
+                  text: "Tap the servers button to switch receiver"),
+          ],
+          caution: "This receiver is SHARED. Tuning it retunes it for everyone listening — which is why the Crown is off until you arm it.",
+          onDismiss: {
+            WKInterfaceDevice.current().play(.click)
+            coachSeen = true
+          }
+        )
+      }
     }
     .ignoresSafeArea()
     .focusable(true)
@@ -183,21 +266,59 @@ struct FmdxView: View {
 
   /// watchOS reserves this strip whether we use it or not, and the clock only sits
   /// at its RIGHT end. The listener count and the arm button cost ZERO height here.
+  /// TWO ROWS, because three controls plus the listener count cannot share one.
+  ///
+  /// The clock's band is free height, but it is NOT free width — the clock reserves ~62pt
+  /// of it, and on a 41mm watch that leaves ~90pt for everything else. Three buttons and
+  /// a count do not fit in 90pt at a legal tap size (they'd be ~15pt each; the minimum is
+  /// 24). A third button was added for volume, and the count is what got pushed off.
+  ///
+  /// So the band keeps what it can genuinely hold — the listener count, which is the one
+  /// thing here that is INFORMATION rather than an affordance — and the controls drop to
+  /// their own row underneath, where they have the full width and can be a comfortable
+  /// size. The cost is one row of height, and it comes out of `identity`, which is the
+  /// designated flexible row and absorbs it without reflowing anything else.
+  /// The clock's band: STATUS only. Who's listening, how much battery is left, and the
+  /// clock itself. Nothing here changes what the crown does.
+  ///
+  /// EXTRA LEADING INSET. The display is a rounded rectangle and every measurement you
+  /// get is a plain one, so the top-left is the worst place on the screen to put anything
+  /// — the corner curve ate the listener glyph at the shared 12pt inset. The top row
+  /// needs more than the rows below it, because only the top row is in the curve.
   private var topBar: some View {
     HStack(spacing: 6) {
       Label("\(st.users)", systemImage: "person.fill")
         .font(.system(size: 12, weight: .semibold, design: .rounded))
         .labelStyle(.titleAndIcon)
         .foregroundStyle(.white.opacity(0.9))
-
-      armButton
-      volumeButton
+        .fixedSize()          // never truncate the count — a truncated number is a lie
       ServersButton(show: $showFavs)
-
       Spacer()
+      // NO BatteryPill here. It is placed by the SAME overlay both screens use (see the
+      // ZStack above) — two screens positioning it with two sets of paddings is exactly
+      // how it ended up visibly jumping when you moved between them.
       Color.clear.frame(width: 62, height: 1)   // the clock's territory
     }
-    .frame(height: 28)
+    .padding(.leading, 6)     // clear of the corner curve — see above
+    .frame(height: 22)
+  }
+
+  /// WHAT THE CROWN DOES — and nothing else. `armButton` and `volumeButton` are the two
+  /// claims on the crown, they are mutually exclusive, and they are the only two controls
+  /// on this screen that change its behaviour. So they get a row to themselves, where you
+  /// can see at a glance which one won.
+  private var controlRow: some View {
+    HStack(spacing: 10) {
+      armButton
+      volumeButton
+      Spacer()
+    }
+    // Inset to match the top row, off the corner curve — and dropped clear of the row
+    // above, because Servers sat DIRECTLY over Volume and reaching for one hit the other.
+    // Adjacent rows of small targets need real space between them, not just a boundary.
+    .padding(.leading, 6)
+    .padding(.top, 6)
+    .frame(height: 30)
   }
 
   /// Hand the crown to the iPhone's SYSTEM volume.
@@ -225,7 +346,15 @@ struct FmdxView: View {
             .background(Circle().fill(.black))
             .offset(x: 5, y: 4)
         }
-        .frame(width: 32, height: 26)          // the TAP TARGET is the frame, not the glyph
+        // 32x26 → 36x30. Big enough to hit (reaching for Volume was landing on Servers),
+        // small enough not to crowd the station name underneath. The frame is the target,
+        // not the glyph — the extra area is free, it just must not eat the layout.
+        .frame(width: 36, height: 30)
+        // The same chip the arm button wears. They are the two claims on the crown; they
+        // must read as one family, and the chip is what says "this is a latch".
+        .background(RoundedRectangle(cornerRadius: 8)
+          .fill(volumeMode ? .green.opacity(0.22) : .white.opacity(0.14)))
+        .contentShape(Rectangle())             // the whole frame is tappable, not the ink
     }
     .buttonStyle(.plain)
     .accessibilityLabel(volumeMode ? "Crown controls iPhone volume. Tap to release."
@@ -259,8 +388,8 @@ struct FmdxView: View {
             .background(Circle().fill(.black))
             .offset(x: 5, y: 4)
         }
-        .frame(width: 32, height: 26)          // the TAP TARGET is the frame, not the glyph
-        .background(RoundedRectangle(cornerRadius: 7)
+        .frame(width: 36, height: 30)          // the TAP TARGET is the frame, not the glyph
+        .background(RoundedRectangle(cornerRadius: 8)
           .fill(armed ? .green.opacity(0.22) : .white.opacity(0.14)))
         .contentShape(Rectangle())
     }
@@ -378,7 +507,10 @@ struct FmdxView: View {
       // Two rows, and the ones NEAREST what you're tuned to get first refusal — a
       // label that has to be dropped should be a distant one, never the neighbour
       // you're about to tune into.
-      let rowY: [CGFloat] = [3, 14]
+      // Rows [3,14] → [2,12]. The two name rows sat a full text-height apart, which is
+      // more air than they need — tightening them buys the MHz numbers underneath the
+      // clearance they were missing, at no cost to legibility.
+      let rowY: [CGFloat] = [2, 12]
       let minGap: CGFloat = 34
       var used: [[CGFloat]] = [[], []]
 
@@ -407,7 +539,12 @@ struct FmdxView: View {
       ctx.stroke(n, with: .color(Color(hue: 4.0 / 360, saturation: 0.85,
                                        brightness: 1.0)), lineWidth: 1.6)
     }
-    .frame(height: 52)
+    // 42 → 50. Shrinking this to 42 broke it: the MHz numbers are drawn from the BOTTOM
+    // (size.height − 21) while the station names are laid out from the TOP, so taking
+    // height out marched the two straight into each other and the names clipped the
+    // numbers. Two rows of names + the numbers + the ticks need ~50pt, and that is not
+    // negotiable — so the buttons gave the height back instead.
+    .frame(height: 50)
     .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
     .padding(.bottom, 4)
   }
@@ -423,11 +560,16 @@ struct FmdxView: View {
       // Station name + RadioText, scrolling. The RDS text IS the content on FM-DX.
       marquee(rdsLine)
 
+      // 26 → 22. The controls moved to a row of their own (three of them could not share
+      // the clock's band), and that row has to be paid for out of somewhere. This is the
+      // tallest thing on the screen and the most legible per point — it can give up 4pt
+      // and still be readable across a room, which the station name and RDS cannot.
       Text(freqText)
-        .font(.system(size: 26, weight: .semibold, design: .rounded))
+        .font(.system(size: 22, weight: .semibold, design: .rounded))
         .monospacedDigit()
         .foregroundStyle(.white)
         .lineLimit(1)
+        .minimumScaleFactor(0.8)
         .minimumScaleFactor(0.6)
 
       // PI, then the transmitter site IF it fits — it's the first thing to go.

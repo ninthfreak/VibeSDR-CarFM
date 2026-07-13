@@ -25,6 +25,7 @@
 import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
 import { getColorLUT } from '../assets/colormapUtils';
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
+import { getPrimaryBandAt, bandHex } from '../constants/bandPlan';
 
 const Native = NativeModules.VibeWatchModule as
   | {
@@ -32,7 +33,9 @@ const Native = NativeModules.VibeWatchModule as
       sendRow(rowB64: string, freq: number, span: number, snr: number, level: number,
               lo: number, hi: number, meter: string): void;
       sendState(freq: number, mode: string, step: number, meter: string,
-                level: number, why: string, link: number, vol: number): void;
+                level: number, why: string, link: number,
+                band: string, bandCol: string): void;
+      sendVolume(vol: number, muted: boolean): void;
       sendFmdx(json: string): void;
       sendStations(json: string): void;
       sendDab(json: string): void;
@@ -724,14 +727,29 @@ class WatchProvider {
   }
 
   sendState(freq: number, mode: string, step: number) {
-    if (!this.isActive) return;
+    // SDR SCREEN ONLY — this is an INVARIANT, not a nicety.
+    //
+    // The watch routes on what it RECEIVES: a `state` message means "the SDR screen is
+    // up", so it sets `isFmdx = false` and shows the waterfall. That was safe while only
+    // SDRScreen ever called this. It stopped being safe the moment anything else could
+    // trigger a state send — and a volume echo (which fires on EVERY screen) did exactly
+    // that, throwing the wrist off FM-DX and onto the waterfall mid-turn.
+    //
+    // The guard belongs HERE, not at the call sites: there is no context in which a
+    // non-SDR screen wants to assert "the SDR screen is up".
+    if (!this.isActive || !this.owns('sdr')) return;
     this.lastStateAt = Date.now();
     // `link` = the PHONE↔SERVER hop. The watch can measure its OWN hop (rows stop
     // arriving) but is blind to the far one, which is why its warning pill could
     // only ever say "something is rough". Riding the existing 250ms state echo, so
     // this costs no extra WCSession traffic — the one budget that must not move.
+    // The BAND — name and colour — from the phone's own ITU band plan. The wrist must not
+    // hold a second opinion about what band it is on, any more than it holds a second
+    // opinion about the palette: the phone computes, the watch mirrors.
+    const b = getPrimaryBandAt(freq);
     Native!.sendState(freq, mode, step, this.meter, this.level, this.whyNoRows(),
-                      this.linkQuality, this.volume);
+                      this.linkQuality,
+                      b?.name ?? '', b ? bandHex(b) : '');
   }
 
   /** The iPhone's SYSTEM volume (0…1), straight from the KVO observer — so it carries
@@ -746,9 +764,33 @@ class WatchProvider {
     const clamped = Math.max(0, Math.min(1, v));
     if (clamped === this.volume) return;
     this.volume = clamped;
-    this.nudgeState();
+    this.flushVolume();
+  }
+
+  /** The watch toggled mute. Mirror it back so the wrist's own glyph is the truth
+   *  rather than an optimistic guess. */
+  setMuted(m: boolean) {
+    if (m === this.muted) return;
+    this.muted = m;
+    this.flushVolume();
+  }
+
+  /** Volume has its OWN message — it must NOT ride the `state` echo.
+   *
+   *  It did, and it broke FM-DX badly: the watch treats a `state` message as PROOF the
+   *  phone is on the SDR screen (it sets `isFmdx = false`). But system volume changes on
+   *  every screen, so a volume echo from the FM-DX screen made the watch throw away the
+   *  FM-DX view and jump to the waterfall — mid-turn, while the crown was moving.
+   *
+   *  Volume is a fact about the DEVICE, not about the session. It asserts nothing about
+   *  which screen is up, so it travels on its own and works on both. Transition-only, so
+   *  it can never become a stream. */
+  private flushVolume() {
+    if (!this.isActive) return;
+    Native!.sendVolume(this.volume, this.muted);
   }
   private volume = 1;
+  private muted = false;
 
   /**
    * The FREQUENCY echo — throttled, trailing-edge, exactly like

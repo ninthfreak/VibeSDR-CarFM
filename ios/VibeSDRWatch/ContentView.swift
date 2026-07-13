@@ -81,6 +81,9 @@ struct ContentView: View {
   @State private var shownSince: Date? = nil
   /// Opacity of the marked-link glyph, animated to read as a live problem.
   @State private var pulse = 1.0
+
+  /// First-run coach. Persisted, so it is shown ONCE — ever, not once per session.
+  @AppStorage("coachSeenSDR") private var coachSeen = false
   @State private var lastDetent = 0
   @FocusState private var crownFocused: Bool
 
@@ -184,6 +187,28 @@ struct ContentView: View {
 
       if link.everGotRow { waterfall } else { placeholder }
 
+      // The watch's own battery, tucked in beside the clock. A live waterfall costs the
+      // watch ~34% of a core, and this is the one screen you'd leave running on a hilltop
+      // — so the number you'd reach for is on the screen you're already looking at.
+      // pointer-events off: it must never eat a tap meant for the waterfall.
+      VStack {
+        HStack(spacing: 5) {
+          // The band name gets the left of the strip — it's the widest thing here and the
+          // only one that varies in length, so it takes the slack.
+          bandLabel
+            .padding(.leading, 6)       // off the corner curve
+          Spacer(minLength: 2)
+          BatteryPill(level: link.battery)
+            .padding(.trailing, 62)     // the clock owns the corner; sit to its left
+        }
+        // LINE IT UP WITH THE CLOCK. The clock is NOT flush to the bezel — watchOS sits it
+        // ~11pt down — so anything pinned to the top edge floats visibly above it and
+        // reads as a mistake. This lands the strip's centre on the clock's.
+        .padding(.top, 19)
+        Spacer()
+      }
+      .allowsHitTesting(false)
+
       // DEGRADE, DON'T BLOCK.
       //
       // A frozen picture with a black box over it is the worst of both worlds: you
@@ -227,6 +252,32 @@ struct ContentView: View {
       .padding(.bottom, 4)
 
       if crownMode != .tune { crownOverlay }
+
+      // THE COACH, once. Gated on everGotRow so it lands on a WORKING waterfall — a
+      // tutorial over a black boot screen teaches you the app is broken. It also sits
+      // ABOVE the crown overlay in the stack, so nothing can draw over it.
+      if link.everGotRow && !coachSeen {
+        CoachOverlay(
+          title: "VibeSDR",
+          items: [
+            .init(glyph: "digitalcrown.horizontal.arrow.clockwise",
+                  text: "Turn the Crown to tune"),
+            .init(glyph: "hand.tap",
+                  text: "Tap the frequency to type one"),
+            .init(glyph: "hand.point.up.left.fill",
+                  text: "Press and hold the waterfall for the menu"),
+            // Called out on its OWN line, deliberately. These are the two controls a
+            // listener reaches for first and the two they will never find by accident —
+            // "there's a menu" does not tell you that the DEMOD is in it.
+            .init(glyph: "slider.horizontal.3",
+                  text: "Demodulator and tuning step live in that menu"),
+          ],
+          onDismiss: {
+            WKInterfaceDevice.current().play(.click)
+            coachSeen = true
+          }
+        )
+      }
     }
     // PUSHED, not presented as a sheet. A watchOS sheet comes with a big header —
     // the X, the clock and a grab handle — which ate ~100pt off the top before the
@@ -954,8 +1005,39 @@ struct ContentView: View {
       }
     }
     .frame(height: 14)
+    // TINTED BY THE BAND. A dark scrim first — it has to stay legible over a bright
+    // waterfall, and that is what darkening is for — then a WHISPER of the band's colour
+    // on top. It is a cue, not a decoration: at this size a strong fill would fight the
+    // tick labels it exists to carry, so 0.22 is deliberately near the threshold of
+    // noticing. Ham reads warm, broadcast reads cool, and you learn it without being told.
     .background(.black.opacity(0.45))
+    .background((link.bandColor ?? .clear).opacity(0.22))
     .clipShape(RoundedRectangle(cornerRadius: 4))
+  }
+
+  /// THE BAND, in words, in the strip beside the clock.
+  ///
+  /// A frequency alone tells you nothing unless you already know the band plan by heart —
+  /// the phone says "20m Ham Band" under its waterfall, and the wrist had nowhere to say
+  /// it at all. watchOS reserves this band whether we use it or not and the clock only
+  /// occupies its right end, so this is the one piece of genuinely free space on a watch.
+  ///
+  /// Coloured by the band, so the label and the ticker underneath agree at a glance.
+  private var bandLabel: some View {
+    Group {
+      if !link.bandName.isEmpty {
+        Text(link.bandName)
+          .font(.system(size: 11, weight: .semibold, design: .rounded))
+          .foregroundStyle(link.bandColor.map { $0.opacity(0.95) } ?? .white.opacity(0.8))
+          .lineLimit(1)
+          .minimumScaleFactor(0.75)
+          .padding(.horizontal, 6)
+          .padding(.vertical, 2)
+          // The same scrim rule as every other piece of chrome: a red band label over a
+          // red-hot waterfall is not a label.
+          .background(.black.opacity(0.55), in: Capsule())
+      }
+    }
   }
 
   /// A 1/2/5 x 10^n step giving ~4 ticks across the span. Tick density therefore

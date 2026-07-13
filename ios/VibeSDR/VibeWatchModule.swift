@@ -195,6 +195,25 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// LOCKED — the text changes every frame, so it became a continuous ~4/sec stream
   /// on top of the rows, and WCSession queues rather than drops. The row is already
   /// going out every frame. 12 bytes, null-padded ("S9+40", "-72dB" — they're short).
+  /// VOLUME GETS ITS OWN MESSAGE, and it must.
+  ///
+  /// It first rode the `state` echo — and that echo carries an INVARIANT the watch
+  /// depends on: only the SDR screen sends `state`, so receiving one is proof we are no
+  /// longer on an FM-DX server (WatchLink `isFmdx = false`). Volume broke it. The system
+  /// volume changes on EVERY screen, so a volume echo from the FM-DX screen sent a
+  /// `state` message — and the watch obediently threw away the FM-DX view and jumped to
+  /// the waterfall, mid-turn, while the crown was being rolled.
+  ///
+  /// So this message asserts NOTHING about which screen the phone is on. It is a fact
+  /// about the device, not about the session. It is also transition-only (both callers
+  /// early-return when the value is unchanged), so it can never become a stream.
+  @objc(sendVolume:muted:)
+  func sendVolume(_ vol: NSNumber, muted: Bool) {
+    guard let s = session, linkAlive else { return }
+    s.sendMessage(["k": "vol", "vo": vol.doubleValue, "mu": muted],
+                  replyHandler: nil, errorHandler: nil)
+  }
+
   @objc(sendRow:freq:span:snr:level:lo:hi:meter:)
   func sendRow(_ rowB64: String, freq: NSNumber, span: NSNumber, snr: NSNumber,
                level: NSNumber, lo: NSNumber, hi: NSNumber, meter: String) {
@@ -313,15 +332,22 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// headset's own rocker). The wrist mirrors it rather than tracking a knob of its own,
   /// which is precisely what the first attempt got wrong: it drove an app-level gain, so
   /// with the phone at 50% the meter read FULL and delivered half.
-  @objc(sendState:mode:step:meter:level:why:link:vol:)
+  /// `band` / `bandCol` = the ITU band plan's name and colour for wherever the VFO is
+  /// sitting ("20m Ham Band", red). Computed on the PHONE from the same band plan the
+  /// waterfall draws, because the wrist must never hold a second opinion about what band
+  /// it is on — same rule as the meter string and the palette LUT.
+  ///
+  /// Volume is NOT here. It has its own message: it changes on every screen, and a `state`
+  /// message asserts that the SDR screen is up (see the isFmdx note in WatchLink).
+  @objc(sendState:mode:step:meter:level:why:link:band:bandCol:)
   func sendState(_ freq: NSNumber, mode: String, step: NSNumber,
                  meter: String, level: NSNumber, why: String, link: NSNumber,
-                 vol: NSNumber) {
+                 band: String, bandCol: String) {
     guard let s = session, linkAlive else { return }
     s.sendMessage(
       ["k": "state", "f": freq.doubleValue, "m": mode, "st": step.doubleValue,
        "mt": meter, "lv": level.doubleValue, "wy": why, "lk": link.intValue,
-       "vo": vol.doubleValue],
+       "bn": band, "bc": bandCol],
       replyHandler: nil,
       errorHandler: nil
     )

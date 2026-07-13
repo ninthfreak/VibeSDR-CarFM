@@ -6,6 +6,150 @@ import WatchKit
 /// The mode is EXPLICIT and PERSISTENT — not a HUD that times out. On a wrist you
 /// must never be unsure what the crown is about to do: an accidental turn should
 /// be recoverable by knowing, not by guessing.
+/// FIRST-RUN COACH. Shown ONCE per screen, then never again.
+///
+/// Everything this app does on a wrist is a GESTURE, and gestures are invisible. The
+/// crown tunes, a tap on the frequency opens the numpad, a long-press opens the control
+/// grid — none of which announce themselves, and a user who doesn't find them has an app
+/// that appears to do nothing but display. One quiet screen, once, fixes that; a coach
+/// that reappears is worse than none, which is why it is gated on a stored flag rather
+/// than on a session.
+///
+/// DELIBERATELY STATIC. No animation, nothing to wait for, nothing to dismiss by accident:
+/// you read three lines and tap Got it. On a wrist, an interactive tutorial is a punishment.
+struct CoachOverlay: View {
+  struct Item: Identifiable {
+    let id = UUID()
+    let glyph: String
+    let text: String
+  }
+
+  let title: String
+  let items: [Item]
+  /// A single line of warning, if this screen has a way to bite you. FM-DX does.
+  var caution: String? = nil
+  let onDismiss: () -> Void
+
+  var body: some View {
+    ZStack {
+      // Opaque, not a scrim: it must be READ, not glanced past, and a waterfall scrolling
+      // underneath is exactly the sort of thing that makes text unreadable on a wrist.
+      Color.black.opacity(0.94).ignoresSafeArea()
+
+      ScrollView {
+        VStack(spacing: 10) {
+          Text(title)
+            .font(.system(size: 15, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .padding(.top, 26)          // clear of the clock
+
+          VStack(alignment: .leading, spacing: 9) {
+            ForEach(items) { it in
+              HStack(alignment: .center, spacing: 9) {
+                Image(systemName: it.glyph)
+                  .font(.system(size: 15, weight: .semibold))
+                  .foregroundStyle(.green)
+                  .frame(width: 22)     // a column, so the text edges line up
+                Text(it.text)
+                  .font(.system(size: 12, weight: .medium, design: .rounded))
+                  .foregroundStyle(.white.opacity(0.92))
+                  .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+              }
+            }
+          }
+
+          if let caution {
+            HStack(alignment: .top, spacing: 7) {
+              Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.orange)
+              Text(caution)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, 2)
+          }
+
+          Button(action: onDismiss) {
+            Text("Got it")
+              .font(.system(size: 13, weight: .semibold, design: .rounded))
+              .frame(maxWidth: .infinity)
+              .padding(.vertical, 7)
+              .background(.green.opacity(0.25), in: Capsule())
+              .foregroundStyle(.white)
+          }
+          .buttonStyle(.plain)
+          .padding(.top, 4)
+          .padding(.bottom, 12)
+        }
+        .padding(.horizontal, 12)
+      }
+    }
+  }
+}
+
+/// THE WATCH'S OWN BATTERY, next to the clock — where a watch user already looks for it.
+///
+/// A live waterfall costs ~34% of a core (measured on-device), and this is an app you
+/// might genuinely leave running on a hilltop with no charger. The system reading is two
+/// swipes away; the thing you're watching it FOR is on this screen.
+///
+/// The number goes INSIDE the icon, like the iPhone's. On a wrist that is not a
+/// stylistic choice — a separate "82%" label would cost width the clock's band does not
+/// have, and an icon with no number only tells you what you could already guess from a
+/// glance at the fill.
+struct BatteryPill: View {
+  /// 0…1, or negative when watchOS can't tell us (simulator, monitoring off).
+  let level: Double
+
+  /// Red at 20% — a wrist has no charger in reach and no time to negotiate.
+  private var tint: Color { level <= 0.20 ? .red : .white.opacity(0.85) }
+
+  var body: some View {
+    if level < 0 {
+      EmptyView()
+    } else {
+      let pct = Int((level * 100).rounded())
+      HStack(spacing: 1) {
+        ZStack {
+          RoundedRectangle(cornerRadius: 2.5)
+            .stroke(tint, lineWidth: 1)
+          // Fill from the left, like every battery glyph ever drawn.
+          GeometryReader { g in
+            RoundedRectangle(cornerRadius: 1.5)
+              .fill(tint.opacity(0.32))
+              .frame(width: max(0, (g.size.width - 2) * level))
+              .padding(1)
+          }
+          Text("\(pct)")
+            .font(.system(size: 8, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(tint)
+            .minimumScaleFactor(0.7)
+            .lineLimit(1)
+        }
+        .frame(width: 26, height: 13)
+        // The nub. Without it a rounded rectangle with a number in it is just a badge.
+        RoundedRectangle(cornerRadius: 0.5)
+          .fill(tint)
+          .frame(width: 1.5, height: 4)
+      }
+      // A SCRIM, because this floats over the WATERFALL. White strokes and white digits
+      // over a bright amber-and-red spectrum are simply not there. Legibility on this app
+      // comes from darkening, never from frosting — frosting blurs but does not darken,
+      // so the glyph would still be yellow-on-yellow. (Same rule as every other piece of
+      // chrome on both watch screens.)
+      .padding(.horizontal, 4)
+      .padding(.vertical, 2)
+      .background(.black.opacity(0.55), in: Capsule())
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Watch battery \(pct) percent")
+    }
+  }
+}
+
 enum CrownMode: Equatable {
   case tune, zoom, brightness, contrast, volume
 

@@ -84,6 +84,25 @@ export const BAND_PLAN: Band[] = [
   { lo: 1240000000, hi: 1300000000, name: '23cm Ham Band',            type: 'ham',  bandLabel: '23cm', mode: 'nfm', step: 25000 },
 ];
 
+/** Band type → colour, as HEX and in ONE place.
+ *
+ *  The waterfall's band plan already had these (as rgba strings, local to
+ *  WaterfallView), and the watch needs the same colours — so they move here rather than
+ *  being typed out a second time. Two lists of brand colours is one list of brand colours
+ *  and one bug waiting to be noticed. WaterfallView now derives its rgba from these. */
+export const BAND_HEX: Record<string, string> = {
+  ham:       '#CF0000',
+  broadcast: '#0900FF',
+  utility:   '#07BD00',
+  cb:        '#FF7700',
+};
+
+/** 11m CB is typed 'utility' in the plan above but has always been coloured orange. */
+export function bandHex(b: Band): string {
+  if (b.name.includes('CB')) return BAND_HEX.cb;
+  return BAND_HEX[b.type] ?? BAND_HEX.utility;
+}
+
 export function getBandsAt(hz: number): Band[] {
   return BAND_PLAN.filter(b => hz >= b.lo && hz <= b.hi);
 }

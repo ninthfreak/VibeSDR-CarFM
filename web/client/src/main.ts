@@ -12,6 +12,13 @@ import { Waterfall } from './waterfall';
 import { resolveAuth, withAuth, type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
+
+/** The fastest an RTL-SDR can actually sustain over USB. Above this the dongle DROPS
+ *  SAMPLES — audio glitches, gaps in the waterfall — and it does so silently, which is
+ *  what makes it a trap rather than a trade-off. Higher rates stay on offer (some dongles
+ *  and some hosts cope, and the extra span is real), but they are never the default and
+ *  never unlabelled. */
+const RTL_SAFE_RATE = 2_400_000;
 import {
   BAND_PLAN, getBandsAtRegion, bandTuneDefaults, type Band,
 } from '../../../src/constants/bandPlan';
@@ -2533,22 +2540,43 @@ function populateHw() {
   if (hwRates.length && !pinned) {
     const r = $<HTMLSelectElement>('rate');
     r.innerHTML = '';
-    for (const rate of hwRates) {
+    // ASCENDING. The server advertises 3.2 first, and an unsorted list made the highest
+    // rate the one the <select> showed by default — see the default below for why that
+    // was not merely untidy.
+    for (const rate of [...hwRates].sort((a, b) => a - b)) {
       const o = document.createElement('option');
       o.value = String(rate);
-      o.textContent = `${(rate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s`;
+      const mhz = `${(rate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s`;
+      // An RTL-SDR cannot sustain more than 2.4 MS/s over USB — above it the dongle
+      // drops samples, which shows up as glitches in the audio and gaps in the
+      // waterfall. It is offered because some dongles cope and some users want the
+      // span, but it must never be chosen FOR them, and never without saying so.
+      o.textContent = rate > RTL_SAFE_RATE ? `${mhz} (may drop samples)` : mhz;
       r.appendChild(o);
     }
     r.onchange = () => {
       spec!.setHwSampleRate(Number(r.value));
       savePref('sampleRate', Number(r.value));
     };
+
+    // THE DEFAULT, and it MUST be sent, not merely displayed.
+    //
+    // Before: with no saved preference nothing was selected and nothing was sent — so the
+    // dropdown sat on whatever happened to be first (3.2 MS/s) while the server was
+    // actually running at 2.4. The UI was not just defaulting badly, it was LYING about
+    // the rate the radio was at. Now the client picks a safe rate, tells the server, and
+    // what you read is what you get.
     const saved = prefs().sampleRate;
-    // Only restore a rate this dongle actually offers (hwinfo is authoritative).
-    if (typeof saved === 'number' && hwRates.includes(saved)) {
-      r.value = String(saved);
-      spec!.setHwSampleRate(saved);
-    }
+    const wanted = (typeof saved === 'number' && hwRates.includes(saved))
+      ? saved
+      : (hwRates.includes(RTL_SAFE_RATE)
+          ? RTL_SAFE_RATE
+          // No 2.4 on offer: take the fastest rate that is still safe, and if even the
+          // slowest is over the line, take the slowest of a bad lot.
+          : ([...hwRates].sort((a, b) => a - b).filter(x => x <= RTL_SAFE_RATE).pop()
+             ?? Math.min(...hwRates)));
+    r.value = String(wanted);
+    spec!.setHwSampleRate(wanted);
   }
 }
 

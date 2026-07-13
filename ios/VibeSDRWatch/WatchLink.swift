@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import WatchConnectivity
+import WatchKit
 
 /// The watch end of the phone<->watch pipe.
 ///
@@ -34,6 +35,20 @@ enum WK {
   static let why     = "wy"  // String — WHY there are no rows: live|paused|idle|reconnecting
   static let link    = "lk"  // Int 0…3 — the PHONE↔SERVER hop's quality (see serverLink)
   static let vol     = "vo"  // Double 0…1 — the iPhone's SYSTEM volume (see volume)
+  static let muted   = "mu"  // Bool — phone muted. NOT volume-zero; the level is preserved.
+  static let band    = "bn"  // String — ITU band plan name ("20m Ham Band"), "" = none
+  static let bandCol = "bc"  // String "#rrggbb" — that band's colour, from the phone's plan
+}
+
+/// "#rrggbb" → Color. Returns nil for an empty or malformed string, so a band we have no
+/// colour for simply doesn't tint anything rather than tinting it black.
+func hexColor(_ s: String) -> Color? {
+  var h = s.trimmingCharacters(in: .whitespaces)
+  if h.hasPrefix("#") { h.removeFirst() }
+  guard h.count == 6, let v = UInt32(h, radix: 16) else { return nil }
+  return Color(red:   Double((v >> 16) & 0xFF) / 255,
+               green: Double((v >>  8) & 0xFF) / 255,
+               blue:  Double( v        & 0xFF) / 255)
 }
 
 final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
@@ -107,6 +122,43 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// Muted is NOT volume-zero — that would lose the level you were listening at, so
   /// unmuting could not restore it. It gates playback and leaves the volume alone.
   @Published var muted = false
+
+  /// THE WATCH'S OWN BATTERY, 0…1 (−1 = unknown).
+  ///
+  /// A live waterfall on a wrist costs ~34% of a core (measured), and this is the one app
+  /// on the watch that a user might genuinely leave running on a hilltop with no charger.
+  /// The system battery reading is two swipes away; the thing you are watching it for is
+  /// right here. So it sits next to the clock, where a watch user already looks for it.
+  ///
+  /// Polled on a slow timer, NOT per frame — the reading changes on the order of minutes
+  /// and this app has learned the hard way what per-frame work costs.
+  @Published var battery: Double = -1
+
+  /// WHERE YOU ARE, in words. "20m Ham Band", "MW Broadcast Band" — from the phone's own
+  /// ITU-derived band plan, computed there and mirrored here.
+  ///
+  /// A frequency alone tells you nothing unless you already know the band plan by heart.
+  /// The phone puts the band under the waterfall; the wrist had nowhere to say it — so it
+  /// goes in the one piece of dead space a watch app has, the strip beside the clock.
+  @Published var bandName = ""
+  /// That band's colour, from the SAME table the phone's band plan draws with — red for
+  /// ham, blue for broadcast, green for utility, orange for CB.
+  @Published var bandColor: Color? = nil
+
+  private var batteryTimer: Timer?
+
+  private func startBatteryMonitor() {
+    let dev = WKInterfaceDevice.current()
+    dev.isBatteryMonitoringEnabled = true
+    let read = { [weak self] in
+      let lvl = Double(WKInterfaceDevice.current().batteryLevel)   // −1 when unavailable
+      DispatchQueue.main.async { self?.battery = lvl }
+    }
+    read()
+    let t = Timer(timeInterval: 60, repeats: true) { _ in read() }
+    RunLoop.main.add(t, forMode: .common)
+    batteryTimer = t
+  }
 
   // ── FM-DX ──────────────────────────────────────────────────────────────────
   //
@@ -254,6 +306,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   }
 
   func activate() {
+    startBatteryMonitor()
     guard WCSession.isSupported() else { return }
     let s = WCSession.default
     s.delegate = self
@@ -634,21 +687,34 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
         if md != "dab"  { dab = nil }
         // Only the SDR screen sends `state` at all — FM-DX sends its own blob — so
         // receiving one is itself proof we are no longer on an FM-DX server.
+        //
+        // THIS IS AN INVARIANT AND IT IS LOAD-BEARING. Volume briefly rode the `state`
+        // echo, and because system volume changes on every screen, an FM-DX volume echo
+        // sent a `state` message — which landed here and threw the wrist off FM-DX and
+        // onto the waterfall, mid-turn, while the crown was being rolled. Volume now has
+        // its own message (case "vol" below), which asserts nothing about the screen.
+        // Anything that is true on BOTH screens must never travel on this one.
         isFmdx = false
       }
       if let st = m[WK.step] as? Double { step = st }
       if let mt = m[WK.meter] as? String { meter = mt }
       if let w = m[WK.why] as? String { why = w }
       if let lk = m[WK.link] as? Int { serverLink = lk }
-      // The phone's SNAPPED truth (iOS quantises volume to 1/16). Adopted only when the
-      // crown is still: mid-spin, a throttled echo carries a level we have already
-      // turned past, and taking it would yank the meter backwards — the identical trap
-      // the frequency readout hit, and the identical fix.
+      if let bn = m[WK.band] as? String { bandName = bn }
+      if let bc = m[WK.bandCol] as? String { bandColor = hexColor(bc) }
+      // NO VOLUME HERE — it has its own message (case "vol"). See the isFmdx note above.
+      lastStateAt = Date()
+      if let lv = m[WK.level] as? Double { level = lv }
+
+    // The iPhone's SYSTEM volume. Its OWN message, deliberately: it is a fact about the
+    // DEVICE, true on every screen, so it must not travel on `state` (which asserts that
+    // the SDR screen is up — see the isFmdx note above). Note this case touches NOTHING
+    // but volume and mute: it must never route, never clear, never claim a screen.
+    case "vol":
       if !volAdjusting, let vo = m[WK.vol] as? Double {
         volume = min(1, max(0, vo))
       }
-      lastStateAt = Date()
-      if let lv = m[WK.level] as? Double { level = lv }
+      if let mu = m[WK.muted] as? Bool { muted = mu }
 
     case "fmdx":
       if let j = m[WK.json] as? String,

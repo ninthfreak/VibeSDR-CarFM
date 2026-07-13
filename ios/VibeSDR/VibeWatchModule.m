@@ -29,6 +29,8 @@ RCT_EXTERN_METHOD(sendFavourites : (NSString *)json)
 
 RCT_EXTERN_METHOD(sendPhone : (NSString *)status)
 
+RCT_EXTERN_METHOD(sendVolume : (nonnull NSNumber *)vol muted : (BOOL)muted)
+
 RCT_EXTERN_METHOD(sendAircraft : (NSString *)json)
 
 RCT_EXTERN_METHOD(sendState
@@ -38,8 +40,9 @@ RCT_EXTERN_METHOD(sendState
                   : (NSString *)meter level
                   : (nonnull NSNumber *)level why
                   : (NSString *)why link
-                  : (nonnull NSNumber *)link vol
-                  : (nonnull NSNumber *)vol)
+                  : (nonnull NSNumber *)link band
+                  : (NSString *)band bandCol
+                  : (NSString *)bandCol)
 
 RCT_EXTERN_METHOD(sendSettings
                   : (NSString *)lutB64 smoothing

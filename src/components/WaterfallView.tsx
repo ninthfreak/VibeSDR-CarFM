@@ -73,7 +73,7 @@ import { getColorLUT } from '../assets/colormapUtils';
 import type { SDRStatus } from '../services/UberSDRClient';
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
 import { watchProvider } from '../services/watchProvider';
-import { BAND_PLAN, type Band } from '../constants/bandPlan';
+import { BAND_PLAN, BAND_HEX, type Band } from '../constants/bandPlan';
 
 // ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
 
@@ -83,11 +83,14 @@ const ROWS     = 256;  // waterfall history depth
 
 // Band type → colour. Indices match v1.5 BAND_COLS: ham=red, broadcast=blue,
 // utility=green, cb=orange. (Screenshot reference: 40m Ham red, 41m B/C blue.)
+// Derived from BAND_HEX (bandPlan.ts) so the phone's band plan and the WATCH's band
+// label can never drift apart. Same values as before: ham #CF0000, broadcast #0900FF,
+// utility #07BD00, cb #FF7700, all at 0.92.
 const BAND_COLS: Record<string, string> = {
-  ham:       'rgba(207,0,0,0.92)',
-  broadcast: 'rgba(9,0,255,0.92)',
-  utility:   'rgba(7,189,0,0.92)',
-  cb:        'rgba(255,119,0,0.92)',
+  ham:       hexRgba(BAND_HEX.ham, 0.92),
+  broadcast: hexRgba(BAND_HEX.broadcast, 0.92),
+  utility:   hexRgba(BAND_HEX.utility, 0.92),
+  cb:        hexRgba(BAND_HEX.cb, 0.92),
 };
 
 // ── Helpers (ported verbatim from v1.5) ──────────────────────────────────────

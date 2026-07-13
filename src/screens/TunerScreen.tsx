@@ -467,6 +467,7 @@ export default function TunerScreen({ route, navigation }: Props) {
       onMute: (muted: boolean) => {
         (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })
           ?.setMuted?.(muted);
+        watchProvider.setMuted(muted);
       },
       onReachableChange: () => {},
       onHello: () => {
