@@ -108,6 +108,36 @@ final class WatchAudio {
     }
   }
 
+  /// WHY DID THE AUDIO STOP? Two completely different answers look identical on the wrist:
+  /// watchOS SUSPENDED the app (background audio was never really granted), or the app stayed
+  /// alive and the SESSION was torn down (an interruption, or a route change). The log's
+  /// `gap=` column separates them — a big gap means we were suspended — and these events say
+  /// which flavour of the second case it was. Guessing between them has cost enough.
+  private func watchSession() {
+    let s = AVAudioSession.sharedInstance()
+    NotificationCenter.default.addObserver(
+      forName: AVAudioSession.interruptionNotification, object: s, queue: nil
+    ) { n in
+      let t = (n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(
+        AVAudioSession.InterruptionType.init(rawValue:))
+      Vitals.crumb("AUDIO interruption: \(t == .began ? "BEGAN" : "ended")")
+      if t == .ended {
+        // Come back. An interruption that ends and is never resumed is silence forever.
+        try? s.setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
+        s.activate(options: []) { ok, err in
+          Vitals.crumb("AUDIO reactivate after interruption: ok=\(ok) err=\(err?.localizedDescription ?? "-")")
+        }
+      }
+    }
+    NotificationCenter.default.addObserver(
+      forName: AVAudioSession.routeChangeNotification, object: s, queue: nil
+    ) { n in
+      let r = (n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 0
+      let out = s.currentRoute.outputs.first?.portType.rawValue ?? "NONE"
+      Vitals.crumb("AUDIO route change (reason \(r)) → \(out)")
+    }
+  }
+
   private func startEngine() throws {
     guard !started else { return }
     engine.attach(player)
@@ -120,6 +150,8 @@ final class WatchAudio {
     try engine.start()
     player.play()
     started = true
+    watchSession()
+    Vitals.crumb("AUDIO engine started · out=\(out)")
 
     // WHEN THE ENGINE RECONFIGURES, THE GRAPH IS ALREADY TORN DOWN. AVAudioEngine posts this
     // on a route change (speaker → Bluetooth, headphones pulled) and every cached format,

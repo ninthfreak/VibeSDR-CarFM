@@ -325,8 +325,35 @@ final class UberClient: ObservableObject {
   /// it thinks is alive. Best effort: watchOS may suspend us before this ever runs, which
   /// is precisely why the session uuid above is stable and not fresh each launch.
   func suspend() {
+    // DROP THE SPECTRUM. KEEP THE AUDIO. This is the whole point of background audio, and we
+    // were defeating it ourselves: suspend() used to cancel BOTH sockets, so the moment the
+    // wrist dropped the app shut the audio off — and then we went looking for the watchOS
+    // setting that would keep it alive. No entitlement can save audio the app itself kills.
+    //
+    // The asymmetry is the same one the phone already lives by: nobody is looking at the
+    // waterfall with the screen off, so the spectrum socket is pure cost and goes. The audio
+    // is the reason the app is still running at all, so it stays — that is what
+    // WKBackgroundModes=[audio] and .longFormAudio are FOR.
+    specSock.cancel()
+    specOpened = false
+    status = "background · audio only"
+  }
+
+  /// The app is really going away (not just wrist-down) — let the server go too, rather than
+  /// leaving it holding a socket it believes is alive.
+  func teardown() {
     specSock.cancel()
     audioSock.cancel()
+    audio.stop()
+  }
+
+  /// Wrist back up: the audio never stopped, so only the waterfall needs bringing home.
+  func resumeSpectrum() {
+    guard status.hasPrefix("background") else { return }
+    status = "live"
+    specRetries = 0
+    specOpened = true
+    openSpectrum()
   }
 
   func reconnectIfNeeded() {

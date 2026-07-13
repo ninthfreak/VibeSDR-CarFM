@@ -185,11 +185,15 @@ struct ContentView: View {
     // was off and the WebSockets died with it; without this the waterfall never comes back.
     .onChange(of: scenePhase) { _, phase in
       switch phase {
-      case .active:     client.reconnectIfNeeded()
-      // Say goodbye BEFORE we're killed, so the server isn't left holding a socket it
-      // thinks is alive. Best effort — watchOS may not give us the chance, which is
-      // exactly why the session id is now stable across launches.
-      case .background: client.suspend()
+      case .active:
+        Vitals.crumb("SCENE → active")
+        client.resumeSpectrum()
+        client.reconnectIfNeeded()
+      // Wrist down. Drop the WATERFALL only — the audio keeps playing, which is the entire
+      // reason this app declares WKBackgroundModes=[audio] and a .longFormAudio session.
+      case .background:
+        Vitals.crumb("SCENE → background (wrist down)")
+        client.suspend()
       default: break
       }
     }

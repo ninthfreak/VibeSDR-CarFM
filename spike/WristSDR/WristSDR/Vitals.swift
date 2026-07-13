@@ -56,7 +56,7 @@ final class Vitals: ObservableObject {
   /// BREADCRUMBS. A Release build on a watch gives you no console and no crash log you can
   /// reach — so the app writes down where it got to, and the LAST LINE BEFORE IT DIED is
   /// the answer. Cheap, ugly, and it works when nothing else does.
-  static func crumb(_ s: String) {
+  nonisolated static func crumb(_ s: String) {
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     let u = docs.appendingPathComponent("jr-vitals.log")
     let line = "\(ISO8601DateFormatter().string(from: Date())) · \(s)\n"
