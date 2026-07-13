@@ -38,9 +38,24 @@ node --version
 npm --version
 
 # JS dependencies.
+#
+# THE FALLBACK MUST START FROM A CLEAN TREE. It was `npm ci || npm install`, and that is a
+# trap: npm ci runs `postinstall` (patch-package) as its LAST step, so a ci that dies late
+# leaves node_modules ALREADY PATCHED. The `npm install` fallback then runs patch-package a
+# second time over a patched tree — and our expo-modules-jsi patch CREATES a file, so
+# re-applying it fails ("Failed to apply patch"), which fails the postinstall, which fails
+# the whole script under `set -e`. The fallback could never have succeeded.
+#
+# So the retry deletes node_modules first. It is also worth SAYING that ci failed and why,
+# because the fallback used to hide it — the build only ever reported the second, confusing
+# error, never the first, real one.
 cd "$CI_PRIMARY_REPOSITORY_PATH"
 echo "--- installing JS dependencies (npm ci) ---"
-npm ci || npm install
+if ! npm ci; then
+  echo "--- npm ci FAILED (see above). Retrying from a clean node_modules… ---"
+  rm -rf node_modules
+  npm install
+fi
 
 # CocoaPods. RN 0.86 fetches a prebuilt "reactnative-dependencies" tarball from
 # Maven Central during pod install, which can transiently reset the connection.
