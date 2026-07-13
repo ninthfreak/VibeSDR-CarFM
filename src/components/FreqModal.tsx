@@ -6,6 +6,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MAX_FREQ_HZ, MIN_FREQ_HZ } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
+import ProfilePicker from './ProfilePicker';
 
 type Unit = 'hz' | 'khz' | 'mhz';
 
@@ -26,6 +27,17 @@ interface FreqModalProps {
   /** Share the current station (moved here from the controls bar). Hidden when
    *  sharing isn't available (undefined). */
   onShare?:  () => void;
+
+  /** OWRX profiles — MOVED HERE FROM THE MAIN MENU. On OWRX a profile IS a frequency
+   *  choice (it's how you pick the band you want to be in), so it belongs with the
+   *  frequency rather than in settings. Hidden entirely when the backend reports no
+   *  profiles. Etiquette warning + live user count come along with it: a profile
+   *  switch changes the band for EVERYONE on that SDR. */
+  profiles?:        { id: string; name: string }[];
+  activeProfileId?: string;
+  sdrUsage?:        Record<string, { name: string; inUse: boolean; activeProfileId?: string }>;
+  clientCount?:     number;
+  onSelectProfile?: (id: string) => void;
 }
 
 function toDisplay(hz: number, unit: Unit): string {
@@ -47,6 +59,7 @@ export default function FreqModal({
   unit: unitProp, onUnit,
   minHz = MIN_FREQ_HZ, maxHz = MAX_FREQ_HZ, lockUnit = false,
   onShare,
+  profiles = [], activeProfileId, sdrUsage, clientCount, onSelectProfile,
 }: FreqModalProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
@@ -161,6 +174,19 @@ export default function FreqModal({
               </TouchableOpacity>
             ))}
           </View>
+          {profiles.length > 0 && (
+            <View style={st.profiles}>
+              <ProfilePicker
+                profiles={profiles}
+                activeProfileId={activeProfileId}
+                sdrUsage={sdrUsage}
+                clientCount={clientCount}
+                onSelectProfile={onSelectProfile}
+                onPicked={onClose}
+              />
+            </View>
+          )}
+
           <View style={st.actions}>
             <TouchableOpacity
               style={[st.cancelBtn, { borderColor: bdrDim, paddingVertical: btnPadY }]}
@@ -212,6 +238,7 @@ const st = StyleSheet.create({
   unitBtn:      { flex: 1, borderWidth: 1, borderRadius: 3, alignItems: 'center', backgroundColor: 'transparent' },
   unitBtnText:  { fontSize: 11 },
   actions:      { flexDirection: 'row', gap: 10 },
+  profiles:     { marginBottom: 12 },
   cancelBtn:    { flex: 1, borderWidth: 1, borderRadius: 3, alignItems: 'center' },
   tuneBtn:      { flex: 2, backgroundColor: 'rgba(20,10,0,0.80)', borderWidth: 1, borderRadius: 3, alignItems: 'center' },
 });

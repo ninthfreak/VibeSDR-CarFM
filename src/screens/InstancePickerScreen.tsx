@@ -80,7 +80,9 @@ import {
 } from '../services/defaultInstance';
 import { isDeepLinkActive, whenInitialLinkChecked } from '../linking/deepLinkState';
 import { parseSdrUrl } from '../linking/SdrLinkHandler';
+import { watchTargetPending } from '../services/watchBoot';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
+         repairVibeserverFavourites,
          TcpFav, getTcpFavs, saveTcpFavs } from '../services/favourites';
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
 import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
@@ -234,7 +236,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // picker could win, auto-connect to the default, and the link would arrive
       // too late (it opened the default instance instead of the scanned one).
       await whenInitialLinkChecked();
-      if (!cancelled && dEarly && !isDeepLinkActive()) {
+      // The WATCH is driving this boot — it has already chosen (or is choosing) a
+    // server, so auto-connecting to the default would drag the user straight back to
+    // it. Stand down. (`noAutoConnect` is the durable form: we sit BENEATH the
+    // watch's target so BACK works, but we must not take over.)
+    if (watchTargetPending.claimed || route.params?.noAutoConnect) return;
+    if (!cancelled && dEarly && !isDeepLinkActive()) {
         navigation.navigate('SDR', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: null });
       }
     }
@@ -250,7 +257,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // set/clear both, and returning here doesn't remount (stale star / missing
     // favourite otherwise).
     getDefaultInstance().then(d => setDefaultInst(d)).catch(() => {});
-    getFavourites().then(f => setFavourites(f)).catch(() => {});
+    // Undo the v8.0.0 mis-detection BEFORE reading them, or we'd show (and
+    // connect with) the corrupted 'vibeserver' type for one more session.
+    repairVibeserverFavourites()
+      .then(getFavourites)
+      .then(f => setFavourites(f))
+      .catch(() => {});
     getTcpFavs().then(f => setTcpFavs(f)).catch(() => {});
     // Skip the initial focus (loadAndInit owns the launch-time USB check — running
     // it here too would race the read-and-clear flag). On LATER focuses (returning

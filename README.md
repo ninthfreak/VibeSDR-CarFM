@@ -239,6 +239,42 @@ The official App Store / Google Play / TestFlight builds are covered by an addit
 
 UberSDR, OpenWebRX/OpenWebRX+, KiwiSDR and FM-DX Webserver are the property of their respective creators and subject to their own licence terms.
 
+## Why no WebSDR support?
+
+Intentional. WebSDR (websdr.org) is closed-source software, and its author has not
+sanctioned third-party clients. VibeSDR only implements platforms that welcome
+independent clients — every backend it speaks to is either open source or supported
+with its creator's blessing (see Credits). Out of respect for that principle,
+WebSDR support will not be added.
+
+## Why doesn't VibeSDR natively decode DAB+, DRM, HD Radio, DMR and similar digital modes?
+
+Patents and codec licensing — not technical difficulty. The VibeDSP engine could
+implement these demodulators, but the audio codecs behind them are legally encumbered
+for distribution in a shipped app:
+
+- **HD Radio** — Xperi's patent portfolio and trademark licensing programme.
+- **DAB+ / DRM** — HE-AAC / xHE-AAC codec licensing.
+- **DMR, D-STAR, System Fusion, NXDN** — the AMBE/IMBE vocoders (DVSI patents).
+
+Shipping unlicensed implementations of these in App Store / Play Store builds is a
+risk VibeSDR will not take. Genuinely open digital voice modes (Codec2-based FreeDV
+and M17) are unencumbered and remain candidates for native support.
+
+**The supported route:** many OpenWebRX / OpenWebRX+ servers decode digital modes
+**server-side**. When you select such a mode on one of those servers, VibeSDR simply
+plays the already-decoded PCM audio stream the server sends — no demodulator or codec
+ships in, or runs inside, the app. That is why DAB+ "works" in VibeSDR on some servers
+(see the screenshots) despite none of these decoders existing in the app itself.
+
+## Why do the skip buttons vanish on FM-DX?
+
+An FM-DX Webserver is **one physical tuner shared by every connected listener** — tuning
+it retunes it for everyone at once. Lock-screen and in-car skip buttons would let you
+change the station for people you can't see, so they're disabled out of courtesy while
+connected to FM-DX. On the Apple Watch, the Crown is likewise disarmed until you
+deliberately arm it. One tuner, many listeners.
+
 ## Privacy
 
 VibeSDR collects no personal data and has no analytics, ads, or tracking. Location is optional (used only to sort instances by distance). See [`PRIVACY.md`](PRIVACY.md).

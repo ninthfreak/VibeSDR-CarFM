@@ -47,7 +47,26 @@ import { localSessionGen } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
          getLearnedBookmarksNow } from '../services/vibeServer';
 import { setReceiverIso } from '../services/rdsCountry';
-import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme } from '../services/SDRBackend';
+import { watchProvider } from '../services/watchProvider';
+
+/** FFT rate divisor while the phone is backgrounded but the watch is watching.
+ *
+ *  ONE — i.e. don't throttle at all.
+ *
+ *  Half rate looked like free battery: the watch only draws ~10fps, so why send
+ *  20? Because a 10fps SOURCE cannot reliably yield 10fps of ROWS. Every frame
+ *  then has to survive the send gate, the JS thread's background scheduling and
+ *  WCSession's own jitter — and iOS throttles a backgrounded JS thread, so frames
+ *  slip. Miss one and the next row is 200ms late. The result was a ragged feed
+ *  full of holes, which the jitter buffer and the trace's EMA smoothed over: on
+ *  the wrist it read as the averaging being cranked right up the moment the phone
+ *  locked.
+ *
+ *  A 20fps source gives the gate a frame to choose from whenever it opens, so the
+ *  watch gets a STEADY 10fps locked or awake. Headroom is what buys steadiness
+ *  here; the frames we drop cost nothing, and the ones we keep are on time. */
+const WATCH_BG_DIVISOR = 1;
+import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme, type Aircraft } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind,
@@ -62,7 +81,7 @@ import { getFavourites, toggleFavourite }              from '../services/favouri
 import { useTheme }                                     from '../contexts/ThemeContext';
 
 import WaterfallView   from '../components/WaterfallView';
-import ControlsBar, { createMeterBus } from '../components/ControlsBar';
+import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
@@ -85,6 +104,8 @@ import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import { resolveStationLogo } from '../services/stationLogoCache';
+import { tidyStationName } from '../services/stationLogo';
+import { isWholeProfileMode } from '../services/dataModes';
 import { isoToFlag, validIso } from '../services/rdsCountry';
 import CenterVfoButton from '../components/CenterVfoButton';
 import PasswordModal from '../components/PasswordModal';
@@ -661,7 +682,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [connLost,   setConnLost]   = useState(false);   // UberSDR link down — auto-reconnecting
   const [connTimedOut, setConnTimedOut] = useState(false); // initial connect never completed
   const connLostTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const appActiveRef  = useRef(true);   // false while backgrounded — gates connLost
+  // Initialised from AppState.currentState — a cold launch INTO THE BACKGROUND (the
+  // watch waking the phone) fires no `change` event, so assuming foreground here made
+  // the app behave as though someone were looking at it.
+  const appActiveRef  = useRef(AppState.currentState === 'active');
   // Returning from the background: the spectrum was deliberately paused, so the
   // link reads 0 for a moment while the waterfall re-subscribes. Show a calm
   // "reinitialising" notice instead of the alarming "connection lost" one, and
@@ -686,6 +710,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   // for the VTS resolver (reads in a debounced callback, avoids stale closures).
   const [dabProgrammes, setDabProgrammes] = useState<DabProgramme[]>([]);  // OWRX DAB ensemble
   const [activeDabId, setActiveDabId] = useState<number>(0);
+  const [dabEnsemble, setDabEnsemble] = useState('');
+  /** OWRX ADS-B: the live aircraft table. Structured — it used to be flattened to
+   *  text on arrival, which is why nothing but the decoder panel could use it. */
+  const [aircraft, setAircraft] = useState<Aircraft[]>([]);
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
   const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; badge?: string; countryIso?: string; pi?: string }>({});
@@ -746,6 +774,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [isMuted, setIsMuted] = useState(false);
   const isMutedRef = useRef(false);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  /** The iPhone's real SYSTEM volume (0…1), kept current by the VibeVolume KVO event.
+   *  The watch sends DELTAS against it — it never sends an absolute, because the phone
+   *  owns the value and the wrist is only allowed to nudge it. */
+  const sysVolRef = useRef(1);
   // True when the data saver has dropped the SDR stream after a muted spell.
   const [dataSaverOff, setDataSaverOff] = useState(false);
   const dataSaverOffRef = useRef(false);
@@ -1340,6 +1372,29 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Handler refs — the decoder-client effect below builds its callbacks once
   // per connect, but tune/mode/filter handlers are declared later in the file
+  /** Did WE close the spectrum WS on background? False when the watch kept it
+   *  alive, so the foreground path knows not to re-open a live socket. */
+  const specPausedByBgRef = useRef(false);
+
+  /** Re-open the spectrum for a watch that is demonstrably there.
+   *
+   *  Called on every watch message (it heartbeats every 4s), so a spectrum that was
+   *  paused while the watch was actually watching heals itself rather than staying
+   *  dead until some flag happens to change. */
+  const wakeSpectrumForWatch = useCallback(() => {
+    if (appActiveRef.current) return;         // phone's own screen governs
+    const c = client.current; if (!c) return;
+    if (specPausedByBgRef.current) {
+      specPausedByBgRef.current = false;
+      c.resumeSpectrum();
+      c.setRate(WATCH_BG_DIVISOR);
+      watchProvider.setSpecPaused(false);
+    }
+  }, []);
+
+  /** Late-bound: zoomBy is declared further down. */
+  const zoomByRef = useRef<((factor: number) => void) | null>(null);
+
   const onTuneHzRef    = useRef<((hz: number) => void) | null>(null);
   const onModeRef      = useRef<((m: SDRMode) => void) | null>(null);
   const onFilterBothRef = useRef<((low: number, high: number) => void) | null>(null);
@@ -1370,7 +1425,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const mediaStepSkipRef = useRef<((dir: 'left' | 'right') => void) | null>(null);
   mediaStepSkipRef.current = (dir: 'left' | 'right') => {
     const c = client.current; if (!c) return;
-    if (String(c.getStatus().mode) === 'dab') return;   // DAB locked to its ensemble
+    // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
+    // thing a VFO can do is drag you OFF the block and kill the decode.
+    if (isWholeProfileMode(String(c.getStatus().mode))) return;
     const s = stepRef.current; if (!(s > 0)) return;
     const cur = c.getStatus().frequency;
     const snapped = dir === 'right'
@@ -1853,6 +1910,30 @@ export default function SDRScreen({ route, navigation }: Props) {
       setIsMuted(false);
       fullReconnect();
     });
+    // The OS says the network path moved under us (WiFi→cellular, or a cellular IP
+    // change on cell handover). Neither sends a FIN or an RST, so every socket on
+    // the old flow is now a zombie that will sit OPEN forever. Native has already
+    // treated the audio WS as suspect; the spectrum WS is JS's to revive, and it
+    // has the same zombie on the same dead flow. Rate-limited inside the client.
+    const subPath = emitter.addListener('VibeNetworkPathChanged', () => {
+      client.current?.forceResubscribe?.('network-path-change');
+    });
+    // The iPhone's SYSTEM volume changed — by the hardware buttons, Control Centre, a
+    // headset's own rocker, or by the watch itself. Mirror it to the wrist so the two
+    // can never disagree. (iOS quantises to 1/16 steps, so what arrives here after a
+    // watch-initiated set is the SNAPPED value — which is the truth the watch adopts.)
+    const subVol = emitter.addListener('VibeVolume', (e: { volume: number }) => {
+      sysVolRef.current = e.volume;
+      watchProvider.setVolume(e.volume);
+    });
+    // Seed it. The observer emits the current volume when it starts, but that can land
+    // before this listener exists — and KVO only fires on CHANGE thereafter, so without
+    // an explicit read the wrist would show a default until the user happened to touch
+    // something. Which is the exact class of bug this whole part exists to kill.
+    (NativeModules.VibePowerModule as { getSystemVolume?: () => Promise<number> })
+      ?.getSystemVolume?.()
+      .then((v) => { sysVolRef.current = v; watchProvider.setVolume(v); })
+      .catch(() => {});
     // Server-NR protocol messages arrive as text on the native audio WS
     const subWs = emitter.addListener('VibeWsText', (e: { text: string }) => {
       let msg: { type?: string; info?: Record<string, unknown> };
@@ -1888,7 +1969,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     });
     return () => {
       sub.remove(); subMute.remove(); subSig.remove(); subSkip.remove(); subWs.remove();
-      subCar.remove(); subCarTune.remove(); subVoice.remove(); subDsOff.remove(); subDsOn.remove();
+      subCar.remove(); subCarTune.remove(); subVoice.remove(); subDsOff.remove(); subDsOn.remove(); subPath.remove(); subVol.remove();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1932,6 +2013,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onReceiverLon: (lon) => { if (!destroyed.current) setRecvLon(lon); },
       onReceiverLoc: (lat, lon) => { recvLocRef.current = { lat, lon }; if (!destroyed.current) setRecvLoc({ lat, lon }); },
+      onReconnecting: (busy: boolean) => {
+        // Tell the WRIST a recovery is under way. There are two links in series and
+        // they fail independently; from the watch, "the phone is healing its server
+        // link" and "the phone is dead" look identical. Only the phone knows, so
+        // only the phone can say — otherwise the watch throws a black overlay over
+        // a recovery that is working perfectly well.
+        watchProvider.setReconnecting(busy);
+      },
       onLink: (q) => {
         if (destroyed.current) return;
         const b = meterBus.current;
@@ -1940,6 +2029,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Clamp it with the real network health — a bad link can only make it worse.
         const eff = Math.min(q, netLinkRef.current) as 0|1|2|3;
         b.emit({ ...b.value, link: eff });
+        // The PHONE↔SERVER hop's health, sent to the wrist so its warning pill can
+        // name which of the two hops is rough rather than shrugging "LINK ROUGH".
+        watchProvider.setLinkQuality(eff);
         // UberSDR auto-reconnects silently — without a cue the app just looks
         // frozen when the link drops (e.g. the instance reboots). But the spectrum
         // is deliberately paused on minimise/resume, which briefly starves the
@@ -1999,6 +2091,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         // UberSDR's fetched bookmarks: VTS station readout + search bar.
         if (!destroyed.current) setServerBookmarks(list.map((b) => ({ name: b.name, frequency: b.frequency, mode: b.mode, repeater: b.repeater, source: 'server' as const })));
       },
+      onAircraft: (list) => { if (!destroyed.current) setAircraft(list); },
+
       onDecoderText: (line, replace) => {
         // OWRX server-side text decoders (Packet/POCSAG/ADSB/…) → the decoder
         // text panel. `replace` (ADS-B live list) supersedes the buffer.
@@ -2043,6 +2137,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
         if (meta.programmes) {
           setDabProgrammes(meta.programmes);
+          if (meta.ensemble) setDabEnsemble(meta.ensemble);
           // Mirror the server's default (first programme) so the picker reflects
           // what's actually playing until the user picks another.
           setActiveDabId((cur) => meta.programmes!.some((p) => p.id === cur)
@@ -2055,6 +2150,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         // Waterfall/spectrum render imperatively — no React state per frame.
         wfFrameSink.current?.(newBins, s);
+        // The watch feeds off the RAW frame, not the waterfall component: the
+        // primary use case is a locked phone in a pocket, and the Skia tree is
+        // unmounted by then. Plain JS + one bridge call, so it's safe to keep
+        // running while backgrounded. No-ops when no watch is watching.
+        watchProvider.onSpectrum(newBins, {
+          centerHz:   s.centerHz,
+          bwHz:       s.bwHz,
+          tuneHz:     s.frequency,
+          filterLow:  s.bandwidthLow,
+          filterHigh: s.bandwidthHigh,
+        });
         // Geometry/status drives the React overlay (band plan, readouts) —
         // only update when something actually changed (settled frames don't).
         // Epsilon gate: radiod's per-frame frequency stamps can jitter ±1Hz —
@@ -2121,11 +2227,27 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (sm.level >= sm.peak)   { sm.peak = sm.level; sm.hold = 15; }
           else if (sm.hold > 0)      { sm.hold--; }
           else                       { sm.peak = Math.max(0, sm.peak - 0.02); }
-          meterBus.current.emit({
-            level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
-            active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,
-            link: meterBus.current.value.link,
-          });
+          // Send the meter TEXT THE PHONE DRAWS, not a metric of the watch's choosing.
+          // OWRX/Kiwi have no SNR (snrDb is hardcoded 0 on them), so a wrist that
+          // rendered SNR showed a permanent "—" while its bar moved perfectly well.
+          watchProvider.setSignal(
+            snrDb, sm.level,
+            meterText(signalModeRef.current, {
+              level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
+              active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6, link: 0,
+            }),
+          );
+          // Backgrounded (watch-only) frames must NOT drive the meter bus: it
+          // re-renders a React leaf per frame, and per-frame React commits in the
+          // background are exactly what starved the audio DSP in v6. Nobody can
+          // see the phone's meter anyway — the watch gets its level above.
+          if (appActiveRef.current) {
+            meterBus.current.emit({
+              level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
+              active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,
+              link: meterBus.current.value.link,
+            });
+          }
         }
       },
       onError: (msg) => {
@@ -2342,7 +2464,21 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; }
         setReinit(false);
         setSpecFailed(false);
-        client.current?.pauseSpectrum();
+        // Keep the spectrum alive if the watch is currently showing it — a
+        // locked phone in a pocket IS the primary watch use case, so pausing
+        // here would kill the feature exactly when it matters. Half rate: the
+        // watch only draws ~10fps, so full rate is wasted bytes and wasted
+        // parse on the thread that feeds the audio DSP. The Skia tree is still
+        // unmounted and every animation driver still cancelled — only the plain
+        // JS path stays alive.
+        if (watchProvider.isActive) {
+          specPausedByBgRef.current = false;
+          client.current?.setRate(WATCH_BG_DIVISOR);
+        } else {
+          specPausedByBgRef.current = true;
+          client.current?.pauseSpectrum();
+        }
+        watchProvider.setSpecPaused(specPausedByBgRef.current);
       } else if (dataSaverOffRef.current) {
         appActiveRef.current = true;
         // Opened the app after a data-saver disconnect (the Play event may not
@@ -2373,7 +2509,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // audio never stopped — so the watchdog only escalates to the real
         // "Connection lost" popup when AUDIO is also dead; while audio still
         // flows it keeps the calm notice and re-checks.
-        if ((route.params.serverType ?? 'ubersdr') === 'ubersdr') {
+        if ((route.params.serverType ?? 'ubersdr') === 'ubersdr' && specPausedByBgRef.current) {
           resumingRef.current = true;
           setReinit(true);
           setSpecFailed(false);
@@ -2407,7 +2543,22 @@ export default function SDRScreen({ route, navigation }: Props) {
           armReinitWatchdog();
         }
         if (resumeTimer) clearTimeout(resumeTimer);
-        resumeTimer = setTimeout(() => { resumeTimer = null; client.current?.resumeSpectrum(); }, 1200);
+        resumeTimer = setTimeout(() => {
+          resumeTimer = null;
+          // If the watch kept the socket alive through the lock there is nothing
+          // to re-subscribe — just restore full rate. Re-opening a live socket
+          // would drop frames and flash the "reinitialising" notice for nothing.
+          if (specPausedByBgRef.current) {
+            specPausedByBgRef.current = false;
+            client.current?.resumeSpectrum();
+          }
+          // ALWAYS restore full rate on wake, on every path. If the watch held the
+          // socket open through the lock we dropped the feed to quarter rate for
+          // it; failing to undo that anywhere leaves the phone's own waterfall
+          // crawling at 5fps.
+          idleActiveRef.current = false;
+          client.current?.setRate(1);
+        }, 1200);
       }
     });
     return () => {
@@ -2445,6 +2596,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
     idleActiveRef.current = false; // new client (baseUrl) starts at divisor 1
     const t = setInterval(() => {
+      // A watch showing the waterfall is an active viewer even though nobody is
+      // touching the phone — don't idle-slow the feed under it.
+      if (watchProvider.isActive) return;
       if (!idleActiveRef.current &&
           Date.now() - lastInteractRef.current > IDLE_SLOW_MS) {
         idleActiveRef.current = true;
@@ -2525,9 +2679,12 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onVfoDelta = useCallback((pxDelta: number) => {
     const c = client.current; if (!c) return;
-    // DAB is locked to its ensemble block — VFO tuning just knocks it off the mux
-    // (kills the decode, and the block is hard to re-find). Ignore drum input.
-    if (String(c.getStatus().mode) === 'dab') return;
+    // Whole-profile data modes are locked to their block — VFO tuning just knocks
+    // you off it (kills the decode, and the block is a nuisance to re-find). DAB had
+    // this guard; ADS-B did NOT, so the drum would happily drag you off 1090 MHz and
+    // stop every aircraft decoding. One predicate now, so the next data mode can't
+    // fall through the same gap. Ignore drum input.
+    if (isWholeProfileMode(String(c.getStatus().mode))) return;
     markInteract();
     const s = stepRef.current;
     // Velocity-adaptive sensitivity: EMA of |px|/dt. A gesture gap resets to
@@ -2716,7 +2873,9 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onWfTapTune = useCallback((hz: number) => {
     const c = client.current; if (!c) return;
-    if (String(c.getStatus().mode) === 'dab') return;   // DAB locked to its ensemble block
+    // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
+    // thing a VFO can do is drag you OFF the block and kill the decode.
+    if (isWholeProfileMode(String(c.getStatus().mode))) return;
     markInteract();
     const [loHz, hiHz] = c.caps.freqRange;
     const clamped = Math.max(loHz, Math.min(hiHz, hz));
@@ -2898,10 +3057,217 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     onTuneHzRef.current    = onTuneHz;
     onModeRef.current      = onMode;
+    zoomByRef.current      = zoomBy;
     onFilterBothRef.current = onFilterBoth;
     onVtsJumpRef.current   = onVtsJump;
     onSearchTuneRef.current = onSearchTune;
   });
+
+  // ── Apple Watch: crown/menu commands in, tuned state back out ─────────────
+  //    The watch sends DELTAS, never absolute frequencies — the phone stays the
+  //    single source of truth for step size and band limits, and the watch just
+  //    mirrors whatever we echo back.
+  useEffect(() => {
+    // CLAIM the watch. Two screens can be alive at once (the outgoing one unmounts
+    // asynchronously), and a stale screen streaming rows drags the wrist back to a
+    // waterfall it has already left. Only the owner may send.
+    const token = watchProvider.claim('sdr');
+    // A MOUNTED SDR SCREEN IS A LIVE SESSION — say so.
+    //
+    // phoneStatus was only ever set to 'ready' on the WATCH-DRIVEN launch path
+    // (App.tsx goTo). Connect on the PHONE instead, and nothing ever retracted an
+    // earlier 'pick'/'setup' — so the wrist kept telling the user to choose a server
+    // while a waterfall drew and the crown tuned underneath the message. The status has
+    // to be owned by the thing that KNOWS, and that is the screen that is running.
+    watchProvider.setPhoneStatus('ready');
+    // The watch knows when ITS rows dried up. That was only ever drawn on screen;
+    // make it act. Last line of defence behind the client's own watchdog, and
+    // rate-limited there — so a wedged link can't turn this into a reopen storm.
+    watchProvider.setStaleHandler(() => {
+      client.current?.forceResubscribe?.('watch-rows-idle');
+    });
+    watchProvider.attach({
+      // No arming here: Kiwi/OWRX/UberSDR give every user their OWN VFO, so tuning
+      // disturbs nobody. Arming is an FM-DX rule, not a "shared backend" rule.
+      onTuneDelta: (delta: number) => {
+        const c = client.current; if (!c || !delta) return;
+        wakeSpectrumForWatch();   // a turning crown is proof the watch is watching
+        if (isWholeProfileMode(String(c.getStatus().mode))) return;   // locked to its ensemble
+        const s = stepRef.current; if (!(s > 0)) return;
+        const cur = c.getStatus().frequency;
+        // Snap to the step grid first, exactly like the media-control skip: a
+        // crown detent should land on a channel, not offset the current fraction.
+        const base = delta > 0 ? Math.floor(cur / s) : Math.ceil(cur / s);
+        const [loHz, hiHz] = c.caps.freqRange;
+        const newHz = Math.max(loHz, Math.min(hiHz, (base + delta) * s));
+        if (newHz === cur) return;
+        onTuneHzRef.current?.(newHz);
+      },
+      // Numpad entry. onTuneHz already clamps to the receiver's range, so a
+      // fat-fingered 999 MHz lands on the band edge rather than nowhere.
+      onTuneHz: (hz: number) => { if (hz > 0) onTuneHzRef.current?.(hz); },
+      onMode: (m: string) => { if (m) onModeRef.current?.(m as SDRMode); },
+      onStep: (hz: number) => { if (hz > 0) setStep(hz); },
+
+      // Crown in ZOOM mode. Drives the SAME client.zoom() the phone's zoom drum
+      // drives — so it moves the real waterfall, and the watch gets genuinely
+      // finer bins rather than a magnified crop of coarse ones.
+      // DAB: pick a service. NOT a tune — setAudioServiceId re-sends the demod
+      // without touching the frequency, so the ensemble lock is never disturbed.
+      onDabSelect: (id: number) => {
+        const c = client.current; if (!c || !id) return;
+        c.setAudioServiceId?.(id);
+        setActiveDabId(id);
+      },
+
+      onZoomDelta: (delta: number) => {
+        if (!delta) return;
+        zoomByRef.current?.(Math.pow(2, -delta / 6));
+      },
+
+      // The crown, in volume mode. ONE detent = ONE 1/16 step, because 1/16 IS the
+      // iPhone's volume quantisation — a finer step would round to the same value and
+      // the crown would feel dead for a click or two at a time.
+      //
+      // Applied against the phone's own current volume (sysVolRef, kept true by the KVO
+      // event), never against a value the watch sent us: the phone owns the knob. The
+      // set then SNAPS to 1/16 and the KVO observer echoes the snapped truth back to the
+      // wrist, which adopts it when the crown settles.
+      onVolumeDelta: (delta: number) => {
+        if (!delta) return;
+        const next = Math.max(0, Math.min(1, sysVolRef.current + delta / 16));
+        sysVolRef.current = next;
+        (NativeModules.VibePowerModule as { setSystemVolume?: (v: number) => void })
+          ?.setSystemVolume?.(next);
+      },
+
+      // A mute is NOT "volume to zero": that would destroy the level you were listening
+      // at, so unmuting could not restore it. Route to the phone's existing mute, which
+      // gates playback and leaves the volume where it was.
+      onMute: (muted: boolean) => {
+        (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })
+          ?.setMuted?.(muted);
+        setIsMuted(muted);
+        watchProvider.setMuted(muted);   // echo the truth back, don't leave the wrist guessing
+      },
+
+      // The watch said hello. Answer with the current state so its menu already
+      // knows the mode and step BEFORE the user opens it. Read from the client,
+      // not from React state, which can lag a frame behind the radio.
+      onHello: () => {
+        const c = client.current; if (!c) return;
+        // ANY message from the watch is PROOF it is there and listening — better
+        // proof than a flag, because recency cannot desync. The watch pings every 4s,
+        // so this self-heals a paused spectrum within one heartbeat.
+        //
+        // It has to, because onReachableChange only fires on a CHANGE: if the flag
+        // was already true when we backgrounded and we paused anyway (or the pause
+        // and the flag ever disagree), NOTHING re-opens the socket. The wrist then
+        // sits there tuning perfectly — uplink alive, downlink dead — showing "No
+        // spectrum from iPhone" forever. Same class as the stale-isReachable bug;
+        // the flag is not the truth, the message is.
+        wakeSpectrumForWatch();
+        const s = c.getStatus();
+        // Answer EVERY ping with state — the watch uses the freshness of this to tell
+        // "the phone is dead" apart from "the phone is fine but rows are being lost",
+        // and those need completely different fixes.
+        watchProvider.sendState(s.frequency, String(s.mode), stepRef.current);
+      },
+
+      // The watch app is usually opened AFTER the phone is already locked in a
+      // pocket — by which point we have already closed the spectrum WS. So the
+      // watch coming into view has to be able to REOPEN it, and its going away
+      // has to close it again, entirely while the phone stays backgrounded.
+      onReachableChange: (reachable: boolean) => {
+        if (appActiveRef.current) return;   // phone's own screen governs
+        const c = client.current; if (!c) return;
+        if (reachable) {
+          if (specPausedByBgRef.current) {
+            specPausedByBgRef.current = false;
+            c.resumeSpectrum();
+          }
+          c.setRate(WATCH_BG_DIVISOR);
+        } else if (!specPausedByBgRef.current) {
+          specPausedByBgRef.current = true;
+          c.pauseSpectrum();
+        }
+        watchProvider.setSpecPaused(specPausedByBgRef.current);
+      },
+    });
+    return () => {
+      watchProvider.setStaleHandler(null);
+      watchProvider.release(token);
+      watchProvider.detach();
+    };
+  }, []);
+
+  // ── DAB on the watch: a LIST, not a band ───────────────────────────────────
+  //    A DAB multiplex is one wide block carrying a dozen services; there is nothing
+  //    to hunt in it and nothing to tune (the phone already refuses to — a nudge
+  //    knocks you off the ensemble and kills the decode). So the wrist gets the
+  //    services, and its crown becomes a SELECTOR.
+  useEffect(() => {
+    watchProvider.sendDab({
+      ensemble: dabEnsemble,
+      active: activeDabId,
+      list: dabProgrammes.map((p) => ({ id: p.id, name: p.name })),
+    });
+  }, [dabProgrammes, activeDabId, dabEnsemble]);
+
+  // The playing service's logo, for the wrist. DAB is the EASY case for the logo
+  // lookup: the label is a decoded station name rather than a truncated 8-character
+  // RDS PS, and the country is simply where the receiver is. The one catch is that
+  // the ensemble sends it UNSPACED ("BBC Radio2"), which matches nothing — hence
+  // tidyStationName.
+  useEffect(() => {
+    const name = dabProgrammes.find((p) => p.id === activeDabId)?.name;
+    if (!name) { watchProvider.sendLogo(''); return; }
+    let cancelled = false;
+    resolveStationLogo({ name: tidyStationName(name) })
+      .then((path) => {
+        if (cancelled) return;
+        if (!path) { watchProvider.sendLogo(''); return; }
+        return FileSystem.readAsStringAsync(path, { encoding: FileSystem.EncodingType.Base64 })
+          .then((b64) => { if (!cancelled) watchProvider.sendLogo(b64); });
+      })
+      .catch(() => { if (!cancelled) watchProvider.sendLogo(''); });
+    return () => { cancelled = true; };
+  }, [dabProgrammes, activeDabId]);
+
+  // ADS-B on the watch: aircraft, not a waterfall. 1090 MHz is a whole-profile mode —
+  // there is nothing to tune, and its spectrum is a slab of noise.
+  useEffect(() => { watchProvider.sendAircraft(aircraft); }, [aircraft]);
+
+  // Mode/step: rare, so send immediately.
+  useEffect(() => {
+    watchProvider.sendState(status.frequency, String(status.mode), step);
+  }, [status.mode, step]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Frequency: the AUTHORITATIVE echo, throttled to 4/sec with the last value
+  // always delivered. The watch no longer reads the frequency off the row stream —
+  // rows are lossy and can back up in WCSession, so a busy link served the wrist a
+  // frequency from seconds ago (it lurched backwards mid-tune, then crawled
+  // forward as the queue drained). Throttled state messages can't build a backlog,
+  // and the trailing edge means the wrist always lands on the truth.
+  useEffect(() => {
+    watchProvider.sendFreq(status.frequency, String(status.mode), step);
+  }, [status.frequency]);    // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Mirror the phone's own render settings into the watch's processor, so the
+  // wrist keeps looking like a shrunk phone waterfall (it runs its own
+  // SignalProcessor precisely so it survives the Skia teardown on lock).
+  useEffect(() => {
+    watchProvider.setColormap(colormap);
+    watchProvider.setNeedle(vfoNeedle, vfoIntensity);
+    watchProvider.setSharpness(wfSharpness);
+    watchProvider.setPeakHold(peakHold);
+    watchProvider.setProcessorSettings({
+      autoContrast, wfBrightness, wfContrast, wfSharpness,
+      spatialSmooth, peakHold,
+      manualRange: wfCoarse === 'manual' ? { minDb: dbMin, maxDb: dbMax } : null,
+    });
+  }, [colormap, autoContrast, wfBrightness, wfContrast, wfSharpness,
+      spatialSmooth, peakHold, wfCoarse, dbMin, dbMax, vfoNeedle, vfoIntensity]);
 
   // ── Share — deep link into this station (web-UI URL params; skin parity:
   //    the skin shared window.location.href which carries the same params) ──
@@ -2953,6 +3319,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     () => deriveItuRegion(route.params.serverLongitude ?? recvLon),
     [recvLon],   // eslint-disable-line react-hooks/exhaustive-deps
   );
+  // The WRIST needs it too — its band label reads off the same plan, and without the
+  // region it was quoting the American 40m/41m border (7300) on a British receiver.
+  useEffect(() => { watchProvider.setItuRegion(ituRegion); }, [ituRegion]);
   const vtsBookmarks = useRef<ServerBookmark[]>([]);
   const [searchBookmarks, setSearchBookmarks] = useState<ServerBookmark[]>([]);
   const [searchBands,     setSearchBands]     = useState<ServerBand[]>([]);
@@ -3611,6 +3980,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <DecoderPanel
           activeDecoder={activeDecoder}
           decoderText={decoderText}
+          aircraft={aircraft}
           decoderStatus={decoderStatus}
           decoding={decoding}
           bottomOffset={pillBottom + 8}
@@ -3883,11 +4253,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       <MenuSheet
         visible={menuOpen}
         serverType={route.params.serverType ?? 'ubersdr'}
-        profiles={profiles}
-        activeProfileId={activeProfileId}
-        sdrUsage={sdrUsage}
-        clientCount={clientCount}
-        onSelectProfile={(id) => { client.current?.selectProfile?.(id); setActiveProfileId(id); }}
         dabProgrammes={dabProgrammes}
         activeDabId={activeDabId}
         onSelectDab={(id) => { client.current?.setAudioServiceId?.(id); setActiveDabId(id); }}
@@ -4212,6 +4577,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         minHz={client.current?.caps.freqRange[0]}
         maxHz={client.current?.caps.freqRange[1]}
         onShare={isLocal ? undefined : onShareStation}
+        profiles={profiles}
+        activeProfileId={activeProfileId}
+        sdrUsage={sdrUsage}
+        clientCount={clientCount}
+        onSelectProfile={(id) => { client.current?.selectProfile?.(id); setActiveProfileId(id); }}
       />
 
       {/* Chat drawer */}

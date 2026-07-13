@@ -69,6 +69,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
 
   const [running, setRunning] = useState<VibeServerInfo | null>(null);
   const [status, setStatus]   = useState<VibeServerStatus | null>(null);
+  /** The mDNS hostname the responder actually TOOK — "vibesdr-moto-g35", or with a "-2"
+   *  suffix if another phone on the LAN already had the name. Asked for after the server
+   *  is up, because the name isn't settled until the responder has probed for a clash. */
+  const [mdnsHost, setMdnsHost] = useState('');
   const [starting, setStarting] = useState(false);
   const [error, setError]     = useState<string | null>(null);
   const runningRef = useRef(false);
@@ -120,6 +124,27 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       if (s) setStatus(s);
     }, 1500);
     return () => clearInterval(t);
+  }, [running]);
+
+  // The NAME the mDNS responder took. Asked for once the server is up, and RETRIED for a
+  // few seconds: the responder probes the network for a clash before it commits to a
+  // name (that's how a second phone ends up as "-2"), so the answer is not ready the
+  // instant the server starts.
+  useEffect(() => {
+    if (!running) { setMdnsHost(''); return; }
+    let cancelled = false;
+    let tries = 0;
+    const ask = async () => {
+      const Local = (NativeModules as any).VibeLocalSDR;
+      try {
+        const h = await Local?.getMdnsHostname?.();
+        if (cancelled) return;
+        if (h) { setMdnsHost(String(h)); return; }
+      } catch { /* not serving, or no responder on this platform */ }
+      if (!cancelled && ++tries < 8) setTimeout(ask, 700);
+    };
+    void ask();
+    return () => { cancelled = true; };
   }, [running]);
 
   // The bookmark count grows on its own as clients tune, so refresh it rather than
@@ -303,7 +328,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           </Text>
 
           <View style={[styles.card, { borderColor: C.borderBright }]}>
+            {/* BOTH WAYS IN. The IP is the one that always works; the NAME is the one a
+                human can actually retype, and it survives the router handing this phone a
+                different address tomorrow — which the IP does not. Showing only the IP
+                hid the better of the two. */}
             <Row C={C} F={F} k="ADDRESS" v={`${running.ip}:${running.port}`} vc={C.amber} />
+            {!!mdnsHost && (
+              <Row C={C} F={F} k="NAME" v={`${mdnsHost}.local:${running.port}`} vc={C.amber} />
+            )}
             <Row C={C} F={F} k="ACCESS" v={effectivePin ? `PIN ${effectivePin}` : 'Open (no PIN)'} vc={effectivePin ? C.green : C.amber} />
             <Row C={C} F={F} k="STATUS"
               v={client ? (status?.clientAddr ? `Connected: ${status.clientAddr}` : 'Client connected') : 'Waiting for a client…'}

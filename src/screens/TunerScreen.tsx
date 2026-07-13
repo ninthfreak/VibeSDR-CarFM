@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable, NativeEventEmitter, NativeModules, Alert, Platform } from 'react-native';
+import { AppState, View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable, NativeEventEmitter, NativeModules, Alert, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import AudioSheet from '../components/AudioSheet';
@@ -11,10 +11,12 @@ import { RootStackParamList } from '../../App';
 import { createBackend } from '../services/UberSDRAdapter';
 import type { SDRBackend, FmdxState, FmdxServerInfo } from '../services/SDRBackend';
 import { resolveStationLogo } from '../services/stationLogoCache';
+import { getFavourites, toggleFavourite } from '../services/favourites';
 import { isoToFlag, ituToIso, validIso } from '../services/rdsCountry';
 import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
 import ControlsBar, { createMeterBus } from '../components/ControlsBar';
 import { VibePowerModule } from '../components/AudioPlayer';
+import { watchProvider } from '../services/watchProvider';
 import ChatDrawer, { type ChatMessage } from '../components/ChatDrawer';
 import FreqModal from '../components/FreqModal';
 import FmdxDial, { type DialStation } from '../components/FmdxDial';
@@ -25,6 +27,30 @@ import FmdxDial, { type DialStation } from '../components/FmdxDial';
 // bottom so it reads as native VibeSDR. Chat is first-class (shared tuning).
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Tuner'>;
+
+/** What the WATCH gets. One builder, so the live frame and the hello reply can
+ *  never drift apart. `dBf` is FM-DX's own unit — the watch prints whatever string
+ *  we hand it and so can never disagree with the phone about the signal. */
+function watchFmdxPayload(s: FmdxState, level: number, rx: string) {
+  const iso = ituToIso(s.tx?.itu) || s.countryIso;
+  return {
+    freq: s.freqHz,
+    ps: s.ps ?? '',
+    rt: s.rt ?? '',
+    pi: s.pi ?? '',
+    sig: s.sig,
+    users: s.users ?? 0,
+    stereo: !!s.stereo,
+    tx: s.tx?.tx ?? '',
+    city: s.tx?.city ?? '',
+    dist: Math.round(s.tx?.dist ?? 0),      // km from the SERVER's QTH, not ours
+    rx,                                     // ...which is HERE. A distance needs an origin.
+    pty: PTY[s.pty] ?? '',
+    flag: validIso(iso) ? isoToFlag(iso) : '',
+    meter: `${Math.round(s.sig)} dBf`,
+    level,
+  };
+}
 
 const PTY = [
   'None', 'News', 'Current Affairs', 'Information', 'Sport', 'Education', 'Drama',
@@ -104,6 +130,16 @@ export default function TunerScreen({ route, navigation }: Props) {
   // doesn't spam retunes for everyone. When not dragging, the server frame drives it.
   const [displayFreq, setDisplayFreq] = useState(95_000_000);
   const [step, setStep] = useState(100_000);
+  /** Mirror of `step` for callbacks that outlive a render (the watch handlers are
+   *  attached once). */
+  const stepRef = useRef(step);
+  /** The iPhone's real SYSTEM volume (0…1). The watch sends DELTAS against it — never
+   *  an absolute — because the phone owns the value and the wrist only nudges it. */
+  const sysVolRef = useRef(1);
+  useEffect(() => { stepRef.current = step; }, [step]);
+  /** Where the RECEIVER is (from /static_data). Every txInfo distance is measured
+   *  from here, so the watch needs it to make "46 km" mean anything. */
+  const rxNameRef = useRef('');
   const [freqModalOpen, setFreqModalOpen] = useState(false);
   const [dialView, setDialView] = useState({ lo: FM_LO, hi: FM_HI });
   const [bottomH, setBottomH] = useState(0);   // measured VTS+island height → ScrollView bottom padding
@@ -159,7 +195,29 @@ export default function TunerScreen({ route, navigation }: Props) {
   useEffect(() => {
     destroyed.current = false;
     AsyncStorage.getItem(CALLSIGN_KEY).then((cs) => { if (!destroyed.current && cs) setMyCallsign(cs); });
-    if (!fmdxNoticeShownThisSession) { fmdxNoticeShownThisSession = true; setShowNotice(true); }
+    // The shared-tuner notice must be SEEN, not merely fired.
+    //
+    // The watch can boot this screen HEADLESSLY (phone asleep in a pocket), and the
+    // notice was shown on mount and immediately marked as shown-this-session — so it
+    // was used up with nobody looking, and the user never got the one warning that
+    // says "retuning this server moves the frequency for everyone else on it". A
+    // notice nobody sees is worse than no notice, because we then believe they've had
+    // it. Wait until the app is actually IN FRONT OF THEM.
+    let noticeSub: { remove(): void } | null = null;
+    if (!fmdxNoticeShownThisSession) {
+      if (AppState.currentState === 'active') {
+        fmdxNoticeShownThisSession = true;
+        setShowNotice(true);
+      } else {
+        noticeSub = AppState.addEventListener('change', (st) => {
+          if (st !== 'active' || fmdxNoticeShownThisSession || destroyed.current) return;
+          fmdxNoticeShownThisSession = true;
+          setShowNotice(true);
+          noticeSub?.remove();
+          noticeSub = null;
+        });
+      }
+    }
     AsyncStorage.getItem(DIAL_KEY).then((raw) => {
       if (destroyed.current || !raw) return;
       try {
@@ -177,7 +235,11 @@ export default function TunerScreen({ route, navigation }: Props) {
       onConnect:  () => { if (!destroyed.current) { setConnected(true); setError(null); } },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
       onServerLost: () => { if (!destroyed.current) setError('Server stopped responding'); },
-      onFmdxInfo: (info) => { if (!destroyed.current) setServerInfo(info); },
+      onFmdxInfo: (info) => {
+        if (destroyed.current) return;
+        setServerInfo(info);
+        rxNameRef.current = info.tunerName ?? '';
+      },
       onFmdxState: (s) => {
         if (destroyed.current) return;
         // Commit to React state at ~5 Hz (trailing) — NOT per frame. The dial +
@@ -194,6 +256,11 @@ export default function TunerScreen({ route, navigation }: Props) {
         const sn = Math.min(1, Math.max(0, s.sig / 70));
         lastSigNorm.current = sn;
         meterBus.emit({ level: sn, peak: sn, snr: 0, dbfs: s.sig, active: true, link: 3 });
+        // The wrist gets the same frame. Throttled inside the provider (4/sec) —
+        // RDS RadioText changes constantly and WCSession queues rather than drops.
+        // `dBf` is FM-DX's own unit; the watch prints whatever string we send, so
+        // it can never disagree with us about the signal.
+        watchProvider.sendFmdx(watchFmdxPayload(s, sn, rxNameRef.current));
         if (s.rds && s.ps) learnStation(s.freqHz, s.ps);  // pin RDS name to the dial
         // Lock-screen card: "STATION · 89.2" (freq beside the RDS name), or just
         // the frequency until RDS locks. Deduped so we don't spam the card.
@@ -235,6 +302,7 @@ export default function TunerScreen({ route, navigation }: Props) {
 
     return () => {
       destroyed.current = true;
+      noticeSub?.remove();
       if (commitTimer.current) clearTimeout(commitTimer.current);
       if (convergeTimer.current) clearTimeout(convergeTimer.current);
       if (dialFlushTimer.current) clearTimeout(dialFlushTimer.current);
@@ -278,7 +346,17 @@ export default function TunerScreen({ route, navigation }: Props) {
         b?.resumeFromPower?.();
       }
     });
-    return () => sub.remove();
+    // The iPhone's SYSTEM volume — mirrored to the wrist so its meter shows the truth
+    // rather than a knob of its own. See VibePowerModule's volume section.
+    const subVol = emitter.addListener('VibeVolume', (e: { volume: number }) => {
+      sysVolRef.current = e.volume;
+      watchProvider.setVolume(e.volume);
+    });
+    (NativeModules.VibePowerModule as { getSystemVolume?: () => Promise<number> })
+      ?.getSystemVolume?.()
+      .then((v) => { sysVolRef.current = v; watchProvider.setVolume(v); })
+      .catch(() => {});
+    return () => { sub.remove(); subVol.remove(); };
   }, [meterBus]);
 
   // ── Station logo (radio-browser, EXACT-name match only so we never show the
@@ -298,6 +376,112 @@ export default function TunerScreen({ route, navigation }: Props) {
 
   // Inlay the resolved station logo on the lock-screen artwork.
   useEffect(() => { (VibePowerModule as any)?.setStationLogo?.(logo ?? ''); }, [logo]);
+
+  // …and send the SAME image to the watch, as bytes. The phone has already resolved
+  // it to a local file, so the wrist shows exactly what the phone shows rather than
+  // fetching a URL it has no network path to. Empty = no logo, and the watch then
+  // falls back to the app icon (glass over nothing reads as a broken grey box).
+  useEffect(() => {
+    let cancelled = false;
+    if (!logo) { watchProvider.sendLogo(''); return; }
+    FileSystem.readAsStringAsync(logo, { encoding: FileSystem.EncodingType.Base64 })
+      .then((b64) => { if (!cancelled) watchProvider.sendLogo(b64); })
+      .catch(() => { if (!cancelled) watchProvider.sendLogo(''); });
+    return () => { cancelled = true; };
+  }, [logo]);
+
+  // ── Favourite this instance ────────────────────────────────────────────────
+  //    The SDR screen offers this from its menu sheet; FM-DX has no menu, so the
+  //    heart lives in the header — otherwise a good receiver you found mid-session
+  //    can only be favourited by going back and hunting for it in the picker.
+  //
+  //    serverType MUST be 'fmdx'. FM-DX isn't sniffable by detectServerType, and the
+  //    picker trusts the stored type — an untyped favourite would be re-detected and
+  //    mis-opened as an UberSDR waterfall (see InstancePickerScreen.connectFav).
+  const [isFavourite, setIsFavourite] = useState(false);
+  useEffect(() => {
+    getFavourites()
+      .then((favs) => setIsFavourite(favs.some((f) => f.url === baseUrl)))
+      .catch(() => {});
+  }, [baseUrl]);
+
+  const onToggleFavourite = useCallback(() => {
+    getFavourites()
+      .then((favs) => toggleFavourite(
+        { name: instanceName ?? baseUrl, url: baseUrl, serverType: 'fmdx' }, favs))
+      .then((next) => setIsFavourite(next.some((f) => f.url === baseUrl)))
+      .catch(() => {});
+  }, [baseUrl, instanceName]);
+
+  // The wrist draws the SAME dial, from the same memory.
+  useEffect(() => { watchProvider.sendStations(dialStations); }, [dialStations]);
+
+  // ── Apple Watch: FM-DX is its own screen on the wrist (no spectrum to show). ──
+  //    The crown is DISARMED there by default — this server has ONE receiver and
+  //    retuning it moves the frequency for EVERY listener, so tuning must be a
+  //    deliberate act, not a wrist twitch. The watch owns that latch; by the time a
+  //    tune command reaches us the user has already armed it.
+  useEffect(() => {
+    const token = watchProvider.claim('fmdx');
+    // A mounted tuner screen is a live session — see the same note in SDRScreen. Without
+    // this, a stale 'pick'/'setup' from a watch-driven boot never gets retracted when the
+    // user connects on the phone, and the wrist reports "choose a server" over a radio
+    // that is plainly playing.
+    watchProvider.setPhoneStatus('ready');
+    watchProvider.attach({
+      onTuneDelta: (delta: number, armed: boolean) => {
+        // A SHARED tuner: retuning moves the frequency for EVERY listener on this
+        // server. The watch disarms its crown by default for exactly that reason —
+        // but that gate must not live in the watch's UI alone, or any other watch
+        // screen (or a stale one, after a navigation bug) can tune the receiver out
+        // from under everyone. The phone REQUIRES the assertion.
+        if (!armed) return;
+        if (!delta) return;
+        const cur = latestStRef.current?.freqHz ?? 0;
+        const st0 = stepRef.current;
+        if (!(cur > 0) || !(st0 > 0)) return;
+        // Snap to the step grid first, like the phone's own drum: a detent should
+        // land on a channel, not offset the current fraction.
+        const base = delta > 0 ? Math.floor(cur / st0) : Math.ceil(cur / st0);
+        const f = (base + delta) * st0;
+        armTarget(f);
+        backendRef.current?.tune(f);
+      },
+      onTuneHz: (hz: number) => {
+        if (hz > 0) { armTarget(hz); backendRef.current?.tune(hz); }
+      },
+      onMode: () => {},          // FM-DX is WFM only — no demod choice to make
+      onStep: (hz: number) => { if (hz > 0) setStep(hz); },
+      onZoomDelta: () => {},     // no spectrum, nothing to zoom
+      // Volume is the SYSTEM's, not the backend's — FM-DX audio comes out of the same
+      // speaker as everything else, so the wrist controls it here exactly as it does on
+      // the SDR screen. (Unlike tuning, this disturbs nobody: a shared tuner is shared,
+      // but the loudness in YOUR ear is yours.)
+      onVolumeDelta: (delta: number) => {
+        if (!delta) return;
+        const next = Math.max(0, Math.min(1, sysVolRef.current + delta / 16));
+        sysVolRef.current = next;
+        (NativeModules.VibePowerModule as { setSystemVolume?: (v: number) => void })
+          ?.setSystemVolume?.(next);
+      },
+      onMute: (muted: boolean) => {
+        (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })
+          ?.setMuted?.(muted);
+        watchProvider.setMuted(muted);
+      },
+      onReachableChange: () => {},
+      onHello: () => {
+        const s0 = latestStRef.current;
+        if (s0) {
+          watchProvider.sendFmdx(
+            watchFmdxPayload(s0, Math.min(1, Math.max(0, s0.sig / 70)),
+                             rxNameRef.current),
+          );
+        }
+      },
+    });
+    return () => { watchProvider.release(token); watchProvider.detach(); };
+  }, [armTarget]);
 
   // ── Drum tuning: velocity-adaptive accumulator, snapped to the step grid,
   //    committed once on settle (shared tuner — don't spam retunes). ───────────
@@ -428,6 +612,19 @@ export default function TunerScreen({ route, navigation }: Props) {
       {/* Header (Back lives in the control island's menu slot) */}
       <View style={[styles.header, { paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right }]}>
         <Text style={styles.title} numberOfLines={1}>{instanceName ?? 'FM-DX'}</Text>
+        {/* Favourite this receiver. Same ♥/♡ convention as the instance picker —
+            the app has no icon library, it uses Unicode glyphs throughout. */}
+        <TouchableOpacity
+          style={styles.favBtn}
+          onPress={onToggleFavourite}
+          accessibilityLabel={isFavourite ? 'Remove from favourites' : 'Add to favourites'}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.fav, isFavourite && styles.favOn]}>
+            {isFavourite ? '♥' : '♡'}
+          </Text>
+        </TouchableOpacity>
         {/* REC + recordings library moved into the AUDIO sheet (control island). */}
         {!!st && !paused && <Text style={styles.users}>{st.users} 👤</Text>}
       </View>
@@ -686,6 +883,9 @@ function makeStyles(t: ThemeTokens) {
     backTxt: { color: t.btnActiveText, fontFamily: F, fontSize: 15 },
     title: { flex: 1, color: t.freqColor, fontFamily: F, fontSize: 18, fontWeight: 'bold', letterSpacing: 1 },
     users: { color: t.snrColor, fontFamily: F, fontSize: 13 },
+    favBtn: { padding: 4 },
+    fav:   { color: t.sectionColor, fontSize: 20 },
+    favOn: { color: '#e5484d' },
     err: { color: '#ff8a8a', fontFamily: F, fontSize: 13, textAlign: 'center' },
     pausedBanner: {
       position: 'absolute', alignSelf: 'center', zIndex: 60,

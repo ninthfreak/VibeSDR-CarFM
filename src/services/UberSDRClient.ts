@@ -54,6 +54,12 @@ export interface SDRCallbacks {
   /** Link quality: 0=down, 1=poor(red), 2=fluctuating(yellow), 3=good(green).
    *  Derived from frame inter-arrival jitter, stalls, ping RTT, reconnects. */
   onLink?:      (q: 0 | 1 | 2 | 3) => void;
+  /** True from the moment a recovery starts (socket torn down) until the first
+   *  frame arrives on the fresh one. The watch cannot infer this — from the wrist
+   *  a recovery-in-progress and a dead phone look identical — so the phone, which
+   *  knows, says so. Drives the watch's "reconnecting" pill instead of a black
+   *  overlay thrown over a recovery that is working. */
+  onReconnecting?: (busy: boolean) => void;
   onDbg?:       (msg: string) => void;
   /** VibeServer: the serving device's supported tuner gains (tenths of dB), so a
    *  remote client can populate its gain slider (it can't query the HW natively). */
@@ -86,6 +92,47 @@ const U8_DBFS_OFFSET = -256;
 // quiet, after which the server's acked state is adopted in one step.
 const VIEW_SEND_MS   = 33;
 const VIEW_SETTLE_MS = 300;
+
+// ── Spectrum starvation watchdog ────────────────────────────────────────────
+// The audio WS has a native watchdog (VibePowerModule.reviveIfDead) that runs in
+// the background. The spectrum WS had none: its only recovery paths were onclose
+// (which a half-open socket never fires) and SDRScreen's AppState `active`
+// handler (which never runs while the phone is locked in a pocket). On cellular
+// — CGNAT rebinds on cell handover, RRC idle transitions, IP changes — the TCP
+// flow is silently invalidated with no FIN/RST, so the socket sat OPEN and
+// starving forever. _evalLink() below has ALWAYS computed the `starving`
+// condition; it just never acted on it. Audio and tuning healed themselves, the
+// waterfall stayed dead. That is the whole bug (field-confirmed 2026-07-13).
+//
+// Detection is PONG-FIRST and deliberately so. A frame-cadence threshold has to
+// distinguish "socket is dead" from "the feed is legitimately slow" — and the
+// feed is legitimately slow on purpose (the idle saver's rate divisor, shared
+// channels' hardcoded ÷3, and any future battery-saving divisor). The pong is an
+// active probe: it does not care what the frame rate is.
+const WATCHDOG_TICK_MS  = 2_000;
+// Two missed 5s ping cycles plus margin. This is the PRIMARY detector.
+const PONG_TIMEOUT_MS   = 12_000;
+// Frame-staleness backstop, in case a server answers pings but stops sending.
+// Scaled off the divisor we ourselves commanded (see _staleLimitMs) rather than
+// off observed gap statistics — which, when the feed has stopped, are describing
+// a feed that has stopped.
+const STALE_MIN_MS      = 10_000;
+// A socket that opened but never delivered a single frame is the reconnect-race
+// (Hole 2): the spectrum re-attached to a session the server had already reaped.
+// It connects fine, receives nothing, and — being OPEN — never retries.
+const NO_FIRST_FRAME_MS = 10_000;
+// A flapping cellular path must not thrash the server with session churn: the
+// server counts connections. One forced reopen per window, whatever asks for it.
+const FORCE_REOPEN_MS   = 15_000;
+// How long a reopen waits for audio to confirm the session is alive before going
+// ahead regardless (the session may be fine and only the spectrum flow dead).
+const AUDIO_WAIT_MS     = 5_000;
+// connect() gives native audio 1s to register the session before the spectrum
+// subscribes. Every recovery path must honour the same ordering or it races.
+const AUDIO_SETTLE_MS   = 1_000;
+// Reopens that produced no frames before we stop trusting the session itself and
+// re-POST /connection. _openSpectrumWs never re-registers — only connect() does.
+const REOPENS_BEFORE_RECHECK = 2;
 
 // ── Client class ──────────────────────────────────────────────────────────────
 
@@ -420,6 +467,10 @@ export class UberSDRClient {
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     if (this.sendTimer)      { clearTimeout(this.sendTimer);      this.sendTimer = null; }
     if (this.settleTimer)    { clearTimeout(this.settleTimer);    this.settleTimer = null; }
+    // The watchdog must be inert while paused: a deliberately-closed socket is
+    // not a starving one, and "paused" is a state the watch is told about.
+    this._stopWatchdog();
+    this._setReconnecting(false);
     this.pendingView = null;
     this.spectrumWs?.close();
     this.spectrumWs = null;
@@ -443,6 +494,8 @@ export class UberSDRClient {
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     if (this.sendTimer)      { clearTimeout(this.sendTimer);      this.sendTimer = null; }
     if (this.settleTimer)    { clearTimeout(this.settleTimer);    this.settleTimer = null; }
+    this._stopWatchdog();
+    this._setReconnecting(false);
     this.pendingView = null;
     this.spectrumWs?.close();
     this.spectrumWs = null;
@@ -493,6 +546,14 @@ export class UberSDRClient {
     ws.binaryType = 'arraybuffer';
     this.spectrumWs = ws;
 
+    // Per-socket, NOT per-client: lastFrameAt carries across reopens, so it can't
+    // answer "has THIS socket ever delivered anything?" — which is the question
+    // that catches a reopen into a reaped session.
+    this.wsOpenedAt      = Date.now();
+    this.framesThisSocket = 0;
+    this.pingSentAt      = 0;
+    this._armWatchdog();
+
     let specMsgCount = 0;
     ws.onopen = () => {
       if (this.destroyed) { ws.close(); return; }
@@ -529,9 +590,16 @@ export class UberSDRClient {
     // Ping doubles as the RTT probe for link quality (server excludes pings
     // from rate limiting, so 5s cadence is safe). One outstanding ping at a
     // time — pong handler computes RTT + jitter EMAs.
+    //
+    // pingSentAt is the timestamp of the OLDEST UNANSWERED ping, not of the last
+    // ping sent. It used to be overwritten on every cycle, which meant it was
+    // always fresh even when no pong had come back for minutes — so it could
+    // measure an RTT but could never detect a link that had stopped answering at
+    // all. Leaving it alone until a pong clears it turns it into the watchdog's
+    // primary death signal, at no extra traffic.
     const ping = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
-        this.pingSentAt = Date.now();
+        if (this.pingSentAt === 0) this.pingSentAt = Date.now();
         ws.send(JSON.stringify({ type: 'ping' }));
       } else clearInterval(ping);
     }, 5_000);
@@ -694,6 +762,180 @@ export class UberSDRClient {
     }
   }
 
+  // ── Starvation watchdog + recovery ──────────────────────────────────────
+  // See the constants block for why this exists and why detection is pong-first.
+  //
+  // It runs in EVERY app state, not just background. The brief that specified it
+  // assumed foreground self-heals via SDRScreen's AppState handler — but that
+  // handler only fires on a lock/unlock TRANSITION, which is a different thing
+  // from "the app is awake". A foregrounded phone whose cellular flow is silently
+  // rebound has exactly the same dead socket and no transition coming. Guarding
+  // on pausedByApp alone is strictly safer, and the 15s rate limit means it
+  // cannot collide with resumeSpectrum()'s own force-reopen.
+
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private wsOpenedAt        = 0;
+  private framesThisSocket  = 0;
+  private lastForceReopenAt = 0;
+  private deadReopens       = 0;   // reopens that produced no frames
+  private reconnecting      = false;
+
+  /** Frame-staleness limit, derived from the divisor WE commanded rather than
+   *  from observed gaps. Shared channels also apply a hardcoded ÷3 server-side,
+   *  so allow for it. Base cadence is ~20fps (50ms). */
+  private _staleLimitMs(): number {
+    const expectedGap = 50 * this.rateDivisor * 3;
+    return Math.max(STALE_MIN_MS, expectedGap * 8);
+  }
+
+  private _armWatchdog() {
+    this._stopWatchdog();
+    this.watchdogTimer = setInterval(() => this._watchdogTick(), WATCHDOG_TICK_MS);
+  }
+
+  private _stopWatchdog() {
+    if (this.watchdogTimer) { clearInterval(this.watchdogTimer); this.watchdogTimer = null; }
+  }
+
+  private _watchdogTick() {
+    if (this.destroyed || this.pausedByApp) return;
+    const ws = this.spectrumWs;
+    // Not OPEN = onclose already owns the recovery. Don't double-drive it.
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    const now = Date.now();
+
+    // 1. PONG TIMEOUT — the link stopped answering. Rate-agnostic, so it is the
+    //    one detector a deliberately-slowed feed cannot fool.
+    if (this.pingSentAt > 0 && now - this.pingSentAt > PONG_TIMEOUT_MS) {
+      this.forceResubscribe('pong-timeout');
+      return;
+    }
+
+    // 2. NO FIRST FRAME — the socket opened into a session that isn't there.
+    if (this.framesThisSocket === 0 && this.wsOpenedAt > 0 &&
+        now - this.wsOpenedAt > NO_FIRST_FRAME_MS) {
+      this.forceResubscribe('no-first-frame');
+      return;
+    }
+
+    // 3. FRAME STALENESS — backstop for a server that pongs but stops sending.
+    if (this.framesThisSocket > 0 && this.lastFrameAt > 0 &&
+        now - this.lastFrameAt > this._staleLimitMs()) {
+      this.forceResubscribe('frames-stale');
+      return;
+    }
+  }
+
+  private _setReconnecting(busy: boolean) {
+    if (busy === this.reconnecting) return;
+    this.reconnecting = busy;
+    this.callbacks.onReconnecting?.(busy);
+  }
+
+  /** Force a fresh spectrum socket. Public because the watch escalates into it
+   *  (its own row-staleness knowledge is otherwise merely displayed) and the
+   *  native network-path monitor fires it on a WiFi↔cellular hop.
+   *
+   *  Rate-limited: a flapping path must not churn server sessions. */
+  forceResubscribe(reason: string) {
+    if (this.destroyed || this.pausedByApp) return;
+    const now = Date.now();
+    if (now - this.lastForceReopenAt < FORCE_REOPEN_MS) {
+      this.dbg(`force-resubscribe (${reason}) SUPPRESSED — ${Math.round((FORCE_REOPEN_MS - (now - this.lastForceReopenAt)) / 1000)}s left in window`);
+      return;
+    }
+    this.lastForceReopenAt = now;
+    this.dbg(`force-resubscribe (${reason})`);
+    this._setReconnecting(true);
+    this._stopWatchdog();
+    // A socket we are replacing that never delivered a single frame is evidence
+    // the SESSION is gone, not just the flow — and no number of reopens can fix
+    // that, because only connect() re-registers. Counted HERE rather than at
+    // detection: detection ticks every 2s and can fire repeatedly while a reopen
+    // is rate-limited, which would have counted our own patience as failures.
+    if (this.framesThisSocket === 0 && this.wsOpenedAt > 0) this.deadReopens++;
+    // Same fresh-socket semantics as resumeSpectrum(): a half-open zombie never
+    // fires onclose, so closing it is defensive, not a handshake.
+    if (this.spectrumWs) {
+      try { this.spectrumWs.close(); } catch { /* already dead */ }
+      this.spectrumWs = null;
+    }
+    void this._reopenSequenced(reason);
+  }
+
+  /** The ordering connect() established, applied to every recovery path.
+   *
+   *  _scheduleReconnect used to reopen after a flat 3s with zero coordination.
+   *  The native audio watchdog can take up to ~12s (8s staleness + 4s tick), so
+   *  after an outage long enough for the server to reap the session, the spectrum
+   *  would reopen FIRST against a session that no longer existed: the socket
+   *  connects, receives nothing, and never retries. Audio confirms the session is
+   *  alive; only then does the spectrum subscribe to it. */
+  private async _reopenSequenced(reason: string) {
+    // Escalation: the session itself is suspect. _openSpectrumWs never re-POSTs
+    // /connection — only connect() does — so a reaped session can never be
+    // re-registered by reopening alone, however many times we try.
+    if (this.deadReopens >= REOPENS_BEFORE_RECHECK) {
+      this.dbg(`${this.deadReopens} dead reopens — re-registering session`);
+      try {
+        await this._checkConnection();
+        this.deadReopens = 0;
+      } catch (e) {
+        this.dbg('session re-register failed: ' + String(e));
+      }
+      if (this.destroyed || this.pausedByApp) { this._setReconnecting(false); return; }
+    }
+
+    await this._awaitAudioAlive();
+    if (this.destroyed || this.pausedByApp) { this._setReconnecting(false); return; }
+
+    this.dbg(`reopening spectrum (${reason})`);
+    this._openSpectrumWs();
+  }
+
+  /** Resolve once native audio is confirmed carrying packets — or give up and let
+   *  the caller open anyway (the session may be fine and only the spectrum dead).
+   *
+   *  Returns immediately on backends whose audio the native module does not own
+   *  (OWRX/Kiwi push external PCM; a local/VibeServer shim runs its own socket),
+   *  where there is no native liveness to wait for. */
+  private async _awaitAudioAlive(): Promise<void> {
+    const mod = VibePowerModule as unknown as {
+      audioStaleness?: () => Promise<number>;
+      revive?: () => void;
+    } | null;
+    if (typeof mod?.audioStaleness !== 'function') {
+      await this._delay(AUDIO_SETTLE_MS);
+      return;
+    }
+
+    const deadline = Date.now() + AUDIO_WAIT_MS;
+    let revived = false;
+    while (Date.now() < deadline) {
+      let stale: number;
+      try { stale = await mod.audioStaleness(); } catch { break; }
+      // −1 = this backend's audio isn't the native engine's to vouch for.
+      if (stale < 0) return;
+      if (stale < 2) {
+        this.dbg(`audio alive (${stale.toFixed(1)}s) — spectrum follows in ${AUDIO_SETTLE_MS}ms`);
+        await this._delay(AUDIO_SETTLE_MS);
+        return;
+      }
+      if (!revived) {
+        revived = true;
+        this.dbg(`audio stale (${stale.toFixed(1)}s) — reviving before spectrum`);
+        mod.revive?.();
+      }
+      await this._delay(500);
+    }
+    this.dbg('audio never confirmed — opening spectrum anyway');
+  }
+
+  private _delay(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
   private _emitSpectrum(frequency: number) {
     // Frame inter-arrival tracking for link quality
     const fNow = Date.now();
@@ -702,6 +944,11 @@ export class UberSDRClient {
       if (this.gapHist.length > 40) this.gapHist.shift();
     }
     this.lastFrameAt = fNow;
+    // FRAMES are the proof of recovery, not a socket that merely opened — a
+    // reopen into a reaped session opens perfectly happily and delivers nothing.
+    if (this.framesThisSocket === 0) this.deadReopens = 0;
+    this.framesThisSocket++;
+    this._setReconnecting(false);
     const s = this.status;
     s.centerHz = frequency;
     s.bwHz     = s.binBandwidth * s.binCount;
@@ -860,10 +1107,20 @@ export class UberSDRClient {
     }
   }
 
+  /** onclose fired — the honest case, where the socket told us it died.
+   *
+   *  Still goes through _reopenSequenced: the close may have been an outage long
+   *  enough for the server to reap the session, and reopening into a reaped
+   *  session is Hole 2. No rate limit here (a close is self-limiting), but the
+   *  reconnecting flag is raised so the watch shows a recovery rather than a
+   *  black screen. */
   private _scheduleReconnect() {
     if (this.destroyed || this.pausedByApp) return;
+    this._setReconnecting(true);
     this.reconnectTimer = setTimeout(() => {
-      if (!this.destroyed) this._openSpectrumWs();
+      this.reconnectTimer = null;
+      if (this.destroyed || this.pausedByApp) return;
+      void this._reopenSequenced('onclose');
     }, 3000);
   }
 }

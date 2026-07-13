@@ -55,6 +55,10 @@ export interface FmdxState {
 export interface FmdxServerInfo {
   antennas: { id: number; name: string }[];
   bwSwitch: boolean;
+  /** The RECEIVER's name/location, from /static_data `tunerName`. Needed wherever a
+   *  txInfo distance is shown: `dist` is measured from the SERVER's QTH, so "46 km"
+   *  is meaningless without saying 46 km from WHERE. */
+  tunerName?: string;
 }
 
 export interface ProfileInfo {
@@ -62,6 +66,34 @@ export interface ProfileInfo {
   name:      string;
   centerHz?: number;  // learned lazily on OWRX (config follows selection)
   bwHz?:     number;
+}
+
+/** One aircraft from an OWRX ADS-B list.
+ *
+ *  Fields are the server's own (verified on-air against a live 1090MHz profile).
+ *  `country`/`ccode` come FROM THE SERVER — no ICAO-range table needed — and are the
+ *  aircraft's REGISTRY, not where the flight departed: a Ryanair 737 is Irish wherever
+ *  it took off from. */
+export interface Aircraft {
+  icao:      string;      // 24-bit address, hex — the only field always present
+  flight?:   string;      // callsign, e.g. RYR4KL
+  reg?:      string;      // registration, e.g. D-AENE (the server calls it `aircraft`)
+  ccode?:    string;      // ISO country of REGISTRY
+  country?:  string;
+  altitude?: number;      // ft
+  speed?:    number;      // kt (ground)
+  vspeed?:   number;      // ft/min — climbing/descending
+  course?:   number;      // degrees
+  squawk?:   string;
+  rssi?:     number;      // dB
+  msgs?:     number;
+  lat?:      number;
+  lon?:      number;
+  /** Great-circle km from the RECEIVER (computed here — the server sends position,
+   *  not distance). Absent when the aircraft hasn't sent a position yet: plenty of
+   *  records carry altitude and speed with no lat/lon at all. */
+  distKm?:   number;
+  bearing?:  number;      // degrees from the receiver
 }
 
 /** A demodulator the backend offers (OWRX reports these; UI gates the picker). */
@@ -137,6 +169,12 @@ export interface SDRBackend {
   setRate(divisor: number): void;
   pauseSpectrum(): void;
   resumeSpectrum(): void;
+  /** Rebuild the spectrum socket NOW — a half-open zombie never fires onclose, so
+   *  nothing else will. Driven by the client's own starvation watchdog, by the
+   *  native network-path monitor, and by the watch when its rows dry up.
+   *  UberSDR only; the other adapters have different pause/socket semantics and
+   *  their own recovery (see BRIEF-watch-fixes §A7). */
+  forceResubscribe?(reason: string): void;
 
   getStatus(): SDRStatus;
   getView(): SDRStatus;
@@ -223,6 +261,11 @@ export interface BackendCallbacks extends SDRCallbacks {
   onFmdxState?: (state: FmdxState) => void;
   /** FM-DX: one-shot server capabilities (antennas, bw switch) from /static_data. */
   onFmdxInfo?: (info: FmdxServerInfo) => void;
+  /** UberSDR: a spectrum recovery is in flight — the socket has been torn down and
+   *  the first frame on its replacement has not arrived yet. The WATCH needs this:
+   *  from the wrist, a phone healing its server link and a phone that has died look
+   *  identical, and only the phone knows which it is. */
+  onReconnecting?: (busy: boolean) => void;
   /** OWRX: the WS closed UNEXPECTEDLY (server crash/restart — common on OWRX),
    *  as opposed to a user pause/navigation. The UI keeps the session alive and
    *  shows a "server stopped responding" prompt instead of silently dropping. */
@@ -251,6 +294,14 @@ export interface BackendCallbacks extends SDRCallbacks {
    *  ACARS/ADSB/WSJT…), one formatted line per record. `replace` true = a live
    *  snapshot (ADS-B list) that supersedes the previous block rather than appends. */
   onDecoderText?: (line: string, replace?: boolean) => void;
+
+  /** OWRX ADS-B: the live aircraft table, STRUCTURED.
+   *
+   *  The same records also become a text blob for the decoder panel — but flattening
+   *  them to text on arrival is why nothing else in the app could ever use them. The
+   *  server sends a rich record (registration country, altitude, speed, vertical
+   *  rate, position, squawk); keep it. */
+  onAircraft?: (list: Aircraft[]) => void;
   /** OWRX: the server/profile's own preset DSP defaults (config `initial_squelch_level`
    *  / `initial_nr_level`), pushed on connect and every profile switch. The adapter
    *  has already applied them to the demod; this just lets the UI sliders reflect the

@@ -80,7 +80,15 @@ export async function detectServerType(url: string): Promise<BackendType | null>
     //
     // Then Kiwi, whose web UI is built ON OpenWebRX and so also contains
     // "openwebrx" — it must beat OWRX.
-    if (/vibeserver|vibesdr/.test(body)) return 'vibeserver';
+    //
+    // MATCH "vibeserver" ONLY — NEVER "vibesdr" (v8.0.0 regression, fixed 8.0.1).
+    // "vibesdr" is the CLIENT's name, not the server's: UberSDR instances carry
+    // vibesdr:// deep-link banners, so that alternative matched genuine UberSDR
+    // pages, and because this rule runs first they were typed as VibeServer — and
+    // the picker then WROTE that back over the saved favourite. "vibeserver" is
+    // safe: it appears in our served page (VIBESERVER, /vibeserver/auth) and has
+    // no reason to appear on anyone else's.
+    if (body.includes('vibeserver')) return 'vibeserver';
     if (body.includes('ubersdr')) return 'ubersdr';
     if (/kiwisdr|kiwi sdr|\/kiwi\/|kiwi_util|owrx_ws_open/.test(body)) return 'kiwi';
     if (body.includes('openwebrx')) return 'owrx';

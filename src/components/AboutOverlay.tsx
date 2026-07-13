@@ -70,6 +70,8 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   { v: 'V5.2.1', detail: 'Privacy: the optional location used to sort the instance list by distance is now taken and shared at approximate (coarse, ~1 km) accuracy only, instead of a precise fix. Location stays entirely optional and every other feature works without it.' },
   { v: 'V5.2.2', detail: 'iPad and tablet polish. The signal meter now frames the frequency correctly on tablets (the coloured level showed above and below the readout on phones but not on larger screens), and the on-screen decoders (RTTY, NAVTEX, WEFAX, SSTV, Morse) now work in landscape on tablets, which have the room a phone doesn’t. The HAPTICS toggle is now hidden on devices with no haptic motor (all iPads, and any Android tablet without one) so it’s no longer a dead button.' },
   { v: 'V6.1.0', detail: 'Networked RTL-SDR. VibeSDR now auto-discovers rtl_tcp servers on your Wi-Fi (via Bonjour/mDNS) and lists them under a new “Discovered” section — no IP typing needed (iOS and Android). And on Android you can now share a plugged-in RTL-SDR over the network as an RTL-TCP server, so an iPhone or any rtl_tcp client can use the dongle remotely — handy for a good antenna location or an always-on phone. Includes an optional bandwidth cap, an editable name shown to other devices, and a live status notification. Plugging in an RTL-SDR on Android now asks whether to listen on the device or share it. The location and local-network permission prompts also now explain exactly what they’re for.' },
+  { v: 'V9.0.0', detail: 'The Apple Watch companion \u2014 the waterfall itself, live on your wrist, drawn from the same data and the same palette as the phone. Turn the Digital Crown to tune, tap the frequency to type one, press and hold for the menu (demodulator, tuning step, zoom, servers). It works with the iPhone LOCKED IN YOUR POCKET, which is the whole point \u2014 and it will start the phone for you: open the watch app with VibeSDR closed and the phone wakes in the background, connects to your default receiver, and the waterfall arrives on your wrist without the phone screen ever coming on. Four screens, chosen by what the receiver actually is: spectrum waterfall, FM-DX tuner (station, distance, RDS), DAB service list, and ADS-B aircraft. Switch receivers from your favourites without touching the phone. Control the iPhone\u2019s system volume and mute from the wrist \u2014 it reads the phone\u2019s REAL volume, including changes you make on the phone, so the two can never disagree. It shows the band you\u2019re in, in words, from the ITU plan for wherever the RECEIVER is, with marks on the ticker showing where that band ends \u2014 and your watch\u2019s own battery, because this is an app you might leave running on a hilltop. When the link is rough it tells you WHICH link: there are two radio hops in the chain (phone-to-server, watch-to-phone) and they fail independently, so a small diagram shows which one is struggling, over a waterfall that keeps drawing. \u2014 FIXED: the waterfall could freeze for good on a locked phone on mobile data and never come back, while audio and tuning carried on working perfectly. A mobile network can silently invalidate a connection without ever closing it, and nothing was watching for that: the spectrum socket sat there, open and dead, forever. VibeSDR now actively probes the link, rebuilds it the moment it stops answering, and reacts instantly when the phone changes network. \u2014 VibeServer: the web client now shows the server\u2019s NAME as well as its address, so there is no IP to remember. FIXED: on first use its sample-rate box read 3.2 MS/s while the receiver was actually running at 2.4 \u2014 it now defaults to 2.4 (the fastest an RTL-SDR can reliably sustain), tells the receiver so the two agree, and marks the higher rates as liable to drop samples. FIXED: on a 1366\u00d7768 laptop the control bar\u2019s buttons overlapped and the signal readout ran off the edge of the window.' },
+  { v: 'V8.0.1', detail: 'Fix: saved favourites could start connecting as a VibeServer instead of the UberSDR receiver they actually are \u2014 and the wrong answer was then saved back onto the favourite. VibeSDR now identifies a VibeServer by a marker only a real one carries, and repairs any favourites that were mislabelled.' },
   { v: 'V8.0.0', detail: 'VibeServer \u2014 turn an Android phone with an RTL-SDR into a receiver anyone on your network can use, from a browser or from VibeSDR itself. The serving phone does all the DSP and sends compressed audio and a ready-made waterfall, so it is roughly 25\u00d7 lighter on the network than raw RTL-TCP and works comfortably over Wi-Fi or a hotspot. Point any browser at the phone\u2019s address and you get the full VibeSDR client \u2014 waterfall and spectrum with the same palettes, click-to-tune, panning and cursor zoom, audio with recording, the decoders (RTTY, NAVTEX, WEFAX, SSTV, FT8 with its map), station search, bookmarks you can export, and OS media controls with artwork. Access is protected by a PIN using challenge-response, so the PIN itself never crosses the network, and you can switch the web client off entirely so only the VibeSDR app can connect. You can leave clients free to choose their own bandwidth, or pin it \u2014 pinned, their picker disappears and says the server set it. The receiver can publish its own location (opt-in, never assumed) by device position or by naming a town or Maidenhead locator, and clients then show the receiver\u2019s name and place, and measure spot distances and band edges from the ANTENNA rather than from wherever the listener happens to be. If the app is killed while serving, the server rebuilds itself and carries on. \u2014 The RTL-TCP box becomes CUSTOM SERVER: type any address and VibeSDR works out what is listening (VibeServer, OpenWebRX, KiwiSDR, UberSDR, FM-DX, rtl_tcp or SpyServer), so one box reaches every backend. Local hardware is now RTL-SDR, with Listen and Use as server side by side. \u2014 Fixes: entering a frequency in a different band now switches to the right demodulator and span (jumping from a medium-wave station to FM used to leave you in AM with a 5 kHz filter); the waterfall no longer shows half a minute of stale history after a big jump; the lower sample rates (0.96 and 1.2 MHz) no longer break up; rtl_tcp no longer plays chipmunks on some rates; dragging the gain slider no longer breaks the audio; panning past the tuned station no longer drops audio or crawls; and auto-contrast now defaults to 5 (10 was too dark). \u2014 The receiver also NAMES THE STATIONS IT CAN HEAR: when a station announces itself over RDS, VibeSDR remembers it against the frequency, so the search bar fills itself in with what this aerial actually receives. It keeps itself honest \u2014 the PI code spots a different broadcaster on a frequency immediately, and a station that goes unheard for 30 days expires rather than sitting on top of static. The name is reconstructed by majority vote across repetitions, so it can recover a name no single transmission delivered cleanly. Save stations to the receiver (shared with everyone) or to your own browser, and import an existing list to either. \u2014 Point a browser at vibesdr.local: no IP address to remember, and a second phone serving on the same network renames itself automatically. \u2014 Station logos and country flags now actually appear, on every backend and on AM and shortwave too, not just FM; where the country genuinely cannot be known (a station arriving on sporadic-E, say) VibeSDR declines to show a flag rather than showing your own country\u2019s.' },
   { v: 'V7.1.0', detail: 'SpyServer compatibility, a reorganised audio menu, and today’s fixes. VibeSDR now connects to SpyServer receivers via sdr:// links (tap one anywhere, or paste sdr://host:port into the Custom URL box) and can save them as favourites — low-bandwidth, so good over mobile data. All audio controls (noise reduction, noise blanker, squelch, auto-notch, recording + playback) moved into a new Audio button to declutter the main menu; the demodulator popup gained the bandwidth sliders and Share moved next to the frequency keypad. You can now favourite the receiver you’re listening to straight from the menu. Every menu section gained a small icon for easier scanning. On FM-DX, recording/library moved into the same Audio button. Fixes: sharing a recording no longer freezes the controls; the waterfall no longer blanks on USB/RTL-TCP at full zoom-out; and iOS cold-start deep links open the linked instance.' },
   { v: 'V7.0.1', detail: 'Networked-radio stability and two iOS fixes. Sharing an RTL-SDR over a phone hotspot or busy Wi-Fi is far more reliable: the sharing phone now holds a Wi-Fi lock so its radio can’t drop into power-save mid-stream, the receiving side keeps a short buffer so a brief Wi-Fi stall no longer breaks the audio, and the sharing screen shows a live link-health indicator. iOS: FM stereo now actually plays in stereo on local hardware and RTL-TCP (it was quietly downmixed to mono), and scanning a QR code or opening a vibesdr:// link with the app closed now goes to the correct receiver instead of your default one.' },
@@ -79,6 +81,65 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
 
 const FUTURE_PLANS: string[] = [
   'There’s no fixed roadmap from here — V4 delivered the big one (local SDR hardware) and V5 replaced its engine with VibeSDR’s own GPL-free DSP. Ongoing work is polish, more decoders and more backends as they come. If general USB SDR access ever lands on iOS, the on-device engine is already cross-platform (it powers RTL-TCP on iPhone today), so Local Hardware would follow.',
+];
+
+/** WHAT VIBESDR WILL NOT DO, and WHY — said plainly, up front, and without apology.
+ *
+ *  Each of these is a question people actually ask, and every one of them has an answer
+ *  that makes VibeSDR look BETTER, not worse: they are principles and legal facts, not
+ *  gaps. A limitation you explain is a design decision; the same limitation left in
+ *  silence is read as a broken app.
+ *
+ *  The WebSDR note deliberately hands off into the CREDITS list that follows it — the
+ *  point being that every backend we DO speak is either open source or has its author's
+ *  blessing, and the credits are the evidence.
+ */
+const LIMITATIONS: { q: string; a: string[] }[] = [
+  {
+    q: 'Why no WebSDR support?',
+    a: ['Intentional. WebSDR (websdr.org) is closed-source software, and its author has not sanctioned third-party clients. VibeSDR only implements platforms that welcome independent clients — every backend it speaks to is either open source or supported with its creator’s blessing (see Credits below). Out of respect for that principle, WebSDR support will not be added.'],
+  },
+  {
+    q: 'Why no native DAB+, DRM, HD Radio, or DMR decoding?',
+    a: [
+      'Patents and codec licensing — not technical difficulty. The VibeDSP engine could implement these demodulators, but the audio codecs behind them are legally encumbered for a shipped app: HD Radio sits on Xperi’s patent portfolio, DAB+ and DRM on HE-AAC/xHE-AAC codec licensing, and DMR, D-STAR, Fusion and NXDN on the AMBE/IMBE vocoder patents. Shipping unlicensed implementations in App Store or Play Store builds is a risk VibeSDR will not take. Genuinely open digital voice modes — Codec2-based FreeDV and M17 — are unencumbered and remain candidates for native support.',
+      'The supported route: many OpenWebRX / OpenWebRX+ servers decode digital modes server-side. When you select such a mode on one of those servers, VibeSDR simply plays the already-decoded PCM audio the server sends — no demodulator or codec ships in, or runs inside, the app. That’s why DAB+ works in VibeSDR on some servers despite none of these decoders existing in the app itself.',
+    ],
+  },
+  {
+    q: 'Why do the skip buttons vanish on FM-DX?',
+    a: ['An FM-DX Webserver is one physical tuner shared by every connected listener — tuning it retunes it for everyone at once. Lock-screen and in-car skip buttons would let you change the station for people you can’t see, so they’re disabled out of courtesy while connected to FM-DX. You’ll see a reminder on the lock-screen artwork too. It’s the same principle behind the connection warning when you join an FM-DX server: one tuner, many listeners.'],
+  },
+];
+
+const V9_CHANGES: string[] = [
+  'VibeSDR on your wrist. A real Apple Watch app — not a remote control with a few buttons, but the waterfall itself, live on the watch, drawn from the same data and the same palette as the phone. Turn the Digital Crown to tune, tap the frequency to type one, press and hold for the menu (demodulator, tuning step, zoom, servers).',
+  'It works with the iPhone LOCKED IN YOUR POCKET, which is the whole point. It will even start the phone for you: open the watch app with VibeSDR closed and the phone wakes up in the background, connects to your default receiver, and the waterfall arrives on your wrist without the phone screen ever coming on.',
+  'Four screens, chosen by what the receiver actually is: the spectrum waterfall, the FM-DX tuner (with the station, its distance and its RDS), the DAB service list, and the ADS-B aircraft table. Switch receivers from your favourites without touching the phone.',
+  'Control the iPhone’s volume from the wrist, and mute it. It reads the phone’s REAL system volume — including changes you make on the phone itself — so the two can never disagree.',
+  'The band you are in, in words (“20m Ham Band”, “41m Broadcast Band”), from the ITU band plan for wherever the RECEIVER is — with marks on the frequency ticker showing where that band ends. And your watch’s own battery, next to the clock, because this is an app you might leave running on a hilltop.',
+  'When the link is rough, the watch now tells you WHICH link. There are two radio hops in the chain — phone-to-server, and watch-to-phone — and they fail independently. A small diagram shows which one is struggling, over a waterfall that keeps drawing; tuning goes on working throughout, and the app says so rather than throwing up a blank screen.',
+  'FIXED: the waterfall could freeze for good on a locked phone, on mobile data, and never come back — while audio and tuning carried on working perfectly. A mobile network can silently invalidate a connection without ever closing it, and nothing was watching for that: the spectrum socket sat there, open and dead, forever. VibeSDR now actively probes the link, rebuilds it the moment it stops answering, and reacts instantly when the phone changes network (Wi-Fi to mobile and back).',
+  'VibeServer: the web client now shows the server’s NAME as well as its address (vibesdr-yourphone.local), so there is no IP to remember, and it survives your router handing the phone a different address tomorrow.',
+  'VibeServer FIXED: on first use the web client’s sample-rate box showed 3.2 MS/s while the receiver was actually running at 2.4 — it was reporting a rate the radio was not using. It now defaults to 2.4 MS/s (the fastest an RTL-SDR can reliably sustain), tells the receiver so the two agree, and marks the higher rates as liable to drop samples.',
+  'VibeServer FIXED: on a smaller laptop screen (1366×768 and below) the control bar’s buttons overlapped each other and the signal readout ran off the edge of the window. The whole bar now scales properly down to 1280×720.',
+];
+
+const V8_0_1_CHANGES: string[] = [
+  'Fixed: your saved favourites could start connecting as a VibeServer instead of the UberSDR receiver they actually are. VibeSDR works out what kind of server it is talking to by looking at its web page — and it was treating the word “VibeSDR” as evidence of a VibeServer. But UberSDR receivers carry a “open in VibeSDR” link of their own, so a perfectly ordinary UberSDR looked like one of ours. Worse, the wrong answer was then saved back onto the favourite. VibeSDR now looks for a marker only a real VibeServer carries, and repairs any favourites that were mislabelled.',
+];
+
+const V8_CHANGES: string[] = [
+  'VibeServer — turn an Android phone with an RTL-SDR into a receiver anyone on your network can use, from a web browser or from VibeSDR on another phone. Point a browser at the phone’s address and the full client is there: no install, no app.',
+  'The serving phone does all the DSP and sends compressed audio plus a ready-made waterfall, so it is roughly 25× lighter on the network than raw RTL-TCP — it works comfortably over Wi-Fi, and even over a phone hotspot.',
+  'The web client is the real thing, not a cut-down view: the same waterfall palettes and colouring as the app, click-to-tune, panning and cursor zoom, audio with recording, the decoders (RTTY, NAVTEX, WEFAX, SSTV, and FT8 with its map), station search, bookmarks you can export, the band plan, and OS media controls with artwork on the lock screen. The decoders run on the server, so a browser never has to do any DSP.',
+  'PIN protected by challenge-response, so the PIN itself never crosses the network — or run it open on a LAN you trust. You can also switch the web client off entirely, so only the VibeSDR app can connect and nobody stumbles into your receiver from a URL.',
+  'Reach it by name: point a browser at vibesdr.local — no IP address to remember. A second phone serving on the same network renames itself automatically.',
+  'The receiver names the stations it can hear. When a station announces itself over RDS, VibeSDR remembers it against the frequency, so the search bar fills itself in with what this aerial actually receives rather than a schedule of what merely exists. The station’s PI code keeps it honest — a different broadcaster on the same frequency is spotted immediately — and the name is reconstructed by majority vote across repetitions, so it can recover a name that no single transmission delivered cleanly.',
+  'Receiver location, opt-in. Granting location to sort a server list is not consent to broadcast your position, so publishing stays off until you choose it: use the device’s coarse position, name a town, or give a Maidenhead locator (which needs no internet — the shed case). Clients then measure spot distances, map centring and the regional band plan from the ANTENNA, not from wherever the listener happens to be sitting.',
+  'The RTL-TCP box becomes CUSTOM SERVER: type any address and VibeSDR works out what is listening — VibeServer, OpenWebRX, KiwiSDR, UberSDR, FM-DX, rtl_tcp or SpyServer — so one box reaches every backend. Local hardware is now RTL-SDR, with Listen and Use as server side by side.',
+  'Station logos and country flags now actually appear — on every backend, and on AM and shortwave too, not just FM. Where the country genuinely cannot be known (a station arriving on sporadic-E, say) VibeSDR declines to show a flag rather than showing your own country’s.',
+  'Fixes: entering a frequency in a different band now switches to the right demodulator and span (jumping from a medium-wave station to FM used to leave you in AM with a 5 kHz filter); the waterfall no longer shows half a minute of stale history after a big jump; the lower sample rates (0.96 and 1.2 MHz) no longer break up; rtl_tcp no longer plays chipmunks on some rates; dragging the gain slider no longer breaks the audio; and panning past the tuned station no longer drops audio or crawls.',
 ];
 
 const V7_1_CHANGES: string[] = [
@@ -262,7 +323,31 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
             <Text style={styles.link}>Visit my UberSDR instance: stuey3d.tunnel.ubersdr.org</Text>
           </TouchableOpacity>
 
-          <Text style={styles.section}>WHAT'S NEW IN V8.0.0</Text>
+          <Text style={styles.section}>WHAT'S NEW IN V9.0.0</Text>
+          {V9_CHANGES.map((c) => (
+            <View key={c} style={styles.bulletRow}>
+              <Text style={styles.bulletDot}>•</Text>
+              <Text style={styles.bulletText}>{c}</Text>
+            </View>
+          ))}
+
+          <Text style={styles.section}>V8.0.1 CHANGES</Text>
+          {V8_0_1_CHANGES.map((c) => (
+            <View key={c} style={styles.bulletRow}>
+              <Text style={styles.bulletDot}>•</Text>
+              <Text style={styles.bulletText}>{c}</Text>
+            </View>
+          ))}
+
+          <Text style={styles.section}>V8.0.0 CHANGES</Text>
+          {V8_CHANGES.map((c) => (
+            <View key={c} style={styles.bulletRow}>
+              <Text style={styles.bulletDot}>•</Text>
+              <Text style={styles.bulletText}>{c}</Text>
+            </View>
+          ))}
+
+          <Text style={styles.section}>V7.1.0 CHANGES</Text>
           {V7_1_CHANGES.map((c) => (
             <View key={c} style={styles.bulletRow}>
               <Text style={styles.bulletDot}>•</Text>
@@ -347,6 +432,19 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
             <Text key={i} style={styles.body}>{p}</Text>
           ))}
 
+          {/* Deliberately placed immediately BEFORE the credits: the WebSDR answer says
+              every backend we do speak is either open source or has its author's
+              blessing, and the list that follows is the evidence for that claim. */}
+          <Text style={styles.section}>LIMITATIONS — AND WHY THEY&rsquo;RE DELIBERATE</Text>
+          {LIMITATIONS.map((l) => (
+            <View key={l.q}>
+              <Text style={styles.limQ}>{l.q}</Text>
+              {l.a.map((p, i) => (
+                <Text key={i} style={styles.body}>{p}</Text>
+              ))}
+            </View>
+          ))}
+
           <Text style={styles.section}>CREDITS</Text>
           <Text style={styles.body}>
             VibeSDR stands on the work of other open projects. Thank you to all of them.
@@ -424,6 +522,12 @@ const styles = StyleSheet.create({
     paddingTop: 14,
   },
   body: { color: 'rgba(255,255,255,0.85)', fontFamily: F, fontSize: 13, lineHeight: 19, marginBottom: 8 },
+  /** The question, in the Limitations section. Brighter than the answer, so the section
+   *  can be SKIMMED — people arrive here with one specific question, not to read an essay. */
+  limQ: {
+    color: '#ffe566', fontFamily: F, fontSize: 13, lineHeight: 19,
+    marginTop: 4, marginBottom: 4,
+  },
 
   bulletRow:  { flexDirection: 'row', gap: 8, marginBottom: 5, paddingRight: 4 },
   bulletDot:  { color: '#ffe566', fontFamily: F, fontSize: 13, lineHeight: 19 },

@@ -72,7 +72,8 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { getColorLUT } from '../assets/colormapUtils';
 import type { SDRStatus } from '../services/UberSDRClient';
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
-import { BAND_PLAN, type Band } from '../constants/bandPlan';
+import { watchProvider } from '../services/watchProvider';
+import { BAND_PLAN, BAND_HEX, type Band } from '../constants/bandPlan';
 
 // ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
 
@@ -82,11 +83,14 @@ const ROWS     = 256;  // waterfall history depth
 
 // Band type → colour. Indices match v1.5 BAND_COLS: ham=red, broadcast=blue,
 // utility=green, cb=orange. (Screenshot reference: 40m Ham red, 41m B/C blue.)
+// Derived from BAND_HEX (bandPlan.ts) so the phone's band plan and the WATCH's band
+// label can never drift apart. Same values as before: ham #CF0000, broadcast #0900FF,
+// utility #07BD00, cb #FF7700, all at 0.92.
 const BAND_COLS: Record<string, string> = {
-  ham:       'rgba(207,0,0,0.92)',
-  broadcast: 'rgba(9,0,255,0.92)',
-  utility:   'rgba(7,189,0,0.92)',
-  cb:        'rgba(255,119,0,0.92)',
+  ham:       hexRgba(BAND_HEX.ham, 0.92),
+  broadcast: hexRgba(BAND_HEX.broadcast, 0.92),
+  utility:   hexRgba(BAND_HEX.utility, 0.92),
+  cb:        hexRgba(BAND_HEX.cb, 0.92),
 };
 
 // ── Helpers (ported verbatim from v1.5) ──────────────────────────────────────
@@ -593,8 +597,21 @@ function WaterfallView({
   // uniforms — with no GL context in the background that spins the native_modules
   // queue ("EGLConsumer is not attached to an OpenGL ES context" spam) and starves
   // the audio DSP. Unmounting is the only reliable stop; it rebuilds on resume.
-  const bgRef = useRef(false);
-  const [active, setActive] = useState(true);
+  // INITIALISED FROM AppState.currentState, not assumed foreground.
+  //
+  // A `change` event only fires on a TRANSITION. When iOS cold-launches the app
+  // straight into the BACKGROUND — which is exactly what the Apple Watch does when it
+  // wakes the phone — no transition ever happens, so these stayed `foreground` and the
+  // whole Skia tree mounted: four Canvases, GPU surfaces, the Reanimated glide. That
+  // is the "EGLConsumer is not attached to an OpenGL ES context" / starves-the-audio-
+  // DSP case described above, running with nobody looking at the screen.
+  //
+  // Ask what state we are ACTUALLY in. Then a headless launch mounts no renderer at
+  // all, and the watch is fed by the cheap raw-spectrum path that already exists for
+  // the locked phone.
+  const startedActive = AppState.currentState === 'active';
+  const bgRef = useRef(!startedActive);
+  const [active, setActive] = useState(startedActive);
   useEffect(() => {
     const sub = AppState.addEventListener('change', (s) => {
       const bg = s !== 'active';
@@ -620,6 +637,10 @@ function WaterfallView({
   frameCfg.current = { width, wfTop, specH, specShow, peakHold,
                        smoothTune, rowsPerFrame: ROWS_PER_FRAME };
 
+  // Geometry the watch needs to crop a VFO-centred slice out of the row.
+  const watchCfg = useRef({ tuneHz, filterLow, filterHigh });
+  watchCfg.current = { tuneHz, filterLow, filterHigh };
+
   const handleFrame = useCallback((fbins: Float32Array, fstatus: SDRStatus) => {
     // Backgrounded: audio keeps playing on its own native path, but the whole
     // visual frame path (Reanimated withTiming glide + reveal/tween setIntervals
@@ -633,6 +654,21 @@ function WaterfallView({
 
     // 1. M9PSY pipeline + UberSDR auto-range
     const frame = proc.current.process(fbins, fstatus.centerHz, fstatus.bwHz);
+
+    // While the phone is rendering, the watch BORROWS this row rather than
+    // running its own SignalProcessor over 4096 bins on this same thread — that
+    // duplicate pass stole the headroom the spectrum tween needs and showed up as
+    // a jerky trace. Forwarding a row we already have is nearly free, and it's
+    // pixel-identical to what's on screen. (Locked phone: no renderer, so
+    // watchProvider does its own DSP from SDRScreen.onSpectrum instead.)
+    const wc = watchCfg.current;
+    watchProvider.pushProcessedRow(frame.row, {
+      centerHz:   fstatus.centerHz,
+      bwHz:       fstatus.bwHz,
+      tuneHz:     wc.tuneHz,
+      filterLow:  wc.filterLow,
+      filterHigh: wc.filterHigh,
+    });
     // dB axis labels — 2dB HYSTERESIS, not just rounding: a noisy floor
     // hovering on a .5 boundary flipped the rounded value every few frames,
     // re-rendering the whole WaterfallView tree at up to 10Hz (profiled:

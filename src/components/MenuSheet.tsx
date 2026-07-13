@@ -679,63 +679,10 @@ export default function MenuSheet({
               <Btn label="RTL-SDR Controls  ›" full onPress={onLocalHardware} />
             </>)}
 
-            {/* ── PROFILE (OWRX only — hidden unless the backend reports profiles) ── */}
-            {profiles.length > 0 && (<>
-              <SectionLabel label="PROFILE" icon="profile" first />
-              {sdrGroups.some((g) => g.inUse) && (
-                <View style={styles.etiquette}>
-                  <Text style={styles.etiquetteText}>
-                    <Text style={styles.etiquetteLead}>Etiquette: </Text>
-                    if an SDR shows IN USE, check chat before changing its profile — you may interrupt another listener.
-                    {clientCount > 0 ? `  ${clientCount} user${clientCount === 1 ? '' : 's'} online.` : ''}
-                  </Text>
-                </View>
-              )}
-              <View style={styles.profileDrop}>
-                <TouchableOpacity style={styles.profileDropHead} onPress={() => setProfileOpen((o) => !o)} activeOpacity={0.7}>
-                  <Text style={styles.profileDropHeadText} numberOfLines={1}>
-                    {profiles.find((p) => p.id === activeProfileId)?.name ?? 'Select profile'}
-                  </Text>
-                  <Text style={styles.profileDropChevron}>{profileOpen ? '▴' : '▾'}</Text>
-                </TouchableOpacity>
-                {profileOpen && (
-                  <ScrollView ref={profScroll} style={[styles.profileDropList, { maxHeight: dropMaxH }]} nestedScrollEnabled
-                              keyboardShouldPersistTaps="handled">
-                    {/* Flat children (header rows + item rows) so each item's
-                        onLayout y is content-relative → scroll-to-current works. */}
-                    {sdrGroups.flatMap((g) => {
-                      const isCurrentSdr = g.items.some((it) => it.id === activeProfileId);
-                      return [
-                        <View key={'h:' + g.sid} style={styles.sdrHeadRow}>
-                          <Text style={styles.sdrHeadText} numberOfLines={1}>{g.sdrName}</Text>
-                          {isCurrentSdr && <Text style={[styles.sdrBadge, styles.sdrBadgeCurrent]}>CURRENT</Text>}
-                          {g.inUse && !isCurrentSdr && <Text style={[styles.sdrBadge, styles.sdrBadgeInUse]}>IN USE</Text>}
-                        </View>,
-                        ...g.items.map((it) => {
-                          const active = it.id === activeProfileId;          // our own pick (green)
-                          const serverActive = it.id === g.activeProfileId;  // tuned on the server (amber)
-                          return (
-                            <TouchableOpacity
-                              key={it.id}
-                              style={[styles.profileDropItemSub, serverActive && !active && styles.profileItemInUse]}
-                              onLayout={e => { profY.current[it.id] = e.nativeEvent.layout.y; }}
-                              onPress={() => { onSelectProfile?.(it.id); setProfileOpen(false); }}
-                              activeOpacity={0.7}>
-                              <Text style={[styles.profileDropItemText,
-                                            serverActive && !active && styles.profileTextInUse,
-                                            active && styles.profileChipTextActive]} numberOfLines={1}>
-                                {active ? '✓ ' : serverActive ? '● ' : ''}{it.label}
-                                {serverActive && !active ? '  (in use)' : ''}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        }),
-                      ];
-                    })}
-                  </ScrollView>
-                )}
-              </View>
-            </>)}
+            {/* PROFILE moved to the FREQUENCY popup: on OWRX a profile IS a frequency
+                choice (it's how you pick the band), so it belongs where you change
+                frequency — and the menu sheet sitting over the decoder panel made a
+                decoding profile look like it produced nothing. See ProfilePicker. */}
 
             {/* ── DAB PROGRAMME (OWRX — only when a DAB ensemble is tuned) ── */}
             {dabProgrammes.length > 0 && (<>
