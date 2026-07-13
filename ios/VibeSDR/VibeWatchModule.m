@@ -42,7 +42,9 @@ RCT_EXTERN_METHOD(sendState
                   : (NSString *)why link
                   : (nonnull NSNumber *)link band
                   : (NSString *)band bandCol
-                  : (NSString *)bandCol)
+                  : (NSString *)bandCol bandLo
+                  : (nonnull NSNumber *)bandLo bandHi
+                  : (nonnull NSNumber *)bandHi)
 
 RCT_EXTERN_METHOD(sendSettings
                   : (NSString *)lutB64 smoothing

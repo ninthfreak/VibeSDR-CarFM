@@ -191,23 +191,7 @@ struct ContentView: View {
       // watch ~34% of a core, and this is the one screen you'd leave running on a hilltop
       // — so the number you'd reach for is on the screen you're already looking at.
       // pointer-events off: it must never eat a tap meant for the waterfall.
-      VStack {
-        HStack(spacing: 5) {
-          // The band name gets the left of the strip — it's the widest thing here and the
-          // only one that varies in length, so it takes the slack.
-          bandLabel
-            .padding(.leading, 6)       // off the corner curve
-          Spacer(minLength: 2)
-          BatteryPill(level: link.battery)
-            .padding(.trailing, 62)     // the clock owns the corner; sit to its left
-        }
-        // LINE IT UP WITH THE CLOCK. The clock is NOT flush to the bezel — watchOS sits it
-        // ~11pt down — so anything pinned to the top edge floats visibly above it and
-        // reads as a mistake. This lands the strip's centre on the clock's.
-        .padding(.top, 19)
-        Spacer()
-      }
-      .allowsHitTesting(false)
+      topStrip
 
       // DEGRADE, DON'T BLOCK.
       //
@@ -244,6 +228,15 @@ struct ContentView: View {
 
       VStack(spacing: 2) {
         Spacer()
+        // THE BAND, with the ticker — not at the top of the screen.
+        //
+        // The top row of the waterfall is the line that arrived a moment ago: it is the
+        // NEWEST data and the only part you are actually tuning by. Putting a label there
+        // covers the very thing you are looking at. Down here the waterfall is already
+        // seconds old and nobody is reading it, so the label costs nothing — and it now
+        // sits directly above the band-boundary marks it explains, which is where it
+        // belonged all along.
+        bandLabel
         ticker
         Button { showNumpad = true } label: { readout }
           .buttonStyle(.plain)
@@ -1003,15 +996,28 @@ struct ContentView: View {
         ctx.draw(label, at: CGPoint(x: cx, y: 5), anchor: .center)
         hz += stepHz
       }
+
+      // BAND BOUNDARIES — a MARK, not a wash.
+      //
+      // Tinting the whole strip was tried and it earns nothing: it is either too faint to
+      // notice or too strong to read the tick labels through, and either way it only tells
+      // you WHICH band you're in — which the label above already says, in words. A mark at
+      // the edge tells you something the label cannot: how far you are from leaving it.
+      // That is the thing you want to know while the crown is turning under your finger.
+      let edges = [link.bandLo, link.bandHi].filter { $0 > 0 && $0 > lo && $0 < hi }
+      let edgeCol = link.bandColor ?? .white
+      for e in edges {
+        let px = x(e)
+        // Full-height bar in the band's own colour, with a dark keyline either side so it
+        // survives a bright tick label landing on top of it.
+        ctx.fill(Path(CGRect(x: px - 2, y: 0, width: 4, height: size.height)),
+                 with: .color(.black.opacity(0.85)))
+        ctx.fill(Path(CGRect(x: px - 1, y: 0, width: 2, height: size.height)),
+                 with: .color(edgeCol))
+      }
     }
     .frame(height: 14)
-    // TINTED BY THE BAND. A dark scrim first — it has to stay legible over a bright
-    // waterfall, and that is what darkening is for — then a WHISPER of the band's colour
-    // on top. It is a cue, not a decoration: at this size a strong fill would fight the
-    // tick labels it exists to carry, so 0.22 is deliberately near the threshold of
-    // noticing. Ham reads warm, broadcast reads cool, and you learn it without being told.
     .background(.black.opacity(0.45))
-    .background((link.bandColor ?? .clear).opacity(0.22))
     .clipShape(RoundedRectangle(cornerRadius: 4))
   }
 
@@ -1027,17 +1033,51 @@ struct ContentView: View {
     Group {
       if !link.bandName.isEmpty {
         Text(link.bandName)
-          .font(.system(size: 11, weight: .semibold, design: .rounded))
-          .foregroundStyle(link.bandColor.map { $0.opacity(0.95) } ?? .white.opacity(0.8))
+          // WHITE. It was drawn in the BAND'S colour, and that is a mistake this app has
+          // a rule against: legibility comes from darkening, never from the accent. A
+          // band-blue label 11pt tall on a dark strip is simply not readable — the colour
+          // belongs on the boundary MARK, which is a shape and can carry it, not on the
+          // text, which cannot.
+          .font(.system(size: 10, weight: .semibold, design: .rounded))
+          .foregroundStyle(.white)
           .lineLimit(1)
-          .minimumScaleFactor(0.75)
-          .padding(.horizontal, 6)
+          .minimumScaleFactor(0.7)
+          .padding(.horizontal, 7)
           .padding(.vertical, 2)
-          // The same scrim rule as every other piece of chrome: a red band label over a
-          // red-hot waterfall is not a label.
-          .background(.black.opacity(0.55), in: Capsule())
+          // Its own scrim now that it lives over the waterfall rather than inside the top
+          // strip's gradient. Darkening, never frosting — the usual rule.
+          .background(.black.opacity(0.62), in: Capsule())
       }
     }
+  }
+
+  /// A slim dark strip behind the clock's row, carrying the battery.
+  ///
+  /// The band NAME used to live up here too, and it was wrong twice over: the top of the
+  /// screen is the NEWEST spectrum — the line that just arrived — and a label there covers
+  /// exactly the data you are tuning by. It also stacked ABOVE the battery, so the battery
+  /// shifted whenever the label appeared or vanished. The label has moved to the ticker,
+  /// where the waterfall is already seconds old and nobody is reading it. The battery is
+  /// pinned again, and cannot move.
+  private var topStrip: some View {
+    VStack(spacing: 0) {
+      ZStack(alignment: .top) {
+        LinearGradient(colors: [.black.opacity(0.78), .black.opacity(0.5), .clear],
+                       startPoint: .top, endPoint: .bottom)
+          .frame(height: 40)
+
+        HStack {
+          Spacer()
+          BatteryPill(level: link.battery)
+            .padding(.trailing, 62)     // the clock owns the corner
+            // The clock is NOT flush to the bezel (watchOS sits it ~11pt down), so pinning
+            // to the top edge floats visibly above it. This lands on the clock's centre.
+            .padding(.top, 19)
+        }
+      }
+      Spacer()
+    }
+    .allowsHitTesting(false)
   }
 
   /// A 1/2/5 x 10^n step giving ~4 ticks across the span. Tick density therefore

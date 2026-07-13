@@ -38,6 +38,8 @@ enum WK {
   static let muted   = "mu"  // Bool — phone muted. NOT volume-zero; the level is preserved.
   static let band    = "bn"  // String — ITU band plan name ("20m Ham Band"), "" = none
   static let bandCol = "bc"  // String "#rrggbb" — that band's colour, from the phone's plan
+  static let bandLo  = "bl"  // Double, Hz — the band's lower edge (0 = none)
+  static let bandHi  = "bh"  // Double, Hz — the band's upper edge (0 = none)
 }
 
 /// "#rrggbb" → Color. Returns nil for an empty or malformed string, so a band we have no
@@ -144,6 +146,12 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// That band's colour, from the SAME table the phone's band plan draws with — red for
   /// ham, blue for broadcast, green for utility, orange for CB.
   @Published var bandColor: Color? = nil
+  /// The band's EDGES, in Hz. Drawn as boundary marks on the ticker — which is worth more
+  /// than tinting the strip: the label already says WHICH band you're in, but only a mark
+  /// tells you how close you are to leaving it, and that is the thing you want to know
+  /// while a crown is turning under your finger.
+  @Published var bandLo = 0.0
+  @Published var bandHi = 0.0
 
   private var batteryTimer: Timer?
 
@@ -702,6 +710,8 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if let lk = m[WK.link] as? Int { serverLink = lk }
       if let bn = m[WK.band] as? String { bandName = bn }
       if let bc = m[WK.bandCol] as? String { bandColor = hexColor(bc) }
+      if let bl = m[WK.bandLo] as? Double { bandLo = bl }
+      if let bh = m[WK.bandHi] as? Double { bandHi = bh }
       // NO VOLUME HERE — it has its own message (case "vol"). See the isFmdx note above.
       lastStateAt = Date()
       if let lv = m[WK.level] as? Double { level = lv }

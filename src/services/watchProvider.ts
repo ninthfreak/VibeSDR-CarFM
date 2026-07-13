@@ -25,7 +25,7 @@
 import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
 import { getColorLUT } from '../assets/colormapUtils';
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
-import { getPrimaryBandAt, bandHex } from '../constants/bandPlan';
+import { getBandsAtRegion, bandHex } from '../constants/bandPlan';
 
 const Native = NativeModules.VibeWatchModule as
   | {
@@ -34,7 +34,8 @@ const Native = NativeModules.VibeWatchModule as
               lo: number, hi: number, meter: string): void;
       sendState(freq: number, mode: string, step: number, meter: string,
                 level: number, why: string, link: number,
-                band: string, bandCol: string): void;
+                band: string, bandCol: string,
+                bandLo: number, bandHi: number): void;
       sendVolume(vol: number, muted: boolean): void;
       sendFmdx(json: string): void;
       sendStations(json: string): void;
@@ -743,13 +744,36 @@ class WatchProvider {
     // arriving) but is blind to the far one, which is why its warning pill could
     // only ever say "something is rough". Riding the existing 250ms state echo, so
     // this costs no extra WCSession traffic — the one budget that must not move.
-    // The BAND — name and colour — from the phone's own ITU band plan. The wrist must not
-    // hold a second opinion about what band it is on, any more than it holds a second
-    // opinion about the palette: the phone computes, the watch mirrors.
-    const b = getPrimaryBandAt(freq);
+    // The BAND — name, colour and EDGES — from the phone's own ITU band plan. The wrist
+    // must not hold a second opinion about what band it is on, any more than it holds one
+    // about the palette: the phone computes, the watch mirrors.
+    const b = this.primaryBand(freq);
     Native!.sendState(freq, mode, step, this.meter, this.level, this.whyNoRows(),
                       this.linkQuality,
-                      b?.name ?? '', b ? bandHex(b) : '');
+                      b?.name ?? '', b ? bandHex(b) : '',
+                      b?.lo ?? 0, b?.hi ?? 0);
+  }
+
+  /** The ITU region the RECEIVER is in (1/2/3; 0 = unknown). Set by SDRScreen, which
+   *  derives it from the receiver's longitude. */
+  setItuRegion(r: number) { this.ituRegion = r; }
+  private ituRegion = 0;
+
+  /** REGION-AWARE, and it has to be.
+   *
+   *  The band plan carries per-region variants and they genuinely differ: 40m ham runs to
+   *  7200 kHz in Region 1 (Europe) and to 7300 in Region 2, with 41m broadcast starting
+   *  where it stops. `getPrimaryBandAt` ignores regions entirely, so on a UK receiver it
+   *  matched the REGION 2 entry and told the wrist the 40m/41m border was at 7300 — the
+   *  American band plan, on a British radio.
+   *
+   *  Same lookup and same precedence (ham > broadcast > utility) the phone's own band
+   *  crossing uses, so the two can't disagree. */
+  private primaryBand(hz: number) {
+    const order: Record<string, number> = { ham: 0, broadcast: 1, utility: 2 };
+    const bands = getBandsAtRegion(hz, this.ituRegion)
+      .sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9));
+    return bands[0] ?? null;
   }
 
   /** The iPhone's SYSTEM volume (0…1), straight from the KVO observer — so it carries

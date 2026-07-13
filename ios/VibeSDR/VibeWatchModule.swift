@@ -339,15 +339,21 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   ///
   /// Volume is NOT here. It has its own message: it changes on every screen, and a `state`
   /// message asserts that the SDR screen is up (see the isFmdx note in WatchLink).
-  @objc(sendState:mode:step:meter:level:why:link:band:bandCol:)
+  /// `bandLo` / `bandHi` = the band's EDGES in Hz. The watch draws them as boundary marks
+  /// on the ticker, which is worth far more than tinting the whole strip: a wash tells you
+  /// what band you're in (the label already does that), whereas a mark tells you HOW FAR
+  /// you are from leaving it — which is the thing you actually want while turning a crown.
+  @objc(sendState:mode:step:meter:level:why:link:band:bandCol:bandLo:bandHi:)
   func sendState(_ freq: NSNumber, mode: String, step: NSNumber,
                  meter: String, level: NSNumber, why: String, link: NSNumber,
-                 band: String, bandCol: String) {
+                 band: String, bandCol: String,
+                 bandLo: NSNumber, bandHi: NSNumber) {
     guard let s = session, linkAlive else { return }
     s.sendMessage(
       ["k": "state", "f": freq.doubleValue, "m": mode, "st": step.doubleValue,
        "mt": meter, "lv": level.doubleValue, "wy": why, "lk": link.intValue,
-       "bn": band, "bc": bandCol],
+       "bn": band, "bc": bandCol,
+       "bl": bandLo.doubleValue, "bh": bandHi.doubleValue],
       replyHandler: nil,
       errorHandler: nil
     )

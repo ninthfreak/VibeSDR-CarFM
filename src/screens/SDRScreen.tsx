@@ -3319,6 +3319,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     () => deriveItuRegion(route.params.serverLongitude ?? recvLon),
     [recvLon],   // eslint-disable-line react-hooks/exhaustive-deps
   );
+  // The WRIST needs it too — its band label reads off the same plan, and without the
+  // region it was quoting the American 40m/41m border (7300) on a British receiver.
+  useEffect(() => { watchProvider.setItuRegion(ituRegion); }, [ituRegion]);
   const vtsBookmarks = useRef<ServerBookmark[]>([]);
   const [searchBookmarks, setSearchBookmarks] = useState<ServerBookmark[]>([]);
   const [searchBands,     setSearchBands]     = useState<ServerBand[]>([]);
