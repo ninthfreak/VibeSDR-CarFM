@@ -51,17 +51,25 @@ final class WatchAudio {
   func start(_ done: @escaping (Bool, String) -> Void) {
     let session = AVAudioSession.sharedInstance()
     do {
-      // .default policy, NOT .longFormAudio.
+      // .longFormAudio, AND THE ROUTE PICKER IS THE PRICE OF IT.
       //
-      // `.longFormAudio` is exactly what makes watchOS demand you CHOOSE a destination —
-      // it is the policy the Music app uses, which is why Music asks you where to send the
-      // audio and then refuses to play through the speaker. It is designed for a route you
-      // pick and keep, i.e. headphones.
+      // I removed this earlier because it made watchOS demand you choose an output — the
+      // same thing the Music app does — and .default played happily through the speaker with
+      // no fuss. But that fuss IS the entitlement: `.longFormAudio` is the policy that keeps
+      // audio alive when the wrist drops and the screen sleeps. Without it watchOS suspends
+      // the app and cuts the speaker the moment you look away, which for a radio is the same
+      // as not working at all. The picker was not a bug to route around; it was the system
+      // telling us the audio was now long-form.
       //
-      // A radio is not that. We want the BUILT-IN SPEAKER by default (Series 9+/Ultra can
-      // do it), with headphones taking over automatically if they happen to be connected.
-      // The default policy gives us exactly that, and asks nothing of the user.
-      try session.setCategory(.playback, mode: .default, policy: .default, options: [])
+      // Two things this ALONE will not do, both outside the app:
+      //   - WKBackgroundModes = [audio] in Info.plist (we have it — note the iOS spelling
+      //     UIBackgroundModes is silently IGNORED on watchOS, which cost us an earlier round).
+      //   - Settings › General › Return to Clock › <app> › Return to App, which the USER must
+      //     turn on for the app to still be there when the wrist comes back up.
+      //
+      // And the cost is real: speaker playback burns roughly an hour of watch battery per ten
+      // minutes of audio. A genuine design constraint for JR, not a footnote.
+      try session.setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
     } catch {
       lastError = "setCategory: \(error.localizedDescription)"
       done(false, lastError)
