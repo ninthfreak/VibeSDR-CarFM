@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import WatchKit
+import MediaPlayer
 
 /// AUDIO ON THE WATCH ITSELF — speaker or paired headphones, with no phone involved.
 ///
@@ -113,6 +114,56 @@ final class WatchAudio {
   /// alive and the SESSION was torn down (an interruption, or a route change). The log's
   /// `gap=` column separates them — a big gap means we were suspended — and these events say
   /// which flavour of the second case it was. Guessing between them has cost enough.
+  /// BE A MEDIA PLAYER, not just an app that makes noise.
+  ///
+  /// The audio FADED OUT gracefully on wrist-down and the AirPods then wandered off to
+  /// another device — that is not a crash and not a dead socket, it is watchOS deliberately
+  /// DEACTIVATING our session. It does that to an app it does not consider entitled to
+  /// background audio, and the entitlement is not just a plist key: the system grants it to
+  /// the NOW PLAYING app. We were shoving PCM into an engine and declaring a background mode,
+  /// while never telling the system we were playing anything.
+  ///
+  /// So: publish now-playing info and handle the remote commands. This is also what makes the
+  /// crown volume and the Control Centre transport work — JR needs it regardless.
+  private func becomeNowPlaying() {
+    let c = MPRemoteCommandCenter.shared()
+    c.playCommand.isEnabled = true
+    c.pauseCommand.isEnabled = true
+    c.togglePlayPauseCommand.isEnabled = true
+    // A live radio does not seek, and advertising commands we cannot honour is how you get a
+    // transport UI that lies.
+    c.nextTrackCommand.isEnabled = false
+    c.previousTrackCommand.isEnabled = false
+    c.changePlaybackPositionCommand.isEnabled = false
+
+    c.playCommand.addTarget { [weak self] _ in
+      self?.q.async { self?.player.play() }
+      return .success
+    }
+    c.pauseCommand.addTarget { [weak self] _ in
+      self?.q.async { self?.player.pause() }
+      return .success
+    }
+    c.togglePlayPauseCommand.addTarget { [weak self] _ in
+      self?.q.async {
+        guard let self else { return }
+        self.player.isPlaying ? self.player.pause() : self.player.play()
+      }
+      return .success
+    }
+
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = [
+      MPMediaItemPropertyTitle: "648 kHz · AM",
+      MPMediaItemPropertyArtist: "WristSDR",
+      // LIVE. Not a track with a position — say so, or the system draws a scrubber for a
+      // stream that cannot be scrubbed.
+      MPNowPlayingInfoPropertyIsLiveStream: true,
+      MPNowPlayingInfoPropertyPlaybackRate: 1.0,
+    ]
+    MPNowPlayingInfoCenter.default().playbackState = .playing
+    Vitals.crumb("AUDIO now-playing registered")
+  }
+
   private func watchSession() {
     let s = AVAudioSession.sharedInstance()
     NotificationCenter.default.addObserver(
@@ -151,6 +202,7 @@ final class WatchAudio {
     player.play()
     started = true
     watchSession()
+    becomeNowPlaying()
     Vitals.crumb("AUDIO engine started · out=\(out)")
 
     // WHEN THE ENGINE RECONFIGURES, THE GRAPH IS ALREADY TORN DOWN. AVAudioEngine posts this
