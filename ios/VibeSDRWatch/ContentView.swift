@@ -1059,21 +1059,31 @@ struct ContentView: View {
   /// shifted whenever the label appeared or vanished. The label has moved to the ticker,
   /// where the waterfall is already seconds old and nobody is reading it. The battery is
   /// pinned again, and cannot move.
+  /// JUST THE BATTERY, in its own small dark pill, to the left of the clock.
+  ///
+  /// It carried a full-width dark strip for a while, and that was a mistake made for a
+  /// reason that no longer exists: the strip was there to carry the BAND LABEL as well —
+  /// and the label has since moved down to the ticker, where it belongs. What was left was
+  /// a band of black across the newest rows of the spectrum, the ones you are actually
+  /// tuning by, in order to darken one corner.
+  ///
+  /// A strip that also tried to wrap the clock was worse still: the clock is drawn by
+  /// watchOS, outside our coordinate space and inside its own safe-area inset, and chasing
+  /// it produced a badge that shifted about and grew a lump of black off its edge.
+  ///
+  /// So: one badge, one scrim, nothing else. It does not touch the spectrum it doesn't
+  /// need to.
   private var topStrip: some View {
     VStack(spacing: 0) {
-      ZStack(alignment: .top) {
-        LinearGradient(colors: [.black.opacity(0.78), .black.opacity(0.5), .clear],
-                       startPoint: .top, endPoint: .bottom)
-          .frame(height: 40)
-
-        HStack {
-          Spacer()
-          BatteryPill(level: link.battery)
-            .padding(.trailing, 62)     // the clock owns the corner
-            // The clock is NOT flush to the bezel (watchOS sits it ~11pt down), so pinning
-            // to the top edge floats visibly above it. This lands on the clock's centre.
-            .padding(.top, 19)
-        }
+      HStack {
+        Spacer()
+        BatteryPill(level: link.battery)
+          .padding(.trailing, 62)   // the clock owns the corner; sit to its left
+          // The clock is NOT flush to the bezel (watchOS sits it ~11pt down), so pinning to
+          // the top edge floats visibly above it. 22 by eye, not the 19 the arithmetic
+          // gives: the pill's cap makes it read top-heavy, so a true centre-line match sits
+          // visibly high beside the clock's digits.
+          .padding(.top, 22)
       }
       Spacer()
     }

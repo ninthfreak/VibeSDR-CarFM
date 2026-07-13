@@ -91,12 +91,14 @@ struct FmdxView: View {
       // moved between them. A thing that appears on both screens must be positioned by
       // one rule, not by two that happen to agree. (Same numbers as ContentView: the
       // clock sits ~11pt down and owns the right corner.)
+      // Same badge, same numbers, as the waterfall screen — see the note on its `topStrip`.
+      // Positioned by ONE rule shared by both screens; it was sited twice, and it showed.
       VStack {
         HStack {
           Spacer()
           BatteryPill(level: link.battery)
             .padding(.trailing, 62)
-            .padding(.top, 19)
+            .padding(.top, 22)
         }
         Spacer()
       }

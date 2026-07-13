@@ -1834,6 +1834,57 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         let w = logo.size.width * s, h = logo.size.height * s
         logo.draw(in: CGRect(x: box.midX - w / 2, y: box.midY - h / 2, width: w, height: h))
       }
+
+      // FM-DX: SHARED RECEIVER — stamped across the top of the lock-screen artwork.
+      //
+      // The lock screen is exactly where a listener reaches for the skip button that
+      // isn't there, so it is exactly where the reason belongs. One physical tuner,
+      // shared by every listener — a skip would change the station for people you cannot
+      // see, so it is disabled out of courtesy rather than out of incapacity.
+      //
+      // A STAMP, not a paragraph: this artwork is displayed at roughly a third of the
+      // size it is rendered at, so it has to survive being small. Top-centre keeps it
+      // clear of the station logo (bottom-left) and the FM-DX mark (bottom-right).
+      //
+      // The wording is deliberately the same phrase used by the warning shown when you
+      // JOIN an FM-DX server and by the About page — "one tuner, many listeners" — so the
+      // three read as one policy rather than as three separate apologies.
+      if npArtworkType == "fmdx" {
+        let head = "SHARED RECEIVER"
+        let body = "One tuner, many listeners.\nSkip is disabled out of courtesy."
+
+        let para = NSMutableParagraphStyle()
+        para.alignment = .center
+        para.lineSpacing = size.height * 0.008
+
+        let headAttrs: [NSAttributedString.Key: Any] = [
+          .font: UIFont.systemFont(ofSize: size.width * 0.052, weight: .heavy),
+          .foregroundColor: amber,
+          .kern: size.width * 0.006,
+          .paragraphStyle: para,
+        ]
+        let bodyAttrs: [NSAttributedString.Key: Any] = [
+          .font: UIFont.systemFont(ofSize: size.width * 0.038, weight: .medium),
+          .foregroundColor: UIColor(white: 1.0, alpha: 0.70),
+          .paragraphStyle: para,
+        ]
+
+        let w = size.width - pad * 2
+        let headH = (head as NSString).boundingRect(
+          with: CGSize(width: w, height: .greatestFiniteMagnitude),
+          options: .usesLineFragmentOrigin, attributes: headAttrs, context: nil).height
+        let bodyH = (body as NSString).boundingRect(
+          with: CGSize(width: w, height: .greatestFiniteMagnitude),
+          options: .usesLineFragmentOrigin, attributes: bodyAttrs, context: nil).height
+
+        let gap = size.height * 0.012
+        var y = pad * 1.2
+        (head as NSString).draw(in: CGRect(x: pad, y: y, width: w, height: headH),
+                                withAttributes: headAttrs)
+        y += headH + gap
+        (body as NSString).draw(in: CGRect(x: pad, y: y, width: w, height: bodyH),
+                                withAttributes: bodyAttrs)
+      }
     }
     npArtwork = MPMediaItemArtwork(boundsSize: img.size) { _ in img }
   }

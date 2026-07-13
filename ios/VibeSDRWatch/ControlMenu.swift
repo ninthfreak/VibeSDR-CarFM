@@ -103,6 +103,13 @@ struct CoachOverlay: View {
 struct BatteryPill: View {
   /// 0…1, or negative when watchOS can't tell us (simulator, monitoring off).
   let level: Double
+  /// Carry its OWN dark capsule. TRUE when it floats on the raw view; FALSE when it sits
+  /// inside something that is already darkening the background for it.
+  ///
+  /// Both at once is visibly wrong: the capsule pokes out of the bottom of the strip's
+  /// gradient and grows a little lump of black off it. Two scrims stacked is not twice as
+  /// legible, it is one scrim and one blemish.
+  var scrim = true
 
   /// Red at 20% — a wrist has no charger in reach and no time to negotiate.
   private var tint: Color { level <= 0.20 ? .red : .white.opacity(0.85) }
@@ -136,14 +143,15 @@ struct BatteryPill: View {
           .fill(tint)
           .frame(width: 1.5, height: 4)
       }
-      // A SCRIM, because this floats over the WATERFALL. White strokes and white digits
+      // A SCRIM, because this can float over the WATERFALL. White strokes and white digits
       // over a bright amber-and-red spectrum are simply not there. Legibility on this app
       // comes from darkening, never from frosting — frosting blurs but does not darken,
       // so the glyph would still be yellow-on-yellow. (Same rule as every other piece of
-      // chrome on both watch screens.)
-      .padding(.horizontal, 4)
-      .padding(.vertical, 2)
-      .background(.black.opacity(0.55), in: Capsule())
+      // chrome on both watch screens.) Suppressed when a strip is already darkening for us.
+      .padding(.horizontal, scrim ? 4 : 0)
+      .padding(.vertical, scrim ? 2 : 0)
+      .background(scrim ? AnyShapeStyle(Color.black.opacity(0.55))
+                        : AnyShapeStyle(Color.clear), in: Capsule())
       .accessibilityElement(children: .ignore)
       .accessibilityLabel("Watch battery \(pct) percent")
     }

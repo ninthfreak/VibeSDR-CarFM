@@ -4,6 +4,84 @@ VibeSDR is free software under the **GNU GPL v3**. Source: https://github.com/St
 
 ---
 
+## v9.0.0 — The Apple Watch companion (2026-07-13)
+
+### Added — VibeSDR on your wrist
+
+A real Apple Watch app: not a remote control with a few buttons, but **the waterfall
+itself**, live on the watch, drawn from the same data and the same palette as the phone.
+
+- **Turn the Digital Crown to tune.** Tap the frequency to type one on a passcode-style
+  pad. Press and hold the waterfall for the menu — **demodulator**, **tuning step**, zoom,
+  brightness, contrast and your saved servers.
+- **It works with the iPhone locked in your pocket**, which is the whole point — and it
+  will start the phone for you. Open the watch app with VibeSDR closed and the phone wakes
+  in the background, connects to your default receiver, and the waterfall arrives on your
+  wrist **without the phone's screen ever coming on**.
+- **Four screens, chosen by what the receiver actually is:** the spectrum waterfall; the
+  FM-DX tuner (station, distance, RDS); the DAB service list (the Crown *selects* a
+  service — DAB is a list, not a continuum); and the ADS-B aircraft table.
+- **Switch receivers from your favourites** without touching the phone.
+- **Control the iPhone's system volume and mute from the wrist.** It mirrors the phone's
+  *real* volume — including changes you make on the phone itself — so the two can never
+  disagree.
+- **The band you're in, in words** ("20m Ham Band", "41m Broadcast Band"), from the ITU
+  band plan for wherever the **receiver** is — with marks on the frequency ticker showing
+  where that band **ends**.
+- **Your watch's own battery**, next to the clock. A live waterfall costs the watch about
+  a third of a CPU core, and this is an app you might leave running on a hilltop.
+- **A first-run guide on each screen.** Everything the app does on a wrist is a gesture,
+  and gestures are invisible.
+
+### Fixed — the waterfall could freeze for good, and never come back
+
+With the phone **locked in a pocket on mobile data**, the waterfall could stop and stay
+stopped — while audio and tuning carried on working perfectly.
+
+A mobile network can **silently invalidate a connection without ever closing it** (a
+CGNAT rebind on a cell handover does exactly this — no FIN, no RST). The audio stream had
+a watchdog that ran in the background and healed itself. The spectrum stream's only
+recovery ran when the app came back to the *foreground* — which never happens when the
+phone is in your pocket. So the socket sat there, open and dead, forever. That asymmetry
+is why *tuning kept working while the waterfall was frozen*.
+
+VibeSDR now **actively probes the spectrum link** and rebuilds it the moment it stops
+answering, waits for the audio session to confirm itself first (so it can't reconnect into
+a session the server has already reaped), and **reacts instantly when the phone changes
+network** — Wi-Fi to mobile and back.
+
+### Added — the watch tells you *which* link is rough
+
+There are **two radio hops** in the chain — phone-to-server and watch-to-phone — and they
+fail independently. Until now the watch could only shrug. It now shows a small diagram of
+which hop is struggling, **over a waterfall that keeps drawing**; tuning goes on working
+throughout, and the app says so rather than throwing up a blank screen.
+
+### Fixed — VibeServer
+
+- **The sample-rate box was lying.** On first use the web client showed **3.2 MS/s** while
+  the receiver was actually running at 2.4 — it displayed a rate the radio was not using.
+  It now defaults to **2.4 MS/s** (the fastest an RTL-SDR can reliably sustain over USB;
+  above that the dongle silently drops samples), *tells the receiver* so the two agree, and
+  marks the higher rates as liable to drop samples.
+- **The web client collapsed on a smaller laptop.** At 1366×768 the control bar's three
+  blocks overlapped by ~46 px — the REC button sat underneath BOOKMARKS — and the signal
+  readout ran clean off the right-hand edge of the window. The bar now scales properly all
+  the way down to 1280×720.
+- **The server now shows its name as well as its address** (`vibesdr-yourphone.local`), so
+  there's no IP to remember — and it survives the router handing the phone a different
+  address tomorrow, which the IP does not.
+
+### Documentation
+
+- **README and About: a Limitations section**, explaining *why* there is no WebSDR support
+  (its author does not sanction third-party clients, and VibeSDR only implements platforms
+  that welcome them), why digital voice and DAB+/DRM/HD Radio are not decoded natively
+  (patent-encumbered codecs — and how OpenWebRX's server-side decoding is the supported
+  route), and why the skip buttons disappear on FM-DX (one tuner, many listeners).
+
+---
+
 ## v8.0.1 — Favourites fix (2026-07-12)
 
 ### Fixed
