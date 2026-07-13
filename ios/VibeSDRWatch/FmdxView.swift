@@ -91,17 +91,30 @@ struct FmdxView: View {
       // moved between them. A thing that appears on both screens must be positioned by
       // one rule, not by two that happen to agree. (Same numbers as ContentView: the
       // clock sits ~11pt down and owns the right corner.)
-      // Same badge, same numbers, as the waterfall screen — see the note on its `topStrip`.
-      // Positioned by ONE rule shared by both screens; it was sited twice, and it showed.
-      VStack {
-        HStack {
-          Spacer()
-          BatteryPill(level: link.battery)
-            .padding(.trailing, 62)
-            .padding(.top, 22)
-        }
-        Spacer()
+      // Same badge, same corner, same numbers as the waterfall screen — see the note on its
+      // `topStrip`. Positioned by ONE rule shared by both screens; it was sited twice once,
+      // and it visibly shifted as you moved between them.
+      // Same capsule, same numbers, as the waterfall screen — see the note on its `topStrip`.
+      ZStack(alignment: .topTrailing) {
+        // This screen has NO waterfall Canvas, so it has no clock scrim of its own to
+        // inherit — this badge IS the only one, which is why it draws a background here and
+        // none on the waterfall screen.
+        //
+        // 0.62, not the waterfall's 0.75: it sits over a blurred station logo, not over a
+        // bright green spectrum, so the low-battery red already reads. Darkening past what
+        // legibility needs is just a hole in the picture.
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+          .fill(.black.opacity(0.62))
+          .frame(width: 92, height: 22)
+          .padding(.top, 16)
+          .padding(.trailing, 10)
+
+        BatteryPill(level: link.battery, scrim: false)
+          .padding(.trailing, 66)
+          .padding(.top, 21)
       }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+      .ignoresSafeArea()
       .allowsHitTesting(false)
 
       // VOLUME HUD. Without it the crown was moving a value the user could not see — you

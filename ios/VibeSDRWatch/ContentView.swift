@@ -540,12 +540,25 @@ struct ContentView: View {
     // the rest of the chrome.
     // Sits BELOW the top edge: the clock is not flush to the bezel, and a scrim
     // starting at y=2 cut through the digits about halfway down.
-    let cw = size.width * 0.42
+    //
+    // IT CARRIES THE BATTERY TOO. This scrim already existed for the clock; when the
+    // battery badge arrived it got a background of its own, and the two stacked — one
+    // scrim visibly overlaid on another, which is the "two pills" you could see. There is
+    // only ever ONE scrim up here, and this is it. Measured off the device: the clock's
+    // digits start 58.8pt in from the right edge, so 0.47 of the width reaches past the
+    // battery sitting to their left, and nothing wider is spectrum worth spending.
+    //
+    // 0.55 → 0.75. It was 0.55 when it only had to carry WHITE clock digits. It now also
+    // carries the battery's LOW-BATTERY RED, which is a dark colour on a bright green
+    // waterfall and needs a darker ground under it than white ever did. (It read fine back
+    // when two scrims were accidentally stacked — 0.55 over 0.62 is an effective 0.83 —
+    // which is the clue that told us the number, not the shape, was what was carrying it.)
+    let cw = size.width * 0.47
     let ch: CGFloat = 30
     ctx.fill(
       Path(roundedRect: CGRect(x: size.width - cw - 4, y: 11, width: cw, height: ch),
            cornerRadius: 9),
-      with: .color(.black.opacity(0.55))
+      with: .color(.black.opacity(0.75))
     )
 
     // Hairline under the band, so the trace's baseline and the waterfall's top
@@ -1017,7 +1030,11 @@ struct ContentView: View {
       }
     }
     .frame(height: 14)
-    .background(.black.opacity(0.45))
+    // 0.45 → 0.68. It sat at 0.45 while the band label DIRECTLY ABOVE IT sits at 0.62, and
+    // the difference is plainly visible on a bright waterfall: one reads, the other doesn't.
+    // A touch darker still than the label, because the tick text is 8pt against the band
+    // name's 10pt — the smaller the type, the more ground it needs under it.
+    .background(.black.opacity(0.68))
     .clipShape(RoundedRectangle(cornerRadius: 4))
   }
 
@@ -1073,20 +1090,59 @@ struct ContentView: View {
   ///
   /// So: one badge, one scrim, nothing else. It does not touch the spectrum it doesn't
   /// need to.
+  /// THE CLOCK AND THE BATTERY, ON ONE SOFT DARK CORNER.
+  ///
+  /// It went through a full-width strip (which blacked out the newest rows of the spectrum
+  /// — the ones you actually tune by — to darken one corner), and a hard pill that tried to
+  /// WRAP the clock (which chased a badge watchOS draws in its own coordinate space, and so
+  /// wandered and grew a lump of black off its edge). Both had EDGES, and every edge was a
+  /// thing to get wrong.
+  ///
+  /// A radial fade has none. It is dark where the chrome is — the clock and the battery,
+  /// side by side in the top-right — and simply gone before it reaches the spectrum. The
+  /// two badges sit on one background, which is what makes them read as one thing rather
+  /// than as a badge and a floating number.
+  ///
+  /// The dark is HELD at full strength out past the battery (~80pt from the corner) and
+  /// only then allowed to fall away. A fade that starts falling immediately is either too
+  /// weak at the badge or too deep into the waterfall — hold, then drop, and it can be both
+  /// solid where it matters and gone where it doesn't.
+  /// ONE CAPSULE, holding the battery AND the clock.
+  ///
+  /// Drawn at an EXPLICIT size rather than wrapped around its contents. The clock is drawn
+  /// by watchOS, in its own coordinate space and inside its own safe-area inset — there is
+  /// nothing here to lay out around it, so laying out around it was the mistake. A capsule
+  /// of known width, pinned to the corner, simply passes underneath it.
+  ///
+  /// (A radial fade was tried instead and it reads as a smudge, not a badge: soft enough
+  /// not to cost the spectrum anything is soft enough not to look deliberate.)
   private var topStrip: some View {
-    VStack(spacing: 0) {
-      HStack {
-        Spacer()
-        BatteryPill(level: link.battery)
-          .padding(.trailing, 62)   // the clock owns the corner; sit to its left
-          // The clock is NOT flush to the bezel (watchOS sits it ~11pt down), so pinning to
-          // the top edge floats visibly above it. 22 by eye, not the 19 the arithmetic
-          // gives: the pill's cap makes it read top-heavy, so a true centre-line match sits
-          // visibly high beside the clock's digits.
-          .padding(.top, 22)
-      }
-      Spacer()
+    ZStack(alignment: .topTrailing) {
+      // MEASURED, not guessed. Off a device screenshot (Ultra 3, 205x251pt) the clock's
+      // digits run 18.0 → 58.8 pt in from the right edge, centred on y = 27.3, and are
+      // 10.7pt tall. Everything below is derived from those three numbers — which is why
+      // there is no round number anywhere in it.
+      //
+      // Real estate is the whole problem here: every point this covers is a point of
+      // spectrum, and every point it DOESN'T cover is chrome you can't read against a
+      // bright waterfall. There is no slack to be sloppy with, so it is sized to the two
+      // badges and nothing more: 7pt of air around them, and it stops.
+      // NO BACKGROUND HERE. The waterfall Canvas has drawn a clock scrim since long before
+      // the battery existed (see `waterfall`), and it now covers the battery as well. A
+      // badge that brings its own is a second scrim stacked on the first — which is exactly
+      // what you could see, and no amount of reshaping it would have helped.
+      BatteryPill(level: link.battery, scrim: false)   // the canvas scrim darkens for us
+        // The clock's leftmost pixel is 58.8pt in. 66 puts the battery's right edge 7pt
+        // clear of it — enough to read as separate, not enough to waste.
+        .padding(.trailing, 66)
+        // Centred on the clock: 27.3 less half the pill's 13pt height.
+        .padding(.top, 21)
     }
+    // FILL THE SCREEN. Without this the ZStack shrinks to fit its own contents, and
+    // `.topTrailing` then aligns them against nothing — the badge lands in the middle of
+    // the waterfall, which is exactly what it did.
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+    .ignoresSafeArea()      // measure from the REAL edges, not from inside the inset
     .allowsHitTesting(false)
   }
 
