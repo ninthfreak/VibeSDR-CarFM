@@ -31,7 +31,9 @@ enum WK {
   static let needleI = "ni"  // Double, 1..10 — needle intensity
   static let sharp   = "sh"  // Double, 0..10 — waterfall sharpness
   static let peak    = "pk"  // Bool — the phone's peak-hold setting, mirrored
-  static let why     = "wy"  // String — WHY there are no rows: live|paused|idle
+  static let why     = "wy"  // String — WHY there are no rows: live|paused|idle|reconnecting
+  static let link    = "lk"  // Int 0…3 — the PHONE↔SERVER hop's quality (see serverLink)
+  static let vol     = "vo"  // Double 0…1 — the iPhone's SYSTEM volume (see volume)
 }
 
 final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
@@ -71,6 +73,40 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// a dead link all look identical from here, and chasing that cost hours.
   @Published var why = "live"
   @Published var lastStateAt: Date? = nil
+
+  /// Quality of the PHONE↔SERVER hop (0=down, 1=poor, 2=fluctuating, 3=good), as
+  /// the phone's own link meter scores it.
+  ///
+  /// There are TWO radio links in series here — iPhone↔server (WebSocket over
+  /// WiFi/cellular) and watch↔iPhone (WCSession over BT/WiFi) — and they fail
+  /// INDEPENDENTLY. The watch can see its own hop fail, because rows stop arriving.
+  /// It is blind to the far one. So a rough link could only ever be reported as
+  /// "LINK ROUGH", which tells the user nothing they can act on and sent us round
+  /// in circles in the field: a frozen waterfall with a working crown looks the
+  /// same whichever hop broke.
+  ///
+  /// It rides the existing throttled state echo, so it costs no extra WCSession
+  /// traffic — the one budget that must never move (see the wedge notes in
+  /// VibeWatchModule.sendState). Defaults to good: a watch that has heard nothing
+  /// yet must not accuse the server.
+  @Published var serverLink = 3
+
+  /// The iPhone's SYSTEM volume (0…1) — the real one, mirrored.
+  ///
+  /// THE WATCH CONTROLS EXACTLY ONE KNOB, and this is it. The first attempt drove an
+  /// app-level GAIN instead: delivered loudness is `appGain × systemVolume`, two
+  /// independent knobs, and the wrist could only see and turn one of them — so with the
+  /// phone at 50% the meter read FULL while delivering half, and cranking it did
+  /// nothing. The missing piece was never control. It was READBACK of the knob that
+  /// actually matters.
+  ///
+  /// So this carries changes the watch did NOT make too — the phone's hardware buttons,
+  /// Control Centre, a Bluetooth headset's own rocker — because a mirror that only
+  /// reflects your own hand is not a mirror.
+  @Published var volume = 1.0
+  /// Muted is NOT volume-zero — that would lose the level you were listening at, so
+  /// unmuting could not restore it. It gates playback and leaves the volume alone.
+  @Published var muted = false
 
   // ── FM-DX ──────────────────────────────────────────────────────────────────
   //
@@ -308,6 +344,58 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
   func zoom(delta: Int) { pendingZoom += delta; scheduleFlush() }
 
+  /// The crown, in volume mode. Carbon-copy of the tuning architecture, because every
+  /// piece of it has already been debugged: coalesce the detents, PREDICT while turning,
+  /// ADOPT the phone's echo when still.
+  ///
+  /// One detent = one 1/16 step, because 1/16 IS the iPhone's volume quantisation. A
+  /// finer step would round to the same value and the crown would feel dead for a click
+  /// or two at a time.
+  ///
+  /// DELTAS, never absolutes — the phone owns the knob, the wrist only nudges it. Same
+  /// direction-of-truth rule as tuning, and for the same reason: an absolute computed on
+  /// the watch is computed from a value that is at best one hop old.
+  func volume(delta: Int) {
+    predictVolume(delta: delta)
+    pendingVol += delta
+    scheduleFlush()
+  }
+
+  func setMuted(_ m: Bool) {
+    muted = m                       // optimistic: the phone has no mute echo to wait for
+    send(["cmd": "mute", "val": m])
+  }
+
+  private var pendingVol = 0
+  private var volSettle: DispatchWorkItem?
+  /// True while the volume readout is OURS rather than the phone's — so a throttled
+  /// state echo carrying a level we have already turned past cannot yank the meter
+  /// backwards mid-spin. Exactly the `tuning` flag, for exactly the same reason.
+  private var volAdjusting: Bool { volSettle != nil }
+
+  private func predictVolume(delta: Int) {
+    volume = min(1, max(0, volume + Double(delta) / 16))
+    armVolSettle()
+  }
+
+  /// Hand the meter back to the phone once the crown is still. The phone's echo carries
+  /// the SNAPPED truth (iOS quantises to 1/16), which may differ from our prediction if
+  /// we ran into 0 or 1 — so the phone's answer always wins, one clean step later.
+  private func armVolSettle() {
+    volSettle?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.volSettle = nil
+      // ASK, don't wait — same trap as tuning. The phone echoes volume only when it
+      // CHANGES, so a prediction that ran past 0 or 1 produced no change, no echo, and
+      // the wrist would sit on a wrong value forever. A ping makes the phone state its
+      // truth unconditionally.
+      self.ping()
+    }
+    volSettle = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+  }
+
   private func predictTune(delta: Int) {
     guard step > 0, frequency > 0 else { return }   // nothing to predict from yet
     // Same snap the phone applies (SDRScreen.onTuneDelta): a detent lands ON the
@@ -358,6 +446,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     flushScheduled = false
     if pendingTune != 0 { send(["cmd": "tune", "delta": pendingTune]); pendingTune = 0 }
     if pendingZoom != 0 { send(["cmd": "zoom", "delta": pendingZoom]); pendingZoom = 0 }
+    if pendingVol  != 0 { send(["cmd": "vol",  "delta": pendingVol]);  pendingVol  = 0 }
   }
   /// Pick a DAB service. NOT a tune — the phone calls setAudioServiceId(), which
   /// re-sends the demod without touching the frequency.
@@ -550,6 +639,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if let st = m[WK.step] as? Double { step = st }
       if let mt = m[WK.meter] as? String { meter = mt }
       if let w = m[WK.why] as? String { why = w }
+      if let lk = m[WK.link] as? Int { serverLink = lk }
+      // The phone's SNAPPED truth (iOS quantises volume to 1/16). Adopted only when the
+      // crown is still: mid-spin, a throttled echo carries a level we have already
+      // turned past, and taking it would yank the meter backwards — the identical trap
+      // the frequency readout hit, and the identical fix.
+      if !volAdjusting, let vo = m[WK.vol] as? Double {
+        volume = min(1, max(0, vo))
+      }
       lastStateAt = Date()
       if let lv = m[WK.level] as? Double { level = lv }
 

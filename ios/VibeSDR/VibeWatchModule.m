@@ -37,7 +37,9 @@ RCT_EXTERN_METHOD(sendState
                   : (nonnull NSNumber *)step meter
                   : (NSString *)meter level
                   : (nonnull NSNumber *)level why
-                  : (NSString *)why)
+                  : (NSString *)why link
+                  : (nonnull NSNumber *)link vol
+                  : (nonnull NSNumber *)vol)
 
 RCT_EXTERN_METHOD(sendSettings
                   : (NSString *)lutB64 smoothing

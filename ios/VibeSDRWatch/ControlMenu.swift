@@ -7,7 +7,7 @@ import WatchKit
 /// must never be unsure what the crown is about to do: an accidental turn should
 /// be recoverable by knowing, not by guessing.
 enum CrownMode: Equatable {
-  case tune, zoom, brightness, contrast
+  case tune, zoom, brightness, contrast, volume
 
   var glyph: String {
     switch self {
@@ -15,6 +15,7 @@ enum CrownMode: Equatable {
     case .zoom:       return "magnifyingglass"
     case .brightness: return "sun.max.fill"
     case .contrast:   return "circle.lefthalf.filled"
+    case .volume:     return "speaker.wave.2.fill"
     }
   }
 }
@@ -138,6 +139,21 @@ struct ControlMenu: View {
           tile(icon: "magnifyingglass", label: "Zoom", h: h) {
             dismiss(); onPickCrown(.zoom)
           }
+          // The iPhone's SYSTEM volume, not an app gain. The wrist shows the phone's
+          // real level — including changes made ON the phone — so the two can never
+          // disagree. (An app gain was the first attempt: delivered loudness is
+          // appGain × systemVolume, the watch could only see one of the two, and with
+          // the phone at 50% the meter read full while delivering half.)
+          tile(icon: "speaker.wave.2.fill", label: "Volume", h: h) {
+            dismiss(); onPickCrown(.volume)
+          }
+          // Mute is NOT volume-to-zero: that would lose the level you were listening
+          // at, so unmuting could not put it back. This gates playback and leaves the
+          // volume where it is.
+          tile(icon: link.muted ? "speaker.slash.fill" : "speaker.fill",
+               label: link.muted ? "Unmute" : "Mute", h: h) {
+            dismiss(); link.setMuted(!link.muted)
+          }
           // NAME the control, then show its VALUE. A tile reading just "Fine" (or
           // "9k", or "USB") shows you the setting while leaving you to guess what
           // it's the setting FOR. The name makes the tile a control; the value makes
@@ -179,7 +195,14 @@ struct ControlMenu: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
     .padding(.horizontal, 6)
-    .ignoresSafeArea(edges: [.top, .bottom])
+    // BOTTOM ONLY.
+    //
+    // It used to ignore the TOP safe area too, to buy the X a free row in the clock's
+    // band. But that band is also where watchOS runs the back-swipe gesture on a pushed
+    // view, and it SWALLOWED THE TAPS: the X did nothing at all, and the only way out of
+    // this menu was to pick a crown mode you didn't want and then cancel that. A control
+    // that cannot be pressed is not worth the height it saves.
+    .ignoresSafeArea(edges: .bottom)
     .toolbar(.hidden, for: .navigationBar)
     .sheet(isPresented: $showFavs) {
       FavouritesList(favs: link.favourites) { url in

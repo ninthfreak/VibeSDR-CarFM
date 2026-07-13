@@ -32,7 +32,7 @@ const Native = NativeModules.VibeWatchModule as
       sendRow(rowB64: string, freq: number, span: number, snr: number, level: number,
               lo: number, hi: number, meter: string): void;
       sendState(freq: number, mode: string, step: number, meter: string,
-                level: number, why: string): void;
+                level: number, why: string, link: number, vol: number): void;
       sendFmdx(json: string): void;
       sendStations(json: string): void;
       sendDab(json: string): void;
@@ -116,6 +116,12 @@ const FMDX_MS = 250;
  *  per second is plenty for a wrist and can never build a WCSession backlog. */
 const AIR_MS = 1000;
 
+/** Rows quiet for this long, with the phone still claiming a live session, and the
+ *  watch escalates: it asks the phone to rebuild the spectrum socket. Sits clear of
+ *  the client's own detectors (12s pong timeout, ~10s frame staleness) so it only
+ *  ever fires as a backstop for a gap they somehow both missed. */
+const IDLE_ESCALATE_MS = 15_000;
+
 /** Span = demod bandwidth x this. Lands a signal on ~25 of the 256 bins: wide
  *  enough to read as a blob rather than a 2-bin hairline, tight enough to leave
  *  room for its neighbours. */
@@ -163,6 +169,13 @@ export interface WatchCommandHandlers {
    *  bins rather than a magnified crop — the only thing that beats the
    *  bin-resolution ceiling. */
   onZoomDelta(delta: number): void;
+  /** Crown in volume mode. DELTAS, never absolutes — same direction-of-truth rule as
+   *  tuning: the phone owns the value, the watch nudges it and adopts what comes back.
+   *  One detent = one 1/16 step, because that is iOS's own volume quantisation. */
+  onVolumeDelta(delta: number): void;
+  /** Mute toggle from the wrist. A mute is NOT "volume to zero" — that would lose the
+   *  level you were listening at, so unmuting could not restore it. */
+  onMute(muted: boolean): void;
   /** Watch app opened/closed. Used to keep the spectrum WS alive while the phone
    *  is locked but the watch is actually looking at it. */
   onReachableChange(reachable: boolean): void;
@@ -366,6 +379,8 @@ class WatchProvider {
           case 'mode': handlers.onMode(String(e.val ?? '')); break;
           case 'step': handlers.onStep(Number(e.val ?? 0)); break;
           case 'zoom': handlers.onZoomDelta(Number(e.delta ?? 0)); break;
+          case 'vol':  handlers.onVolumeDelta(Number(e.delta ?? 0)); break;
+          case 'mute': handlers.onMute(e.val === true); break;
           case 'ping':
             // The watch pings on appear, on wake and every 4s. Treat the FIRST one
             // after a gap as "it has nothing" — cheap, and it heals a watch that was
@@ -535,6 +550,53 @@ class WatchProvider {
    *  go straight to the right screen with no detection round-trip. */
   setSpecPaused(p: boolean) { this.specPaused = p; }
 
+  /** The phone is rebuilding its server link right now. A fact the watch cannot
+   *  infer: from the wrist, a recovery in progress and a dead phone are the same
+   *  black screen. Rides the existing throttled state echo as a `why` value. */
+  setReconnecting(b: boolean) {
+    if (b === this.reconnecting) return;
+    this.reconnecting = b;
+    this.nudgeState();
+  }
+  private reconnecting = false;
+
+  /** The PHONE↔SERVER hop's quality (0=down … 3=good), teed from the client's own
+   *  link meter. There are TWO links in series — phone↔server and watch↔phone —
+   *  and they fail independently, so without this the watch can only say "something
+   *  is rough" and not which. */
+  setLinkQuality(q: 0 | 1 | 2 | 3) {
+    if (q === this.linkQuality) return;
+    this.linkQuality = q;
+    this.nudgeState();
+  }
+  private linkQuality: 0 | 1 | 2 | 3 = 3;
+
+  /** Re-send the state echo because a value INSIDE it changed (why / link quality),
+   *  rather than because the frequency did.
+   *
+   *  Without this the watch would not hear about a reconnect until its next 4s
+   *  heartbeat — and a "reconnecting" pill that shows up four seconds into a
+   *  fifteen-second recovery has missed most of the point.
+   *
+   *  This is NOT a new stream, and must never become one. It fires on a TRANSITION
+   *  only (both callers early-return when the value is unchanged), and it rides the
+   *  existing 250ms trailing-edge throttle — so a flapping link coalesces instead of
+   *  queueing. The channel budget is the one thing that must not move; see the
+   *  downlink-wedge notes on setSignal. */
+  private nudgeState() {
+    const s = this.lastState;
+    if (!s || !this.isActive) return;
+    this.sendFreq(s.freq, s.mode, s.step);
+  }
+
+  /** Phase 4 escalation. The watch already knows when rows have stopped; that
+   *  knowledge was merely DISPLAYED. Make it actionable: if the phone believes it
+   *  is connected but has sent nothing for long enough, have it prove that by
+   *  rebuilding the socket. Rate-limiting lives in the client. */
+  setStaleHandler(fn: (() => void) | null) { this.staleHandler = fn; }
+  private staleHandler: (() => void) | null = null;
+  private idleSince = 0;
+
   setPhoneStatus(st: string) {
     if (st === this.phoneStatus) return;
     this.phoneStatus = st;
@@ -558,8 +620,28 @@ class WatchProvider {
    *  (that's why the frequency kept updating), so it can carry the reason. */
   private whyNoRows(): string {
     if (this.specPaused) return 'paused';                      // socket closed for power
-    if (Date.now() - this.lastRowAt > 2000) return 'idle';     // nothing to send us rows
+    // A recovery IN PROGRESS is not a fault, and must not be drawn as one — the
+    // watch shows a "reconnecting" pill over the last frames rather than a black
+    // overlay. Ranks above 'idle': rows have of course stopped, that is what a
+    // reconnect IS.
+    if (this.reconnecting) return 'reconnecting';
+    if (Date.now() - this.lastRowAt > 2000) {                  // nothing to send us rows
+      this.escalateIfStuck();
+      return 'idle';
+    }
+    this.idleSince = 0;
     return 'live';
+  }
+
+  /** Rows have stopped for long enough that the phone's own watchdogs should have
+   *  caught it. If they haven't, the watch's staleness knowledge is the last line
+   *  of defence — so use it instead of merely drawing it. */
+  private escalateIfStuck() {
+    const now = Date.now();
+    if (this.idleSince === 0) { this.idleSince = now; return; }
+    if (now - this.idleSince < IDLE_ESCALATE_MS) return;
+    this.idleSince = now;   // re-arm; the client rate-limits the real work
+    this.staleHandler?.();
   }
 
   sendFavourites(list: { name: string; url: string; type?: string }[]) {
@@ -644,8 +726,29 @@ class WatchProvider {
   sendState(freq: number, mode: string, step: number) {
     if (!this.isActive) return;
     this.lastStateAt = Date.now();
-    Native!.sendState(freq, mode, step, this.meter, this.level, this.whyNoRows());
+    // `link` = the PHONE↔SERVER hop. The watch can measure its OWN hop (rows stop
+    // arriving) but is blind to the far one, which is why its warning pill could
+    // only ever say "something is rough". Riding the existing 250ms state echo, so
+    // this costs no extra WCSession traffic — the one budget that must not move.
+    Native!.sendState(freq, mode, step, this.meter, this.level, this.whyNoRows(),
+                      this.linkQuality, this.volume);
   }
+
+  /** The iPhone's SYSTEM volume (0…1), straight from the KVO observer — so it carries
+   *  changes the watch did NOT make (hardware buttons, Control Centre, a headset's own
+   *  rocker) as well as the ones it did.
+   *
+   *  The wrist MIRRORS this rather than tracking a knob of its own. Getting that wrong
+   *  is what broke the last attempt: it drove an app-level gain, delivered loudness was
+   *  `appGain × systemVolume`, and the watch could only see one of the two — so with the
+   *  phone at 50% the meter read full while delivering half. */
+  setVolume(v: number) {
+    const clamped = Math.max(0, Math.min(1, v));
+    if (clamped === this.volume) return;
+    this.volume = clamped;
+    this.nudgeState();
+  }
+  private volume = 1;
 
   /**
    * The FREQUENCY echo — throttled, trailing-edge, exactly like

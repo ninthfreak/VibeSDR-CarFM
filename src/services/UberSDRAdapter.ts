@@ -95,6 +95,7 @@ export class UberSDRAdapter implements SDRBackend {
   setRate(divisor: number) { this.client.setRate(divisor); }
   pauseSpectrum()          { this.client.pauseSpectrum(); }
   resumeSpectrum()         { this.client.resumeSpectrum(); }
+  forceResubscribe(reason: string) { this.client.forceResubscribe(reason); }
 
   getStatus(): SDRStatus { return this.client.getStatus(); }
   getView():   SDRStatus { return this.client.getView(); }

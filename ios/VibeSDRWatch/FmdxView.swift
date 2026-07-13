@@ -31,6 +31,14 @@ struct FmdxView: View {
 
   @State private var showFavs = false
   @State private var armed = false
+  /// The crown drives the iPhone's SYSTEM volume instead of the tuner.
+  ///
+  /// This screen has no long-press control menu (the waterfall's crown-mode picker lives
+  /// there), so volume needs a control of its own up here — otherwise it would simply be
+  /// unreachable on FM-DX. Unlike the tune latch it does NOT time out: it is not
+  /// dangerous, it is just a mode, and a mode that expires under you is worse than one
+  /// you have to switch back.
+  @State private var volumeMode = false
   @State private var disarmAt: Date? = nil
   @State private var crown = 0.0
   @State private var lastDetent = 0
@@ -89,6 +97,11 @@ struct FmdxView: View {
       if delta >  range / 2 { delta -= range }
       if delta < -range / 2 { delta += range }
       lastDetent = detent
+
+      // VOLUME MODE takes the crown outright. It needs no arming and no timeout: the
+      // loudness in YOUR ear is yours, and turning it disturbs nobody on the shared
+      // receiver. (Tuning is the dangerous one, and it keeps its latch below.)
+      if volumeMode { link.volume(delta: delta); return }
 
       // DISARMED = the crown does nothing at all. Not "does something smaller".
       guard armed else { return }
@@ -178,12 +191,45 @@ struct FmdxView: View {
         .foregroundStyle(.white.opacity(0.9))
 
       armButton
+      volumeButton
       ServersButton(show: $showFavs)
 
       Spacer()
       Color.clear.frame(width: 62, height: 1)   // the clock's territory
     }
     .frame(height: 28)
+  }
+
+  /// Hand the crown to the iPhone's SYSTEM volume.
+  ///
+  /// This screen has no long-press menu, so without a button of its own volume would be
+  /// simply unreachable on FM-DX. It shares the arm button's badge grammar — same shape,
+  /// same green ✓ — so the two read as one family: "what is the crown doing?"
+  ///
+  /// Taking the crown for volume DISARMS tuning, because the crown can only do one thing
+  /// and leaving a shared receiver armed behind a mode you have switched away from is
+  /// exactly the hazard the latch exists to prevent.
+  private var volumeButton: some View {
+    Button {
+      volumeMode.toggle()
+      if volumeMode { armed = false; disarmAt = nil }
+      WKInterfaceDevice.current().play(volumeMode ? .start : .stop)
+    } label: {
+      Image(systemName: link.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(.white)
+        .overlay(alignment: .bottomTrailing) {
+          Image(systemName: volumeMode ? "checkmark.circle.fill" : "xmark.circle.fill")
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(volumeMode ? .green : .red)
+            .background(Circle().fill(.black))
+            .offset(x: 5, y: 4)
+        }
+        .frame(width: 32, height: 26)          // the TAP TARGET is the frame, not the glyph
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(volumeMode ? "Crown controls iPhone volume. Tap to release."
+                                   : "Give the crown to iPhone volume")
   }
 
   /// A RADIO TUNING SCALE, badged: red ✗ when the crown is dead, green ✓ when live.
@@ -199,6 +245,8 @@ struct FmdxView: View {
     Button {
       armed.toggle()
       disarmAt = armed ? Date().addingTimeInterval(Self.armSeconds) : nil
+      // The crown does ONE thing. Arming tuning takes it back off volume.
+      if armed { volumeMode = false }
       WKInterfaceDevice.current().play(armed ? .start : .stop)
     } label: {
       TuneScaleGlyph()

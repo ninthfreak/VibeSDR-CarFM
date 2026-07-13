@@ -2,6 +2,52 @@ import SwiftUI
 import Combine
 import WatchKit
 
+// ── Link-hint tuning ─────────────────────────────────────────────────────────
+/// Rows quiet for longer than this and the local hop is suspect. A watch on the
+/// end of Bluetooth drops the odd frame; that is not news.
+private let hintRowGap   = 1.2
+/// Hold a condition for this long before showing a pill. A single late frame must
+/// not strobe it.
+private let hintDebounce = 0.7
+/// …and keep it up for at least this long once shown, so a marginal link doesn't
+/// flicker the pill on and off.
+private let hintHold     = 2.0
+/// A state echo older than this means the WCSession hop itself is suspect, and we
+/// can no longer trust anything the phone last told us about the FAR hop. The
+/// phone answers a heartbeat every 4s, so a stale state message is itself a
+/// finding.
+private let hintStateFresh = 8.0
+
+/// WHICH HOP is rough. There are two radio links in series — server↔iPhone and
+/// iPhone↔watch — and they fail independently, so "LINK ROUGH" was never an
+/// actionable thing to say.
+///
+/// Rendered as a miniature DIAGRAM of the chain with the troubled link marked,
+/// not as text: it reads at a glance, fits the smallest watch, and needs no
+/// localisation. Direction convention: the FURTHER device is always on the left,
+/// the wrist end on the right, so the two two-device pills are visually parallel
+/// and the user learns the grammar once.
+///
+/// TUNING SURVIVES ALL OF THESE except `.indeterminate`. Crown commands travel
+/// watch → WCSession → phone → audio WS, and the audio WS has its own native
+/// watchdog, so in the first three cases the crown (and the phone's audio) still
+/// work while the spectrum is degraded. Half the app still working must not read
+/// as the whole app broken — hence a small pill over a live waterfall, never an
+/// overlay, and never whole-app wording like "connection lost".
+enum LinkHint: Equatable {
+  /// "Reconnecting to the server." The phone is rebuilding its spectrum socket
+  /// right now (UberSDRClient's starvation watchdog doing its job). Shown even
+  /// though rows have stopped — a recovery in progress is not a failure.
+  case reconnecting
+  /// "The server hop is rough." Shown EVEN WHILE ROWS STILL ARRIVE: this is the
+  /// erratic-but-working case, and a gap-only trigger misses it entirely.
+  case serverHop
+  /// "The wrist hop is weak." The phone says its own link is fine, so the rows
+  /// are being lost between here and the pocket.
+  case wristHop
+  /// The whole WCSession pipe is suspect, so we cannot honestly blame either hop.
+  case indeterminate
+}
 
 /// Spectrum screen: full-bleed waterfall with chrome FLOATING over it.
 ///
@@ -28,6 +74,13 @@ struct ContentView: View {
   /// across it — rotating then hangs the main thread and the watchdog SIGKILLs
   /// the app (which reads as "the app bounced back to the app list").
   @State private var crown = 0.0
+
+  // ── Link hint (hop-diagnostic pill) ──────────────────────────────────────
+  /// What is actually on screen, after debounce/hold. See syncHint().
+  @State private var hint: LinkHint? = nil
+  @State private var shownSince: Date? = nil
+  /// Opacity of the marked-link glyph, animated to read as a live problem.
+  @State private var pulse = 1.0
   @State private var lastDetent = 0
   @FocusState private var crownFocused: Bool
 
@@ -143,14 +196,9 @@ struct ContentView: View {
       // So: a brief gap gets a small WARNING PILL and the waterfall keeps rendering
       // whatever it's got. Only a genuinely dead link (or a phone that has told us
       // it's doing something else) gets the full overlay.
-      if link.everGotRow, let warn = linkWarning {
+      if let h = hint {
         VStack {
-          Text(warn)
-            .font(.system(size: 9, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(.orange.opacity(0.85), in: Capsule())
+          hintPill(h)
             .padding(.top, 46)      // clear of the clock
           Spacer()
         }
@@ -233,6 +281,7 @@ struct ContentView: View {
       switch crownMode {
       case .tune: link.tune(delta: delta)
       case .zoom: link.zoom(delta: delta)
+      case .volume: link.volume(delta: delta)
       case .brightness:
         wfBright = clamp(wfBright + Double(delta) * 0.04)
         link.waterfall.brightness = wfBright
@@ -251,6 +300,11 @@ struct ContentView: View {
       link.ping()          // tell the phone we're here — see below
       applyTone()
     }
+    // The pill's clock. Rows tick this ~16/sec while all is well; when the rows are
+    // the very thing that stopped, the 4/sec state echo keeps it running — which is
+    // exactly the moment it has to work. No timer of its own.
+    .onChange(of: link.lastRowAt)   { _, _ in syncHint() }
+    .onChange(of: link.lastStateAt) { _, _ in syncHint() }
     .onChange(of: scenePhase) { _, phase in
       // YOU LEFT — the mode ends. This is the honest signal, and it's the case that
       // actually bit: zoom, lower your wrist, come back later, and the crown was
@@ -572,7 +626,8 @@ struct ContentView: View {
   }
 
   private var glyph: some View {
-    Image(systemName: crownMode.glyph)
+    Image(systemName: crownMode == .volume && link.muted ? "speaker.slash.fill"
+                                                         : crownMode.glyph)
       .font(.system(size: 15, weight: .semibold))
       .foregroundStyle(meterTint)
   }
@@ -592,6 +647,9 @@ struct ContentView: View {
     switch crownMode {
     case .brightness: return .yellow
     case .contrast:   return .white
+    // Muted must be unmistakable at a glance: the bar still shows the level the phone
+    // will return to, but nothing is coming out of it.
+    case .volume:     return link.muted ? .red : .green
     default:          return .cyan
     }
   }
@@ -604,6 +662,9 @@ struct ContentView: View {
     // -1…+1 mapped onto the bar, so centre = "no change from the phone".
     case .brightness: return (wfBright + 1) / 2
     case .contrast:   return (wfContrast + 1) / 2
+    // The iPhone's REAL system volume — so a phone sitting at 50% reads half a bar, not
+    // a full one. That lie is the entire reason this feature was rebuilt.
+    case .volume:     return link.volume
     case .zoom:
       guard link.span > 0 else { return 0 }
       let lo = log2(2_000.0), hi = log2(4_000_000.0)
@@ -615,22 +676,130 @@ struct ContentView: View {
   }
 
 
-  /// nil = healthy. Otherwise, WHY there's nothing moving.
+  /// nil = healthy. Otherwise, WHICH HOP is rough.
   ///
-  /// Driven by the frame clock, so it appears without needing its own timer.
-  /// A ROUGH LINK, not a dead one — say so and keep drawing.
+  /// Driven by the frame clock, so it appears without needing its own timer — and
+  /// when the ROWS stop, the 4/sec state echo keeps the redraws coming, which is
+  /// exactly when this matters most.
   ///
-  /// The rows have gone quiet, but not for long enough to call the link dead, and the
-  /// phone is still answering. That is a bumpy radio link, which is a normal thing for
-  /// a watch on the end of Bluetooth. Show a pill, keep the waterfall on screen, and
-  /// let it resume when the rows come back — rather than throwing a black box over
-  /// perfectly good data.
-  private var linkWarning: String? {
+  /// A ROUGH LINK, not a dead one — say so and KEEP DRAWING. Rows going quiet is a
+  /// normal thing for a watch on the end of Bluetooth; throwing a black box over
+  /// perfectly good data because of it is not.
+  ///
+  /// This is the raw reading. `hint` is the debounced one that reaches the screen.
+  private var rawHint: LinkHint? {
     guard stalledMessage == nil else { return nil }   // the hard overlay owns it
-    guard let t = link.lastRowAt else { return nil }
-    let gap = Date().timeIntervalSince(t)
-    guard gap > 1.2 else { return nil }
-    return "LINK ROUGH · SPECTRUM ERRATIC"
+    guard link.everGotRow else { return nil }         // a cold boot is not a fault
+
+    let now = Date()
+    let stateFresh = link.lastStateAt.map { now.timeIntervalSince($0) < hintStateFresh } ?? false
+    let gap = link.lastRowAt.map { now.timeIntervalSince($0) } ?? 0
+
+    // 1. The phone TOLD us it is rebuilding the link. Outranks everything below:
+    //    of course the rows have stopped — that is what a reconnect IS.
+    if stateFresh, link.why == "reconnecting" { return .reconnecting }
+
+    // 2. The phone's own link to the server is poor. Shown even while rows are
+    //    STILL ARRIVING — jerky-but-working is precisely the case a row-gap
+    //    trigger cannot see, and the case the user most wants explained.
+    if stateFresh, link.serverLink <= 1 { return .serverHop }
+
+    // Below here, something must actually have stopped.
+    guard gap > hintRowGap else { return nil }
+
+    // 3. The phone says its own hop is fine, and it is still answering us — so the
+    //    rows are dying between the pocket and the wrist.
+    if stateFresh { return .wristHop }
+
+    // 4. The phone has gone quiet on the state channel too, so the whole WCSession
+    //    pipe is suspect and we know nothing about the far hop. Say only that.
+    return .indeterminate
+  }
+
+  /// The pill: a miniature diagram of the two-hop chain with the troubled link
+  /// marked. The previous text strings are kept beside each case as the canonical
+  /// meaning — the diagram asserts exactly that sentence and nothing more.
+  @ViewBuilder
+  private func hintPill(_ h: LinkHint) -> some View {
+    let glyphs: [String] = {
+      switch h {
+      // "Reconnecting to server" — the circular-arrows glyph IS the universal
+      // reconnecting sign, so it needs no marked link.
+      case .reconnecting:   return ["arrow.triangle.2.circlepath", "server.rack"]
+      // "Server link rough — spectrum erratic"
+      case .serverHop:      return ["server.rack", "wifi.exclamationmark", "iphone"]
+      // "Watch link weak — spectrum erratic"
+      case .wristHop:       return ["iphone", "wifi.exclamationmark", "applewatch"]
+      // "Link rough" — nothing more is honestly known.
+      case .indeterminate:  return ["wifi.exclamationmark"]
+      }
+    }()
+    HStack(spacing: 3) {
+      ForEach(Array(glyphs.enumerated()), id: \.offset) { _, g in
+        Image(systemName: g)
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(.white)
+          // The marked link pulses gently so it reads as a LIVE problem rather
+          // than a static badge. Opacity only — nothing per-frame or laid out.
+          .opacity(g == "wifi.exclamationmark" ? pulse : 1)
+      }
+    }
+    .padding(.horizontal, 7)
+    .padding(.vertical, 3)
+    .background(.orange.opacity(0.85), in: Capsule())
+    // VoiceOver gets the words the sighted user no longer needs.
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel({
+      switch h {
+      case .reconnecting:  return "Reconnecting to server. Tuning still works."
+      case .serverHop:     return "iPhone's link to the server is rough. Spectrum erratic. Tuning still works."
+      case .wristHop:      return "Watch link to iPhone is weak. Spectrum erratic. Tuning still works."
+      case .indeterminate: return "Link rough. Spectrum erratic."
+      }
+    }())
+    .onAppear  { withAnimation(.easeInOut(duration: 1).repeatForever(autoreverses: true)) { pulse = 0.5 } }
+    .onDisappear { pulse = 1 }
+  }
+
+  /// Promote a raw reading to the screen only once it has HELD, and retire it only
+  /// after it has been up long enough to read. Without this, a marginal link strobes
+  /// the pill on every late frame.
+  ///
+  /// Driven by the row and state clocks, so it needs no timer of its own.
+  private func syncHint() {
+    let now = Date()
+    guard let c = rawHint else {
+      // Healthy again — but a pill that flashed up for 200ms is worse than none, so
+      // hold it for its minimum read time before retiring it.
+      if let shown = shownSince, now.timeIntervalSince(shown) < hintHold { return }
+      hint = nil
+      shownSince = nil
+      return
+    }
+    guard heldLongEnough(c, now: now) else { return }
+    if hint != c { hint = c; shownSince = now }
+  }
+
+  /// Facts the PHONE ASSERTS — it is reconnecting; its own link to the server is
+  /// poor — are shown at once. They arrive already debounced (the phone's link meter
+  /// only emits on a CHANGE, off jitter/RTT moving averages) and the phone pushes a
+  /// state echo the moment either flips. There is nothing to wait for and nothing
+  /// that can strobe.
+  ///
+  /// Facts the WATCH INFERS FROM SILENCE must wait, because one late frame is not a
+  /// fault. Measure from the moment the condition BECAME true (lastRowAt + the gap
+  /// threshold), not from the moment we noticed it: when the rows are the very thing
+  /// that died, this view is only redrawing on the phone's 4s heartbeat, and dating
+  /// the debounce from the observation would cost a whole heartbeat — the pill would
+  /// arrive eight seconds into the problem it exists to explain.
+  private func heldLongEnough(_ h: LinkHint, now: Date) -> Bool {
+    switch h {
+    case .reconnecting, .serverHop:
+      return true
+    case .wristHop, .indeterminate:
+      guard let t = link.lastRowAt else { return false }
+      return now.timeIntervalSince(t) >= hintRowGap + hintDebounce
+    }
   }
 
   /// nil = healthy. Otherwise, WHY there's nothing moving — and the phone TELLS us
@@ -646,22 +815,36 @@ struct ContentView: View {
       return ("iphone.slash", "Reconnecting to iPhone")
     }
 
+    // ROWS BEAT ANY CLAIM. A waterfall that is drawing is PROOF the phone is on a
+    // server, and no status message may contradict a fact we can see.
+    //
+    // This guard is the fix for a real bug: phoneStatus is only ever pushed when it
+    // CHANGES, and the phone only announced 'ready' on the WATCH-DRIVEN launch path. So
+    // a watch cold-boot that landed on 'pick' (favourites, but no default), followed by
+    // the user simply connecting ON THE PHONE, left the status stuck at 'pick' forever —
+    // and the wrist sat there telling the user to "Choose a server" over a live, tuning,
+    // perfectly healthy waterfall. The phone now reports 'ready' on every connect, but a
+    // stale claim must never be able to do this again, whatever the phone forgets to say.
+    let rowsFlowing = link.lastRowAt.map { Date().timeIntervalSince($0) < 2.0 } ?? false
+
     // WHAT THE PHONE IS DOING. A cold launch is a BOOT, not a fault — reporting it as
     // a missing waterfall was both wrong and useless. The watch WAKES the phone (iOS
     // launches it straight into the background), so this state is normal, not an error.
-    switch link.phoneStatus {
-    case "starting":
-      return ("hourglass", "Starting VibeSDR…")
-    case "pick":
-      // No default instance — but there ARE favourites. The wrist can choose.
-      return ("server.rack", "Choose a server\nLong-press → Servers")
-    case "setup":
-      // Nothing to connect to. Say so plainly rather than showing a dead screen.
-      // ♥ is FAVOURITE. ★ is DEFAULT. Getting that backwards in the one message a
-      // stranded user reads would send them to press the wrong button.
-      return ("iphone", "Open VibeSDR on iPhone\nand ♥ a server")
-    default:
-      break
+    if !rowsFlowing {
+      switch link.phoneStatus {
+      case "starting":
+        return ("hourglass", "Starting VibeSDR…")
+      case "pick":
+        // No default instance — but there ARE favourites. The wrist can choose.
+        return ("server.rack", "Choose a server\nLong-press → Servers")
+      case "setup":
+        // Nothing to connect to. Say so plainly rather than showing a dead screen.
+        // ♥ is FAVOURITE. ★ is DEFAULT. Getting that backwards in the one message a
+        // stranded user reads would send them to press the wrong button.
+        return ("iphone", "Open VibeSDR on iPhone\nand ♥ a server")
+      default:
+        break
+      }
     }
     // Rows may never have arrived at all (a cold start) — the phone's own status
     // above still applies, and is checked BEFORE this.
@@ -676,12 +859,33 @@ struct ContentView: View {
     let stateFresh = link.lastStateAt.map { Date().timeIntervalSince($0) < 8 } ?? false
 
     // The phone TOLD us it isn't sending — that's a fact, not a guess, so say it now.
+    //
+    // These `why`-driven overlays all imply a FRESH state message, i.e. the
+    // WCSession command path is alive — so the "tuning still works" line is safe
+    // here, and it matters: a user staring at a black overlay has no reason to try
+    // the crown unless told. The "Watch link lost" / "iPhone not responding"
+    // overlays below must NOT gain that line — there, the command path is itself
+    // the casualty.
     if stateFresh {
       switch link.why {
       case "paused":
         return ("pause.circle", "iPhone paused the spectrum")
+      case "reconnecting":
+        // A recovery IN PROGRESS is not a failure, and must not be drawn as one.
+        // The phone's watchdog budget is ~15s, so hold the pill (which leaves the
+        // last frames on screen) and only escalate to a hard overlay past that.
+        // Beyond ~45s, stop making excuses and fall through to the "idle" message.
+        let recovering = Date().timeIntervalSince(t)
+        if recovering < 20 { return nil }
+        if recovering < 45 {
+          return ("arrow.triangle.2.circlepath", "Reconnecting to server…\nTuning still works")
+        }
+        return ("dot.radiowaves.left.and.right", "iPhone lost the server\nTuning may still work")
       case "idle":
-        return ("dot.radiowaves.left.and.right", "iPhone isn't receiving")
+        // "iPhone isn't receiving" read as a WATCH-side fault, which is exactly
+        // backwards: the wrist is fine, the phone's link to the server is the
+        // casualty. Name the hop, and preserve the half of the app that still works.
+        return ("dot.radiowaves.left.and.right", "iPhone lost the server\nTuning may still work")
       default:
         break
       }

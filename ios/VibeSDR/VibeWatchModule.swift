@@ -14,6 +14,7 @@ import WatchConnectivity
 class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
 
   private var session: WCSession?
+
   private var hasListeners = false
 
   /// When the watch last sent us anything.
@@ -303,13 +304,24 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// QUEUES rather than drops — and the DOWNLINK WEDGED. The uplink kept working
   /// (a message from the watch always wakes the phone), so the wrist could still
   /// tune while having gone completely deaf. One channel, one throttle.
-  @objc(sendState:mode:step:meter:level:why:)
+  /// `link` = the quality of the PHONE↔SERVER hop (0=down … 3=good). The watch can
+  /// see its own hop fail (rows stop) but is blind to the far one, so its warning
+  /// could only ever say "something is rough". It rides THIS message rather than
+  /// getting one of its own — see the wedge above.
+  /// `vol` = the iPhone's SYSTEM volume (0…1) — the real one, as the phone is actually
+  /// set, including changes the watch did not make (hardware buttons, Control Centre, a
+  /// headset's own rocker). The wrist mirrors it rather than tracking a knob of its own,
+  /// which is precisely what the first attempt got wrong: it drove an app-level gain, so
+  /// with the phone at 50% the meter read FULL and delivered half.
+  @objc(sendState:mode:step:meter:level:why:link:vol:)
   func sendState(_ freq: NSNumber, mode: String, step: NSNumber,
-                 meter: String, level: NSNumber, why: String) {
+                 meter: String, level: NSNumber, why: String, link: NSNumber,
+                 vol: NSNumber) {
     guard let s = session, linkAlive else { return }
     s.sendMessage(
       ["k": "state", "f": freq.doubleValue, "m": mode, "st": step.doubleValue,
-       "mt": meter, "lv": level.doubleValue, "wy": why],
+       "mt": meter, "lv": level.doubleValue, "wy": why, "lk": link.intValue,
+       "vo": vol.doubleValue],
       replyHandler: nil,
       errorHandler: nil
     )

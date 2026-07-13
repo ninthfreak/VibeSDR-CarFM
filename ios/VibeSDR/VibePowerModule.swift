@@ -50,7 +50,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   override func supportedEvents() -> [String]! {
     return ["VibeTuned", "VibeMuted", "VibeWsText", "VibeSkip", "VibeCarConnected", "VibeCarTune",
             "VibeDataSaverDisconnect", "VibeDataSaverResume", "VibeSignal",
-            "VibeVoiceQuery", "VibeVoiceTune", "VibeMdnsFound", "VibeMdnsLost"]
+            "VibeVoiceQuery", "VibeVoiceTune", "VibeMdnsFound", "VibeMdnsLost",
+            "VibeNetworkPathChanged", "VibeVolume"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
@@ -229,12 +230,17 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     packetCount  = 0
     lastPacketAt = Date()
     startHealthTimer()
+    startPathMonitor()
     configureAVSession()
     startEngine()
     openAudioWs(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid)
     DispatchQueue.main.async {
       self.setupRemoteCommands()
       self.updateNowPlaying()
+      // AFTER configureAVSession: the session must be active for outputVolume to be
+      // meaningful. Both are idempotent, so a re-start of the engine is harmless.
+      self.startVolumeObserver()
+      self.installVolumeView()
     }
   }
 
@@ -270,6 +276,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     DispatchQueue.main.async {
       self.setupRemoteCommands()
       self.updateNowPlaying()
+      // System volume is the SYSTEM's — it applies to OWRX/Kiwi audio exactly as it
+      // does to UberSDR's, so the wrist must be able to see and turn it here too.
+      self.startVolumeObserver()
+      self.installVolumeView()
     }
   }
 
@@ -357,6 +367,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     DispatchQueue.main.async {
       self.setupRemoteCommands()
       self.updateNowPlaying()
+      self.startVolumeObserver()
+      self.installVolumeView()
     }
   }
 
@@ -510,6 +522,25 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
   }
 
+  /** Seconds since the last audio packet — or −1 when the native engine does not
+   *  own this backend's audio and therefore cannot vouch for the session.
+   *
+   *  JS uses this to sequence spectrum reopens AFTER audio has confirmed the
+   *  session is alive (UberSDRClient._awaitAudioAlive). connect() has always given
+   *  audio a 1s head start for exactly this reason; the background recovery paths
+   *  did not, and would reopen the spectrum into a session the server had reaped —
+   *  a socket that connects, receives nothing, and never retries. */
+  @objc func audioStaleness(_ resolve: @escaping RCTPromiseResolveBlock,
+                            reject: @escaping RCTPromiseRejectBlock) {
+    // Same exclusions as reviveIfDead: OWRX/Kiwi push external PCM and a shared
+    // FM-DX tuner runs its own WS, so there is no native liveness to report.
+    guard isRunning, !externalAudio, !fmdxAudio, !dataSaverDisconnected else {
+      resolve(-1.0)
+      return
+    }
+    resolve(Date().timeIntervalSince(lastPacketAt))
+  }
+
   // MARK: - Watchdog
 
   private func startHealthTimer() {
@@ -519,6 +550,158 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
     RunLoop.main.add(t, forMode: .common)
     healthTimer = t
+  }
+
+  // MARK: - System volume
+  //
+  // THE WATCH CONTROLS EXACTLY ONE KNOB: the iPhone's SYSTEM volume.
+  //
+  // The previous attempt drove an app-level gain (an AVAudioEngine scalar). Delivered
+  // loudness is `appGain × systemVolume` — two independent knobs — and the watch could
+  // only see and turn one of them. With the phone at 50% system volume the wrist meter
+  // read FULL while delivering half loudness, and cranking it did nothing. The missing
+  // piece was never control; it was READBACK of the knob that actually matters.
+  //
+  // So: app gain is not the watch's to touch, and the volume the wrist displays is the
+  // volume the phone is really at — including changes it did not make.
+
+  private var volumeObs: NSKeyValueObservation?
+  /// Kept in the hierarchy for the life of the engine. Its slider is not settable
+  /// until ~100ms after insertion, so it CANNOT be created on demand.
+  private var volumeView: MPVolumeView?
+
+  /// Observe the real system volume and forward every change to JS.
+  ///
+  /// KVO on `outputVolume` catches ALL of them — the hardware buttons, Control Centre,
+  /// a Bluetooth headset's own volume rocker — not just the ones the watch asked for.
+  /// That is the whole point: the wrist meter can then never disagree with the phone.
+  ///
+  /// Registered once and left alone. reviveIfDead() restarts the audio ENGINE, but the
+  /// AVAudioSession singleton it observes outlives that, so re-registering per restart
+  /// would only risk a double-observation.
+  private func startVolumeObserver() {
+    guard volumeObs == nil else { return }
+    let session = AVAudioSession.sharedInstance()
+    volumeObs = session.observe(\.outputVolume, options: [.new]) { [weak self] _, change in
+      guard let self, let v = change.newValue else { return }
+      self.sendEvent(withName: "VibeVolume", body: ["volume": Double(v)])
+    }
+    // Seed JS with the CURRENT volume — KVO only fires on change, so without this the
+    // wrist would show a default until the user happened to touch something.
+    sendEvent(withName: "VibeVolume", body: ["volume": Double(session.outputVolume)])
+  }
+
+  /// iOS has no public setter for system volume. The sanctioned route is MPVolumeView's
+  /// own UISlider: setting it maps through to the active output route (including a
+  /// Bluetooth headset's absolute volume) and, unlike other approaches, does NOT raise
+  /// the system volume HUD over whatever the user is looking at.
+  ///
+  /// It must be IN the view hierarchy before first use and stay there — the slider is
+  /// not settable for ~100ms after insertion, so an add-adjust-remove cycle per detent
+  /// would silently drop the first change of every gesture.
+  private func installVolumeView() {
+    guard volumeView == nil else { return }
+    let scene = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .first(where: { $0.activationState == .foregroundActive })
+      ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+    guard let window = scene?.windows.first(where: { $0.isKeyWindow }) ?? scene?.windows.first else {
+      return
+    }
+    // Offscreen rather than hidden: an `isHidden` MPVolumeView stops working.
+    let v = MPVolumeView(frame: CGRect(x: -4000, y: -4000, width: 100, height: 30))
+    v.alpha = 0.01
+    v.isUserInteractionEnabled = false
+    window.addSubview(v)
+    volumeView = v
+  }
+
+  /// Set the iPhone's system volume (0…1).
+  ///
+  /// iOS quantises to 1/16 steps, so the value that lands is the SNAPPED one — and the
+  /// KVO observer above then fires with that snapped truth, which is what gets echoed to
+  /// the wrist. The watch predicts while the crown turns and adopts this on settle, so
+  /// the two can differ for a moment and always converge on the phone's answer.
+  @objc func setSystemVolume(_ v: NSNumber) {
+    let target = Float(min(1, max(0, v.doubleValue)))
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.installVolumeView()   // no-op after the first call
+      guard let slider = self.volumeView?.subviews.compactMap({ $0 as? UISlider }).first else {
+        NSLog("[VibePowerModule] setSystemVolume: no slider — MPVolumeView not ready")
+        return
+      }
+      slider.value = target
+      // Some routes ignore a bare `.value` assignment without the control event.
+      slider.sendActions(for: .valueChanged)
+    }
+  }
+
+  /// The phone's current system volume (0…1) — so the watch's first detent can be
+  /// applied as a DELTA against the truth rather than against a guess.
+  @objc func getSystemVolume(_ resolve: @escaping RCTPromiseResolveBlock,
+                             reject: @escaping RCTPromiseRejectBlock) {
+    resolve(Double(AVAudioSession.sharedInstance().outputVolume))
+  }
+
+  // MARK: - Network path monitoring
+  //
+  // The 8s staleness window is the right patience for a bumpy link, but it is
+  // pure waiting when the OS already KNOWS the path changed underneath us — a
+  // WiFi→cellular handover, or a cellular IP change on cell handover. Neither
+  // produces a FIN or an RST: the old flow is simply gone, and every socket on it
+  // is a zombie that will sit OPEN forever. NWPathMonitor turns that into an
+  // event, which makes recovery near-instant instead of near-12-seconds.
+  //
+  // Cheap: a system callback, not a poll. Nothing here runs per-frame.
+  private var pathMonitor: NWPathMonitor?
+  private let pathQueue = DispatchQueue(label: "com.vibesdr.path", qos: .utility)
+  private var sawFirstPath = false
+  private var lastPathIface: NWInterface.InterfaceType?
+
+  private func startPathMonitor() {
+    guard pathMonitor == nil else { return }
+    sawFirstPath  = false
+    lastPathIface = nil
+    let m = NWPathMonitor()
+    m.pathUpdateHandler = { [weak self] path in
+      guard let self, self.isRunning else { return }
+
+      let iface = path.availableInterfaces.first(where: { path.usesInterfaceType($0.type) })?.type
+
+      // The monitor always fires once on start with the CURRENT path. That is a
+      // report, not a change — acting on it would revive a healthy socket at the
+      // start of every session.
+      guard self.sawFirstPath else {
+        self.sawFirstPath  = true
+        self.lastPathIface = iface
+        return
+      }
+
+      let satisfied = path.status == .satisfied
+      let changed   = iface != self.lastPathIface
+      self.lastPathIface = iface
+
+      // An unsatisfied path means there is nothing to reconnect TO yet — wait for
+      // it to come back rather than burning a recovery attempt on dead air.
+      guard satisfied, changed else { return }
+
+      NSLog("[VibePowerModule] network path changed → %@ — treating sockets as suspect",
+            String(describing: iface))
+      DispatchQueue.main.async {
+        // staleAfter: 0 — the path is gone, so don't spend the 8s window proving it.
+        self.reviveIfDead(staleAfter: 0)
+        // JS owns the spectrum WS and has the same zombie on the same dead flow.
+        self.sendEvent(withName: "VibeNetworkPathChanged", body: nil)
+      }
+    }
+    m.start(queue: pathQueue)
+    pathMonitor = m
+  }
+
+  private func stopPathMonitor() {
+    pathMonitor?.cancel()
+    pathMonitor = nil
   }
 
   private func reviveIfDead(staleAfter: TimeInterval) {
@@ -1208,6 +1391,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     externalPauseMode = "release"
     healthTimer?.invalidate()
     healthTimer = nil
+    stopPathMonitor()
     closeAudioWs()
     closeFmdxWs()
     destroyDecoder()

@@ -169,6 +169,12 @@ export interface SDRBackend {
   setRate(divisor: number): void;
   pauseSpectrum(): void;
   resumeSpectrum(): void;
+  /** Rebuild the spectrum socket NOW — a half-open zombie never fires onclose, so
+   *  nothing else will. Driven by the client's own starvation watchdog, by the
+   *  native network-path monitor, and by the watch when its rows dry up.
+   *  UberSDR only; the other adapters have different pause/socket semantics and
+   *  their own recovery (see BRIEF-watch-fixes §A7). */
+  forceResubscribe?(reason: string): void;
 
   getStatus(): SDRStatus;
   getView(): SDRStatus;
@@ -255,6 +261,11 @@ export interface BackendCallbacks extends SDRCallbacks {
   onFmdxState?: (state: FmdxState) => void;
   /** FM-DX: one-shot server capabilities (antennas, bw switch) from /static_data. */
   onFmdxInfo?: (info: FmdxServerInfo) => void;
+  /** UberSDR: a spectrum recovery is in flight — the socket has been torn down and
+   *  the first frame on its replacement has not arrived yet. The WATCH needs this:
+   *  from the wrist, a phone healing its server link and a phone that has died look
+   *  identical, and only the phone knows which it is. */
+  onReconnecting?: (busy: boolean) => void;
   /** OWRX: the WS closed UNEXPECTEDLY (server crash/restart — common on OWRX),
    *  as opposed to a user pause/navigation. The UI keeps the session alive and
    *  shows a "server stopped responding" prompt instead of silently dropping. */

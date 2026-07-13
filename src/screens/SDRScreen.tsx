@@ -774,6 +774,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [isMuted, setIsMuted] = useState(false);
   const isMutedRef = useRef(false);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  /** The iPhone's real SYSTEM volume (0…1), kept current by the VibeVolume KVO event.
+   *  The watch sends DELTAS against it — it never sends an absolute, because the phone
+   *  owns the value and the wrist is only allowed to nudge it. */
+  const sysVolRef = useRef(1);
   // True when the data saver has dropped the SDR stream after a muted spell.
   const [dataSaverOff, setDataSaverOff] = useState(false);
   const dataSaverOffRef = useRef(false);
@@ -1906,6 +1910,30 @@ export default function SDRScreen({ route, navigation }: Props) {
       setIsMuted(false);
       fullReconnect();
     });
+    // The OS says the network path moved under us (WiFi→cellular, or a cellular IP
+    // change on cell handover). Neither sends a FIN or an RST, so every socket on
+    // the old flow is now a zombie that will sit OPEN forever. Native has already
+    // treated the audio WS as suspect; the spectrum WS is JS's to revive, and it
+    // has the same zombie on the same dead flow. Rate-limited inside the client.
+    const subPath = emitter.addListener('VibeNetworkPathChanged', () => {
+      client.current?.forceResubscribe?.('network-path-change');
+    });
+    // The iPhone's SYSTEM volume changed — by the hardware buttons, Control Centre, a
+    // headset's own rocker, or by the watch itself. Mirror it to the wrist so the two
+    // can never disagree. (iOS quantises to 1/16 steps, so what arrives here after a
+    // watch-initiated set is the SNAPPED value — which is the truth the watch adopts.)
+    const subVol = emitter.addListener('VibeVolume', (e: { volume: number }) => {
+      sysVolRef.current = e.volume;
+      watchProvider.setVolume(e.volume);
+    });
+    // Seed it. The observer emits the current volume when it starts, but that can land
+    // before this listener exists — and KVO only fires on CHANGE thereafter, so without
+    // an explicit read the wrist would show a default until the user happened to touch
+    // something. Which is the exact class of bug this whole part exists to kill.
+    (NativeModules.VibePowerModule as { getSystemVolume?: () => Promise<number> })
+      ?.getSystemVolume?.()
+      .then((v) => { sysVolRef.current = v; watchProvider.setVolume(v); })
+      .catch(() => {});
     // Server-NR protocol messages arrive as text on the native audio WS
     const subWs = emitter.addListener('VibeWsText', (e: { text: string }) => {
       let msg: { type?: string; info?: Record<string, unknown> };
@@ -1941,7 +1969,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     });
     return () => {
       sub.remove(); subMute.remove(); subSig.remove(); subSkip.remove(); subWs.remove();
-      subCar.remove(); subCarTune.remove(); subVoice.remove(); subDsOff.remove(); subDsOn.remove();
+      subCar.remove(); subCarTune.remove(); subVoice.remove(); subDsOff.remove(); subDsOn.remove(); subPath.remove(); subVol.remove();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1985,6 +2013,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onReceiverLon: (lon) => { if (!destroyed.current) setRecvLon(lon); },
       onReceiverLoc: (lat, lon) => { recvLocRef.current = { lat, lon }; if (!destroyed.current) setRecvLoc({ lat, lon }); },
+      onReconnecting: (busy: boolean) => {
+        // Tell the WRIST a recovery is under way. There are two links in series and
+        // they fail independently; from the watch, "the phone is healing its server
+        // link" and "the phone is dead" look identical. Only the phone knows, so
+        // only the phone can say — otherwise the watch throws a black overlay over
+        // a recovery that is working perfectly well.
+        watchProvider.setReconnecting(busy);
+      },
       onLink: (q) => {
         if (destroyed.current) return;
         const b = meterBus.current;
@@ -1993,6 +2029,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Clamp it with the real network health — a bad link can only make it worse.
         const eff = Math.min(q, netLinkRef.current) as 0|1|2|3;
         b.emit({ ...b.value, link: eff });
+        // The PHONE↔SERVER hop's health, sent to the wrist so its warning pill can
+        // name which of the two hops is rough rather than shrugging "LINK ROUGH".
+        watchProvider.setLinkQuality(eff);
         // UberSDR auto-reconnects silently — without a cue the app just looks
         // frozen when the link drops (e.g. the instance reboots). But the spectrum
         // is deliberately paused on minimise/resume, which briefly starves the
@@ -3033,6 +3072,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     // asynchronously), and a stale screen streaming rows drags the wrist back to a
     // waterfall it has already left. Only the owner may send.
     const token = watchProvider.claim('sdr');
+    // A MOUNTED SDR SCREEN IS A LIVE SESSION — say so.
+    //
+    // phoneStatus was only ever set to 'ready' on the WATCH-DRIVEN launch path
+    // (App.tsx goTo). Connect on the PHONE instead, and nothing ever retracted an
+    // earlier 'pick'/'setup' — so the wrist kept telling the user to choose a server
+    // while a waterfall drew and the crown tuned underneath the message. The status has
+    // to be owned by the thing that KNOWS, and that is the screen that is running.
+    watchProvider.setPhoneStatus('ready');
+    // The watch knows when ITS rows dried up. That was only ever drawn on screen;
+    // make it act. Last line of defence behind the client's own watchdog, and
+    // rate-limited there — so a wedged link can't turn this into a reopen storm.
+    watchProvider.setStaleHandler(() => {
+      client.current?.forceResubscribe?.('watch-rows-idle');
+    });
     watchProvider.attach({
       // No arming here: Kiwi/OWRX/UberSDR give every user their OWN VFO, so tuning
       // disturbs nobody. Arming is an FM-DX rule, not a "shared backend" rule.
@@ -3070,6 +3123,31 @@ export default function SDRScreen({ route, navigation }: Props) {
       onZoomDelta: (delta: number) => {
         if (!delta) return;
         zoomByRef.current?.(Math.pow(2, -delta / 6));
+      },
+
+      // The crown, in volume mode. ONE detent = ONE 1/16 step, because 1/16 IS the
+      // iPhone's volume quantisation — a finer step would round to the same value and
+      // the crown would feel dead for a click or two at a time.
+      //
+      // Applied against the phone's own current volume (sysVolRef, kept true by the KVO
+      // event), never against a value the watch sent us: the phone owns the knob. The
+      // set then SNAPS to 1/16 and the KVO observer echoes the snapped truth back to the
+      // wrist, which adopts it when the crown settles.
+      onVolumeDelta: (delta: number) => {
+        if (!delta) return;
+        const next = Math.max(0, Math.min(1, sysVolRef.current + delta / 16));
+        sysVolRef.current = next;
+        (NativeModules.VibePowerModule as { setSystemVolume?: (v: number) => void })
+          ?.setSystemVolume?.(next);
+      },
+
+      // A mute is NOT "volume to zero": that would destroy the level you were listening
+      // at, so unmuting could not restore it. Route to the phone's existing mute, which
+      // gates playback and leaves the volume where it was.
+      onMute: (muted: boolean) => {
+        (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })
+          ?.setMuted?.(muted);
+        setIsMuted(muted);
       },
 
       // The watch said hello. Answer with the current state so its menu already
@@ -3115,7 +3193,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         watchProvider.setSpecPaused(specPausedByBgRef.current);
       },
     });
-    return () => { watchProvider.release(token); watchProvider.detach(); };
+    return () => {
+      watchProvider.setStaleHandler(null);
+      watchProvider.release(token);
+      watchProvider.detach();
+    };
   }, []);
 
   // ── DAB on the watch: a LIST, not a band ───────────────────────────────────
