@@ -614,6 +614,10 @@ static void bmLearn(double hz, int pi, const std::string& psRaw) {
     b.manual = (it != g_bookmarks.end()) ? it->second.manual : false;
     g_bookmarks[key] = b;
     g_bmPending.erase(key);
+    // PERSIST. This was the one mutator that didn't — so a station you sat on for
+    // 20 seconds and genuinely learned lived in memory only, and died with the
+    // process. bmSaveLocked()'s own comment says it is "called on EVERY change".
+    bmSaveLocked();
 }
 
 /**
