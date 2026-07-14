@@ -31,6 +31,13 @@ case "$(uname -m)" in
 esac
 echo
 
+# 32-bit ARM has no native 64-bit atomics, so std::atomic<double> in RxPipeline
+# (pipeline.cpp, deempTau_) lands on libatomic calls: "undefined reference to
+# __atomic_load_8". aarch64/x86 do them inline and don't need this. macOS has
+# no -latomic at all, hence the guard.
+ATOMIC=""
+if [ "$(uname -s)" = "Linux" ]; then ATOMIC="-latomic"; fi
+
 g++ $FLAGS \
   bench.cpp \
   "$DSP/fft.cpp" \
@@ -43,7 +50,7 @@ g++ $FLAGS \
   "$DSP/third_party/kissfft/kiss_fftr.c" \
   -I"$DSP" \
   -I"$DSP/third_party/kissfft" \
-  -lm -lpthread \
+  -lm -lpthread $ATOMIC \
   -o bench
 
 echo "built ./bench — run it with:  ./bench"
