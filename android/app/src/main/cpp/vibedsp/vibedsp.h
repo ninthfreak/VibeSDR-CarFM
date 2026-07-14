@@ -437,7 +437,12 @@ private:
 
     // audio DDC chain
     NCO nco_;
-    std::unique_ptr<FirDecimator> dec_;
+    // Decimation CASCADE, not one filter. Filter cost scales with the rate it runs
+    // at, so decimating 50:1 in one step needs ~750 taps at the full input rate;
+    // split into 5x5x2 the early stages need only ~9-17 (they just stop aliases
+    // folding into the channel) and the narrow channel filter runs last, slowest,
+    // and cheapest. Same audio, ~3x less CPU. See rebuildAudio().
+    std::vector<std::unique_ptr<FirDecimator>> decs_;
     std::unique_ptr<AmDemod> am_;
     std::unique_ptr<FmDemod> fm_;
     std::unique_ptr<SsbDemod> ssb_;

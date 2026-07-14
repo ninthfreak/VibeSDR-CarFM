@@ -54,12 +54,61 @@ void RxPipeline::rebuildAudio() {
     chDecim_ = std::max(1, (int)std::floor(sampleRate_ / targetCh));
     chFs_    = sampleRate_ / chDecim_;
 
-    // Channel low-pass. The decimator filters at the INPUT rate, so cutoff is
-    // normalised to sampleRate: pass the demod bandwidth, but never exceed the
-    // post-decimation Nyquist (0.5/chDecim) or we alias.
-    const double cutoff = std::min(0.45 / chDecim_, (bwHz_ * 0.5) / sampleRate_);
-    const double trans  = std::max(cutoff * 0.5, 0.25 / chDecim_ - cutoff);
-    dec_  = std::make_unique<FirDecimator>(designLowpass(cutoff, std::max(trans, 1e-3)), chDecim_);
+    // ── Channel low-pass: a CASCADE, not one long filter ──────────────────────
+    //
+    // Tap count goes as 3.3/transition (designLowpass), and transition is normalised
+    // to the rate the filter RUNS AT. So the same real-world filter costs ~25x more
+    // taps at 2.4 MSPS than at 96 kHz. Decimating by 50 in ONE step therefore forced
+    // a ~750-tap filter at the full input rate — 36M complex MACs/sec, which was
+    // most of a core on a Pi 3 and a big slice of one on a budget phone.
+    //
+    // Instead, factor the decimation (50 -> 5x5x2) and give the early stages only
+    // the job they actually have: stop anything folding INTO the final channel. That
+    // is a hugely relaxed spec, so they cost ~9-17 taps each even though they run at
+    // the high rates. The narrow, expensive, selectivity-defining filter then runs
+    // LAST, at the lowest rate, where its taps are cheap.
+    //
+    // Same filter shape out, ~3x less work. Measured (tools/pi-bench, one user):
+    //   SSB @ 2.4 MSPS   4.4% -> 1.6% of a core     AM   1.8% -> 0.9%
+    const double chHalf = std::max(1.0, bwHz_ * 0.5);            // channel half-width, Hz
+    // The absolute transition width the old single-stage design worked out to. Keep it
+    // identical so the audible filter shape does not change.
+    const double transHz = std::max(chHalf * 0.5, chFs_ * 0.25 - chHalf);
+
+    decs_.clear();
+    std::vector<int> stages;
+    {   // Prime-factorise the decimation, largest factor first, so the SMALLEST factor
+        // is last — that keeps the final (narrow, tap-heavy) filter running as slowly
+        // as possible, which is the whole point.
+        int d = chDecim_;
+        for (int p = 2; p <= d; ++p) while (d % p == 0) { stages.push_back(p); d /= p; }
+        std::sort(stages.rbegin(), stages.rend());
+        if (stages.empty()) stages.push_back(1);   // chDecim_ == 1: a plain filter
+    }
+
+    double fs = sampleRate_;
+    for (size_t i = 0; i < stages.size(); ++i) {
+        const int D = stages[i];
+        const double fsOut = fs / D;
+        const bool last = (i + 1 == stages.size());
+
+        double cutoff, trans;
+        if (last) {
+            // The real channel filter: defines selectivity. Cheap here because fs is low.
+            cutoff = std::min(0.45 / D, chHalf / fs);
+            trans  = std::max(cutoff * 0.5, transHz / fs);
+        } else {
+            // Anti-alias only: protect the final channel from what folds at fsOut.
+            // Everything between chHalf and (fsOut - chHalf) is allowed to be ugly —
+            // a later stage will remove it — so the transition is enormous and the
+            // filter is tiny.
+            cutoff = chHalf / fs;
+            trans  = std::max((fsOut - chHalf) / fs - cutoff, cutoff * 0.5);
+        }
+        decs_.push_back(std::make_unique<FirDecimator>(
+            designLowpass(cutoff, std::max(trans, 1e-3)), D));
+        fs = fsOut;
+    }
 
     nco_.setFreq(offsetHz_ / sampleRate_);   // tune the channel to baseband
 
@@ -151,8 +200,21 @@ void RxPipeline::feed(const cf32* iq, int n) {
         baseBuf_.resize(n);
         nco_.mix(iq, baseBuf_.data(), n);
 
-        chBuf_.resize(dec_->maxOut(n));
-        const int nc = dec_->process(baseBuf_.data(), n, chBuf_.data());
+        // Run the decimation cascade, ping-ponging between two buffers. Each stage
+        // drops the rate by its own factor; the last one is the channel filter.
+        int nc = n;
+        const cf32* src = baseBuf_.data();
+        for (auto& d : decs_) {
+            std::vector<cf32>& dst = (src == baseBuf_.data()) ? chBuf_ : baseBuf_;
+            dst.resize(d->maxOut(nc));
+            nc = d->process(src, nc, dst.data());
+            src = dst.data();
+        }
+        // Make sure the demods below always read from chBuf_, whichever buffer the
+        // cascade happened to land in (an even number of stages ends on baseBuf_).
+        if (src != chBuf_.data()) {
+            chBuf_.assign(src, src + nc);
+        }
 
         demodBuf_.resize(nc);
         if (am_)       am_->process(chBuf_.data(), demodBuf_.data(), nc);
@@ -231,7 +293,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
 }
 
 void RxPipeline::stop() {
-    cfft_.reset(); dec_.reset(); am_.reset(); resamp_.reset();
+    cfft_.reset(); decs_.clear(); am_.reset(); resamp_.reset();
 }
 
 } // namespace vibedsp
