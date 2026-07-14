@@ -1,6 +1,6 @@
 # VibeSDR
 
-A mobile-first SDR receiver app for iOS and Android — and far more than a single-server client. VibeSDR speaks multiple SDR server protocols, runs **local SDR hardware on-device**, and does its own demodulation with a clean-room, GPL-free DSP engine. It pairs all of that with a GPU-rendered waterfall, native background audio, on-device decoders and maps, voice and in-car control — a genuinely great SDR experience on any phone, regardless of the receiver behind it.
+A mobile-first SDR receiver app for iOS, Android **and Apple Watch** — and far more than a single-server client. VibeSDR speaks multiple SDR server protocols, runs **local SDR hardware on-device**, and does its own demodulation with a clean-room, GPL-free DSP engine. It pairs all of that with a GPU-rendered waterfall, native background audio, on-device decoders and maps, voice and in-car control — a genuinely great SDR experience on any phone, regardless of the receiver behind it.
 
 **What VibeSDR connects to:**
 - **Remote SDR servers** — native adapters for [UberSDR](https://ubersdr.org), **OpenWebRX / OpenWebRX+**, **KiwiSDR**, and **FM-DX Webserver** (the worldwide network of shared FM broadcast tuners), all behind one interface, with a directory chooser in the instance picker.
