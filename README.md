@@ -88,7 +88,7 @@ So the fix isn't to hide the tooling. It's to be checkable:
 - **The source is open.** GPLv3, all of it, right here. Not a demo, not a crippled build — the App Store binary is this tree. Read it, fork it, tell me where it's wrong.
 - **Everyone who contributed is credited**, and the licences are honoured — see [Credits](#credits). Where the app leans on someone else's protocol or work, it says so by name.
 - **Nothing is claimed that isn't there.** Every feature in this README exists, on a device, and has been used on the air. If you find one that doesn't work, that's a bug and I want the report — [open an issue](https://github.com/Stuey3D/VibeSDR/issues).
-- **It refuses to ship what it can't ship honestly.** No native DAB+, DRM, HD Radio or DMR — the codecs are patent-encumbered and shipping them would be a licensing violation dressed up as a feature. No WebSDR — its author doesn't sanction third-party clients, so VibeSDR doesn't have one. Both refusals cost features. They're documented below, and they're the point: an app that will hallucinate a decoder is not an app that turns things down.
+- **It leaves features on the table on purpose.** No native DAB+, DRM, HD Radio or DMR — those codecs are patent-encumbered, and shipping them would be a licensing violation dressed up as a feature list. No WebSDR — its author doesn't sanction third-party clients, so VibeSDR doesn't have one. Both decisions cost real features, and both are [written down](#why-doesnt-vibesdr-natively-decode-dab-drm-hd-radio-dmr-and-similar-digital-modes) with the reasoning. Saying no is the expensive option. It's also the one nobody bothers to fake.
 - **It isn't a wrapper.** The DSP is a clean-room ARM-NEON engine written from scratch, the waterfall is an original shader, the controls are a hand-tuned physical simulation. That work is in the commit history, in the open, with its mistakes still visible.
 
 ### Tested on
@@ -111,7 +111,7 @@ The two that matter are the SE and the G35. Anyone can test on a Pro Max — tha
 
 No patent-encumbered vocoders. No HD Radio, no DAB+, no DRM, no DMR/AMBE. Those decoders would be *easy* features to claim and hard ones to ship legally — the codecs behind them belong to Xperi and DVSI, and shipping them in a store build would be a licensing violation dressed up as a feature list. So they're not here, and [the reasons are written down](#why-doesnt-vibesdr-natively-decode-dab-drm-hd-radio-dmr-and-similar-digital-modes). Same with WebSDR: its author doesn't sanction third-party clients, so VibeSDR doesn't have one.
 
-Both refusals cost real features. That's the point — **an app that will hallucinate a decoder is not an app that turns features down.**
+Both decisions cost real features, and I made them anyway. **That's the part you can check.**
 
 **Use of AI isn't the thing worth judging.** Whether the result is honest, credited, open, and actually *works on a radio* is — and all four of those you can verify here rather than take my word for.
 
