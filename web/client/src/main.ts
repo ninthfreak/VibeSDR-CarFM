@@ -818,14 +818,21 @@ function updateStatus() {
   // off the edge of the screen, and the meter is where you're already looking
   // when you're wondering why there's no sound.
   let fault = '';
+  let info = '';
   switch (audio?.health) {
     case 'suspended': fault = 'AUDIO PAUSED — CLICK THE PAGE'; break;
     case 'no-stream': fault = 'AUDIO DISCONNECTED'; break;
     case 'silent':    fault = 'NO SOUND — IS THE TAB MUTED?'; break;
+    case 'squelched': info  = 'NO AUDIO — SQUELCH ENABLED'; break;
   }
+  // A fault replaces the meter and pulses, to grab attention. Squelch does neither:
+  // it is expected behaviour, and the meter is exactly what you want to watch while
+  // waiting for a signal to break the threshold.
   $('sig').classList.toggle('fault', !!fault);
-  $('sigFault').textContent = fault;
-  $('sigFault').classList.toggle('show', !!fault);
+  $('sig').classList.toggle('squelched', !fault && !!info);
+  $('sigFault').textContent = fault || info;
+  $('sigFault').classList.toggle('show', !!fault || !!info);
+  $('sigFault').classList.toggle('info', !fault && !!info);
 }
 
 // ── Controls ─────────────────────────────────────────────────────────────────
@@ -904,6 +911,20 @@ function buildControls() {
   void loadServerBookmarks(currentHost, authState?.query ?? '').then((n) => {
     if (n) console.info(`server bookmarks: ${n} heard by this receiver`);
   });
+  // ...and keep asking. RDS learning takes ~20 s of held PS to commit, so the station
+  // you are sitting on RIGHT NOW is learned long after this page loaded. Fetching once
+  // at boot meant a freshly learned bookmark never appeared until you reloaded — it
+  // looked like the learning was broken when it had actually worked. The native app has
+  // polled for this all along (SDRScreen.tsx); the web client never did.
+  setInterval(() => {
+    const before = JSON.stringify(getServerBookmarks().map(b => [b.frequency, b.name]));
+    void loadServerBookmarks(currentHost, authState?.query ?? '').then(() => {
+      const after = JSON.stringify(getServerBookmarks().map(b => [b.frequency, b.name]));
+      // Only repaint on a real change — an unconditional re-render every 30 s would
+      // reset the list's scroll position under the user's finger.
+      if (after !== before) renderBookmarks();
+    });
+  }, 30_000);
   initWaterfallInput();
   initKeyboard();
 }
@@ -2347,7 +2368,9 @@ function buildMenu() {
   // ── Audio (server-side DSP in the shim) ──────────────────────────────────
   slider('sql', 'sqlVal',
     (v) => (v <= -100 ? 'OFF' : `${v} dB`),
-    (v) => spec!.setSquelch(v),
+    // Mirror the setting into the audio engine: squelch is applied SERVER-side, so
+    // without this the client cannot tell a closed squelch from a muted tab.
+    (v) => { spec!.setSquelch(v); if (audio) audio.squelchDb = v; },
     'squelch');
 
   slider('nr', 'nrVal',
@@ -2478,7 +2501,11 @@ function pushSettingsToServer() {
   const num = (k: string) => (typeof p[k] === 'number' ? p[k] as number : undefined);
   const bool = (k: string) => (typeof p[k] === 'boolean' ? p[k] as boolean : undefined);
 
-  const sql = num('squelch');       if (sql !== undefined) spec.setSquelch(sql);
+  // Mirror to the audio engine here too, or a page RELOAD with squelch already saved
+  // restores the squelch but not the engine's knowledge of it — and the false
+  // "IS THE TAB MUTED?" warning comes straight back.
+  const sql = num('squelch');
+  if (sql !== undefined) { spec.setSquelch(sql); if (audio) audio.squelchDb = sql; }
   const nr = num('nr');             if (nr !== undefined) spec.setNr(nr > 0, nr / 100);
   const notch = bool('notch');      if (notch !== undefined) spec.setNotch(notch);
   const stereo = bool('stereo');    if (stereo !== undefined) spec.setStereo(stereo);
