@@ -12,6 +12,51 @@ A mobile-first SDR receiver app for iOS, Android **and Apple Watch** — and far
 > Built by Stuart Carr (Stuey3D) with AI assistance from Claude (Anthropic).
 > Free software under the GNU GPL-3.0.
 
+---
+
+## What actually sets VibeSDR apart
+
+Plenty of apps can open a socket to a remote SDR and show you a picture of a waterfall. Two things here are not like that, and they're where the work went: **the controls** and **the waterfall**.
+
+### The controls are built for a thumb, and they're meant to feel like an analogue tuner
+
+Radios used to have a *weighted flywheel dial*. You could spin it and let it coast, feel it click through the detents, and slow it to a crawl to nail the last hundred hertz. That feeling is what VibeSDR's **VFO drum** is chasing — and it's a real simulation, not a slider with a texture on it:
+
+- **It's a cylinder, not a strip.** The tick marks are projected onto a rotating drum — position follows `sin(d/R)`, brightness and width follow `cos(d/R)` — so it reads as something turning, not something sliding.
+- **It has mass.** Flick it and it coasts under **friction (0.974 per 60th of a second)**, frame-rate normalised so it decays identically at 60 Hz and 120 Hz. Flicks below 50 px/s don't coast at all — lift means stop, exactly as a real dial with your finger still on it. The zoom drum runs much heavier friction (0.90), because you want zoom to *arrive* and stop, not drift.
+- **It has detents you can feel.** A haptic tick every 22 px of travel, capped to ~35/second so a fast spin ratchets instead of buzzing. **The intensity adapts to how you're turning it:** deliberate, slow movements get a firm mechanical *click*; a fast spin gets a light ratchet tick; and when a coasting flick finally comes to rest, you feel a soft *thunk*.
+- **It knows the difference between hunting and searching.** Thumb speed is tracked as a rolling average and the ratio changes *continuously* with it: move slowly and it takes up to **4× more travel per tuning step** — up to 176 px per step in precise mode — so fine-tuning a weak SSB signal is genuinely fine. Spin it fast and it gets out of your way. There's no mode switch for this; it's just how it responds to your thumb.
+- **It always lands on the grid.** Tuning is quantised to whole steps and snapped, so you land on 7,153.0 kHz — never 7,153.437.
+- **Zoom is a drum too** — one octave per 40 px, anchored on the frequency you're *tuned to* rather than the middle of the screen, so zooming in doesn't slide your signal off the display.
+
+None of that is decoration. It's what makes the radio usable one-handed, on a phone, with a thumb, while you're standing on a hill.
+
+### The waterfall is *our* pixels, not the server's picture
+
+VibeSDR does **not** take the ready-made waterfall image the server draws and show it to you. It takes the **raw FFT bins**, and paints every pixel itself in a **Skia GPU runtime shader (SkSL)**:
+
+- **The history is stored as raw intensity**, not as coloured pixels — so changing the palette, sharpness or contrast **restyles the entire waterfall you've already seen, instantly**. All 26 palettes (GQRX, Kiwi, CuteSDR, SdrDx, OpenWebRX, turbo, viridis, Night Vision…) repaint your history, not just the next line.
+- **The shader invents the lines between the data.** Servers send spectrum frames about ten times a second; a waterfall that only scrolls when data arrives looks like a slideshow. So the shader **interpolates between adjacent FFT frames on the GPU**, synthesising 2 or 3 display lines per real frame, and scrolls them by moving a *uniform* rather than shifting any pixels (the history is a ring buffer — nothing is ever memmoved).
+- **It glides at 120 Hz while you're touching it.** During interaction the scroll is driven on the UI thread at panel rate — no JavaScript in the frame loop at all — so tuning stays liquid on ProMotion. When you settle, it deliberately drops to discrete whole-pixel rows so the display idles and the battery stops paying for smoothness you're not looking at.
+- Sharpening (unsharp mask) and an S-curve contrast run in the same shader pass, on the GPU, for free.
+
+That's the difference between *displaying* a waterfall and *rendering* one — and it's why the waterfall could move to the Apple Watch at all: the watch computes its own pixels too.
+
+### "Another app that does the same thing as the other 50"
+
+It's a fair thing to be tired of, so here is the specific answer.
+
+Most SDR clients are a socket and a picture: they ask the server for a waterfall image and put it on the screen, and the tuning is a slider or a numeric keypad. If that's the category, VibeSDR isn't in it.
+
+- **It doesn't display the server's waterfall — it renders its own**, from raw FFT bins, in a GPU shader that synthesises the lines between the data frames and repaints your entire history the instant you change a palette.
+- **It doesn't just demodulate somewhere else.** Plug an RTL-SDR into an Android phone and the whole radio runs *on the phone* — through a clean-room ARM-NEON DSP engine written from scratch (no SDR++, no FFTW, no VOLK), with true Weaver SSB, real FM stereo with a 19 kHz pilot PLL and RDS, and MMSE noise reduction.
+- **It turns your phone into a server.** VibeServer shares your radio to anyone with a browser, ~25× lighter than raw rtl_tcp.
+- **The waterfall runs on your watch.** Not media buttons — the live spectrum, tuned with the Digital Crown, phone locked in your pocket.
+- **The tuning is a flywheel with mass, detents and speed-adaptive haptics**, not a slider.
+- **It's GPLv3 and the source is right here.** Build it yourself, free, forever. The £2.99 App Store price is Apple's fee, not a paywall.
+
+Judge it on the feel — that's the part a screenshot can't show, and it's the part we care most about getting right.
+
 ## Get VibeSDR
 
 | | | |
@@ -101,15 +146,20 @@ VibeSDR runs full-screen on iPad, with the on-screen decoders available in lands
 ## Features
 
 ### Display & waterfall
-- **Custom GPU waterfall and spectrum** — rendered with a Skia runtime shader, with in-shader temporal line synthesis for a smooth, high-frame-rate display independent of the server's own waterfall
-- **Portrait and landscape** layouts, ProMotion 120 Hz rendering, haptic tuning feedback
-- **Colour palettes** (GQRX, KiwiSDR, CuteSDR, SdrDx, OpenWebRX, matplotlib origins), VFO glow and frost controls, S-meter calibration and selectable signal-meter modes
+- **Our own pixels, not the server's picture** — the waterfall is rendered from raw FFT bins in a Skia GPU runtime shader (SkSL), never by displaying a server-supplied waterfall image
+- **In-shader temporal line synthesis** — the GPU interpolates between spectrum frames to invent the display lines between them, so the scroll is smooth even though the data arrives ~10× a second. Scrolling moves a shader uniform over a ring buffer; no pixels are ever shifted
+- **120 Hz while you're touching it** — the scroll runs on the UI thread at panel rate with no JavaScript in the frame loop, then drops to discrete rows when you settle so the display can idle and save battery
+- **26 colour palettes** (GQRX, KiwiSDR, CuteSDR, SdrDx, OpenWebRX, turbo/viridis/inferno, Night Vision, Sonar…) — and because the history is stored as raw intensity, **switching palette, sharpness or contrast restyles the whole waterfall you've already seen, instantly**
+- **Portrait and landscape** layouts, VFO glow and frost controls, S-meter calibration and selectable signal-meter modes
 - **Spectrum backdrop image** with opacity control and station-ID overlay
 - **Power saving** — half-rate spectrum, idle timeout, and the waterfall fully disconnects when backgrounded or when a map overlay is active
 
-### Tuning & SDR controls
-- **VFO drum** with inertia scrolling and friction decay; precise / normal resolution toggle
-- **Dual-drum waterfall zoom**
+### Tuning & SDR controls — *thumb-first, analogue-feeling*
+- **VFO drum** — a weighted-flywheel simulation: cylinder projection, momentum, friction decay, and **haptic detents whose intensity adapts to how fast you're turning** (a firm click when you're deliberate, a light ratchet when you spin, a soft thunk when it settles)
+- **Velocity-adaptive ratio** — move slowly and it gives you up to **4× more travel per step** for genuinely fine tuning; spin fast and it gets out of the way. No mode switch needed
+- **Precise / normal** toggle on top of that, doubling the finger travel per step when you want it
+- **Zoom drum** — one octave per flick-length, anchored on the frequency you're tuned to (so zooming never slides your signal off-screen)
+- **Everything lands on the step grid** — 7,153.0 kHz, never 7,153.437
 - **Full mode set** — USB, LSB, AM, SAM, FM, NFM, CW
 - **Bandwidth / passband sliders** mirrored around the carrier, matched to the server's limits
 - **Noise reduction** — on-device NR, NR2 and noise blanker, plus server-side NR with a dynamic filter list and live parameter control
