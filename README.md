@@ -1,5 +1,13 @@
 # VibeSDR
 
+**Yes — the name is the disclosure. This app was vibe-coded, and it's called VibeSDR so you'd know that before you downloaded it.**
+
+It's written by one radio amateur working with Claude (Anthropic), in the open, under the GPL. Every line is on GitHub — including the mistakes, the dead ends and the commits where it didn't work. Nothing about how it was made is hidden, because the honest thing to do with AI-assisted software is to *say so on the tin* and then let people check.
+
+Judge it the way you'd judge any radio app: turn the dial and see if it feels right. [What sets it apart](#what-actually-sets-vibesdr-apart) · [On AI, honestly](#on-ai-honestly)
+
+---
+
 A mobile-first SDR receiver app for iOS, Android **and Apple Watch** — and far more than a single-server client. VibeSDR speaks multiple SDR server protocols, runs **local SDR hardware on-device**, and does its own demodulation with a clean-room, GPL-free DSP engine. It pairs all of that with a GPU-rendered waterfall, native background audio, on-device decoders and maps, voice and in-car control — a genuinely great SDR experience on any phone, regardless of the receiver behind it.
 
 **What VibeSDR connects to:**
@@ -59,11 +67,11 @@ Judge it on the feel — that's the part a screenshot can't show, and it's the p
 
 ### On AI, honestly
 
-VibeSDR is written with AI assistance. It says so at the top of this README, in the Credits, and in the App Store listing — because you deserve to know, and because you'd work it out anyway.
+**It's in the name.** VibeSDR is vibe-coded — written by one radio amateur working with Claude — and it's called that on purpose, so that nobody has to discover it, suspect it, or be told it by someone else in a comments section. If you'd rather not run AI-assisted software, the name told you before you clicked, and that's exactly what it's for.
 
-There's a pattern doing the rounds that has earned the scepticism: a closed-source app, an AI-generated feature list longer than any one person could have tested, decoders that "work" without an antenna plugged in, someone else's GPL code quietly folded in without credit, and a price tag on the end of it. That's not a tooling problem, it's an honesty problem — and the fix isn't to hide the tooling, it's to be checkable.
+The scepticism is earned, though, and worth being precise about. There's a pattern doing the rounds: a closed-source app, an AI-generated feature list longer than any one person could have tested, decoders that "work" with no antenna plugged in, someone else's GPL code quietly folded in without credit, and a price tag on the end of it. **That's not a tooling problem — it's an honesty problem.** Every one of those failures is a choice the developer made, and the AI didn't make any of them.
 
-So here's the deal:
+So the fix isn't to hide the tooling. It's to be checkable:
 
 - **The source is open.** GPLv3, all of it, right here. Not a demo, not a crippled build — the App Store binary is this tree. Read it, fork it, tell me where it's wrong.
 - **Everyone who contributed is credited**, and the licences are honoured — see [Credits](#credits). Where the app leans on someone else's protocol or work, it says so by name.
@@ -71,7 +79,9 @@ So here's the deal:
 - **It refuses to ship what it can't ship honestly.** No native DAB+, DRM, HD Radio or DMR — the codecs are patent-encumbered and shipping them would be a licensing violation dressed up as a feature. No WebSDR — its author doesn't sanction third-party clients, so VibeSDR doesn't have one. Both refusals cost features. They're documented below, and they're the point: an app that will hallucinate a decoder is not an app that turns things down.
 - **It isn't a wrapper.** The DSP is a clean-room ARM-NEON engine written from scratch, the waterfall is an original shader, the controls are a hand-tuned physical simulation. That work is in the commit history, in the open, with its mistakes still visible.
 
-Use of AI isn't the thing worth judging. Whether the result is honest, credited, open, and actually *works on a radio* is — and all four of those are things you can verify here rather than take my word for.
+**Use of AI isn't the thing worth judging.** Whether the result is honest, credited, open, and actually *works on a radio* is — and all four of those you can verify here rather than take my word for.
+
+And if it turns out a vibe-coded app can give you a waterfall on your wrist and a tuning dial that feels like a real one, then the tool was never the interesting part of the argument.
 
 ## Get VibeSDR
 
