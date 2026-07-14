@@ -282,6 +282,11 @@ html, body {
 #demod { display: flex; flex-direction: column; gap: 0.6em; }
 .bwRow { display: flex; align-items: center; gap: 0.6em; }
 .bwRow input[type=range] { flex: 1 1 auto; width: auto; min-width: 6em; }
+/* The low slider holds a MAGNITUDE and is mirrored, so its amber fill grows outward
+   from the carrier just like the high one — both oranges then mean "this much
+   bandwidth". Un-mirrored, a native range fills from its minimum, which on the low
+   side drew the bandwidth you were NOT using. See syncBw(). */
+#bwLo { transform: scaleX(-1); }
 .bwRow .val { color: var(--unit); font-size: 0.82em; min-width: 3.4em; font-variant-numeric: tabular-nums; }
 
 .stack { display: flex; flex-direction: column; gap: 0.6em; }

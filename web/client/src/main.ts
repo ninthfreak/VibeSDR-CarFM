@@ -2656,7 +2656,7 @@ function applyBw(low: number, high: number) {
   spec.setBandwidth(Math.round(low), Math.round(high));
   $('bwLoVal').textContent = edgeLabel(low);
   $('bwHiVal').textContent = edgeLabel(high);
-  $<HTMLInputElement>('bwLo').value = String(Math.round(low));
+  $<HTMLInputElement>('bwLo').value = String(-Math.round(low));   // magnitude (see syncBw)
   $<HTMLInputElement>('bwHi').value = String(Math.round(high));
 }
 
@@ -2667,9 +2667,15 @@ function syncBw() {
   const step = max > 50_000 ? 1000 : max > 10_000 ? 100 : 10;
   const lo = $<HTMLInputElement>('bwLo');
   const hi = $<HTMLInputElement>('bwHi');
-  lo.min = String(-max); lo.max = '0'; lo.step = String(step);
+  // The LOW slider carries a MAGNITUDE (0..max), not the signed edge, and is mirrored
+  // in CSS (#bwLo { transform: scaleX(-1) }). A native range always fills from its
+  // minimum to the thumb — so with a -max..0 range the orange grew from the OUTER edge
+  // inward, i.e. it showed the bandwidth you were NOT using. Magnitude + mirror makes
+  // both halves fill outward from the carrier, so the orange always means "this much
+  // bandwidth", the same on both sides.
+  lo.min = '0'; lo.max = String(max); lo.step = String(step);
   hi.min = '0'; hi.max = String(max); hi.step = String(step);
-  lo.value = String(Math.max(-max, Math.min(0, spec.bandwidthLow)));
+  lo.value = String(-Math.max(-max, Math.min(0, spec.bandwidthLow)));   // signed -> magnitude
   hi.value = String(Math.min(max, Math.max(0, spec.bandwidthHigh)));
   $('bwLoVal').textContent = edgeLabel(spec.bandwidthLow);
   $('bwHiVal').textContent = edgeLabel(spec.bandwidthHigh);
@@ -2680,7 +2686,7 @@ function initBw() {
   const hi = $<HTMLInputElement>('bwHi');
 
   lo.oninput = () => {
-    const v = Number(lo.value);
+    const v = -Number(lo.value);        // slider holds a magnitude; the edge is negative
     if (bwSync) applyBw(v, -v);
     else applyBw(v, spec!.bandwidthHigh);
   };
