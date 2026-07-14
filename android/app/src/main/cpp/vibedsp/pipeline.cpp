@@ -37,11 +37,20 @@ void RxPipeline::setTune(double offsetHz, Mode mode, double bwHz) {
 void RxPipeline::rebuildAudio() {
     // Channel decimation: bring the IQ down to a manageable channel rate that
     // comfortably holds the demod bandwidth, then resample to exactly outRate.
-    // 1.5x covers the RF channel + (for WFM) the 60 kHz MPX while keeping the
-    // per-sample MPX/PLL/RDS work as cheap as possible — WFM at bwHz*3 (=600 kHz)
-    // was ~2x more CPU than needed and made audio choppy on budget phones. Narrow
-    // modes are unaffected (floored by outRate).
-    const double targetCh = std::max((double)outRate_, bwHz_ * 3.0);
+    // 1.5x covers the RF channel while keeping the per-sample MPX/PLL/RDS work as
+    // cheap as possible. Narrow modes are unaffected (floored by outRate).
+    //
+    // WFM needs a floor of its own: the MPX runs to 57 kHz (RDS) + sidebands, so
+    // the channel must hold ~120 kHz of Nyquist regardless of how narrow the user
+    // sets the RF bandwidth — otherwise RDS folds and stereo dies.
+    //
+    // This used to be bwHz*3, which cost 2-7x more CPU for no benefit. Worst at
+    // LOW sample rates: at 1.024 MSPS the target (540 kHz) exceeded fs/2, so
+    // floor(fs/target) came out as 1 — no decimation at all, and the entire MPX
+    // chain ran at the full 1.024 MSPS. That is why lowering the sample rate made
+    // WFM *more* expensive instead of less.
+    double targetCh = std::max((double)outRate_, bwHz_ * 1.5);
+    if (mode_ == Mode::WFM) targetCh = std::max(targetCh, 150000.0);
     chDecim_ = std::max(1, (int)std::floor(sampleRate_ / targetCh));
     chFs_    = sampleRate_ / chDecim_;
 
