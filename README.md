@@ -57,6 +57,22 @@ Most SDR clients are a socket and a picture: they ask the server for a waterfall
 
 Judge it on the feel — that's the part a screenshot can't show, and it's the part we care most about getting right.
 
+### On AI, honestly
+
+VibeSDR is written with AI assistance. It says so at the top of this README, in the Credits, and in the App Store listing — because you deserve to know, and because you'd work it out anyway.
+
+There's a pattern doing the rounds that has earned the scepticism: a closed-source app, an AI-generated feature list longer than any one person could have tested, decoders that "work" without an antenna plugged in, someone else's GPL code quietly folded in without credit, and a price tag on the end of it. That's not a tooling problem, it's an honesty problem — and the fix isn't to hide the tooling, it's to be checkable.
+
+So here's the deal:
+
+- **The source is open.** GPLv3, all of it, right here. Not a demo, not a crippled build — the App Store binary is this tree. Read it, fork it, tell me where it's wrong.
+- **Everyone who contributed is credited**, and the licences are honoured — see [Credits](#credits). Where the app leans on someone else's protocol or work, it says so by name.
+- **Nothing is claimed that isn't there.** Every feature in this README exists, on a device, and has been used on the air. If you find one that doesn't work, that's a bug and I want the report — [open an issue](https://github.com/Stuey3D/VibeSDR/issues).
+- **It refuses to ship what it can't ship honestly.** No native DAB+, DRM, HD Radio or DMR — the codecs are patent-encumbered and shipping them would be a licensing violation dressed up as a feature. No WebSDR — its author doesn't sanction third-party clients, so VibeSDR doesn't have one. Both refusals cost features. They're documented below, and they're the point: an app that will hallucinate a decoder is not an app that turns things down.
+- **It isn't a wrapper.** The DSP is a clean-room ARM-NEON engine written from scratch, the waterfall is an original shader, the controls are a hand-tuned physical simulation. That work is in the commit history, in the open, with its mistakes still visible.
+
+Use of AI isn't the thing worth judging. Whether the result is honest, credited, open, and actually *works on a radio* is — and all four of those are things you can verify here rather than take my word for.
+
 ## Get VibeSDR
 
 | | | |
