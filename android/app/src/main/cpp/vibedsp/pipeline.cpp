@@ -85,19 +85,41 @@ void RxPipeline::rebuildAudio() {
     //
     // Same filter shape out, ~3x less work. Measured (tools/pi-bench, one user):
     //   SSB @ 2.4 MSPS   4.4% -> 1.6% of a core     AM   1.8% -> 0.9%
-    const double chHalf = std::max(1.0, bwHz_ * 0.5);            // channel half-width, Hz
+    // Channel half-width. For AM/FM the signal straddles the carrier, so it is bw/2.
+    // For SSB and CW it is NOT: the wanted sideband runs from the carrier out to the
+    // FULL bandwidth on one side (that is the premise SsbDemod's Weaver mixer is built
+    // on — it down-mixes by bw/2 to centre a sideband that spans 0..bw). Using bw/2
+    // here cut the sideband in half: for a 2.8 kHz SSB channel the filter closed at
+    // 1.4 kHz and took the consonants with it.
+    //
+    // This was masked for years: the old single-stage filter had a ~10.6 kHz transition
+    // and sloppily leaked 1.4-2.8 kHz back through. Tightening the filter did its job
+    // properly and made the missing top half of the voice audible — measured against
+    // an UberSDR recording of the same signal, we were 37 dB down over 2.0-2.7 kHz.
+    const bool ssbLike = (mode_ == Mode::SSB_USB || mode_ == Mode::SSB_LSB ||
+                          mode_ == Mode::CW);
+    const double chHalf = std::max(1.0, ssbLike ? bwHz_ : bwHz_ * 0.5);
     // The absolute transition width the old single-stage design worked out to. Keep it
     // identical so the audible filter shape does not change.
     const double transHz = std::max(chHalf * 0.5, chFs_ * 0.25 - chHalf);
 
     decs_.clear();
     std::vector<int> stages;
-    {   // Prime-factorise the decimation, largest factor first, so the SMALLEST factor
-        // is last — that keeps the final (narrow, tap-heavy) filter running as slowly
-        // as possible, which is the whole point.
+    {   // Decimate HARD and EARLY. Each stage costs roughly (its output rate x taps),
+        // so the goal is to collapse the sample rate as fast as possible and do the
+        // remaining work cheaply. Prime factors are the wrong tool: a decimation of 64
+        // prime-factorises to SIX stages of 2, and a first stage of 2 barely reduces
+        // the rate — so the expensive high-rate samples get dragged through stage after
+        // stage. (Measured: that made NFM 40% dearer than doing nothing.) Greedily take
+        // the LARGEST composite factor up to 8 instead: 64 -> 8x8, 50 -> 5x5x2.
         int d = chDecim_;
-        for (int p = 2; p <= d; ++p) while (d % p == 0) { stages.push_back(p); d /= p; }
-        std::sort(stages.rbegin(), stages.rend());
+        while (d > 1) {
+            int f = 1;
+            for (int p = 8; p >= 2; --p) if (d % p == 0) { f = p; break; }
+            if (f == 1) { stages.push_back(d); break; }   // awkward prime: one stage
+            stages.push_back(f);
+            d /= f;
+        }
         if (stages.empty()) stages.push_back(1);   // chDecim_ == 1: a plain filter
     }
 
@@ -120,8 +142,16 @@ void RxPipeline::rebuildAudio() {
             cutoff = chHalf / fs;
             trans  = std::max((fsOut - chHalf) / fs - cutoff, cutoff * 0.5);
         }
+        // DEEP STOPBAND on the last stage. Whatever it fails to attenuate folds
+        // straight into the audio and can never be removed afterwards — and the
+        // fold lands at (channel rate +/- passband), which for a 12 kHz channel is
+        // only ~10 kHz off tune. On a crowded band that neighbour can be 60 dB
+        // louder than the signal you are trying to hear, and Hamming's ~53 dB is
+        // not enough. Blackman's ~74 dB is, and the extra taps are nearly free at
+        // the slowest rate in the chain. THIS IS THE ADJACENT-CHANNEL REJECTION —
+        // see test_demod's alias-rejection case before touching it.
         decs_.push_back(std::make_unique<FirDecimator>(
-            designLowpass(cutoff, std::max(trans, 1e-3)), D));
+            designLowpass(cutoff, std::max(trans, 1e-3), /*deepStop=*/last), D));
         fs = fsOut;
     }
 

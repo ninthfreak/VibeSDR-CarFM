@@ -108,7 +108,11 @@ private:
 // Windowed-sinc real low-pass. `cutoff` and `transition` are normalised
 // (cycles/sample). Returns unity-DC-gain taps. Used as the DDC anti-alias /
 // channel filter ahead of decimation, and reusable for audio shaping.
-std::vector<float> designLowpass(double cutoff, double transition);
+// `deepStop` swaps the Hamming window (~53 dB stopband) for a Blackman (~74 dB).
+// Costs ~1.7x the taps for the same transition. Worth it for the LAST decimation
+// stage: whatever it fails to attenuate FOLDS into the audio, and on a crowded band
+// a neighbour 10 kHz away can be 60 dB louder than the signal you actually want.
+std::vector<float> designLowpass(double cutoff, double transition, bool deepStop = false);
 
 // ── FIR decimator (complex) ──────────────────────────────────────────────--
 // Applies a real-tap low-pass to a complex stream and keeps every Dth sample.
