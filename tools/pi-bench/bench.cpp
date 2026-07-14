@@ -151,7 +151,7 @@ int main(int argc, char** argv) {
         printf("── %.3f MSPS ─────────────────────────────────────────────\n", fs / 1e6);
         printf("   %-22s %8s   %s\n", "mode", "core%", "users that fit (est.)");
         for (const auto& c : cases) {
-            const Result r = runOne(fs, c.mode, c.bw, 1024, 20.0, seconds);
+            const Result r = runOne(fs, c.mode, c.bw, 1024, getenv("WFPS") ? atof(getenv("WFPS")) : 20.0, seconds);
             const double pct = r.coreFrac * 100.0;
             // Leave one core's worth of headroom for USB capture, the WebSocket
             // server, ADPCM and the OS — do not promise the last core.

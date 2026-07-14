@@ -49,8 +49,23 @@ void RxPipeline::rebuildAudio() {
     // floor(fs/target) came out as 1 — no decimation at all, and the entire MPX
     // chain ran at the full 1.024 MSPS. That is why lowering the sample rate made
     // WFM *more* expensive instead of less.
-    double targetCh = std::max((double)outRate_, bwHz_ * 1.5);
-    if (mode_ == Mode::WFM) targetCh = std::max(targetCh, 150000.0);
+    // The channel rate does NOT have to be the audio rate. It used to be floored at
+    // outRate_ (48 kHz) — but a 2.8 kHz SSB signal does not need a 48 kHz channel, and
+    // that floor was the single most expensive line in the engine.
+    //
+    // Why: SsbDemod's Weaver filters use a deliberately SHARP ~80 Hz transition to
+    // reject the wrong sideband, and tap count is 3.3/(transition/fs). At 48 kHz that
+    // is ~2000 taps — TWICE (I and Q). Filter cost then scales with fs SQUARED: more
+    // taps AND more samples through them. Dropping the channel to 12 kHz cuts it ~16x.
+    // The demodulated audio (<=3 kHz) is resampled up to 48 kHz afterwards as always,
+    // so nothing about the output changes.
+    //
+    // 12 kHz floor: enough for the widest narrow mode's audio plus filter transition
+    // room, and enough for CW's beat note. 3x bandwidth keeps AM/NFM comfortable.
+    double targetCh = std::max(bwHz_ * 3.0, 12000.0);
+    // WFM is the exception: its MPX runs to 57 kHz (RDS) + sidebands, so it needs a
+    // real channel regardless of the RF bandwidth the user picked.
+    if (mode_ == Mode::WFM) targetCh = std::max(bwHz_ * 1.5, 150000.0);
     chDecim_ = std::max(1, (int)std::floor(sampleRate_ / targetCh));
     chFs_    = sampleRate_ / chDecim_;
 
