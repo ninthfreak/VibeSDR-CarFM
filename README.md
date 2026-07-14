@@ -2,7 +2,9 @@
 
 **Yes — the name is the disclosure. This app was vibe-coded, and it's called VibeSDR so you'd know that before you downloaded it.**
 
-It's written by one radio amateur working with Claude (Anthropic), in the open, under the GPL. Every line is on GitHub — including the mistakes, the dead ends and the commits where it didn't work. Nothing about how it was made is hidden, because the honest thing to do with AI-assisted software is to *say so on the tin* and then let people check.
+It's written by one person working with Claude (Anthropic), in the open, under the GPL. I'm not a licensed amateur and I don't transmit — I'm a listener, fascinated by radio and by its history. That's the whole reason this app exists, and it's why it's a *receiver*: I wanted the thing I'd have loved to own, with a dial that feels like the ones that got me interested in the first place.
+
+Every line is on GitHub — including the mistakes, the dead ends and the commits where it didn't work. Nothing about how it was made is hidden, because the honest thing to do with AI-assisted software is to *say so on the tin* and then let people check.
 
 Judge it the way you'd judge any radio app: turn the dial and see if it feels right. [What sets it apart](#what-actually-sets-vibesdr-apart) · [On AI, honestly](#on-ai-honestly)
 
@@ -67,7 +69,7 @@ Judge it on the feel — that's the part a screenshot can't show, and it's the p
 
 ### On AI, honestly
 
-**It's in the name.** VibeSDR is vibe-coded — written by one radio amateur working with Claude — and it's called that on purpose, so that nobody has to discover it, suspect it, or be told it by someone else in a comments section. If you'd rather not run AI-assisted software, the name told you before you clicked, and that's exactly what it's for.
+**It's in the name.** VibeSDR is vibe-coded — written by one curious listener working with Claude — and it's called that on purpose, so that nobody has to discover it, suspect it, or be told it by someone else in a comments section. If you'd rather not run AI-assisted software, the name told you before you clicked, and that's exactly what it's for.
 
 The scepticism is earned, though, and worth being precise about. There's a pattern doing the rounds: a closed-source app, an AI-generated feature list longer than any one person could have tested, decoders that "work" with no antenna plugged in, someone else's GPL code quietly folded in without credit, and a price tag on the end of it. **That's not a tooling problem — it's an honesty problem.** Every one of those failures is a choice the developer made, and the AI didn't make any of them.
 
