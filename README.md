@@ -1,12 +1,22 @@
 # VibeSDR
 
-**Yes — the name is the disclosure. This app was vibe-coded, and it's called VibeSDR so you'd know that before you downloaded it.**
+### Designed for your thumbs.
 
-It's written by one person working with Claude (Anthropic), in the open, under the GPL. I'm not a licensed amateur and I don't transmit — I'm a listener, fascinated by radio and by its history. That's the whole reason this app exists, and it's why it's a *receiver*: I wanted the thing I'd have loved to own, with a dial that feels like the ones that got me interested in the first place.
+**Two large weighted drums with real inertia. Spin them, flick them, let them coast. It feels like tuning a radio, because that's what it's modelled on.**
 
-Every line is on GitHub — including the mistakes, the dead ends and the commits where it didn't work. Nothing about how it was made is hidden, because the honest thing to do with AI-assisted software is to *say so on the tin* and then let people check.
+![VibeSDR on an Apple Watch Ultra](screenshots/21-watch-wrist-am.jpeg)
 
-Judge it the way you'd judge any radio app: turn the dial and see if it feels right. [What sets it apart](#what-actually-sets-vibesdr-apart) · [On AI, honestly](#on-ai-honestly)
+### And a waterfall you can wear.
+
+The live RF spectrum, on your wrist, tuned with the Digital Crown — as far as I can tell, the only SDR waterfall on Apple Watch on either app store. It draws its own pixels on the watch, at about a third of one CPU core.
+
+---
+
+I'm not a licensed amateur and I don't transmit. I'm a listener, fascinated by radio and by its history — and VibeSDR is the receiver I'd have loved to own, with a dial that feels like the ones that got me interested in the first place.
+
+It started as a mobile skin for my own UberSDR instance, which went through **500+ tests** before I was happy with it. Every feature in this app has been designed and personally tested by me, on real hardware, across five devices — from an iPhone 17 Pro Max down to a **Moto G35 and an iPhone SE**, because if the GPU waterfall and the NEON DSP hold up on those, they hold up anywhere. I don't ship things I wouldn't use myself. I once spent hours chasing a clock that jumped a few pixels on cold start, once per session, that nobody would ever have consciously noticed. I'd have known.
+
+**The code was written with AI assistance (Claude) — hence the name.** I designed it, I broke it, I tested it, I filed the bugs and I signed off every release. Full source is public under GPL-3.0, mistakes and dead ends included. Nothing about how this app was made is hidden, because the honest thing to do is say it on the tin and then let people check. → [On AI, honestly](#on-ai-honestly)
 
 ---
 
@@ -81,6 +91,28 @@ So the fix isn't to hide the tooling. It's to be checkable:
 - **It refuses to ship what it can't ship honestly.** No native DAB+, DRM, HD Radio or DMR — the codecs are patent-encumbered and shipping them would be a licensing violation dressed up as a feature. No WebSDR — its author doesn't sanction third-party clients, so VibeSDR doesn't have one. Both refusals cost features. They're documented below, and they're the point: an app that will hallucinate a decoder is not an app that turns things down.
 - **It isn't a wrapper.** The DSP is a clean-room ARM-NEON engine written from scratch, the waterfall is an original shader, the controls are a hand-tuned physical simulation. That work is in the commit history, in the open, with its mistakes still visible.
 
+### Tested on
+
+Not a spec sheet — the actual devices every feature has been driven on, by me, on the air:
+
+| | |
+|---|---|
+| **iPhone 17 Pro Max** | the easy one, where everything works |
+| **iPhone SE (2nd gen)** | a 2020 A13 with a 4.7″ screen — the layout floor |
+| **Moto G35** | a budget Android phone — the thermal and DSP floor |
+| **Galaxy Tab A9** | Android tablet layout |
+| **iPad Air 13″** | full-screen iPad, landscape decoders |
+| **Apple Watch Ultra** | the wrist waterfall |
+| **VibeServer web client** | Safari and Chrome, macOS and Windows |
+
+The two that matter are the SE and the G35. Anyone can test on a Pro Max — that's testing where everything already works. If the GPU waterfall and the NEON DSP survive a budget Unisoc phone and a 2020 four-inch-class screen, they'll survive your phone.
+
+### Every codec in here is one I'm entitled to ship
+
+No patent-encumbered vocoders. No HD Radio, no DAB+, no DRM, no DMR/AMBE. Those decoders would be *easy* features to claim and hard ones to ship legally — the codecs behind them belong to Xperi and DVSI, and shipping them in a store build would be a licensing violation dressed up as a feature list. So they're not here, and [the reasons are written down](#why-doesnt-vibesdr-natively-decode-dab-drm-hd-radio-dmr-and-similar-digital-modes). Same with WebSDR: its author doesn't sanction third-party clients, so VibeSDR doesn't have one.
+
+Both refusals cost real features. That's the point — **an app that will hallucinate a decoder is not an app that turns features down.**
+
 **Use of AI isn't the thing worth judging.** Whether the result is honest, credited, open, and actually *works on a radio* is — and all four of those you can verify here rather than take my word for.
 
 And if it turns out a vibe-coded app can give you a waterfall on your wrist and a tuning dial that feels like a real one, then the tool was never the interesting part of the argument.
@@ -101,9 +133,6 @@ The App Store build is the same source you see here. If you'd rather not pay, **
 > **📱 On iOS, the App Store is behind the releases here.** Apple review has been slow, so the store is still serving **v6.1** — which predates **VibeServer** (v8) and the **Apple Watch app** (v9). To run v9 on an iPhone today, sideload the `.ipa` from the [latest release](https://github.com/Stuey3D/VibeSDR/releases/latest); a **TestFlight build of v9 is on its way**, which will let you install it without re-signing anything.
 
 **Latest release: [v9.0.0 — The Apple Watch companion](https://github.com/Stuey3D/VibeSDR/releases/latest)** — the live waterfall on your wrist, tuned with the Digital Crown, with the phone locked in your pocket. Plus the fix for a waterfall that could freeze for good on mobile data and never come back.
-
-![VibeSDR on an Apple Watch Ultra](screenshots/21-watch-wrist-am.jpeg)
-*Not a screenshot of the phone — this is the waterfall running **on the watch**. 648 kHz AM, S8, with the iPhone locked in a pocket.*
 
 ![VibeSDR web client](docs/screenshots/v8-web-client.png)
 *The VibeServer web client — served by an Android phone with an RTL-SDR, open in Safari at `vibesdr-moto-g35.local`.*
