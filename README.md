@@ -29,12 +29,22 @@ The App Store build is the same source you see here. If you'd rather not pay, **
 
 **Latest release: [v9.0.0 — The Apple Watch companion](https://github.com/Stuey3D/VibeSDR/releases/latest)** — the live waterfall on your wrist, tuned with the Digital Crown, with the phone locked in your pocket. Plus the fix for a waterfall that could freeze for good on mobile data and never come back.
 
+![VibeSDR on an Apple Watch Ultra](screenshots/21-watch-wrist-am.jpeg)
+*Not a screenshot of the phone — this is the waterfall running **on the watch**. 648 kHz AM, S8, with the iPhone locked in a pocket.*
+
 ![VibeSDR web client](docs/screenshots/v8-web-client.png)
 *The VibeServer web client — served by an Android phone with an RTL-SDR, open in Safari at `vibesdr-moto-g35.local`.*
 
 ---
 
 ## Screenshots
+
+### Apple Watch (new in v9)
+
+| | |
+|---|---|
+| ![Watch waterfall — 40m](screenshots/22-watch-waterfall-40m.png) | ![Watch FM-DX](screenshots/23-watch-fmdx.png) |
+| *The live waterfall on the wrist — 40m Ham Band, S5. Turn the Crown to tune; the ticker marks where the band ends* | *The FM-DX screen — station, RDS RadioText, transmitter site + distance (Bilsdale West Moor, 84 km), and a tuning dial* |
 
 ### FM-DX Webserver (new in v7)
 
