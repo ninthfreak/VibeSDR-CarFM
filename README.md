@@ -5,18 +5,32 @@ A mobile-first SDR receiver app for iOS and Android — and far more than a sing
 **What VibeSDR connects to:**
 - **Remote SDR servers** — native adapters for [UberSDR](https://ubersdr.org), **OpenWebRX / OpenWebRX+**, **KiwiSDR**, and **FM-DX Webserver** (the worldwide network of shared FM broadcast tuners), all behind one interface, with a directory chooser in the instance picker.
 - **Local hardware** — plug an **RTL-SDR into an Android phone over USB** ("Local Hardware"), or connect to a networked **rtl_tcp** server from either platform. VibeSDR demodulates the raw IQ itself.
-- **VibeServer** *(new in v8)* — turn an Android phone with an RTL-SDR into a **receiver anyone on your network can use, from a browser**. The phone does the DSP and sends compressed audio and a ready-made waterfall (~25× lighter than raw rtl_tcp), so it works comfortably over Wi-Fi or a hotspot. Point a browser at `vibesdr.local` — no app, no install.
+- **VibeServer** *(v8)* — turn an Android phone with an RTL-SDR into a **receiver anyone on your network can use, from a browser**. The phone does the DSP and sends compressed audio and a ready-made waterfall (~25× lighter than raw rtl_tcp), so it works comfortably over Wi-Fi or a hotspot. Point a browser at `vibesdr.local` — no app, no install.
+- **Apple Watch** *(new in v9)* — **the waterfall itself, on your wrist.** Not a remote control with a few buttons: the live spectrum, drawn on the watch, with the Digital Crown to tune — while the iPhone stays locked in your pocket.
 - **VibeDSP** — its own from-scratch, ARM-NEON-optimised DSP engine for the on-device paths (no SDR++ / FFTW / VOLK), so the local radio is fast, light on battery, and free of bundled third-party GPL DSP.
 
 > Built by Stuart Carr (Stuey3D) with AI assistance from Claude (Anthropic).
 > Free software under the GNU GPL-3.0.
 
-**Latest release: [v8.0.0](https://github.com/Stuey3D/VibeSDR/releases/latest)** — iOS `.ipa` and Android `.apk`. **VibeServer**: share your radio from any browser, with the full client (waterfall, audio, decoders, FT8 map, search, bookmarks, media controls) served by the phone itself. Plus a **Custom server** box that works out what any address is running, station bookmarks the receiver **learns from RDS**, and `vibesdr.local`.
+## Get VibeSDR
+
+| | | |
+|---|---|---|
+| **iPhone / iPad** | **[App Store](https://apps.apple.com/gb/app/vibesdr/id6786344049)** — £2.99 | Currently **v6.1**. Newer versions are working their way through review — **v9 is heading to TestFlight**. |
+| **iPhone / iPad** | **[`.ipa` from the latest release](https://github.com/Stuey3D/VibeSDR/releases/latest)** — free | Always the newest version, but you must **re-sign it yourself** — see [Installing on iPhone](#installing-on-iphone-signing-the-ipa-with-xcode). |
+| **Android** | **[`.apk` from the latest release](https://github.com/Stuey3D/VibeSDR/releases/latest)** — free | Always the newest version. Just install it. |
+| **Anyone** | **Build it from this repository** — free, forever | See [Building](#building). |
+
+**Why does the App Store version cost £2.99 when the source is free?** It goes towards Apple's fees — the Developer Programme costs $99 a year, and Apple takes its cut of every sale on top. The £2.99 covers the cost of *being on the App Store at all*; it isn't what VibeSDR is worth, because VibeSDR is GPLv3 free software and always will be.
+
+The App Store build is the same source you see here. If you'd rather not pay, **build it yourself from this repository, free, forever** — same app, no crippled features, no nag screens, no catch. Paying is just the convenient route (and it keeps the certificate alive for everyone who takes it).
+
+> **📱 On iOS, the App Store is behind the releases here.** Apple review has been slow, so the store is still serving **v6.1** — which predates **VibeServer** (v8) and the **Apple Watch app** (v9). To run v9 on an iPhone today, sideload the `.ipa` from the [latest release](https://github.com/Stuey3D/VibeSDR/releases/latest); a **TestFlight build of v9 is on its way**, which will let you install it without re-signing anything.
+
+**Latest release: [v9.0.0 — The Apple Watch companion](https://github.com/Stuey3D/VibeSDR/releases/latest)** — the live waterfall on your wrist, tuned with the Digital Crown, with the phone locked in your pocket. Plus the fix for a waterfall that could freeze for good on mobile data and never come back.
 
 ![VibeSDR web client](docs/screenshots/v8-web-client.png)
 *The VibeServer web client — served by an Android phone with an RTL-SDR, open in Safari at `vibesdr-moto-g35.local`.*
-
-> **📱 iOS App Store approval is in progress.** Apple review is taking a while at the moment, but a **TestFlight link is coming soon** so you'll be able to install on iPhone without re-signing anything. In the meantime, iPhone users can sign and sideload the `.ipa` — see [Installing on iPhone](#installing-on-iphone-signing-the-ipa-with-xcode) below.
 
 ---
 
@@ -96,6 +110,15 @@ VibeSDR runs full-screen on iPad, with the on-screen decoders available in lands
 - **Background audio** — keeps receiving when backgrounded on **both** platforms
 - **Lock-screen / Now Playing / car / watch controls** — media-session metadata (frequency + station) with next/previous mapped to station or bookmark skip
 - **AAC recorder** with share sheet
+
+### On the wrist (Apple Watch) — new in v9
+- **The waterfall itself, on the watch** — not a remote control with a few buttons. The live spectrum is drawn on the watch from the same data and the same palette as the phone
+- **Turn the Digital Crown to tune**; tap the frequency to type one on a passcode-style pad; press and hold the waterfall for the menu (demodulator, tuning step, zoom, brightness, contrast, saved servers)
+- **It works with the iPhone locked in your pocket** — and it will **start the phone for you**: open the watch app with VibeSDR closed and the phone wakes in the background, connects to your default receiver, and the waterfall arrives on your wrist **without the phone's screen ever coming on**
+- **Four screens, chosen by what the receiver actually is** — the spectrum waterfall; the FM-DX tuner (station, distance, RDS); the DAB service list (where the Crown *selects* a service, because DAB is a list, not a continuum); and the ADS-B aircraft table
+- **Switch receivers from your favourites**, and **control the iPhone's system volume and mute** from the wrist — mirroring the phone's *real* volume, including changes you make on the phone, so the two can never disagree
+- **The band you're in, in words** ("20m Ham Band", "41m Broadcast Band"), from the ITU band plan for wherever the **receiver** is, with ticker marks showing where that band ends
+- **Your watch's own battery** next to the clock — a live waterfall costs the watch about a third of a CPU core, and this is an app you might leave running on a hilltop
 
 ### Local SDR hardware & on-device DSP
 - **USB RTL-SDR on Android** — plug an RTL-SDR (incl. RTL-SDR Blog V4) into the phone and VibeSDR runs the whole radio on-device: full waterfall, drum, audio, decoders and a hardware-control submenu (gain, PPM, bias-T, AGC, sample rate, direct sampling)
