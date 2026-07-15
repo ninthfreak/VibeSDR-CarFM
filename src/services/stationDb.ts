@@ -225,16 +225,35 @@ export async function saveLogo(
   if (!d || !base) return;
   const key = base.toUpperCase();
   try {
+    // A manually-assigned logo is sticky: an auto source never overwrites it
+    // (only another 'manual' write can). See resolveLogo / setManualLogo.
     await d.runAsync(
       `INSERT INTO logos(callsign_base,img,mime,genre,homepage,source,fetched_at)
        VALUES (?,?,?,?,?,?,?)
        ON CONFLICT(callsign_base) DO UPDATE SET
          img=excluded.img, mime=excluded.mime, genre=excluded.genre,
-         homepage=excluded.homepage, source=excluded.source, fetched_at=excluded.fetched_at`,
+         homepage=excluded.homepage, source=excluded.source, fetched_at=excluded.fetched_at
+       WHERE logos.source IS NOT 'manual' OR excluded.source = 'manual'`,
       [key, img, mime, genre, homepage, source, Date.now()],
     );
     await d.runAsync('DELETE FROM logo_wanted WHERE callsign_base = ?', [key]);
   } catch (e) { console.warn('[stationDb] saveLogo failed', e); }
+}
+
+/** Assign a logo by hand (sticky — auto sources won't overwrite it). */
+export async function setManualLogo(base: string, img: Uint8Array, mime: string): Promise<void> {
+  await saveLogo(base, img, mime, null, null, 'manual');
+}
+
+/** The source that last set a station's stored logo, or null. */
+export async function logoSourceOf(base: string): Promise<string | null> {
+  const d = await db();
+  if (!d || !base) return null;
+  try {
+    const r = await d.getFirstAsync<{ source: string | null }>(
+      `SELECT source FROM logos WHERE callsign_base = ?`, [base.toUpperCase()]);
+    return r?.source ?? null;
+  } catch { return null; }
 }
 
 /**

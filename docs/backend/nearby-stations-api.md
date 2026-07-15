@@ -70,9 +70,27 @@ getStationDataDate(): Promise<string | null>;
 // the CarFM screen, so the picker usually needn't call it.
 initLogoService(location?: { lat: number; lon: number }): Promise<void>;
 
-// Mark a station as encountered (tuned) so its logo is fetched or queued.
-noteEncountered(callsignBase: string, nameHint?: string): Promise<void>;
+// Manually assign a logo from an image URL (a search result or a pasted link).
+// Sticky: auto sources never overwrite it. Returns true on success.
+setStationLogoFromUrl(callsignBase: string, url: string): Promise<boolean>;
+isManualLogo(callsignBase: string): Promise<boolean>;
+
+// Web image search for the manual-assign UI (default provider: Wikimedia Commons).
+searchLogoImages(query: string, limit?: number): Promise<ImageResult[]>;
+//   ImageResult = { url, thumb, title, width?, height? }
 ```
+
+**Logo sources are layered** (auto), best hit wins, all stored in the DB:
+`RadioDNS` (PI/ECC-keyed, official) → `Wikidata` (by callsign) → station
+**homepage favicon** → `Radio-Browser` (last resort). RadioDNS US coverage is
+sparse and its FQDN format is marked VERIFY in `logoRadioDns.ts` until checked
+against a real station; the others work today.
+
+**Manual assignment** (`setStationLogoFromUrl`) wins over everything and is never
+re-fetched. The **web image search** (`searchLogoImages`) currently returns
+Wikimedia Commons results (keyless); for whole-web search a broader provider
+(e.g. Google Programmable Search with a key, or an Android share-to-app flow) can
+sit behind the same signature — pending the chosen mechanism.
 
 **Logos** (`logoUri`) are stored as blobs **in the same station DB** and returned
 as a `data:` URI you can drop straight into `<Image source={{ uri: logoUri }} />`.
