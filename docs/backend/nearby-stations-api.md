@@ -70,14 +70,22 @@ getStationDataDate(): Promise<string | null>;
 // the CarFM screen, so the picker usually needn't call it.
 initLogoService(location?: { lat: number; lon: number }): Promise<void>;
 
-// Manually assign a logo from an image URL (a search result or a pasted link).
-// Sticky: auto sources never overwrite it. Returns true on success.
+// Assign a logo from an image URL (e.g. an in-app search result). Sticky: auto
+// sources never overwrite it. Returns true on success.
 setStationLogoFromUrl(callsignBase: string, url: string): Promise<boolean>;
 isManualLogo(callsignBase: string): Promise<boolean>;
 
-// Web image search for the manual-assign UI (default provider: Wikimedia Commons).
+// Quick IN-APP image search (Wikimedia Commons, keyless, non-Google). Narrow.
 searchLogoImages(query: string, limit?: number): Promise<ImageResult[]>;
 //   ImageResult = { url, thumb, title, width?, height? }
+
+// WHOLE-WEB logo search via the browser + Android share-back (no Google):
+//   openLogoWebSearch(base) opens a non-Google image search (DuckDuckGo) and
+//   remembers the target station. The user long-presses the logo and shares it
+//   to CarFM; consumeSharedLogo() (already wired to fire on app resume) assigns
+//   the shared image to that station. Returns the base that got a logo, or null.
+openLogoWebSearch(callsignBase: string, query?: string): Promise<void>;
+consumeSharedLogo(): Promise<string | null>;
 ```
 
 **Logo sources are layered** (auto), best hit wins, all stored in the DB:
@@ -86,11 +94,11 @@ searchLogoImages(query: string, limit?: number): Promise<ImageResult[]>;
 sparse and its FQDN format is marked VERIFY in `logoRadioDns.ts` until checked
 against a real station; the others work today.
 
-**Manual assignment** (`setStationLogoFromUrl`) wins over everything and is never
-re-fetched. The **web image search** (`searchLogoImages`) currently returns
-Wikimedia Commons results (keyless); for whole-web search a broader provider
-(e.g. Google Programmable Search with a key, or an Android share-to-app flow) can
-sit behind the same signature — pending the chosen mechanism.
+**Manual assignment** wins over everything and is never re-fetched. Two ways to
+find a logo, both non-Google: a quick in-app search (`searchLogoImages`, Wikimedia
+Commons) and whole-web search (`openLogoWebSearch` → browser → share back →
+`consumeSharedLogo`). No "paste a URL" and no Google. The browser engine is
+DuckDuckGo by default (one-line swap to Bing/Brave/Qwant in `stationFinder.ts`).
 
 **Logos** (`logoUri`) are stored as blobs **in the same station DB** and returned
 as a `data:` URI you can drop straight into `<Image source={{ uri: logoUri }} />`.

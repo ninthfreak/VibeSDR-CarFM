@@ -39,6 +39,8 @@ interface SourceHit {
   source: string;
 }
 
+export { base64ToBytes } from './base64';
+
 /** Download an image URL to bytes, size-capped. */
 export async function fetchImage(url: string): Promise<{ bytes: Uint8Array; mime: string } | null> {
   try {

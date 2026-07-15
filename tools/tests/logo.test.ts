@@ -3,6 +3,7 @@
 import { buildSparql, parseSparqlLogo } from '../../src/services/logoWikidata.ts';
 import { pickIconUrl } from '../../src/services/logoSiteFavicon.ts';
 import { fmFrequencyField, gccFromPiEcc, buildFmFqdn, parseSpiLogo } from '../../src/services/logoRadioDns.ts';
+import { base64ToBytes, bytesToBase64 } from '../../src/services/base64.ts';
 
 let fail = 0;
 const eq = (name: string, got: unknown, want: unknown) => {
@@ -36,6 +37,16 @@ eq('spi logo picks largest',
   parseSpiLogo('<multimedia url="s.png" width="32" height="32"/><multimedia url="big.png" width="320" height="240"/>'),
   'big.png');
 eq('spi no logo', parseSpiLogo('<programme>nothing</programme>'), null);
+
+// base64 round-trip (native shares images as base64 → bytes for the blob store)
+for (const len of [0, 1, 2, 3, 4, 5, 255, 1000]) {
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = (i * 37 + 11) & 255;
+  const back = base64ToBytes(bytesToBase64(bytes));
+  eq(`base64 round-trip len=${len}`, Array.from(back), Array.from(bytes));
+}
+// decode tolerates padded input (native uses NO_WRAP with '=')
+eq('base64 decodes "TWFu" -> Man', Array.from(base64ToBytes('TWFu')), [77, 97, 110]);
 
 console.log(fail === 0 ? '\nLOGO: ALL PASS' : `\nLOGO: ${fail} FAILURES`);
 if (fail) process.exit(1);

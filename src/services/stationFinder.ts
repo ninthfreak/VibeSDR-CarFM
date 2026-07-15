@@ -7,6 +7,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Linking, NativeModules } from 'react-native';
 
 import { getUserLocation } from './instancesApi';
 import { haversineKm } from './stationGeo';
@@ -16,7 +17,7 @@ import {
   setManualLogo, logoSourceOf,
   type NearbyDbResult,
 } from './stationDb';
-import { resolveLogo, fetchImage, type LogoStation } from './logoResolver';
+import { resolveLogo, fetchImage, base64ToBytes, type LogoStation } from './logoResolver';
 import { piToCallsign, callsignBase } from './piCallsign';
 import type { NearbyStation, StationIdentity, StationRow } from './stationTypes';
 
@@ -148,10 +149,9 @@ export async function isManualLogo(base: string): Promise<boolean> {
 export interface ImageResult { url: string; thumb: string; title: string; width?: number; height?: number; }
 
 /**
- * Web image search for the manual-assign UI. Default provider is Wikimedia
- * Commons (keyless, licensable images) — good for station logos on Commons but
- * not the whole web. A broader provider (e.g. Google Programmable Search) can be
- * slotted in behind this same signature; see docs/backend/nearby-stations-api.md.
+ * Quick in-app image search for the manual-assign UI, via Wikimedia Commons
+ * (keyless, non-Google, licensable). Coverage is narrow — for whole-web logo
+ * search use openLogoWebSearch() (browser + share-back) below.
  */
 export async function searchLogoImages(query: string, limit = 24): Promise<ImageResult[]> {
   try {
@@ -169,6 +169,46 @@ export async function searchLogoImages(query: string, limit = 24): Promise<Image
     });
   } catch {
     return [];
+  }
+}
+
+// ── whole-web logo search via browser + Android share-back ────────────────────
+const PENDING_LOGO_TARGET = '@vibesdr/logo_assign_target';
+// Non-Google image search. Swap for Bing/Brave/Qwant by changing this one line:
+//   Bing:  https://www.bing.com/images/search?q=
+//   Brave: https://search.brave.com/images?q=
+const IMAGE_SEARCH_URL = (q: string) => `https://duckduckgo.com/?iax=images&ia=images&q=${encodeURIComponent(q)}`;
+
+/**
+ * Open the browser to a (non-Google) image search for a station's logo. The user
+ * long-presses the logo and shares it back to CarFM (Android share sheet); the
+ * app then assigns it via consumeSharedLogo(). We remember which station the
+ * search was for so the shared image lands on the right one.
+ */
+export async function openLogoWebSearch(base: string, query?: string): Promise<void> {
+  await AsyncStorage.setItem(PENDING_LOGO_TARGET, base.toUpperCase());
+  await Linking.openURL(IMAGE_SEARCH_URL(query ?? `${base} radio station logo`));
+}
+
+/**
+ * Consume an image shared into the app and assign it to the station chosen by the
+ * preceding openLogoWebSearch(). Call this on app foreground/resume. Returns the
+ * callsign_base that got a logo, or null.
+ */
+export async function consumeSharedLogo(): Promise<string | null> {
+  const Local = (NativeModules as { VibeLocalSDR?: { consumeSharedLogo?: () => Promise<{ base64: string; mime: string } | null> } }).VibeLocalSDR;
+  if (!Local?.consumeSharedLogo) return null;
+  let shared: { base64: string; mime: string } | null = null;
+  try { shared = await Local.consumeSharedLogo(); } catch { return null; }
+  if (!shared?.base64) return null;
+  const base = await AsyncStorage.getItem(PENDING_LOGO_TARGET);
+  if (!base) return null;                       // no pending target — ignore
+  await AsyncStorage.removeItem(PENDING_LOGO_TARGET);
+  try {
+    await setManualLogo(base, base64ToBytes(shared.base64), shared.mime || 'image/png');
+    return base;
+  } catch {
+    return null;
   }
 }
 

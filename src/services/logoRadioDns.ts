@@ -46,13 +46,13 @@ export function parseSpiLogo(xml: string): string | null {
   return best?.url ?? null;
 }
 
+// DNS-over-HTTPS via Cloudflare (non-Google). RN can't do raw DNS.
 async function doh(name: string, type: string): Promise<string | null> {
   try {
     const res = await fetch(
-      `https://dns.google/resolve?name=${encodeURIComponent(name)}&type=${type}`,
+      `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=${type}`,
       { headers: { Accept: 'application/dns-json' } });
     const j = await res.json() as { Answer?: { type: number; data: string }[] };
-    // For CNAME prefer a CNAME (type 5) answer; for SRV take the first answer.
     return j?.Answer?.[j.Answer.length - 1]?.data ?? null;
   } catch { return null; }
 }
