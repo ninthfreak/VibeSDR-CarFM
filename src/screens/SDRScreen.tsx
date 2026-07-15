@@ -124,7 +124,7 @@ import {
 import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { fmNowPlaying } from '../services/nowPlaying';
 import CarFmFace, { type CarFmPreset } from '../components/CarFmFace';
-import { identifyByPi } from '../services/stationFinder';
+import { identifyByPi, initLogoService } from '../services/stationFinder';
 import type { StationIdentity } from '../services/stationTypes';
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation } from '../services/instancesApi';
@@ -3860,6 +3860,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     }, 500);
     return () => clearInterval(t);
   }, [fmFaceActive]);
+
+  // CarFM launch: sweep any offline-queued logos and, at most monthly / on a
+  // region change, prefetch logos for the surrounding stations (all background,
+  // rate-limited — never blocks). Once per carFm session.
+  useEffect(() => { if (carFm) void initLogoService(); }, [carFm]);
 
   // Resolve station identity from the RDS PI (offline, via the bundled DB) so the
   // FM face can name the station before PS arrives. Hex string -> int -> lookup.

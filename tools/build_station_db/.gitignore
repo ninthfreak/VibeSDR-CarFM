@@ -1,2 +1,4 @@
 lms_files/
 *.zip
+__pycache__/
+*.pyc

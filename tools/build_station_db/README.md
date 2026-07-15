@@ -31,9 +31,10 @@ file there (the build prints this reminder).
 
 `sample` writes ~12 obviously-fake stations (callsigns `KAMP`, `KBMP`, …, city
 "Sample City", snapshot `SAMPLE`) around a center (`--lat/--lon`, default San
-Francisco) so you can build the "Nearby" UI and exercise the query/ranking in the
-emulator **before** wrangling the real LMS download. Replace it with a real
-`build` (and bump `DB_ASSET_VERSION`) before shipping.
+Francisco), **each with a synthetic solid-colour PNG logo**, so you can build the
+"Nearby" UI and exercise the query/ranking/logos in the emulator **before**
+wrangling the real LMS download. Replace it with a real `build` (and bump
+`DB_ASSET_VERSION`) before shipping.
 
 Then **bump `DB_ASSET_VERSION` in `src/services/stationDb.ts`** so installed apps
 re-copy the new DB, and rebuild the app.
@@ -85,10 +86,20 @@ Notes / gotchas found so far:
 
 ## Output
 
-`stations.sqlite` — table `stations` (schema in the addendum §4) + a `meta` table
-holding `lms_snapshot_date`, `schema_version`, `row_count`, `built_at`. Expect
-~20–22k rows, single-digit MB. The build warns if it produces far fewer FM rows
-than expected (usually a broken join).
+`stations.sqlite` — table `stations` (schema in the addendum §4), a `meta` table
+(`lms_snapshot_date`, `schema_version`, `row_count`, `built_at`), and two logo
+tables (schema_version 2):
+
+- `logos(callsign_base, img BLOB, mime, genre, homepage, source, fetched_at)` —
+  logos live in the **same** DB, as blobs. `build` leaves it empty (the app fills
+  it at runtime); `sample` populates it with synthetic PNGs. `img IS NULL` records
+  a known miss so the app doesn't retry forever.
+- `logo_wanted(callsign_base, marked_at)` — the deferred-download queue: stations
+  seen offline get marked, then swept when data returns.
+
+Expect ~20–22k station rows, single-digit MB *without* logos; bundling logos adds
+roughly the sizes noted in the addendum discussion. The build warns if it
+produces far fewer FM rows than expected (usually a broken join).
 
 ## Station Explorer (sibling toy)
 

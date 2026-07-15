@@ -108,7 +108,43 @@ CREATE INDEX idx_callsign_base ON stations(callsign_base);
 CREATE INDEX idx_lat ON stations(lat);
 CREATE INDEX idx_lon ON stations(lon);
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+-- Logos live in the SAME db, keyed by callsign_base. img NULL = a known miss
+-- (station has no logo) so we don't retry forever. genre/homepage ride along.
+CREATE TABLE logos (
+  callsign_base TEXT PRIMARY KEY,
+  img           BLOB,
+  mime          TEXT,
+  genre         TEXT,
+  homepage      TEXT,
+  source        TEXT,      -- 'radio-browser' | 'sample' | ...
+  fetched_at    INTEGER
+);
+-- Deferred-download queue: stations seen (geo search / tuned) while offline get
+-- marked here; a sweep downloads their logos once connectivity returns.
+CREATE TABLE logo_wanted (
+  callsign_base TEXT PRIMARY KEY,
+  marked_at     INTEGER
+);
 """
+
+SCHEMA_VERSION = "2"   # bumped when logos/logo_wanted were added
+
+
+def make_png(size: int, rgb: tuple[int, int, int]) -> bytes:
+    """A minimal valid solid-colour RGB PNG (no PIL) for synthetic sample logos."""
+    import struct
+    import zlib
+
+    def chunk(typ: bytes, data: bytes) -> bytes:
+        body = typ + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)  # 8-bit, colour type 2 (RGB)
+    raw = (b"\x00" + bytes(rgb) * size) * size                # each row: filter byte 0 + pixels
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", ihdr)
+            + chunk(b"IDAT", zlib.compress(raw, 9))
+            + chunk(b"IEND", b""))
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -292,7 +328,7 @@ def build(lms_dir: str, out_path: str, snapshot: str) -> dict:
         "INSERT OR REPLACE INTO stations VALUES (?,?,?,?,?,?,?,?,?,?,?)", stations)
     db.executemany("INSERT INTO meta(key,value) VALUES (?,?)", [
         ("lms_snapshot_date", snapshot),
-        ("schema_version", "1"),
+        ("schema_version", SCHEMA_VERSION),
         ("row_count", str(len(stations))),
         ("built_at", datetime.utcnow().isoformat(timespec="seconds") + "Z"),
     ])
@@ -351,12 +387,26 @@ def cmd_sample(args):
     db = sqlite3.connect(args.out)
     db.executescript(SCHEMA)
     db.executemany("INSERT INTO stations VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
+    # Synthetic logos so the UI shows something offline. Distinct solid colours
+    # per station (hash-derived) — obviously fake, but valid renderable PNGs.
+    palette = [(0x3B, 0x9E, 0xFF), (0xFF, 0xB8, 0x33), (0x4C, 0xC9, 0x8A), (0xB0, 0x8C, 0xFF),
+               (0xFF, 0x6F, 0x91), (0x59, 0xC3, 0xC3), (0xE8, 0xA8, 0x4B), (0x8A, 0x94, 0xA2)]
+    genres = ["News/Talk", "Classic Rock", "Country", "Public Radio", "Top 40", "Jazz", None]
+    logos = []
+    for i, r in enumerate(rows):
+        base = r[1]
+        logos.append((base, make_png(96, palette[i % len(palette)]), "image/png",
+                      genres[i % len(genres)], f"https://example.com/{base.lower()}",
+                      "sample", 0))
+    db.executemany("INSERT INTO logos(callsign_base,img,mime,genre,homepage,source,fetched_at) "
+                   "VALUES (?,?,?,?,?,?,?)", logos)
     db.executemany("INSERT INTO meta(key,value) VALUES (?,?)", [
-        ("lms_snapshot_date", "SAMPLE"), ("schema_version", "1"),
+        ("lms_snapshot_date", "SAMPLE"), ("schema_version", SCHEMA_VERSION),
         ("row_count", str(len(rows))),
     ])
     db.commit()
-    print(f"Wrote {len(rows)} SAMPLE stations to {args.out} around "
+    nlogo = db.execute("SELECT COUNT(*) FROM logos WHERE img IS NOT NULL").fetchone()[0]
+    print(f"Wrote {len(rows)} SAMPLE stations ({nlogo} with logos) to {args.out} around "
           f"({lat0}, {lon0}). integrity={db.execute('PRAGMA integrity_check').fetchone()[0]}")
     db.close()
     print("This is synthetic dev data — run `build` for the real FCC DB, and bump "
@@ -406,6 +456,12 @@ def cmd_self_test(args):
     check("KBBB row correct", kbbb == ("KBBB", 101.1, 100.0, 39.5296))
     snap = con.execute("SELECT value FROM meta WHERE key='lms_snapshot_date'").fetchone()[0]
     check("meta snapshot set", snap == "2099-01-01")
+    ver = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+    check("schema_version == 2", ver == SCHEMA_VERSION)
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    check("logos + logo_wanted tables present", {"logos", "logo_wanted"} <= tables)
+    png = make_png(8, (10, 20, 30))
+    check("make_png emits a PNG signature", png[:8] == b"\x89PNG\r\n\x1a\n")
     con.close()
     print("\nSELF-TEST PASS" if ok else "\nSELF-TEST FAILURES")
     sys.exit(0 if ok else 1)

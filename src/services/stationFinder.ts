@@ -1,45 +1,50 @@
 /**
- * Public facade for the "stations near me" feature — the surface the UI (the
- * "Nearby" button + picker) calls. Offline-first: the list always comes from the
- * bundled FCC DB and NEVER blocks on a network call; enrichment (logo/genre) is
- * merged from cache and refreshed in the background (addendum §1, §7, §8).
+ * Public facade for the "stations near me" feature — the surface the UI calls.
+ * Offline-first: the list always comes from the bundled FCC DB and NEVER blocks
+ * on the network. Logos live in the same DB (blobs); they're read instantly and
+ * fetched/queued in the background (addendum §1, §7, §8).
  *
- * UI contract (see docs/backend/nearby-stations-api.md):
- *   getNearbyStations()  -> ranked NearbyStation[] + location + data date
- *   identifyByPi()       -> live station identity from RDS PI, before PS arrives
- *   enrichNow()          -> on-demand enrich one station (e.g. row on screen)
+ * Logo lifecycle:
+ *   - getNearbyStations() returns logos already stored, and lazily fetches ones
+ *     it's missing for the rows it returns (fetch self-queues if offline).
+ *   - initLogoService() runs at launch: sweeps the wanted queue (stations seen
+ *     offline) and, once, prefetches logos for the user's region.
+ *   - noteEncountered() marks/fetches a station's logo when it's tuned.
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 import { getUserLocation } from './instancesApi';
-import { nearbyStations as dbNearby, stationsForCallsignBase, snapshotDate } from './stationDb';
-import { getCachedEnrichment, enrichStation } from './radioBrowser';
+import { haversineKm } from './stationGeo';
+import {
+  nearbyStations as dbNearby, stationsForCallsignBase, snapshotDate,
+  getLogoDataUri, markWanted, wantedBases, basesMissingLogo,
+} from './stationDb';
+import { enrichStation } from './radioBrowser';
 import { piToCallsign, callsignBase } from './piCallsign';
 import type { NearbyStation, StationIdentity, StationRow } from './stationTypes';
 
 export interface NearbyResult {
-  /** GPS point used, or null if no fix (UI should say so). */
   location: { lat: number; lon: number } | null;
   radiusKm: number;
   stations: NearbyStation[];
-  /** LMS snapshot date ("station data as of …"), or null if DB unbuilt. */
   snapshotDate: string | null;
 }
 
 export interface NearbyOptions {
-  radiusKm?: number;          // default 100 km (addendum §5.4)
+  radiusKm?: number;
   limit?: number;
-  /** Override GPS (e.g. a manually chosen city). */
   location?: { lat: number; lon: number };
-  /** Kick off background online enrichment for the top rows (default true). */
+  /** Lazily fetch logos the list is missing (default true). */
   enrich?: boolean;
 }
 
-/**
- * Ranked nearby stations. Resolves entirely from the offline DB + enrichment
- * cache, so it works in airplane mode; if online and `enrich` is on, it also
- * fires background fetches for the top rows whose logo/genre aren't cached yet
- * (results appear on a later call — never awaited here).
- */
+/** Fire background logo fetches for bases we don't have yet (throttled inside). */
+async function lazyFetch(bases: string[], cap = 20): Promise<void> {
+  const missing = (await basesMissingLogo(bases)).slice(0, cap);
+  missing.forEach((b) => { void enrichStation(b); });
+}
+
 export async function getNearbyStations(opts: NearbyOptions = {}): Promise<NearbyResult> {
   const radiusKm = opts.radiusKm ?? 100;
   const location = opts.location ?? (await getUserLocation());
@@ -48,73 +53,108 @@ export async function getNearbyStations(opts: NearbyOptions = {}): Promise<Nearb
 
   const rows = await dbNearby(location.lat, location.lon, radiusKm, opts.limit ?? 100);
 
-  // Merge cached enrichment (offline, per row). Absent fields stay null (§7).
-  const stations: NearbyStation[] = await Promise.all(
-    rows.map(async (r) => {
-      const e = await getCachedEnrichment(r.callsignBase);
-      return { ...r, genre: e?.genre ?? null, logoUri: e?.logoUri ?? null, homepage: e?.homepage ?? null };
-    }),
-  );
+  const stations: NearbyStation[] = await Promise.all(rows.map(async (r) => ({
+    ...r,
+    logoUri: r.hasLogo ? await getLogoDataUri(r.callsignBase) : null,
+    genre: r.genre,
+    homepage: r.homepage,
+  })));
 
-  // Background enrichment for the top rows lacking a cached logo (fire-and-forget,
-  // rate-limited inside radioBrowser). Never blocks the returned list.
+  // Lazy fetch logos for FM rows we don't have yet (self-queues if offline).
   if (opts.enrich !== false) {
-    stations.slice(0, 20)
-      .filter((s) => s.logoUri == null && s.service === 'FM')
-      .forEach((s) => { void enrichStation(s.callsignBase); });
+    void lazyFetch(rows.filter((r) => !r.hasLogo && r.service === 'FM').map((r) => r.callsignBase));
   }
-
   return { location, radiusKm, stations, snapshotDate: snap };
 }
 
-/** Pick the best DB row for a decoded callsign: prefer full-power FM. */
 function bestStation(rows: StationRow[]): StationRow | null {
   if (rows.length === 0) return null;
   const order: Record<string, number> = { FM: 0, FL: 1, FX: 2 };
   return [...rows].sort((a, b) => (order[a.service] ?? 9) - (order[b.service] ?? 9))[0];
 }
 
-/**
- * Identify the live station from its RDS PI (addendum §6). PI is in block 1 of
- * every group, so this resolves an identity offline within a second of tuning —
- * before PS/RadioText assemble. The result is a HINT: `confident` is true only
- * for a clean formula decode that matches a full-power FM row in the DB.
- * Translators, defaults, and A-block PIs come back not-confident; the UI should
- * prefer decoded PS text when it disagrees.
- */
 export async function identifyByPi(pi: number, psText?: string): Promise<StationIdentity> {
   const dec = piToCallsign(pi);
-  if (!dec.callsign) {
-    return { pi, callsign: null, confident: false, station: null, note: dec.note };
-  }
-  const rows = await stationsForCallsignBase(callsignBase(dec.callsign));
+  if (!dec.callsign) return { pi, callsign: null, confident: false, station: null, note: dec.note };
+
+  const base = callsignBase(dec.callsign);
+  const rows = await stationsForCallsignBase(base);
   const station = bestStation(rows);
 
-  // Confident only when the decode is clean, a DB row exists, and it's a
-  // full-power FM (translators are exactly where the formula misfires).
   let confident = dec.confident && station != null && station.service === 'FM';
   let note = dec.note;
   if (station == null) note = 'no DB match for computed callsign';
   else if (station.service !== 'FM') note = `matched a ${station.service} (formula unreliable for translators)`;
 
-  // If PS text is present and clearly names a different callsign, stand down.
   if (psText) {
-    const ps = psText.toUpperCase();
-    const other = ps.match(/\b([KW][A-Z]{3})\b/);
-    if (other && other[1] !== callsignBase(dec.callsign)) {
-      confident = false;
-      note = `PS text names ${other[1]}, not ${dec.callsign}`;
-    }
+    const other = psText.toUpperCase().match(/\b([KW][A-Z]{3})\b/);
+    if (other && other[1] !== base) { confident = false; note = `PS text names ${other[1]}, not ${dec.callsign}`; }
   }
+
+  // Tuning to it counts as an encounter — get/queue its logo.
+  if (station) void noteEncountered(base, station.callsign);
   return { pi, callsign: dec.callsign, confident, station, note };
 }
 
-/** On-demand enrichment for a single station (e.g. when its row is shown). */
-export async function enrichNow(callsignBaseStr: string, nameHint?: string) {
-  return enrichStation(callsignBaseStr, nameHint);
+/** A station was tuned/shown — fetch its logo now, or queue it if offline. */
+export async function noteEncountered(base: string, nameHint?: string): Promise<void> {
+  if (!base) return;
+  const missing = await basesMissingLogo([base]);
+  if (missing.length === 0) return;          // already have it
+  await markWanted(base);                     // ensure it's queued even if the fetch below fails
+  void enrichStation(base, nameHint);         // clears the queue entry on success
 }
 
-/** LMS snapshot date for the unobtrusive "data as of …" label (§8). */
+/** On-demand logo for one station (e.g. a row scrolled into view). */
+export async function getStationLogo(base: string): Promise<string | null> {
+  return getLogoDataUri(base);
+}
+
+export async function enrichNow(base: string, nameHint?: string) {
+  return enrichStation(base, nameHint);
+}
+
 export async function getStationDataDate(): Promise<string | null> {
   return snapshotDate();
+}
+
+// ── launch-time logo maintenance ─────────────────────────────────────────────
+const PREFETCH_KEY = '@vibesdr/logo_prefetch';
+const PREFETCH_MIN_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000; // at most monthly
+const PREFETCH_MOVE_KM = 50;                                // ...or if the car moved region
+
+/** Sweep the wanted queue: retry logos for stations seen while offline. */
+export async function sweepWantedLogos(cap = 100): Promise<void> {
+  const bases = await wantedBases(cap);
+  bases.forEach((b) => { void enrichStation(b); });
+}
+
+/** Prefetch logos for stations around a location (throttled inside enrichStation). */
+async function regionalPrefetch(lat: number, lon: number, radiusKm = 100, cap = 60): Promise<void> {
+  const rows = await dbNearby(lat, lon, radiusKm, 200);
+  const bases = rows.filter((r) => r.service === 'FM' && !r.hasLogo).map((r) => r.callsignBase);
+  (await basesMissingLogo(bases)).slice(0, cap).forEach((b) => { void enrichStation(b); });
+}
+
+/**
+ * Call once at launch (ideally after a GPS fix). Sweeps the offline queue, and
+ * — at most monthly, or when the car has moved to a new region — prefetches
+ * logos for the surrounding stations so the Nearby list is populated on day one.
+ * All fetches are background + rate-limited; this never blocks.
+ */
+export async function initLogoService(location?: { lat: number; lon: number }): Promise<void> {
+  void sweepWantedLogos();
+
+  const loc = location ?? (await getUserLocation());
+  if (!loc) return;
+  try {
+    const raw = await AsyncStorage.getItem(PREFETCH_KEY);
+    const prev = raw ? JSON.parse(raw) as { lat: number; lon: number; at: number } : null;
+    const stale = !prev || (Date.now() - prev.at) > PREFETCH_MIN_INTERVAL_MS;
+    const moved = !!prev && haversineKm(prev.lat, prev.lon, loc.lat, loc.lon) > PREFETCH_MOVE_KM;
+    if (stale || moved) {
+      await AsyncStorage.setItem(PREFETCH_KEY, JSON.stringify({ lat: loc.lat, lon: loc.lon, at: Date.now() }));
+      void regionalPrefetch(loc.lat, loc.lon);
+    }
+  } catch { /* prefetch is best-effort */ }
 }

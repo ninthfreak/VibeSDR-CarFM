@@ -97,10 +97,12 @@ def query_nearby(db_path, lat, lon, radius_km=100, limit=200):
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
     min_lat, max_lat, min_lon, max_lon = bounding_box(lat, lon, radius_km)
-    rows = con.execute(
-        "SELECT * FROM stations WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?",
-        (min_lat, max_lat, min_lon, max_lon),
-    ).fetchall()
+    has_logos = _has_table(con, "logos")
+    sql = ("SELECT s.*, {logo} FROM stations s {join} "
+           "WHERE s.lat BETWEEN ? AND ? AND s.lon BETWEEN ? AND ?").format(
+        logo="length(l.img) AS logo_len, l.genre AS logo_genre" if has_logos else "NULL AS logo_len, NULL AS logo_genre",
+        join="LEFT JOIN logos l ON l.callsign_base = s.callsign_base" if has_logos else "")
+    rows = con.execute(sql, (min_lat, max_lat, min_lon, max_lon)).fetchall()
     con.close()
     out = []
     for r in rows:
@@ -110,11 +112,29 @@ def query_nearby(db_path, lat, lon, radius_km=100, limit=200):
         out.append({
             "freq": r["frequency_mhz"], "callsign": r["callsign"], "service": r["service"],
             "class": r["station_class"], "erp": r["erp_kw"], "city": r["city"],
-            "state": r["state"], "dist": dist,
+            "state": r["state"], "base": r["callsign_base"], "dist": dist,
+            "logo_len": r["logo_len"], "genre": r["logo_genre"],
             "score": receivability_score(r["erp_kw"], r["station_class"], dist),
         })
     out.sort(key=lambda s: s["score"], reverse=True)
     return out[:limit]
+
+
+def _has_table(con, name):
+    return con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
+def logo_bytes(db_path, callsign_base):
+    """Raw logo image bytes for one station, or None (for the GUI thumbnail)."""
+    try:
+        con = sqlite3.connect(db_path)
+        if not _has_table(con, "logos"):
+            con.close(); return None
+        row = con.execute("SELECT img FROM logos WHERE callsign_base=?", (callsign_base,)).fetchone()
+        con.close()
+        return row[0] if row and row[0] else None
+    except Exception:
+        return None
 
 
 def db_meta(db_path):
@@ -187,11 +207,14 @@ def run_cli(args):
         print(f"PI 0x{pi:04X} -> {cs or '(none)'}  confident={conf}  [{note}]{where}")
         return
     res = query_nearby(args.db, args.lat, args.lon, args.radius)
-    print(f"\n{len(res)} stations within {args.radius} km of ({args.lat}, {args.lon}), best first:\n")
-    print(f"  {'FREQ':>6} {'CALL':<8} {'SVC':<3} {'CLS':<3} {'ERPkW':>7} {'DISTkm':>7} {'SCORE':>6}  CITY")
+    withlogo = sum(1 for s in res if s.get("logo_len"))
+    print(f"\n{len(res)} stations within {args.radius} km of ({args.lat}, {args.lon}), "
+          f"best first ({withlogo} with logos):\n")
+    print(f"  {'FREQ':>6} {'CALL':<8} {'SVC':<3} {'CLS':<3} {'ERPkW':>7} {'DISTkm':>7} {'SCORE':>6} {'LOGO':>6}  CITY")
     for s in res[:args.limit]:
+        logo = f"{s['logo_len'] / 1024:.1f}K" if s.get("logo_len") else "–"
         print(f"  {s['freq']:>6} {s['callsign']:<8} {s['service']:<3} {str(s['class'] or ''):<3} "
-              f"{(s['erp'] or 0):>7.2f} {s['dist']:>7.1f} {s['score']:>6.1f}  {s['city'] or ''}")
+              f"{(s['erp'] or 0):>7.2f} {s['dist']:>7.1f} {s['score']:>6.1f} {logo:>6}  {s['city'] or ''}")
 
 
 # ── GUI ──────────────────────────────────────────────────────────────────────
@@ -238,15 +261,27 @@ def run_gui(args):
         ttk.Label(q, text=lbl).grid(row=0, column=i * 2, sticky="e", padx=(8, 2))
         ttk.Entry(q, textvariable=var, width=w).grid(row=0, column=i * 2 + 1, sticky="w")
 
-    cols = ("freq", "call", "svc", "cls", "erp", "dist", "score", "city")
-    tree = ttk.Treeview(root, columns=cols, show="headings", height=16)
-    widths = {"freq": 70, "call": 90, "svc": 45, "cls": 45, "erp": 80, "dist": 80, "score": 70, "city": 220}
+    # table + a thumbnail pane on the right
+    body = ttk.Frame(root)
+    cols = ("freq", "call", "svc", "cls", "erp", "dist", "score", "logo", "city")
+    tree = ttk.Treeview(body, columns=cols, show="headings", height=16)
+    widths = {"freq": 66, "call": 88, "svc": 42, "cls": 42, "erp": 74, "dist": 72,
+              "score": 62, "logo": 56, "city": 200}
     heads = {"freq": "Freq", "call": "Callsign", "svc": "Svc", "cls": "Cls", "erp": "ERP kW",
-             "dist": "Dist km", "score": "Score", "city": "City"}
+             "dist": "Dist km", "score": "Score", "logo": "Logo", "city": "City"}
     for c in cols:
         tree.heading(c, text=heads[c])
         tree.column(c, width=widths[c], anchor="center" if c != "city" else "w")
 
+    thumb_pane = ttk.Frame(body, width=180)
+    ttk.Label(thumb_pane, text="LOGO", foreground="#888").pack(pady=(8, 2))
+    thumb = ttk.Label(thumb_pane, text="(select a row)")
+    thumb.pack(pady=4)
+    thumb_meta = ttk.Label(thumb_pane, text="", wraplength=170, justify="center")
+    thumb_meta.pack()
+    keep = {}  # hold a PhotoImage ref so Tk doesn't GC it
+
+    row_base = {}   # tree item id -> callsign_base
     pi_result = tk.StringVar()
 
     def find():
@@ -256,12 +291,35 @@ def run_gui(args):
             status.set(f"error: {e}")
             return
         tree.delete(*tree.get_children())
+        row_base.clear()
         for s in res:
-            tree.insert("", "end", values=(
+            logo_cell = f"{s['logo_len'] / 1024:.1f}K" if s.get("logo_len") else "–"
+            iid = tree.insert("", "end", values=(
                 s["freq"], s["callsign"], s["service"], s["class"] or "",
-                f"{s['erp'] or 0:.2f}", f"{s['dist']:.1f}", f"{s['score']:.1f}",
+                f"{s['erp'] or 0:.2f}", f"{s['dist']:.1f}", f"{s['score']:.1f}", logo_cell,
                 f"{s['city'] or ''}, {s['state'] or ''}"))
+            row_base[iid] = (s["base"], s.get("genre"))
         refresh_status()
+
+    def on_select(_evt=None):
+        sel = tree.selection()
+        if not sel or sel[0] not in row_base:
+            return
+        base, genre = row_base[sel[0]]
+        img = logo_bytes(state["db"].get(), base)
+        if img:
+            try:
+                keep["img"] = tk.PhotoImage(data=img)   # Tk 8.6+ reads PNG bytes
+                thumb.configure(image=keep["img"], text="")
+            except Exception:
+                thumb.configure(image="", text="(unrenderable)")
+            thumb_meta.configure(text=f"{base}\n{len(img)} B" + (f"\n{genre}" if genre else ""))
+        else:
+            thumb.configure(image="", text="(no logo)")
+            keep.pop("img", None)
+            thumb_meta.configure(text=base)
+
+    tree.bind("<<TreeviewSelect>>", on_select)
 
     def decode():
         try:
@@ -283,7 +341,10 @@ def run_gui(args):
     ttk.Button(pi_row, text="Decode", command=decode).pack(side="left")
     ttk.Label(pi_row, textvariable=pi_result).pack(side="left", padx=10)
 
-    tree.pack(fill="both", expand=True, padx=8, pady=4)
+    body.pack(fill="both", expand=True, padx=8, pady=4)
+    tree.pack(side="left", fill="both", expand=True)
+    thumb_pane.pack(side="right", fill="y", padx=(8, 0))
+    thumb_pane.pack_propagate(False)
     ttk.Label(root, textvariable=status, relief="sunken", anchor="w").pack(fill="x", side="bottom")
 
     refresh_status()
