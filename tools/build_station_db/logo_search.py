@@ -60,26 +60,37 @@ BUILTIN_STATIONS = [
 
 
 # ── the app's intended query construction (single source of truth for the sim) ──
-def wikidata_url(callsign: str) -> tuple[str, str]:
+# Each source wants a DIFFERENT query: Commons/Wikidata match file/item text, so
+# they want the bare call sign; whole-web (DDG) wants descriptive terms.
+def wikidata_url(callsign: str) -> str:
     cs = callsign.upper().split("-")[0].strip()
     sparql = f'SELECT ?logo WHERE {{ ?item wdt:P2317 "{cs}" . ?item wdt:P154 ?logo . }} LIMIT 3'
-    return sparql, "https://query.wikidata.org/sparql?" + urlencode({"format": "json", "query": sparql})
+    return "https://query.wikidata.org/sparql?" + urlencode({"format": "json", "query": sparql})
 
 
-def keyword_query(callsign: str, city: str | None, state: str | None) -> str:
-    return " ".join(x for x in [callsign.upper(), city or "", state or "", "radio logo"] if x)
-
-
-def commons_url(query: str, limit: int = 5) -> str:
-    return "https://commons.wikimedia.org/w/api.php?" + urlencode({
-        "action": "query", "format": "json", "generator": "search", "gsrsearch": query,
+def commons_url(callsign: str, limit: int = 5) -> tuple[str, str]:
+    q = f"{callsign.upper().split('-')[0]} logo"
+    return q, "https://commons.wikimedia.org/w/api.php?" + urlencode({
+        "action": "query", "format": "json", "generator": "search", "gsrsearch": q,
         "gsrnamespace": "6", "gsrlimit": str(limit), "prop": "imageinfo",
-        "iiprop": "url|size|mime", "iiurlwidth": "128",
+        "iiprop": "url|mime", "iiurlwidth": "128",
     })
 
 
-def ddg_url(query: str) -> str:
-    return "https://duckduckgo.com/?" + urlencode({"iax": "images", "ia": "images", "q": query})
+def wikipedia_url(callsign: str, limit: int = 3) -> tuple[str, str]:
+    # Article search -> the page's lead image (usually the station's logo). Much
+    # broader US-station coverage than Commons file search.
+    q = f"{callsign.upper().split('-')[0]} radio station"
+    return q, "https://en.wikipedia.org/w/api.php?" + urlencode({
+        "action": "query", "format": "json", "generator": "search", "gsrsearch": q,
+        "gsrnamespace": "0", "gsrlimit": str(limit), "prop": "pageimages",
+        "piprop": "thumbnail|original", "pithumbsize": "160",
+    })
+
+
+def ddg_url(callsign: str, city: str | None) -> str:
+    q = " ".join(x for x in [callsign.upper(), city or "", "radio logo"] if x)
+    return "https://duckduckgo.com/?" + urlencode({"iax": "images", "ia": "images", "q": q})
 
 
 # ── fetch ─────────────────────────────────────────────────────────────────────
@@ -94,23 +105,33 @@ def http_get(url: str, accept: str = "application/json") -> tuple[int, bytes]:
 def run_searches(callsign: str, city: str | None, state: str | None) -> dict:
     """Run the app's intended searches for one station; return results + queries."""
     hits: list[dict] = []
-    _, wd_url = wikidata_url(callsign)
-    st, body = http_get(wd_url, "application/sparql-results+json")
+
+    st, body = http_get(wikidata_url(callsign), "application/sparql-results+json")
     if st == 200:
         try:
             for b in json.loads(body)["results"]["bindings"]:
                 hits.append({"url": b["logo"]["value"], "source": "wikidata"})
         except Exception:
             pass
-    kw = keyword_query(callsign, city, state)
-    st, body = http_get(commons_url(kw))
+
+    cq, curl = commons_url(callsign)
+    st, body = http_get(curl)
     if st == 200:
-        pages = (json.loads(body).get("query") or {}).get("pages") or {}
-        for p in pages.values():
+        for p in ((json.loads(body).get("query") or {}).get("pages") or {}).values():
             ii = (p.get("imageinfo") or [{}])[0]
             if ii.get("url"):
                 hits.append({"url": ii["url"], "thumb": ii.get("thumburl") or ii["url"], "source": "commons"})
-    return {"keyword": kw, "ddg": ddg_url(kw), "hits": hits}
+
+    wq, wurl = wikipedia_url(callsign)
+    st, body = http_get(wurl)
+    if st == 200:
+        for p in ((json.loads(body).get("query") or {}).get("pages") or {}).values():
+            thumb = (p.get("thumbnail") or {}).get("source")
+            orig = (p.get("original") or {}).get("source")
+            if thumb or orig:
+                hits.append({"url": orig or thumb, "thumb": thumb or orig, "source": "wikipedia"})
+
+    return {"queries": f'commons:"{cq}"   wikipedia:"{wq}"', "ddg": ddg_url(callsign, city), "hits": hits}
 
 
 # ── GUI ──────────────────────────────────────────────────────────────────────
@@ -132,8 +153,8 @@ class Sim:
         ttk.Label(bar, textvariable=self.src).pack(side="left", padx=8)
 
         ttk.Label(root, padding=(8, 0), foreground="#555", justify="left",
-                  text='Query per station = "<callsign> <city> <state> radio logo"  •  '
-                       'Wikidata = exact call sign.  No manual input — this is what the app auto-searches.'
+                  text='Auto-search per station (no input): Wikidata (exact call sign) + Commons "<call> logo" '
+                       '+ Wikipedia lead image "<call> radio station".  "open web search" = whole-web DuckDuckGo.'
                   ).pack(fill="x")
 
         wrap = ttk.Frame(root, padding=4)
@@ -196,7 +217,7 @@ class Sim:
         ttk.Label(head, text=f"{cs}", font=("TkDefaultFont", 12, "bold")).pack(side="left")
         ttk.Label(head, text=f"  {city}, {state}   {freq} MHz", foreground="#555").pack(side="left")
         ttk.Button(head, text="open web search", command=lambda u=res["ddg"]: webbrowser.open(u)).pack(side="right")
-        ttk.Label(card, text=f'query: "{res["keyword"]}"', foreground="#777").pack(anchor="w")
+        ttk.Label(card, text=res["queries"], foreground="#777").pack(anchor="w")
         strip = ttk.Frame(card); strip.pack(fill="x", pady=2)
         if not res["hits"]:
             ttk.Label(strip, text="— no results —", foreground="#a00").pack(side="left")

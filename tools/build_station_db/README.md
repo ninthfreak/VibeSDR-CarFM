@@ -130,10 +130,16 @@ Run and it iterates a built-in set of real US FM stations (or a real
 `stations.sqlite` you load) and, for each, derives the query the way the app does
 and shows the resulting images so you can judge whether they're usable:
 
+Each source gets the query it actually wants:
 - **Wikidata** — exact call sign (P2317 → P154 logo).
-- **Commons / web** — `"<callsign> <city> <state> radio logo"` (the app has
-  callsign/city/state from the FCC DB; the branded RDS name isn't known until a
-  station is tuned, so it isn't used here).
+- **Commons** — `"<callsign> logo"` (file search matches file names, not prose).
+- **Wikipedia** — article search `"<callsign> radio station"` → the page's lead
+  image (usually the logo; far broader US coverage than Commons files).
+- **Web** — descriptive `"<callsign> <city> radio logo"` handed to DuckDuckGo.
+
+Automatic open sources are inherently thin for radio logos (mostly notable/public
+stations), so expect modest hit rates — the whole-web share-back path is the real
+workhorse. The query formulas live in `commons_url` / `wikipedia_url` / `ddg_url`.
 
 ```bash
 python3 logo_search.py        # pip install pillow for thumbnails
