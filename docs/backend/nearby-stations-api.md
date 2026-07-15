@@ -54,12 +54,32 @@ getNearbyStations(opts?: {
 // in case the picker wants it too). Hint only — prefer PS text when present.
 identifyByPi(pi: number, psText?: string): Promise<StationIdentity>;
 
-// On-demand enrichment for one station (e.g. when its row scrolls into view).
-enrichNow(callsignBase: string, nameHint?: string): Promise<Enrichment | null>;
+// On-demand logo for one station (data: URI, base64 from the DB) — e.g. when a
+// row scrolls into view and you didn't get logoUri in the list payload.
+getStationLogo(callsignBase: string): Promise<string | null>;
+
+// Force a logo/genre fetch for one station now.
+enrichNow(callsignBase: string, nameHint?: string): Promise<boolean>;
 
 // LMS snapshot date for the unobtrusive "station data as of …" label.
 getStationDataDate(): Promise<string | null>;
+
+// Call ONCE at launch (after a GPS fix if you can): sweeps logos for stations
+// seen while offline, and — at most monthly / on a region change — prefetches
+// logos for the surrounding area. Background + rate-limited; already wired into
+// the CarFM screen, so the picker usually needn't call it.
+initLogoService(location?: { lat: number; lon: number }): Promise<void>;
+
+// Mark a station as encountered (tuned) so its logo is fetched or queued.
+noteEncountered(callsignBase: string, nameHint?: string): Promise<void>;
 ```
+
+**Logos** (`logoUri`) are stored as blobs **in the same station DB** and returned
+as a `data:` URI you can drop straight into `<Image source={{ uri: logoUri }} />`.
+`getNearbyStations` fills `logoUri` for rows that already have one and lazily
+fetches the rest in the background (they show up on a later call, or via
+`getStationLogo`). A station seen while offline is queued and swept automatically
+when data returns — you don't manage any of that.
 
 ## Building the picker UI against this
 
