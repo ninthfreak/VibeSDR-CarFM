@@ -6,10 +6,14 @@ is derived from station data the way the app derives it — you just press Run.
 
 What the app intends to search on (the thing being evaluated here):
   - Wikidata : the call sign, exact structured match (P2317) -> logo (P154)
-  - Commons  : auto-built keyword string  ==  "<callsign> <city> <state> radio logo"
-               (the app has callsign/city/state/freq from the FCC DB; the branded
-                RDS name isn't known until a station is tuned, so it's not used.)
-  - Web      : the same keyword handed to a non-Google (DuckDuckGo) browser search.
+  - Commons  : "<callsign> logo" restricted to SVG files (filemime:image/svg+xml).
+               A vector file is almost always branding; raster hits are mostly
+               photos / show art / junk, so SVG-only sharply cuts the noise.
+  - Wikipedia: article search "<callsign> radio station" -> the page's lead image.
+  - Web      : "<callsign> <city> radio logo" handed to a non-Google (DuckDuckGo)
+               browser search — usually the best hits (whole web, not just Commons).
+SVG sources (Wikidata + Commons) are shown first; SVG thumbs are rasterized to PNG
+so they actually render (the correct logos were often the ones not displaying).
 
 Stations come from a real stations.sqlite if one is loaded (File > Load), else a
 built-in set of well-known US FM stations so it's useful before the FCC DB build.
@@ -68,13 +72,22 @@ def wikidata_url(callsign: str) -> str:
     return "https://query.wikidata.org/sparql?" + urlencode({"format": "json", "query": sparql})
 
 
-def commons_url(callsign: str, limit: int = 5) -> tuple[str, str]:
-    q = f"{callsign.upper().split('-')[0]} logo"
+def commons_url(callsign: str, limit: int = 8) -> tuple[str, str]:
+    # SVG ≈ logo: restrict Commons to vector files, which are almost always
+    # branding (raster hits are mostly photos / show art / junk).
+    q = f"{callsign.upper().split('-')[0]} logo filemime:image/svg+xml"
     return q, "https://commons.wikimedia.org/w/api.php?" + urlencode({
         "action": "query", "format": "json", "generator": "search", "gsrsearch": q,
         "gsrnamespace": "6", "gsrlimit": str(limit), "prop": "imageinfo",
-        "iiprop": "url|mime", "iiurlwidth": "128",
+        "iiprop": "url|mime", "iiurlwidth": "200",   # thumburl = rasterized PNG of the SVG
     })
+
+
+def raster_thumb(url: str) -> str:
+    """Rasterize a Commons SVG (Special:FilePath) to a PNG preview so it renders."""
+    if url.lower().endswith(".svg") and "Special:FilePath" in url:
+        return url + ("&" if "?" in url else "?") + "width=200"
+    return url
 
 
 def wikipedia_url(callsign: str, limit: int = 3) -> tuple[str, str]:
@@ -106,11 +119,14 @@ def run_searches(callsign: str, city: str | None, state: str | None) -> dict:
     """Run the app's intended searches for one station; return results + queries."""
     hits: list[dict] = []
 
+    # Wikidata + Commons are SVG-first (vector ≈ branding), so they lead the strip;
+    # both get a rasterized PNG thumb so the logo actually renders.
     st, body = http_get(wikidata_url(callsign), "application/sparql-results+json")
     if st == 200:
         try:
             for b in json.loads(body)["results"]["bindings"]:
-                hits.append({"url": b["logo"]["value"], "source": "wikidata"})
+                u = b["logo"]["value"]
+                hits.append({"url": u, "thumb": raster_thumb(u), "source": "wikidata"})
         except Exception:
             pass
 
@@ -153,8 +169,9 @@ class Sim:
         ttk.Label(bar, textvariable=self.src).pack(side="left", padx=8)
 
         ttk.Label(root, padding=(8, 0), foreground="#555", justify="left",
-                  text='Auto-search per station (no input): Wikidata (exact call sign) + Commons "<call> logo" '
-                       '+ Wikipedia lead image "<call> radio station".  "open web search" = whole-web DuckDuckGo.'
+                  text='Auto-search per station (no input): Wikidata (exact call sign) + Commons SVG-only '
+                       '"<call> logo" (vector ≈ branding) + Wikipedia lead image "<call> radio station", '
+                       'SVG sources first.  "open web search" = whole-web DuckDuckGo (usually the best hits).'
                   ).pack(fill="x")
 
         wrap = ttk.Frame(root, padding=4)
@@ -201,10 +218,10 @@ class Sim:
         for i, (cs, city, state, freq) in enumerate(self.stations, 1):
             self.root.after(0, lambda i=i, cs=cs: self.status.set(f"Searching {i}/{n}: {cs}…"))
             res = run_searches(cs, city, state)
-            for h in res["hits"][:6]:
+            for h in res["hits"][:12]:
                 if HAVE_PIL:
                     st, data = http_get(h.get("thumb") or h["url"], "image/*")
-                    h["_bytes"] = data if (st == 200 and data[:1] != b"<") else None
+                    h["_bytes"] = data if st == 200 else None
             self.root.after(0, lambda cs=cs, city=city, state=state, freq=freq, res=res: self._row(cs, city, state, freq, res))
             time.sleep(0.4)  # be polite to the APIs
         self.root.after(0, lambda: (self.status.set(f"Done — {n} stations."), self.run_btn.configure(state="normal")))
@@ -221,8 +238,12 @@ class Sim:
         strip = ttk.Frame(card); strip.pack(fill="x", pady=2)
         if not res["hits"]:
             ttk.Label(strip, text="— no results —", foreground="#a00").pack(side="left")
-        for h in res["hits"][:6]:
-            cell = ttk.Frame(strip, padding=2); cell.pack(side="left")
+        # Grid-wrap so a station with many hits wraps to new rows instead of
+        # running off the right edge of the window.
+        COLS = 8
+        for idx, h in enumerate(res["hits"][:12]):
+            cell = ttk.Frame(strip, padding=2)
+            cell.grid(row=idx // COLS, column=idx % COLS, sticky="n")
             if h.get("_bytes"):
                 try:
                     im = Image.open(io.BytesIO(h["_bytes"])); im.thumbnail((72, 72))
