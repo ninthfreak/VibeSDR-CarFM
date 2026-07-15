@@ -122,6 +122,23 @@ next to the script itself, then the repo's `assets/db/stations.sqlite` — first
 one found wins. So `build`/`sample` then `station_explorer.py` in the same folder
 just works, and running it from inside the repo finds the bundled DB.
 
+## Logo search inspector (sibling toy)
+
+`logo_search.py` (CLI) and `logo_search_gui.py` (Tkinter) show the logo-search
+queries the app generates for a station and what the API sources return —
+Wikidata (exact call-sign → logo), Wikimedia Commons (keyword image search), and
+homepage favicon; whole-web is a non-Google DuckDuckGo browser hand-off. Useful
+for eyeballing coverage/quality for your market and tuning the keyword query
+before wiring a real UI.
+
+```bash
+python3 logo_search.py KQED --homepage https://www.kqed.org     # CLI
+python3 logo_search_gui.py                                       # GUI (pip install pillow for thumbnails)
+```
+
+Run on a normal connection (Wikimedia blocks locked-down proxies); the GUI needs
+Tk (`sudo apt install python3-tk`).
+
 ## Three-letter callsign table (separate task)
 
 `src/services/piCallsign.ts` needs the NRSC-4-B Annex D three-letter → PI table
