@@ -90,6 +90,27 @@ holding `lms_snapshot_date`, `schema_version`, `row_count`, `built_at`. Expect
 ~20–22k rows, single-digit MB. The build warns if it produces far fewer FM rows
 than expected (usually a broken join).
 
+## Station Explorer (sibling toy)
+
+`station_explorer.py` in this folder is a tiny stdlib **Tkinter** GUI to browse a
+`stations.sqlite` with the *same* logic as the app (bounding box → haversine →
+receivability score, plus RDS PI ⇄ callsign decode, self-checked against
+`stationGeo.ts` / `piCallsign.ts`). Handy for sanity-checking a build without an
+emulator.
+
+```bash
+# GUI needs Tk: `sudo apt install python3-tk` (Debian/Mint/Ubuntu)
+python3 station_explorer.py --db stations.sqlite
+# headless, no Tk:
+python3 station_explorer.py --cli --db stations.sqlite --lat 37.77 --lon -122.42
+python3 station_explorer.py --db stations.sqlite --pi 0x54C4     # decode a PI
+```
+
+With no `--db`, it looks for `stations.sqlite` in the current directory, then
+next to the script itself, then the repo's `assets/db/stations.sqlite` — first
+one found wins. So `build`/`sample` then `station_explorer.py` in the same folder
+just works, and running it from inside the repo finds the bundled DB.
+
 ## Three-letter callsign table (separate task)
 
 `src/services/piCallsign.ts` needs the NRSC-4-B Annex D three-letter → PI table
