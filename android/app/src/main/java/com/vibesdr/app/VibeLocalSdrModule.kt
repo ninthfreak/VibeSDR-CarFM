@@ -629,6 +629,28 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(pending)
     }
 
+    /** Read+clear an image shared INTO the app (CarFM manual-logo flow). Returns
+     *  { base64, mime } for the shared image, or null. Reads the content URI's
+     *  bytes via the resolver (the share grant is valid for this activity). */
+    @ReactMethod
+    fun consumeSharedLogo(promise: Promise) {
+        val uri = MainActivity.sharedImagePending
+        MainActivity.sharedImagePending = null
+        if (uri == null) { promise.resolve(null); return }
+        try {
+            val cr = reactContext.contentResolver
+            val bytes = cr.openInputStream(uri)?.use { it.readBytes() }
+            if (bytes == null || bytes.isEmpty() || bytes.size > 512 * 1024) { promise.resolve(null); return }
+            val map = Arguments.createMap()
+            map.putString("base64", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
+            map.putString("mime", cr.getType(uri) ?: "image/*")
+            promise.resolve(map)
+        } catch (e: Exception) {
+            Log.w(TAG, "consumeSharedLogo failed: ${e.message}")
+            promise.resolve(null)
+        }
+    }
+
     /** True if the OS has this app "background restricted" (the user — or an
      *  aggressive OEM like Motorola/Lenovo by default — set it to "Restricted").
      *  When restricted, Android strips our mediaPlayback foreground service in the

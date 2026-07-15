@@ -70,9 +70,35 @@ getStationDataDate(): Promise<string | null>;
 // the CarFM screen, so the picker usually needn't call it.
 initLogoService(location?: { lat: number; lon: number }): Promise<void>;
 
-// Mark a station as encountered (tuned) so its logo is fetched or queued.
-noteEncountered(callsignBase: string, nameHint?: string): Promise<void>;
+// Assign a logo from an image URL (e.g. an in-app search result). Sticky: auto
+// sources never overwrite it. Returns true on success.
+setStationLogoFromUrl(callsignBase: string, url: string): Promise<boolean>;
+isManualLogo(callsignBase: string): Promise<boolean>;
+
+// Quick IN-APP image search (Wikimedia Commons, keyless, non-Google). Narrow.
+searchLogoImages(query: string, limit?: number): Promise<ImageResult[]>;
+//   ImageResult = { url, thumb, title, width?, height? }
+
+// WHOLE-WEB logo search via the browser + Android share-back (no Google):
+//   openLogoWebSearch(base) opens a non-Google image search (DuckDuckGo) and
+//   remembers the target station. The user long-presses the logo and shares it
+//   to CarFM; consumeSharedLogo() (already wired to fire on app resume) assigns
+//   the shared image to that station. Returns the base that got a logo, or null.
+openLogoWebSearch(callsignBase: string, query?: string): Promise<void>;
+consumeSharedLogo(): Promise<string | null>;
 ```
+
+**Logo sources are layered** (auto), best hit wins, all stored in the DB:
+`Wikidata` (by callsign) → station **homepage favicon** → `Radio-Browser` (last
+resort). (RadioDNS was dropped: sparse US coverage, and it was the only source
+needing DNS-over-HTTPS — so the app now uses only the device's own DNS. If a DoH
+provider is ever reintroduced, use **Quad9** — `dns.quad9.net` / 9.9.9.9.)
+
+**Manual assignment** wins over everything and is never re-fetched. Two ways to
+find a logo, both non-Google: a quick in-app search (`searchLogoImages`, Wikimedia
+Commons) and whole-web search (`openLogoWebSearch` → browser → share back →
+`consumeSharedLogo`). No "paste a URL" and no Google. The browser engine is
+DuckDuckGo by default (one-line swap to Bing/Brave/Qwant in `stationFinder.ts`).
 
 **Logos** (`logoUri`) are stored as blobs **in the same station DB** and returned
 as a `data:` URI you can drop straight into `<Image source={{ uri: logoUri }} />`.

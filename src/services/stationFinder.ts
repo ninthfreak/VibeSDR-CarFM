@@ -2,25 +2,22 @@
  * Public facade for the "stations near me" feature — the surface the UI calls.
  * Offline-first: the list always comes from the bundled FCC DB and NEVER blocks
  * on the network. Logos live in the same DB (blobs); they're read instantly and
- * fetched/queued in the background (addendum §1, §7, §8).
- *
- * Logo lifecycle:
- *   - getNearbyStations() returns logos already stored, and lazily fetches ones
- *     it's missing for the rows it returns (fetch self-queues if offline).
- *   - initLogoService() runs at launch: sweeps the wanted queue (stations seen
- *     offline) and, once, prefetches logos for the user's region.
- *   - noteEncountered() marks/fetches a station's logo when it's tuned.
+ * resolved in the background through the layered source chain (addendum §7):
+ * Wikidata -> site favicon -> Radio-Browser, with manual override.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Linking, NativeModules } from 'react-native';
 
 import { getUserLocation } from './instancesApi';
 import { haversineKm } from './stationGeo';
 import {
   nearbyStations as dbNearby, stationsForCallsignBase, snapshotDate,
   getLogoDataUri, markWanted, wantedBases, basesMissingLogo,
+  setManualLogo, logoSourceOf,
+  type NearbyDbResult,
 } from './stationDb';
-import { enrichStation } from './radioBrowser';
+import { resolveLogo, fetchImage, base64ToBytes, type LogoStation } from './logoResolver';
 import { piToCallsign, callsignBase } from './piCallsign';
 import type { NearbyStation, StationIdentity, StationRow } from './stationTypes';
 
@@ -35,14 +32,25 @@ export interface NearbyOptions {
   radiusKm?: number;
   limit?: number;
   location?: { lat: number; lon: number };
-  /** Lazily fetch logos the list is missing (default true). */
+  /** Lazily resolve logos the list is missing (default true). */
   enrich?: boolean;
 }
 
-/** Fire background logo fetches for bases we don't have yet (throttled inside). */
-async function lazyFetch(bases: string[], cap = 20): Promise<void> {
-  const missing = (await basesMissingLogo(bases)).slice(0, cap);
-  missing.forEach((b) => { void enrichStation(b); });
+/** Build a resolver descriptor from a nearby DB row. */
+function toLogoStation(r: NearbyDbResult): LogoStation {
+  return {
+    base: r.callsignBase,
+    callsign: r.callsign,
+    homepage: r.homepage,
+    name: r.callsign,
+  };
+}
+
+/** Fire background logo resolution for rows we don't have yet (throttled inside). */
+async function lazyResolve(rows: NearbyDbResult[], cap = 20): Promise<void> {
+  const missing = new Set(await basesMissingLogo(rows.map((r) => r.callsignBase)));
+  rows.filter((r) => missing.has(r.callsignBase)).slice(0, cap)
+    .forEach((r) => { void resolveLogo(toLogoStation(r)); });
 }
 
 export async function getNearbyStations(opts: NearbyOptions = {}): Promise<NearbyResult> {
@@ -60,10 +68,7 @@ export async function getNearbyStations(opts: NearbyOptions = {}): Promise<Nearb
     homepage: r.homepage,
   })));
 
-  // Lazy fetch logos for FM rows we don't have yet (self-queues if offline).
-  if (opts.enrich !== false) {
-    void lazyFetch(rows.filter((r) => !r.hasLogo && r.service === 'FM').map((r) => r.callsignBase));
-  }
+  if (opts.enrich !== false) void lazyResolve(rows.filter((r) => r.service === 'FM'));
   return { location, radiusKm, stations, snapshotDate: snap };
 }
 
@@ -91,31 +96,114 @@ export async function identifyByPi(pi: number, psText?: string): Promise<Station
     if (other && other[1] !== base) { confident = false; note = `PS text names ${other[1]}, not ${dec.callsign}`; }
   }
 
-  // Tuning to it counts as an encounter — get/queue its logo.
-  if (station) void noteEncountered(base, station.callsign);
+  // Tuning to it counts as an encounter — resolve its logo.
+  void noteEncountered({ base, callsign: dec.callsign, homepage: null, name: station?.callsign });
   return { pi, callsign: dec.callsign, confident, station, note };
 }
 
-/** A station was tuned/shown — fetch its logo now, or queue it if offline. */
-export async function noteEncountered(base: string, nameHint?: string): Promise<void> {
-  if (!base) return;
-  const missing = await basesMissingLogo([base]);
-  if (missing.length === 0) return;          // already have it
-  await markWanted(base);                     // ensure it's queued even if the fetch below fails
-  void enrichStation(base, nameHint);         // clears the queue entry on success
+/** A station was tuned/shown — resolve its logo now, or queue it if offline. */
+export async function noteEncountered(st: LogoStation): Promise<void> {
+  if (!st.base) return;
+  if ((await basesMissingLogo([st.base])).length === 0) return; // already have it
+  await markWanted(st.base);        // queued even if the resolve below fails
+  void resolveLogo(st);             // clears the queue entry on success
 }
 
-/** On-demand logo for one station (e.g. a row scrolled into view). */
+/** On-demand logo (data: URI) for one station (e.g. a row scrolled into view). */
 export async function getStationLogo(base: string): Promise<string | null> {
   return getLogoDataUri(base);
 }
 
-export async function enrichNow(base: string, nameHint?: string) {
-  return enrichStation(base, nameHint);
+/** Force logo resolution for one station now. */
+export async function enrichNow(base: string, nameHint?: string): Promise<boolean> {
+  return resolveLogo({ base, callsign: base, name: nameHint });
 }
 
 export async function getStationDataDate(): Promise<string | null> {
   return snapshotDate();
+}
+
+// ── manual assignment + web image search (addendum §7, user addition) ─────────
+/**
+ * Assign a logo to a station from an image URL (a web-search result or a pasted
+ * link). Sticky: auto sources never overwrite it. Returns true on success.
+ */
+export async function setStationLogoFromUrl(base: string, url: string): Promise<boolean> {
+  const img = await fetchImage(url);
+  if (!img) return false;
+  await setManualLogo(base, img.bytes, img.mime);
+  return true;
+}
+
+/** True if this station's logo was set by hand. */
+export async function isManualLogo(base: string): Promise<boolean> {
+  return (await logoSourceOf(base)) === 'manual';
+}
+
+export interface ImageResult { url: string; thumb: string; title: string; width?: number; height?: number; }
+
+/**
+ * Quick in-app image search for the manual-assign UI, via Wikimedia Commons
+ * (keyless, non-Google, licensable). Coverage is narrow — for whole-web logo
+ * search use openLogoWebSearch() (browser + share-back) below.
+ */
+export async function searchLogoImages(query: string, limit = 24): Promise<ImageResult[]> {
+  try {
+    const u = 'https://commons.wikimedia.org/w/api.php?action=query&format=json'
+      + `&generator=search&gsrsearch=${encodeURIComponent(query)}&gsrnamespace=6&gsrlimit=${limit}`
+      + '&prop=imageinfo&iiprop=url|size|mime&iiurlwidth=256&origin=*';
+    const res = await fetch(u, { headers: { 'User-Agent': 'VibeSDR-CarFM/1.0' } });
+    const pages = ((await res.json()) as { query?: { pages?: Record<string, {
+      title?: string; imageinfo?: { url?: string; thumburl?: string; width?: number; height?: number; mime?: string }[];
+    }> } })?.query?.pages ?? {};
+    return Object.values(pages).flatMap((p) => {
+      const ii = p.imageinfo?.[0];
+      if (!ii?.url || !(ii.mime ?? '').startsWith('image/')) return [];
+      return [{ url: ii.url, thumb: ii.thumburl ?? ii.url, title: p.title ?? '', width: ii.width, height: ii.height }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+// ── whole-web logo search via browser + Android share-back ────────────────────
+const PENDING_LOGO_TARGET = '@vibesdr/logo_assign_target';
+// Non-Google image search. Swap for Bing/Brave/Qwant by changing this one line:
+//   Bing:  https://www.bing.com/images/search?q=
+//   Brave: https://search.brave.com/images?q=
+const IMAGE_SEARCH_URL = (q: string) => `https://duckduckgo.com/?iax=images&ia=images&q=${encodeURIComponent(q)}`;
+
+/**
+ * Open the browser to a (non-Google) image search for a station's logo. The user
+ * long-presses the logo and shares it back to CarFM (Android share sheet); the
+ * app then assigns it via consumeSharedLogo(). We remember which station the
+ * search was for so the shared image lands on the right one.
+ */
+export async function openLogoWebSearch(base: string, query?: string): Promise<void> {
+  await AsyncStorage.setItem(PENDING_LOGO_TARGET, base.toUpperCase());
+  await Linking.openURL(IMAGE_SEARCH_URL(query ?? `${base} radio station logo`));
+}
+
+/**
+ * Consume an image shared into the app and assign it to the station chosen by the
+ * preceding openLogoWebSearch(). Call this on app foreground/resume. Returns the
+ * callsign_base that got a logo, or null.
+ */
+export async function consumeSharedLogo(): Promise<string | null> {
+  const Local = (NativeModules as { VibeLocalSDR?: { consumeSharedLogo?: () => Promise<{ base64: string; mime: string } | null> } }).VibeLocalSDR;
+  if (!Local?.consumeSharedLogo) return null;
+  let shared: { base64: string; mime: string } | null = null;
+  try { shared = await Local.consumeSharedLogo(); } catch { return null; }
+  if (!shared?.base64) return null;
+  const base = await AsyncStorage.getItem(PENDING_LOGO_TARGET);
+  if (!base) return null;                       // no pending target — ignore
+  await AsyncStorage.removeItem(PENDING_LOGO_TARGET);
+  try {
+    await setManualLogo(base, base64ToBytes(shared.base64), shared.mime || 'image/png');
+    return base;
+  } catch {
+    return null;
+  }
 }
 
 // ── launch-time logo maintenance ─────────────────────────────────────────────
@@ -126,21 +214,22 @@ const PREFETCH_MOVE_KM = 50;                                // ...or if the car 
 /** Sweep the wanted queue: retry logos for stations seen while offline. */
 export async function sweepWantedLogos(cap = 100): Promise<void> {
   const bases = await wantedBases(cap);
-  bases.forEach((b) => { void enrichStation(b); });
+  bases.forEach((b) => { void resolveLogo({ base: b, callsign: b }); });
 }
 
-/** Prefetch logos for stations around a location (throttled inside enrichStation). */
+/** Prefetch logos for stations around a location (throttled inside resolveLogo). */
 async function regionalPrefetch(lat: number, lon: number, radiusKm = 100, cap = 60): Promise<void> {
   const rows = await dbNearby(lat, lon, radiusKm, 200);
-  const bases = rows.filter((r) => r.service === 'FM' && !r.hasLogo).map((r) => r.callsignBase);
-  (await basesMissingLogo(bases)).slice(0, cap).forEach((b) => { void enrichStation(b); });
+  const fm = rows.filter((r) => r.service === 'FM' && !r.hasLogo);
+  const missing = new Set(await basesMissingLogo(fm.map((r) => r.callsignBase)));
+  fm.filter((r) => missing.has(r.callsignBase)).slice(0, cap)
+    .forEach((r) => { void resolveLogo(toLogoStation(r)); });
 }
 
 /**
  * Call once at launch (ideally after a GPS fix). Sweeps the offline queue, and
  * — at most monthly, or when the car has moved to a new region — prefetches
- * logos for the surrounding stations so the Nearby list is populated on day one.
- * All fetches are background + rate-limited; this never blocks.
+ * logos for the surrounding stations. All fetches are background + rate-limited.
  */
 export async function initLogoService(location?: { lat: number; lon: number }): Promise<void> {
   void sweepWantedLogos();

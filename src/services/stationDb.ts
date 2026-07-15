@@ -20,6 +20,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as SQLite from 'expo-sqlite';
 
 import { boundingBox, haversineKm, receivabilityScore } from './stationGeo';
+import { bytesToBase64 } from './base64';
 import type { StationRow } from './stationTypes';
 
 const DB_NAME = 'stations.sqlite';
@@ -187,20 +188,6 @@ export async function snapshotDate(): Promise<string | null> {
 }
 
 // ── logos (same db) ──────────────────────────────────────────────────────────
-const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-function bytesToBase64(bytes: Uint8Array): string {
-  let out = '';
-  let i = 0;
-  for (; i + 3 <= bytes.length; i += 3) {
-    const n = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2];
-    out += B64[(n >> 18) & 63] + B64[(n >> 12) & 63] + B64[(n >> 6) & 63] + B64[n & 63];
-  }
-  const rem = bytes.length - i;
-  if (rem === 1) { const n = bytes[i] << 16; out += B64[(n >> 18) & 63] + B64[(n >> 12) & 63] + '=='; }
-  else if (rem === 2) { const n = (bytes[i] << 16) | (bytes[i + 1] << 8); out += B64[(n >> 18) & 63] + B64[(n >> 12) & 63] + B64[(n >> 6) & 63] + '='; }
-  return out;
-}
-
 /** Logo as a data URI for RN <Image>, or null if none stored. */
 export async function getLogoDataUri(base: string): Promise<string | null> {
   const d = await db();
@@ -225,16 +212,35 @@ export async function saveLogo(
   if (!d || !base) return;
   const key = base.toUpperCase();
   try {
+    // A manually-assigned logo is sticky: an auto source never overwrites it
+    // (only another 'manual' write can). See resolveLogo / setManualLogo.
     await d.runAsync(
       `INSERT INTO logos(callsign_base,img,mime,genre,homepage,source,fetched_at)
        VALUES (?,?,?,?,?,?,?)
        ON CONFLICT(callsign_base) DO UPDATE SET
          img=excluded.img, mime=excluded.mime, genre=excluded.genre,
-         homepage=excluded.homepage, source=excluded.source, fetched_at=excluded.fetched_at`,
+         homepage=excluded.homepage, source=excluded.source, fetched_at=excluded.fetched_at
+       WHERE logos.source IS NOT 'manual' OR excluded.source = 'manual'`,
       [key, img, mime, genre, homepage, source, Date.now()],
     );
     await d.runAsync('DELETE FROM logo_wanted WHERE callsign_base = ?', [key]);
   } catch (e) { console.warn('[stationDb] saveLogo failed', e); }
+}
+
+/** Assign a logo by hand (sticky — auto sources won't overwrite it). */
+export async function setManualLogo(base: string, img: Uint8Array, mime: string): Promise<void> {
+  await saveLogo(base, img, mime, null, null, 'manual');
+}
+
+/** The source that last set a station's stored logo, or null. */
+export async function logoSourceOf(base: string): Promise<string | null> {
+  const d = await db();
+  if (!d || !base) return null;
+  try {
+    const r = await d.getFirstAsync<{ source: string | null }>(
+      `SELECT source FROM logos WHERE callsign_base = ?`, [base.toUpperCase()]);
+    return r?.source ?? null;
+  } catch { return null; }
 }
 
 /**
