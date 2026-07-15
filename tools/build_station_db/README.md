@@ -122,21 +122,27 @@ next to the script itself, then the repo's `assets/db/stations.sqlite` — first
 one found wins. So `build`/`sample` then `station_explorer.py` in the same folder
 just works, and running it from inside the repo finds the bundled DB.
 
-## Logo search inspector (sibling toy)
+## Logo search simulation
 
-`logo_search.py` is a single-file Tkinter GUI: enter a callsign and it shows the
-logo-search queries the app generates and what the API sources return — Wikidata
-(exact call-sign → logo), Wikimedia Commons (keyword image search), and homepage
-favicon; whole-web is a non-Google DuckDuckGo browser hand-off. Useful for
-eyeballing coverage/quality for your market and tuning the keyword query before
-wiring a real UI.
+`logo_search.py` is a single-file Tkinter GUI that simulates **exactly what the
+app will auto-search** for a station logo, over real stations — no typing. Press
+Run and it iterates a built-in set of real US FM stations (or a real
+`stations.sqlite` you load) and, for each, derives the query the way the app does
+and shows the resulting images so you can judge whether they're usable:
+
+- **Wikidata** — exact call sign (P2317 → P154 logo).
+- **Commons / web** — `"<callsign> <city> <state> radio logo"` (the app has
+  callsign/city/state from the FCC DB; the branded RDS name isn't known until a
+  station is tuned, so it isn't used here).
 
 ```bash
 python3 logo_search.py        # pip install pillow for thumbnails
 ```
 
 Run on a normal connection (Wikimedia blocks locked-down proxies); needs Tk
-(`sudo apt install python3-tk`).
+(`sudo apt install python3-tk`). If the results look wrong, that's the signal to
+change the query formula (one place: `keyword_query()`), which the app will then
+match.
 
 ## Three-letter callsign table (separate task)
 

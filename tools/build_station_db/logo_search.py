@@ -1,32 +1,41 @@
 #!/usr/bin/env python3
 """
-Single-file GUI to inspect the radio-station logo search — the queries it
-generates and the results they return — mirroring the app's sources
-(src/services/logoWikidata.ts, logoSiteFavicon.ts, stationFinder.ts):
+Simulate EXACTLY what the app will auto-search for a station's logo, over REAL
+stations, so you can eyeball whether the results are usable. No typing: the query
+is derived from station data the way the app derives it — you just press Run.
 
-  - Wikidata : exact call-sign (P2317) -> logo (P154)
-  - Commons  : keyword image search
-  - Favicon  : best icon from a station homepage (optional)
-  - Web      : the non-Google (DuckDuckGo) browser URL the app would open
+What the app intends to search on (the thing being evaluated here):
+  - Wikidata : the call sign, exact structured match (P2317) -> logo (P154)
+  - Commons  : auto-built keyword string  ==  "<callsign> <city> <state> radio logo"
+               (the app has callsign/city/state/freq from the FCC DB; the branded
+                RDS name isn't known until a station is tuned, so it's not used.)
+  - Web      : the same keyword handed to a non-Google (DuckDuckGo) browser search.
 
-    python3 logo_search.py
+Stations come from a real stations.sqlite if one is loaded (File > Load), else a
+built-in set of well-known US FM stations so it's useful before the FCC DB build.
 
-Tkinter (stdlib). `pip install pillow` for thumbnails; without it you still get
-titles, sizes, and Open buttons. Run on a normal connection — Wikimedia requires
-a descriptive User-Agent (sent below) and blocks locked-down proxies. On
-Debian/Mint/Ubuntu the GUI needs `sudo apt install python3-tk`.
+    python3 logo_search.py            # Tkinter; `pip install pillow` for thumbnails
+
+Run on a normal connection (Wikimedia blocks locked-down proxies). Needs Tk
+(`sudo apt install python3-tk`).
 """
 from __future__ import annotations
 
 import io
-import re
+import json
+import sqlite3
 import threading
+import time
 import webbrowser
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urlencode
 from urllib.request import urlopen, Request
 
-import tkinter as tk
-from tkinter import ttk
+try:
+    import tkinter as tk
+    from tkinter import ttk, filedialog
+    HAVE_TK = True
+except Exception:
+    HAVE_TK = False
 
 try:
     from PIL import Image, ImageTk
@@ -36,8 +45,44 @@ except Exception:
 
 UA = "VibeSDR-CarFM/1.0 (logo-search inspector; https://github.com/ninthfreak/VibeSDR-CarFM)"
 
+# Well-known real US FM stations so the sim shows real logos before the FCC build.
+# (callsign, city, state, MHz) — frequency is display-only; it isn't in the query.
+BUILTIN_STATIONS = [
+    ("KQED", "San Francisco", "CA", 88.5), ("KCRW", "Santa Monica", "CA", 89.9),
+    ("KEXP", "Seattle", "WA", 90.3), ("WNYC", "New York", "NY", 93.9),
+    ("WXPN", "Philadelphia", "PA", 88.5), ("WFMU", "Jersey City", "NJ", 91.1),
+    ("WBEZ", "Chicago", "IL", 91.5), ("KUTX", "Austin", "TX", 98.9),
+    ("WAMU", "Washington", "DC", 88.5), ("KUOW", "Seattle", "WA", 94.9),
+    ("WBUR", "Boston", "MA", 90.9), ("WWOZ", "New Orleans", "LA", 90.7),
+    ("KUSC", "Los Angeles", "CA", 91.5), ("WHYY", "Philadelphia", "PA", 90.9),
+    ("KROQ", "Los Angeles", "CA", 106.7), ("WXRT", "Chicago", "IL", 93.1),
+]
 
-# ── search logic (mirrors the app's source modules) ──────────────────────────
+
+# ── the app's intended query construction (single source of truth for the sim) ──
+def wikidata_url(callsign: str) -> tuple[str, str]:
+    cs = callsign.upper().split("-")[0].strip()
+    sparql = f'SELECT ?logo WHERE {{ ?item wdt:P2317 "{cs}" . ?item wdt:P154 ?logo . }} LIMIT 3'
+    return sparql, "https://query.wikidata.org/sparql?" + urlencode({"format": "json", "query": sparql})
+
+
+def keyword_query(callsign: str, city: str | None, state: str | None) -> str:
+    return " ".join(x for x in [callsign.upper(), city or "", state or "", "radio logo"] if x)
+
+
+def commons_url(query: str, limit: int = 5) -> str:
+    return "https://commons.wikimedia.org/w/api.php?" + urlencode({
+        "action": "query", "format": "json", "generator": "search", "gsrsearch": query,
+        "gsrnamespace": "6", "gsrlimit": str(limit), "prop": "imageinfo",
+        "iiprop": "url|size|mime", "iiurlwidth": "128",
+    })
+
+
+def ddg_url(query: str) -> str:
+    return "https://duckduckgo.com/?" + urlencode({"iax": "images", "ia": "images", "q": query})
+
+
+# ── fetch ─────────────────────────────────────────────────────────────────────
 def http_get(url: str, accept: str = "application/json") -> tuple[int, bytes]:
     try:
         with urlopen(Request(url, headers={"User-Agent": UA, "Accept": accept}), timeout=20) as r:
@@ -46,216 +91,137 @@ def http_get(url: str, accept: str = "application/json") -> tuple[int, bytes]:
         return getattr(e, "code", 0) or 0, str(e).encode()
 
 
-def default_query(callsign: str) -> str:
-    return f"{callsign.upper()} radio logo"
-
-
-def build_wikidata(callsign: str, limit: int = 6) -> tuple[str, str]:
-    cs = callsign.upper().split("-")[0].strip()
-    sparql = f'SELECT ?logo WHERE {{ ?item wdt:P2317 "{cs}" . ?item wdt:P154 ?logo . }} LIMIT {limit}'
-    return sparql, "https://query.wikidata.org/sparql?" + urlencode({"format": "json", "query": sparql})
-
-
-def search_wikidata(callsign: str, limit: int = 6) -> dict:
-    import json
-    sparql, url = build_wikidata(callsign, limit)
-    out = {"sparql": sparql, "url": url, "results": [], "error": None}
-    status, body = http_get(url, "application/sparql-results+json")
-    if status != 200:
-        out["error"] = f"HTTP {status}: {body[:120].decode(errors='replace')}"
-        return out
-    try:
-        for b in json.loads(body)["results"]["bindings"]:
-            out["results"].append({"url": b["logo"]["value"], "thumb": b["logo"]["value"],
-                                   "title": "Wikidata P154 logo", "mime": None, "w": None, "h": None,
-                                   "source": "wikidata"})
-    except Exception as e:
-        out["error"] = f"parse error: {e}"
-    return out
-
-
-def build_commons(query: str, limit: int = 12) -> str:
-    return "https://commons.wikimedia.org/w/api.php?" + urlencode({
-        "action": "query", "format": "json", "generator": "search",
-        "gsrsearch": query, "gsrnamespace": "6", "gsrlimit": str(limit),
-        "prop": "imageinfo", "iiprop": "url|size|mime", "iiurlwidth": "256",
-    })
-
-
-def search_commons(query: str, limit: int = 12) -> dict:
-    import json
-    url = build_commons(query, limit)
-    out = {"query": query, "url": url, "results": [], "error": None}
-    status, body = http_get(url)
-    if status != 200:
-        out["error"] = f"HTTP {status}: {body[:120].decode(errors='replace')}"
-        return out
-    pages = (json.loads(body).get("query") or {}).get("pages") or {}
-    for p in pages.values():
-        ii = (p.get("imageinfo") or [{}])[0]
-        if not ii.get("url"):
-            continue
-        out["results"].append({
-            "url": ii["url"], "thumb": ii.get("thumburl") or ii["url"], "title": p.get("title", ""),
-            "mime": ii.get("mime"), "w": ii.get("width"), "h": ii.get("height"), "source": "commons",
-        })
-    return out
-
-
-def search_favicon(homepage: str) -> dict:
-    out = {"homepage": homepage, "chosen": None, "error": None}
-    status, body = http_get(homepage, "text/html")
-    if status != 200:
-        out["error"] = f"HTTP {status}"
-        return out
-    html = body.decode(errors="replace")
-    links = re.findall(r"<link\b[^>]*>", html, re.I)
-
-    def by_rel(rx):
-        for tag in links:
-            rel = re.search(r'rel\s*=\s*["\']([^"\']+)["\']', tag, re.I)
-            if rel and re.search(rx, rel.group(1), re.I):
-                h = re.search(r'href\s*=\s*["\']([^"\']+)["\']', tag, re.I)
-                if h:
-                    return urljoin(homepage, h.group(1))
-        return None
-
-    apple = by_rel(r"apple-touch-icon")
-    ogm = re.search(r'<meta[^>]+property\s*=\s*["\']og:image["\'][^>]*>', html, re.I)
-    og = re.search(r'content\s*=\s*["\']([^"\']+)["\']', ogm.group(0), re.I).group(1) if ogm else None
-    icon = by_rel(r"(^|\s)icon(\s|$)")
-    out["chosen"] = apple or (urljoin(homepage, og) if og else None) or icon or urljoin(homepage, "/favicon.ico")
-    return out
-
-
-def ddg_url(callsign: str) -> str:
-    return "https://duckduckgo.com/?" + urlencode(
-        {"iax": "images", "ia": "images", "q": f"{callsign.upper()} radio station logo"})
+def run_searches(callsign: str, city: str | None, state: str | None) -> dict:
+    """Run the app's intended searches for one station; return results + queries."""
+    hits: list[dict] = []
+    _, wd_url = wikidata_url(callsign)
+    st, body = http_get(wd_url, "application/sparql-results+json")
+    if st == 200:
+        try:
+            for b in json.loads(body)["results"]["bindings"]:
+                hits.append({"url": b["logo"]["value"], "source": "wikidata"})
+        except Exception:
+            pass
+    kw = keyword_query(callsign, city, state)
+    st, body = http_get(commons_url(kw))
+    if st == 200:
+        pages = (json.loads(body).get("query") or {}).get("pages") or {}
+        for p in pages.values():
+            ii = (p.get("imageinfo") or [{}])[0]
+            if ii.get("url"):
+                hits.append({"url": ii["url"], "thumb": ii.get("thumburl") or ii["url"], "source": "commons"})
+    return {"keyword": kw, "ddg": ddg_url(kw), "hits": hits}
 
 
 # ── GUI ──────────────────────────────────────────────────────────────────────
-class LogoSearchGUI:
+class Sim:
     def __init__(self, root: tk.Tk):
         self.root = root
-        root.title("CarFM — Station Logo Search")
-        root.geometry("900x680")
-        self._imgs: list = []   # keep PhotoImage refs alive
+        root.title("CarFM — Logo Search Simulation (what the app will search for)")
+        root.geometry("980x720")
+        self._imgs: list = []
+        self.stations = list(BUILTIN_STATIONS)
+        self.running = False
 
-        top = ttk.Frame(root, padding=8)
-        top.pack(fill="x")
-        self.callsign = tk.StringVar(value="KQED")
-        self.query = tk.StringVar()
-        self.homepage = tk.StringVar()
-        for col, (lbl, var, w) in enumerate([
-            ("Callsign", self.callsign, 12), ("Query (optional)", self.query, 26),
-            ("Homepage (optional)", self.homepage, 30),
-        ]):
-            ttk.Label(top, text=lbl).grid(row=0, column=col * 2, sticky="e", padx=(8, 2))
-            e = ttk.Entry(top, textvariable=var, width=w)
-            e.grid(row=0, column=col * 2 + 1, sticky="w")
-        ttk.Button(top, text="Search", command=self.on_search).grid(row=0, column=6, padx=10)
-        root.bind("<Return>", lambda _e: self.on_search())
+        bar = ttk.Frame(root, padding=8)
+        bar.pack(fill="x")
+        self.run_btn = ttk.Button(bar, text="Run simulation", command=self.run)
+        self.run_btn.pack(side="left")
+        ttk.Button(bar, text="Load stations.sqlite…", command=self.load_db).pack(side="left", padx=8)
+        self.src = tk.StringVar(value=f"source: {len(self.stations)} built-in real stations")
+        ttk.Label(bar, textvariable=self.src).pack(side="left", padx=8)
 
-        qf = ttk.LabelFrame(root, text="Generated queries", padding=6)
-        qf.pack(fill="x", padx=8)
-        self.qtext = tk.Text(qf, height=6, wrap="none")
-        self.qtext.pack(fill="x")
-        self.qtext.configure(state="disabled")
+        ttk.Label(root, padding=(8, 0), foreground="#555", justify="left",
+                  text='Query per station = "<callsign> <city> <state> radio logo"  •  '
+                       'Wikidata = exact call sign.  No manual input — this is what the app auto-searches.'
+                  ).pack(fill="x")
 
-        rf = ttk.LabelFrame(root, text="Results", padding=4)
-        rf.pack(fill="both", expand=True, padx=8, pady=(6, 4))
-        self.canvas = tk.Canvas(rf, highlightthickness=0)
-        sb = ttk.Scrollbar(rf, orient="vertical", command=self.canvas.yview)
-        self.results = ttk.Frame(self.canvas)
-        self.results.bind("<Configure>", lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.create_window((0, 0), window=self.results, anchor="nw")
+        wrap = ttk.Frame(root, padding=4)
+        wrap.pack(fill="both", expand=True)
+        self.canvas = tk.Canvas(wrap, highlightthickness=0)
+        sb = ttk.Scrollbar(wrap, orient="vertical", command=self.canvas.yview)
+        self.body = ttk.Frame(self.canvas)
+        self.body.bind("<Configure>", lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.create_window((0, 0), window=self.body, anchor="nw")
         self.canvas.configure(yscrollcommand=sb.set)
         self.canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        self.status = tk.StringVar(value="Enter a callsign and Search." + ("" if HAVE_PIL else "  (no Pillow → no thumbnails)"))
+        self.status = tk.StringVar(value="Press Run." + ("" if HAVE_PIL else "  (pip install pillow for thumbnails)"))
         ttk.Label(root, textvariable=self.status, relief="sunken", anchor="w").pack(fill="x", side="bottom")
 
-    def on_search(self):
-        cs = self.callsign.get().strip().upper()
-        if not cs:
+    def load_db(self):
+        f = filedialog.askopenfilename(filetypes=[("SQLite", "*.sqlite *.db"), ("All", "*.*")])
+        if not f:
             return
-        query = self.query.get().strip() or default_query(cs)
-        homepage = self.homepage.get().strip() or None
+        try:
+            con = sqlite3.connect(f)
+            con.row_factory = sqlite3.Row
+            rows = con.execute("SELECT callsign, city, state, frequency_mhz FROM stations "
+                               "WHERE service='FM' ORDER BY callsign LIMIT 40").fetchall()
+            con.close()
+            self.stations = [(r["callsign"], r["city"], r["state"], r["frequency_mhz"]) for r in rows]
+            self.src.set(f"source: {len(self.stations)} FM stations from {f.split('/')[-1]}")
+        except Exception as e:
+            self.status.set(f"could not read DB: {e}")
 
-        sparql, wd_url = build_wikidata(cs)
-        lines = [
-            f"Wikidata SPARQL : {sparql}",
-            f"Wikidata URL    : {wd_url}",
-            f"Commons query   : {query!r}",
-            f"Commons URL     : {build_commons(query)}",
-            f"Web (DuckDuckGo): {ddg_url(cs)}",
-        ]
-        if homepage:
-            lines.append(f"Favicon of      : {homepage}")
-        self._set_queries("\n".join(lines))
-
-        for w in self.results.winfo_children():
+    def run(self):
+        if self.running:
+            return
+        self.running = True
+        self.run_btn.configure(state="disabled")
+        for w in self.body.winfo_children():
             w.destroy()
         self._imgs.clear()
-        self.status.set("Searching…")
-        threading.Thread(target=self._work, args=(cs, query, homepage), daemon=True).start()
+        threading.Thread(target=self._work, daemon=True).start()
 
-    def _work(self, cs, query, homepage):
-        wd = search_wikidata(cs)
-        cm = search_commons(query)
-        fav = search_favicon(homepage) if homepage else None
-        rows = list(wd["results"]) + list(cm["results"])
-        if fav and fav.get("chosen"):
-            rows.append({"url": fav["chosen"], "thumb": fav["chosen"], "title": "homepage favicon",
-                         "mime": None, "w": None, "h": None, "source": "favicon"})
-        for r in rows:
-            r["_bytes"] = None
-            if HAVE_PIL:
-                st, data = http_get(r.get("thumb") or r["url"], "image/*")
-                if st == 200 and not data[:1] == b"<":   # skip HTML/SVG-ish
-                    r["_bytes"] = data
-        errs = [x for x in (wd["error"], cm["error"], (fav or {}).get("error")) if x]
-        self.root.after(0, lambda: self._render(rows, errs))
+    def _work(self):
+        n = len(self.stations)
+        for i, (cs, city, state, freq) in enumerate(self.stations, 1):
+            self.root.after(0, lambda i=i, cs=cs: self.status.set(f"Searching {i}/{n}: {cs}…"))
+            res = run_searches(cs, city, state)
+            for h in res["hits"][:6]:
+                if HAVE_PIL:
+                    st, data = http_get(h.get("thumb") or h["url"], "image/*")
+                    h["_bytes"] = data if (st == 200 and data[:1] != b"<") else None
+            self.root.after(0, lambda cs=cs, city=city, state=state, freq=freq, res=res: self._row(cs, city, state, freq, res))
+            time.sleep(0.4)  # be polite to the APIs
+        self.root.after(0, lambda: (self.status.set(f"Done — {n} stations."), self.run_btn.configure(state="normal")))
+        self.running = False
 
-    def _render(self, rows, errs):
-        if not rows:
-            ttk.Label(self.results, text="No results." + (("  " + errs[0]) if errs else "")).pack(anchor="w", padx=8, pady=8)
-            self.status.set("Done — 0 results" + (f"  ({errs[0]})" if errs else ""))
-            return
-        for r in rows:
-            card = ttk.Frame(self.results, padding=6)
-            card.pack(fill="x", anchor="w")
-            if r.get("_bytes"):
+    def _row(self, cs, city, state, freq, res):
+        card = ttk.Frame(self.body, padding=(8, 6))
+        card.pack(fill="x", anchor="w")
+        head = ttk.Frame(card); head.pack(fill="x")
+        ttk.Label(head, text=f"{cs}", font=("TkDefaultFont", 12, "bold")).pack(side="left")
+        ttk.Label(head, text=f"  {city}, {state}   {freq} MHz", foreground="#555").pack(side="left")
+        ttk.Button(head, text="open web search", command=lambda u=res["ddg"]: webbrowser.open(u)).pack(side="right")
+        ttk.Label(card, text=f'query: "{res["keyword"]}"', foreground="#777").pack(anchor="w")
+        strip = ttk.Frame(card); strip.pack(fill="x", pady=2)
+        if not res["hits"]:
+            ttk.Label(strip, text="— no results —", foreground="#a00").pack(side="left")
+        for h in res["hits"][:6]:
+            cell = ttk.Frame(strip, padding=2); cell.pack(side="left")
+            if h.get("_bytes"):
                 try:
-                    im = Image.open(io.BytesIO(r["_bytes"]))
-                    im.thumbnail((96, 96))
-                    ph = ImageTk.PhotoImage(im)
-                    self._imgs.append(ph)
-                    tk.Label(card, image=ph, width=100).pack(side="left")
+                    im = Image.open(io.BytesIO(h["_bytes"])); im.thumbnail((72, 72))
+                    ph = ImageTk.PhotoImage(im); self._imgs.append(ph)
+                    b = tk.Button(cell, image=ph, command=lambda u=h["url"]: webbrowser.open(u), bd=1)
+                    b.pack()
                 except Exception:
-                    tk.Label(card, text="[img]", width=12).pack(side="left")
+                    tk.Button(cell, text="[img]", command=lambda u=h["url"]: webbrowser.open(u)).pack()
             else:
-                tk.Label(card, text="[no preview]", width=12, foreground="#888").pack(side="left")
-            dims = f"{r['w']}x{r['h']}" if r.get("w") else ""
-            meta = ttk.Frame(card)
-            meta.pack(side="left", fill="x", expand=True, padx=8)
-            ttk.Label(meta, text=f"[{r['source']}]  {r.get('title', '')}", font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
-            ttk.Label(meta, text=f"{r.get('mime') or ''}  {dims}", foreground="#666").pack(anchor="w")
-            ttk.Label(meta, text=r["url"], foreground="#3B6FB6", wraplength=560).pack(anchor="w")
-            ttk.Button(card, text="Open", command=lambda u=r["url"]: webbrowser.open(u)).pack(side="right")
-        self.status.set(f"Done — {len(rows)} results" + (f"  (some errors: {errs[0]})" if errs else ""))
-
-    def _set_queries(self, text):
-        self.qtext.configure(state="normal")
-        self.qtext.delete("1.0", "end")
-        self.qtext.insert("1.0", text)
-        self.qtext.configure(state="disabled")
+                tk.Button(cell, text=h["source"], command=lambda u=h["url"]: webbrowser.open(u)).pack()
+            ttk.Label(cell, text=h["source"], foreground="#888", font=("TkDefaultFont", 8)).pack()
+        ttk.Separator(card, orient="horizontal").pack(fill="x", pady=(6, 0))
 
 
 def main():
+    if not HAVE_TK:
+        print("Tkinter isn't available. On Debian/Mint/Ubuntu: sudo apt install python3-tk")
+        return
     root = tk.Tk()
-    LogoSearchGUI(root)
+    Sim(root)
     root.mainloop()
 
 
