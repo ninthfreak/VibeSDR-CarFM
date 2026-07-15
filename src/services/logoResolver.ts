@@ -2,17 +2,17 @@
  * Layered logo resolver. Walks sources in priority order and persists the first
  * hit into the station DB (addendum §7, revised to store logos in-DB):
  *
- *   RadioDNS (PI/ECC-keyed, official)  ->  Wikidata (by callsign)
- *     ->  station-homepage favicon      ->  Radio-Browser (last resort)
+ *   Wikidata (by callsign)  ->  station-homepage favicon  ->  Radio-Browser
+ *
+ * (RadioDNS was dropped — sparse US coverage, and it was the only source needing
+ * a hardcoded DoH resolver; the app now uses only the device's DNS.)
  *
  * A manually-assigned logo is never overwritten (saveLogo guards source='manual').
  * On total network failure the station is queued (markWanted) for a later sweep;
  * a clean "no source had it" is recorded as a miss so we don't retry constantly.
  */
 
-import { callsignToPi } from './piCallsign';
 import { saveLogo, logoFetchedAt, markWanted } from './stationDb';
-import { radioDnsLogo } from './logoRadioDns';
 import { wikidataLogo } from './logoWikidata';
 import { siteFaviconLogo } from './logoSiteFavicon';
 import { fetchRadioBrowser } from './radioBrowser';
@@ -23,9 +23,6 @@ const MAX_LOGO_BYTES = 200 * 1024;
 export interface LogoStation {
   base: string;
   callsign?: string;
-  freqHz?: number;
-  piHex?: string;
-  ecc?: number;
   homepage?: string | null;
   name?: string | null;
 }
@@ -64,16 +61,7 @@ export async function resolveLogo(st: LogoStation): Promise<boolean> {
   const at = await logoFetchedAt(base);
   if (at != null && Date.now() - at < CACHE_TTL_MS) return false;
 
-  const piHex = st.piHex
-    ?? (st.callsign ? callsignToPi(st.callsign)?.toString(16).padStart(4, '0') : undefined);
-
   const attempts: Array<() => Promise<SourceHit | null>> = [];
-  if (piHex && st.freqHz) {
-    attempts.push(async () => {
-      const r = await radioDnsLogo(piHex, st.freqHz!, st.ecc);
-      return r ? { url: r.url, source: 'radiodns' } : null;
-    });
-  }
   if (st.callsign) {
     attempts.push(async () => {
       const r = await wikidataLogo(st.callsign!);

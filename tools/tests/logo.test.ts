@@ -2,7 +2,6 @@
 // Pure-helper tests for the layered logo sources (network calls not exercised).
 import { buildSparql, parseSparqlLogo } from '../../src/services/logoWikidata.ts';
 import { pickIconUrl } from '../../src/services/logoSiteFavicon.ts';
-import { fmFrequencyField, gccFromPiEcc, buildFmFqdn, parseSpiLogo } from '../../src/services/logoRadioDns.ts';
 import { base64ToBytes, bytesToBase64 } from '../../src/services/base64.ts';
 
 let fail = 0;
@@ -27,16 +26,6 @@ eq('og:image when no apple icon',
   pickIconUrl('<meta property="og:image" content="https://cdn/o.jpg">', 'https://k.example'),
   'https://cdn/o.jpg');
 eq('falls back to /favicon.ico', pickIconUrl('<html>no icons</html>', 'https://k.example/deep/page'), 'https://k.example/favicon.ico');
-
-// RadioDNS construction (format VERIFY-marked; test the mechanics)
-eq('freq field 95.8MHz -> 09580', fmFrequencyField(95_800_000), '09580');
-eq('freq field 100.3MHz -> 10030', fmFrequencyField(100_300_000), '10030');
-eq('gcc from pi/ecc', gccFromPiEcc('C586', 0xE1), 'ce1');
-eq('fm fqdn shape', buildFmFqdn('C586', 95_800_000, 'ce1'), '09580.c586.ce1.fm.radiodns.org');
-eq('spi logo picks largest',
-  parseSpiLogo('<multimedia url="s.png" width="32" height="32"/><multimedia url="big.png" width="320" height="240"/>'),
-  'big.png');
-eq('spi no logo', parseSpiLogo('<programme>nothing</programme>'), null);
 
 // base64 round-trip (native shares images as base64 → bytes for the blob store)
 for (const len of [0, 1, 2, 3, 4, 5, 255, 1000]) {

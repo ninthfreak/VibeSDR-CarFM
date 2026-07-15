@@ -89,10 +89,10 @@ consumeSharedLogo(): Promise<string | null>;
 ```
 
 **Logo sources are layered** (auto), best hit wins, all stored in the DB:
-`RadioDNS` (PI/ECC-keyed, official) → `Wikidata` (by callsign) → station
-**homepage favicon** → `Radio-Browser` (last resort). RadioDNS US coverage is
-sparse and its FQDN format is marked VERIFY in `logoRadioDns.ts` until checked
-against a real station; the others work today.
+`Wikidata` (by callsign) → station **homepage favicon** → `Radio-Browser` (last
+resort). (RadioDNS was dropped: sparse US coverage, and it was the only source
+needing DNS-over-HTTPS — so the app now uses only the device's own DNS. If a DoH
+provider is ever reintroduced, use **Quad9** — `dns.quad9.net` / 9.9.9.9.)
 
 **Manual assignment** wins over everything and is never re-fetched. Two ways to
 find a logo, both non-Google: a quick in-app search (`searchLogoImages`, Wikimedia

@@ -3,7 +3,7 @@
  * Offline-first: the list always comes from the bundled FCC DB and NEVER blocks
  * on the network. Logos live in the same DB (blobs); they're read instantly and
  * resolved in the background through the layered source chain (addendum §7):
- * RadioDNS -> Wikidata -> site favicon -> Radio-Browser, with manual override.
+ * Wikidata -> site favicon -> Radio-Browser, with manual override.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -41,7 +41,6 @@ function toLogoStation(r: NearbyDbResult): LogoStation {
   return {
     base: r.callsignBase,
     callsign: r.callsign,
-    freqHz: r.frequencyMhz * 1e6,
     homepage: r.homepage,
     name: r.callsign,
   };
@@ -97,13 +96,8 @@ export async function identifyByPi(pi: number, psText?: string): Promise<Station
     if (other && other[1] !== base) { confident = false; note = `PS text names ${other[1]}, not ${dec.callsign}`; }
   }
 
-  // Tuning to it counts as an encounter — resolve its logo (PI-keyed for RadioDNS).
-  void noteEncountered({
-    base, callsign: dec.callsign,
-    piHex: pi.toString(16).padStart(4, '0'),
-    freqHz: station ? station.frequencyMhz * 1e6 : undefined,
-    homepage: null, name: station?.callsign,
-  });
+  // Tuning to it counts as an encounter — resolve its logo.
+  void noteEncountered({ base, callsign: dec.callsign, homepage: null, name: station?.callsign });
   return { pi, callsign: dec.callsign, confident, station, note };
 }
 

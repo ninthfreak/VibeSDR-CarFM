@@ -1,7 +1,7 @@
 /**
  * Station-homepage logo source: fetch the site and pick the best icon
  * (apple-touch-icon > og:image > <link rel=icon> > /favicon.ico). A broad
- * fallback when a station has a website but isn't on Wikidata/RadioDNS.
+ * fallback when a station has a website but isn't on Wikidata.
  *
  * pickIconUrl is pure and unit-tested; siteFaviconLogo does the fetch.
  */
