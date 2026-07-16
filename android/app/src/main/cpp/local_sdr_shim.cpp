@@ -1182,6 +1182,7 @@ struct LocalSdrShim::Impl {
     // WFM RDS (fed by the engine's rdsPs/rdsText callbacks) + stereo-pilot lock.
     std::mutex rdsMtx;
     std::string rdsPsName, rdsText;
+    std::string rdsArtist, rdsTitle;         // RT+ (ODA 0x4BD7) tags, when transmitted
     int rdsPi = -1;
     int rdsEcc = 0;                          // RDS Extended Country Code (0 = none)
     std::atomic<bool> stereoDetected{false};
@@ -1514,6 +1515,11 @@ struct LocalSdrShim::Impl {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
         t->rdsText = rt64 ? rt64 : "";
     }
+    static void rdsRtPlusCb(void* ctx, const char* artist, const char* title) {
+        Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
+        t->rdsArtist = artist ? artist : "";
+        t->rdsTitle  = title ? title : "";
+    }
     static void rdsEccCb(void* ctx, uint8_t ecc) {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
         t->rdsEcc = ecc;
@@ -1808,6 +1814,7 @@ struct LocalSdrShim::Impl {
         cb.audio    = &Impl::audioCb;
         cb.rdsPs    = &Impl::rdsPsCb;
         cb.rdsText  = &Impl::rdsTextCb;
+        cb.rdsRtPlus = &Impl::rdsRtPlusCb;
         cb.rdsEcc   = &Impl::rdsEccCb;
         cb.stereo   = &Impl::stereoCb;
         fftAccum.assign(fftSize, 0.0f); accumCount = 0;
@@ -1824,11 +1831,12 @@ struct LocalSdrShim::Impl {
         return o;
     }
     void sendFmMeta(const std::shared_ptr<net::Socket>& sock) {
-        std::string ps, rt; int pi = -1, ecc = 0;
+        std::string ps, rt, artist, title; int pi = -1, ecc = 0;
         bool wfm = (mode == "wfm");
         if (wfm) {
             std::lock_guard<std::mutex> lk(rdsMtx);
-            ps = rdsPsName; rt = rdsText; pi = rdsPi; ecc = rdsEcc;
+            ps = rdsPsName; rt = rdsText; artist = rdsArtist; title = rdsTitle;
+            pi = rdsPi; ecc = rdsEcc;
         }
         // trim trailing spaces RDS pads with
         auto trim = [](std::string s){ size_t e = s.find_last_not_of(" \t\r\n"); return e==std::string::npos?std::string():s.substr(0,e+1); };
@@ -1836,18 +1844,22 @@ struct LocalSdrShim::Impl {
         const bool st = wfm && stereoDetected.load();
         // Only send when something actually CHANGED — re-sending identical RDS each
         // second re-triggers the client's notification marquee (text "repopulates"
-        // and flickers). Change-detect ps/rt/pi/ecc/stereo and skip otherwise.
-        if (ps == lastSentPs_ && rt == lastSentRt_ && pi == lastSentPi_ && ecc == lastSentEcc_ && st == lastSentStereo_) return;
-        lastSentPs_ = ps; lastSentRt_ = rt; lastSentPi_ = pi; lastSentEcc_ = ecc; lastSentStereo_ = st;
-        char buf[512];
+        // and flickers). Change-detect ps/rt/rt+/pi/ecc/stereo and skip otherwise.
+        if (ps == lastSentPs_ && rt == lastSentRt_ && artist == lastSentArtist_ && title == lastSentTitle_
+            && pi == lastSentPi_ && ecc == lastSentEcc_ && st == lastSentStereo_) return;
+        lastSentPs_ = ps; lastSentRt_ = rt; lastSentArtist_ = artist; lastSentTitle_ = title;
+        lastSentPi_ = pi; lastSentEcc_ = ecc; lastSentStereo_ = st;
+        char buf[768];
         snprintf(buf, sizeof buf,
-            "{\"type\":\"rds\",\"stereo\":%s,\"ps\":\"%s\",\"radiotext\":\"%s\",\"pi\":%d,\"ecc\":%d}",
+            "{\"type\":\"rds\",\"stereo\":%s,\"ps\":\"%s\",\"radiotext\":\"%s\",\"rt_artist\":\"%s\",\"rt_title\":\"%s\",\"pi\":%d,\"ecc\":%d}",
             st ? "true" : "false",
-            jsonEscape(ps).c_str(), jsonEscape(rt).c_str(), pi, ecc);
+            jsonEscape(ps).c_str(), jsonEscape(rt).c_str(),
+            jsonEscape(artist).c_str(), jsonEscape(title).c_str(), pi, ecc);
         sendText(sock, buf);
     }
     // Last RDS values pushed to the client (change-detect to avoid marquee re-trigger).
-    std::string lastSentPs_, lastSentRt_; int lastSentPi_ = -2; int lastSentEcc_ = -1; bool lastSentStereo_ = false;
+    std::string lastSentPs_, lastSentRt_, lastSentArtist_, lastSentTitle_;
+    int lastSentPi_ = -2; int lastSentEcc_ = -1; bool lastSentStereo_ = false;
 
     // retune the demod (and RTL centre if the offset would fall outside span)
     void retune(double freq) {
@@ -1890,7 +1902,8 @@ struct LocalSdrShim::Impl {
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
         // New frequency -> drop the cached RDS so a different station doesn't keep
         // showing the previous one's PS/RadioText until its own RDS re-syncs.
-        { std::lock_guard<std::mutex> rl(rdsMtx); rdsPsName.clear(); rdsText.clear(); rdsPi = -1; }
+        { std::lock_guard<std::mutex> rl(rdsMtx);
+          rdsPsName.clear(); rdsText.clear(); rdsArtist.clear(); rdsTitle.clear(); rdsPi = -1; }
         stereoDetected.store(false);
     }
 

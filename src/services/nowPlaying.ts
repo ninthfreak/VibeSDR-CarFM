@@ -17,6 +17,10 @@ export interface FmRdsInput {
   ps?: string | null;
   /** RDS RadioText (RT) — the rolling per-song / now-playing line. */
   rt?: string | null;
+  /** RT+ ITEM.ARTIST — typed slice of RT, when the station transmits RT+. */
+  rtArtist?: string | null;
+  /** RT+ ITEM.TITLE — see rtArtist. */
+  rtTitle?: string | null;
   /** Tuned frequency in Hz. */
   freqHz: number;
 }
@@ -39,14 +43,21 @@ export function formatFmFreq(freqHz: number): string {
  * ESP32 display reads. Empty RDS fields fall back so the card never goes blank
  * before RDS locks — PS/RT can take several seconds to arrive after a tune.
  */
-export function fmNowPlaying({ ps, rt, freqHz }: FmRdsInput): FmNowPlaying {
+export function fmNowPlaying({ ps, rt, rtArtist, rtTitle, freqHz }: FmRdsInput): FmNowPlaying {
   const freq = formatFmFreq(freqHz);
   const station = (ps ?? '').trim();
   const text = (rt ?? '').trim();
+  // RT+ gives typed artist/title slices of the RadioText. The contract's SLOTS
+  // stay fixed (RT->TITLE, PS->ARTIST, freq->ALBUM — the ESP32 reads them
+  // positionally), so RT+ only upgrades the TITLE *content* to a clean
+  // "Artist – Title" instead of the raw RT line with its promo/junk framing.
+  const a = (rtArtist ?? '').trim();
+  const t = (rtTitle ?? '').trim();
+  const item = a && t ? `${a} – ${t}` : (t || a);
   return {
-    // RT is the per-song text; before it locks show the station, then the freq,
+    // Per-song text: RT+ item first, then raw RT, then station, then freq,
     // so the title line is never empty.
-    title: text || station || freq,
+    title: item || text || station || freq,
     // PS is the stable station identifier; fall back to "FM <freq>".
     artist: station || `FM ${freq}`,
     album: freq,

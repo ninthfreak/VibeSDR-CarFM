@@ -721,7 +721,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [aircraft, setAircraft] = useState<Aircraft[]>([]);
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
-  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; badge?: string; countryIso?: string; pi?: string }>({});
+  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; rtArtist?: string; rtTitle?: string; badge?: string; countryIso?: string; pi?: string }>({});
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
   const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
@@ -2150,7 +2150,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // so a live station name shows uniformly regardless of source.
         liveStationRef.current = meta.stationName ?? '';
         liveBadgeRef.current = meta.badge;
-        setLiveStation({ name: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi });
+        setLiveStation({ name: meta.stationName, text: meta.text, rtArtist: meta.rtArtist, rtTitle: meta.rtTitle, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi });
         if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
@@ -3739,7 +3739,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       // frequency -> ALBUM. Gadgetbridge relays these three, so this branch is
       // the whole system contract; the general SDR mapping below is bypassed.
       if (route.params.carFm && status.mode === 'wfm') {
-        const np = fmNowPlaying({ ps: liveStation.name, rt: liveStation.text, freqHz: hz });
+        const np = fmNowPlaying({
+          ps: liveStation.name, rt: liveStation.text,
+          rtArtist: liveStation.rtArtist, rtTitle: liveStation.rtTitle, freqHz: hz,
+        });
         VibePowerModule?.setNowPlaying(np.title, np.artist);
         VibePowerModule?.setNowPlayingAlbum?.(np.album);
         VibePowerModule?.setArtwork(route.params.isTcp ? 'rtltcp' : 'local');
@@ -3786,7 +3789,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     }, 300);
     return () => clearTimeout(t);
   }, [status.frequency, status.mode, step, freqUnit, ituRegion, mediaSkip,
-      serverBookmarks, userBookmarks, liveStation.name, liveStation.text]);
+      serverBookmarks, userBookmarks, liveStation.name, liveStation.text,
+      liveStation.rtArtist, liveStation.rtTitle]);
 
   useEffect(() => () => {
     if (vtsDeferredBand.current) clearTimeout(vtsDeferredBand.current);
@@ -4800,7 +4804,11 @@ export default function SDRScreen({ route, navigation }: Props) {
           freqHz={status.frequency}
           stationName={liveStation.name}
           callsignHint={fmCallsignHint}
-          radioText={liveStation.text}
+          // RT+ (when transmitted) gives a clean "Artist – Title"; show that on
+          // the strip instead of the raw RT line with its promo framing.
+          radioText={liveStation.rtArtist && liveStation.rtTitle
+            ? `${liveStation.rtArtist} – ${liveStation.rtTitle}`
+            : liveStation.text}
           stereo={fmStereo}
           signalDb={fmSignalDb}
           presets={fmPresets}
