@@ -89,6 +89,7 @@ void RdsDecoder::reset() {
     rtpGroup_ = -1; rtpToggle_ = false; rtpHaveToggle_ = false;
     std::memset(rtpArtist_, 0, sizeof rtpArtist_);
     std::memset(rtpTitle_, 0, sizeof rtpTitle_);
+    tp_ = false; ta_ = false; afSeen_ = false; pty_ = 0; lastFlags_ = -1;
 }
 
 void RdsDecoder::pushBit(int bit) {
@@ -128,6 +129,25 @@ void RdsDecoder::parseGroup() {
     const uint16_t pi = blk_[0];
     const int gtype = (blk_[1] >> 12) & 0xF;
     const int ver   = (blk_[1] >> 11) & 1;
+
+    // Every group's block B carries TP (bit 10) + PTY (bits 9-5); TA and the
+    // AF list only ride in group 0. Collected here, emitted change-detected.
+    tp_  = (blk_[1] >> 10) & 1;
+    pty_ = (uint8_t)((blk_[1] >> 5) & 0x1F);
+    if (gtype == 0) {
+        ta_ = (blk_[1] >> 4) & 1;
+        // 0A block C carries AF pairs; codes 1..204 are actual frequencies
+        // (224+ are "count" markers, 205/206+ fillers) — any real code = has AF.
+        if (ver == 0 && blkOk_[2]) {
+            const uint8_t a = (blk_[2] >> 8) & 0xFF, b = blk_[2] & 0xFF;
+            if ((a >= 1 && a <= 204) || (b >= 1 && b <= 204)) afSeen_ = true;
+        }
+    }
+    const int packed = ((int)tp_ << 7) | ((int)ta_ << 6) | ((int)afSeen_ << 5) | pty_;
+    if (packed != lastFlags_) {
+        lastFlags_ = packed;
+        if (cb_.flags) cb_.flags(cb_.ctx, tp_, ta_, pty_, afSeen_);
+    }
 
     if (gtype == 0) {                                  // 0A/0B — programme service name
         const int addr = blk_[1] & 0x3;

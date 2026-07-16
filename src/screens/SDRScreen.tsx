@@ -123,6 +123,7 @@ import {
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { fmNowPlaying } from '../services/nowPlaying';
+import { ptyLabel } from '../services/ptyLabels';
 import CarFmFace, { type CarFmPreset } from '../components/CarFmFace';
 import { identifyByPi, initLogoService, consumeSharedLogo } from '../services/stationFinder';
 import type { StationIdentity } from '../services/stationTypes';
@@ -721,7 +722,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [aircraft, setAircraft] = useState<Aircraft[]>([]);
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
-  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; rtArtist?: string; rtTitle?: string; badge?: string; countryIso?: string; pi?: string }>({});
+  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; rtArtist?: string; rtTitle?: string; tp?: boolean; ta?: boolean; pty?: number; af?: boolean; badge?: string; countryIso?: string; pi?: string }>({});
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
   const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
@@ -2150,7 +2151,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // so a live station name shows uniformly regardless of source.
         liveStationRef.current = meta.stationName ?? '';
         liveBadgeRef.current = meta.badge;
-        setLiveStation({ name: meta.stationName, text: meta.text, rtArtist: meta.rtArtist, rtTitle: meta.rtTitle, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi });
+        setLiveStation({ name: meta.stationName, text: meta.text, rtArtist: meta.rtArtist, rtTitle: meta.rtTitle, tp: meta.tp, ta: meta.ta, pty: meta.pty, af: meta.af, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi });
         if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
@@ -4811,6 +4812,11 @@ export default function SDRScreen({ route, navigation }: Props) {
             : liveStation.text}
           stereo={fmStereo}
           signalDb={fmSignalDb}
+          rdsOk={!!liveStation.pi || !!liveStation.name}
+          tp={liveStation.tp}
+          ta={liveStation.ta}
+          af={liveStation.af}
+          ptyText={ptyLabel(liveStation.pty, ituRegion === 2)}
           presets={fmPresets}
           onTuneHz={onTuneHz}
           onToggleSave={onFmToggleSave}

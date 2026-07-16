@@ -314,6 +314,9 @@ public:
         // RadioText Plus (RT+, ODA 0x4BD7): ITEM.ARTIST / ITEM.TITLE sliced out
         // of the current RadioText. Fired on change; both empty = item ended.
         void (*rtPlus)(void* ctx, const char* artist, const char* title) = nullptr;
+        // Programme flags: TP + PTY ride in every group's block B; TA and
+        // AF-present come from group 0A/0B. Fired on change.
+        void (*flags)(void* ctx, bool tp, bool ta, uint8_t pty, bool afPresent) = nullptr;
     };
     void setCallbacks(const Callbacks& c) { cb_ = c; }
     void reset();
@@ -341,6 +344,10 @@ private:
     bool rtpToggle_ = false, rtpHaveToggle_ = false;
     char rtpArtist_[65] = {0};
     char rtpTitle_[65] = {0};
+    // Programme flags (TP/TA/PTY/AF-present), change-detected as one packed word.
+    bool tp_ = false, ta_ = false, afSeen_ = false;
+    uint8_t pty_ = 0;
+    int lastFlags_ = -1;
     Callbacks cb_{};
 };
 
@@ -389,6 +396,7 @@ public:
         void (*audio)(void* ctx, const float* pcm, int frames, int channels, int outRate) = nullptr;
         // Optional: WFM RDS programme-service name (8 chars) + station PI code.
         void (*rdsRtPlus)(void* ctx, const char* artist, const char* title) = nullptr;
+        void (*rdsFlags)(void* ctx, bool tp, bool ta, uint8_t pty, bool afPresent) = nullptr;
         void (*rdsPs)(void* ctx, uint16_t pi, const char* ps8) = nullptr;
         // Optional: WFM RDS RadioText (up to 64 chars).
         void (*rdsText)(void* ctx, const char* rt64) = nullptr;

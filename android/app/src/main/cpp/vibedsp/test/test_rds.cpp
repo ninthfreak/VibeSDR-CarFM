@@ -36,6 +36,10 @@ static void onRtPlus(void* c, const char* artist, const char* title) {
     std::strncpy(p->artist, artist, 64); std::strncpy(p->title, title, 64);
     p->rtpCalls++;
 }
+struct FlagCap { bool tp = false, ta = false, af = false; int pty = -1; int calls = 0; };
+static void onFlags(void* c, bool tp, bool ta, uint8_t pty, bool af) {
+    auto* p = (FlagCap*)c; p->tp = tp; p->ta = ta; p->pty = pty; p->af = af; p->calls++;
+}
 
 int main() {
     std::printf("== vibedsp RDS data-link host test ==\n");
@@ -138,6 +142,28 @@ int main() {
         }
         check(c2.rtpCalls == 2, "toggle flip fires a clear");
         check(c2.artist[0] == 0 && c2.title[0] == 0, "toggle flip clears artist/title");
+    }
+
+    // ── Programme flags: TP + PTY (every block B), TA + AF (group 0A) ─────────
+    {
+        RdsDecoder d3;
+        FlagCap fc;
+        RdsDecoder::Callbacks cb3; cb3.ctx = &fc; cb3.flags = onFlags;
+        d3.setCallbacks(cb3);
+        d3.reset();
+        // 0A with TP=1 (bit 10), PTY=5 (bits 9-5), TA=1 (bit 4), AF code 42 in C.
+        const uint16_t B = (0 << 12) | (0 << 11) | (1 << 10) | (5 << 5) | (1 << 4) | 0x0;
+        const uint16_t C = (42 << 8) | 240;                    // one AF freq + a filler
+        feedBlock(d3, encodeBlock(PI, 0)); feedBlock(d3, encodeBlock(B, 1));
+        feedBlock(d3, encodeBlock(C, 2));  feedBlock(d3, encodeBlock(0, 4));
+        std::printf("  flags: tp=%d ta=%d pty=%d af=%d (callbacks=%d)\n", fc.tp, fc.ta, fc.pty, fc.af, fc.calls);
+        check(fc.calls == 1, "flags callback fired");
+        check(fc.tp && fc.ta && fc.af, "TP/TA/AF decoded");
+        check(fc.pty == 5, "PTY code decoded");
+        // Same group again -> no re-fire (change detection).
+        feedBlock(d3, encodeBlock(PI, 0)); feedBlock(d3, encodeBlock(B, 1));
+        feedBlock(d3, encodeBlock(C, 2));  feedBlock(d3, encodeBlock(0, 4));
+        check(fc.calls == 1, "identical flags do not re-fire");
     }
 
     std::printf(failures ? "\n%d FAILURE(S)\n" : "\nALL PASS\n", failures);

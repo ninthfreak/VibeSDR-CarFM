@@ -222,6 +222,14 @@ export interface StationMeta {
   rtArtist?: string;
   /** RT+ ITEM.TITLE — see rtArtist. */
   rtTitle?: string;
+  /** RDS Traffic Programme flag (block B bit 10). */
+  tp?: boolean;
+  /** RDS Traffic Announcement in progress (group 0). */
+  ta?: boolean;
+  /** RDS Programme Type code 0–31 (RBDS table in region 2). */
+  pty?: number;
+  /** Station transmits an Alternative Frequencies list. */
+  af?: boolean;
   /** DAB ensemble (multiplex) label. */
   ensemble?: string;
   /** DAB programmes in the ensemble — drives the programme picker. */
