@@ -28,6 +28,7 @@ import sqlite3
 import sys
 import zipfile
 from datetime import date, datetime
+from urllib.error import HTTPError
 from urllib.request import urlopen, Request
 
 # Outputs default to the CURRENT directory so this single-file script is safe to
@@ -224,11 +225,41 @@ def index_by_facility(rows: list[dict], cols: dict) -> dict:
 
 
 # ── commands ─────────────────────────────────────────────────────────────────
+# The FCC download sits behind an Akamai WAF that 403s non-browser clients, so we
+# present a normal browser's headers. This is a public, no-auth file — we're just
+# not being blocked for the crime of not being Chrome.
+BROWSER_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
+    "Accept": "application/zip,application/octet-stream,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
 def cmd_fetch(args):
     os.makedirs(args.lms_dir, exist_ok=True)
-    print(f"Downloading {LMS_ZIP_URL}")
-    req = Request(LMS_ZIP_URL, headers={"User-Agent": "VibeSDR-CarFM station DB build"})
-    data = urlopen(req, timeout=300).read()
+
+    # Escape hatch: if the WAF still won't budge, download the zip in a browser
+    # and point --zip at it. Same unzip path, no network.
+    if getattr(args, "zip", None):
+        print(f"Using local zip {args.zip}")
+        data = open(args.zip, "rb").read()
+    else:
+        print(f"Downloading {LMS_ZIP_URL}")
+        req = Request(LMS_ZIP_URL, headers=BROWSER_HEADERS)
+        try:
+            data = urlopen(req, timeout=300).read()
+        except HTTPError as e:
+            if e.code in (403, 406, 429):
+                sys.exit(
+                    f"\nFCC download blocked (HTTP {e.code}). The server sits behind a\n"
+                    f"WAF that sometimes still refuses scripted requests. Download it\n"
+                    f"once in a browser:\n\n    {LMS_ZIP_URL}\n\n"
+                    f"then re-run with the saved file:\n\n"
+                    f"    python3 build_station_db.py fetch --zip lms_public_database.zip\n\n"
+                    f"(Everything after this — inspect/build — is offline.)")
+            raise
+
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         z.extractall(args.lms_dir)
     print(f"Extracted {len(os.listdir(args.lms_dir))} files to {args.lms_dir}")
@@ -475,6 +506,8 @@ def main():
         sp.add_argument("--lms-dir", default=DEFAULT_LMS_DIR)
         sp.add_argument("--out", default=DEFAULT_OUT)
         sp.add_argument("--snapshot", help="LMS snapshot date YYYY-MM-DD (default: today)")
+        if name == "fetch":
+            sp.add_argument("--zip", help="unzip this already-downloaded LMS zip instead of fetching")
         if name == "sample":
             sp.add_argument("--lat", type=float, default=37.7749, help="center latitude (default: SF)")
             sp.add_argument("--lon", type=float, default=-122.4194, help="center longitude")

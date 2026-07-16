@@ -18,6 +18,20 @@ directory**; pass `--out` to place it elsewhere.
 ```bash
 python3 build_station_db.py fetch      # download + unzip LMS files -> ./lms_files
 python3 build_station_db.py inspect    # print each .dat's columns + a sample row
+```
+
+The FCC download sits behind an Akamai WAF that returns **HTTP 403** to scripted
+clients. `fetch` already sends browser-like headers, but if it still refuses,
+download the zip once in a browser and hand it to the same command:
+
+```bash
+# browser -> https://enterpriseefiling.fcc.gov/dataentry/public/tv/lms_db_download/lms_public_database.zip
+python3 build_station_db.py fetch --zip lms_public_database.zip   # offline unzip
+```
+
+Everything after `fetch` (`inspect`, `build`) is offline.
+
+```bash
 python3 build_station_db.py build      # emit ./stations.sqlite
 python3 build_station_db.py self-test  # prove the pipeline with synthetic data
 python3 build_station_db.py sample     # emit a small SYNTHETIC db for emulator/UI dev
