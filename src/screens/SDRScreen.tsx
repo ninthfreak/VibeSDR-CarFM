@@ -3893,39 +3893,77 @@ export default function SDRScreen({ route, navigation }: Props) {
     return city ? `${piIdentity.callsign} · ${city}` : piIdentity.callsign;
   }, [liveStation.name, piIdentity]);
 
-  // Presets = this-instance FM bookmarks (broadcast band), nearest-first.
-  const fmPresets = useMemo<CarFmPreset[]>(() => (
-    visibleBookmarks
+  // Presets = this-instance FM bookmarks (broadcast band), in the USER'S order
+  // (design: presets are an ordered strip, reorderable in the face; PREV/NEXT
+  // step displayed order). The order overlay is a persisted list of frequency
+  // keys; bookmarks not in it append frequency-sorted at the end.
+  const FM_ORDER_KEY = '@carfm/preset_order_v1';
+  const fmKeyOf = (hz: number) => String(Math.round(hz / 100_000));  // 0.1 MHz key
+  const [fmOrder, setFmOrder] = useState<string[]>([]);
+  useEffect(() => {
+    AsyncStorage.getItem(FM_ORDER_KEY)
+      .then((raw: string | null) => { if (raw) setFmOrder(JSON.parse(raw)); })
+      .catch(() => {});
+  }, []);
+  const persistFmOrder = useCallback((keys: string[]) => {
+    setFmOrder(keys);
+    AsyncStorage.setItem(FM_ORDER_KEY, JSON.stringify(keys)).catch(() => {});
+  }, []);
+
+  const fmPresets = useMemo<CarFmPreset[]>(() => {
+    const base = visibleBookmarks
       .filter((b: UserBookmark) =>
         b.mode === 'wfm' || (b.frequency >= 87_000_000 && b.frequency <= 108_500_000))
       .map((b: UserBookmark) => ({ name: b.name, frequency: b.frequency }))
-      .sort((a, b) => a.frequency - b.frequency)
-  ), [visibleBookmarks]);
+      .sort((a, b) => a.frequency - b.frequency);
+    if (fmOrder.length === 0) return base;
+    const pos = new Map(fmOrder.map((k, i) => [k, i]));
+    return [...base].sort((a, b) =>
+      (pos.get(fmKeyOf(a.frequency)) ?? 1e6 + a.frequency / 1e5)
+      - (pos.get(fmKeyOf(b.frequency)) ?? 1e6 + b.frequency / 1e5));
+  }, [visibleBookmarks, fmOrder]);
 
-  // Tune by the broadcast-FM channel raster (200 kHz Region 2, else 100 kHz).
-  const onFmStep = useCallback((dir: 1 | -1) => {
-    const raster = ituRegion === 2 ? 200_000 : 100_000;
-    const cur = client.current?.getStatus().frequency ?? status.frequency;
-    onTuneHz(Math.round(cur / raster) * raster + dir * raster);
-  }, [ituRegion, status.frequency, onTuneHz]);
+  // Star: save the tuned station (named from RDS PS), or un-save if it already
+  // is a preset. Removal also drops any duplicate bookmarks on that channel.
+  const fmRemoveAt = useCallback((hz: number) => {
+    const key = fmKeyOf(hz);
+    persistUserBookmarks(userBookmarks.filter((b: UserBookmark) => fmKeyOf(b.frequency) !== key));
+    persistFmOrder(fmOrder.filter((k) => k !== key));
+  }, [userBookmarks, persistUserBookmarks, fmOrder, persistFmOrder]);
 
-  // Seek = jump to the previous/next preset (true signal-seek is a follow-up).
-  const onFmSeekPreset = useCallback((dir: 1 | -1) => {
-    if (fmPresets.length === 0) { onFmStep(dir); return; }
-    const cur = client.current?.getStatus().frequency ?? status.frequency;
-    const sorted = fmPresets;
-    let idx = sorted.findIndex((p) => p.frequency > cur + 1);      // next above
-    if (dir < 0) idx = idx <= 0 ? sorted.length - 1 : idx - 1;
-    else if (idx < 0) idx = 0;
-    onTuneHz(sorted[Math.max(0, Math.min(sorted.length - 1, idx))].frequency);
-  }, [fmPresets, status.frequency, onTuneHz, onFmStep]);
-
-  // Save the current station as a preset, named from RDS PS when we have it.
-  const onFmSavePreset = useCallback(() => {
+  const onFmToggleSave = useCallback(() => {
+    const hz = client.current?.getStatus().frequency ?? status.frequency;
+    if (fmPresets.some((p) => fmKeyOf(p.frequency) === fmKeyOf(hz))) { fmRemoveAt(hz); return; }
     const name = (liveStationRef.current || '').trim()
-      || `FM ${(status.frequency / 1e6).toFixed(1)}`;
+      || `FM ${(hz / 1e6).toFixed(1)}`;
     onAddBookmark(name, false);
-  }, [status.frequency, onAddBookmark]);
+  }, [status.frequency, fmPresets, fmRemoveAt, onAddBookmark]);
+
+  // Reorder/remove from the face's reorder mode (indexes are displayed order).
+  const onFmReorderPreset = useCallback((index: number, dir: 1 | -1) => {
+    const j = index + dir;
+    if (index < 0 || j < 0 || index >= fmPresets.length || j >= fmPresets.length) return;
+    const keys = fmPresets.map((p) => fmKeyOf(p.frequency));
+    [keys[index], keys[j]] = [keys[j], keys[index]];
+    persistFmOrder(keys);
+  }, [fmPresets, persistFmOrder]);
+  const onFmRemovePreset = useCallback((index: number) => {
+    const p = fmPresets[index];
+    if (p) fmRemoveAt(p.frequency);
+  }, [fmPresets, fmRemoveAt]);
+
+  // Save a station straight from the Nearby picker (hold a row).
+  const onFmSaveStationPreset = useCallback((name: string, freqMhz: number) => {
+    const bm: UserBookmark = {
+      name: name.trim() || `FM ${freqMhz.toFixed(1)}`,
+      frequency: Math.round(freqMhz * 1e6),
+      mode: 'wfm',
+      bandwidth_low: null, bandwidth_high: null,
+      group: null, comment: null, extension: null,
+      scope: baseUrl,
+    };
+    persistUserBookmarks(mergeBookmarks(userBookmarks, [bm]));
+  }, [baseUrl, userBookmarks, persistUserBookmarks]);
 
   // First-run guided tour (dismissable). Spotlights the drum, step rate, the
   // disabled back-gesture, and the menu — opening it to show the route back to
@@ -4766,12 +4804,11 @@ export default function SDRScreen({ route, navigation }: Props) {
           stereo={fmStereo}
           signalDb={fmSignalDb}
           presets={fmPresets}
-          region2={ituRegion === 2}
-          onStep={onFmStep}
-          onSeekPreset={onFmSeekPreset}
-          onSelectPreset={onTuneHz}
-          onSavePreset={onFmSavePreset}
-          onEnterFreq={onFreqOpen}
+          onTuneHz={onTuneHz}
+          onToggleSave={onFmToggleSave}
+          onReorderPreset={onFmReorderPreset}
+          onRemovePreset={onFmRemovePreset}
+          onSaveStationPreset={onFmSaveStationPreset}
           onOpenAdvanced={() => setAdvancedOpen(true)}
         />
       ) : null}
