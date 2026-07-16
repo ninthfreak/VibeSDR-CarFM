@@ -26,7 +26,8 @@ import type { StationRow } from './stationTypes';
 const DB_NAME = 'stations.sqlite';
 // Bump whenever you rebuild + rebundle the DB (see tools/build_station_db). On a
 // bump the stale copy is replaced with the new asset; logos/wanted are migrated.
-const DB_ASSET_VERSION = '2';
+// 3 = first real FCC build (LMS snapshot 2026-07-16, 20733 stations).
+const DB_ASSET_VERSION = '3';
 
 const LOGO_DDL = `
   CREATE TABLE IF NOT EXISTS logos (

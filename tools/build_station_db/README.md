@@ -67,36 +67,48 @@ Only `python3` (stdlib) is required — no pip installs.
 If the download URL 404s, get the current one from the LMS Public Database page:
 <https://enterpriseefiling.fcc.gov/dataentry/public/tv/lmsDatabase.html>
 
-## The join (VERIFY against a real download)
+## The join (VERIFIED against the 2026-07-16 LMS files)
 
-The FM facility identity, engineering, and location live in separate LMS tables.
-The mapping is isolated in the **CONFIG block** at the top of
-`build_station_db.py`; each field lists candidate column names and the first one
-present wins. **Confirm these against `inspect` output** and update this table
-when you do:
+Identity + frequency come straight from `facility.dat`. Engineering and location
+live in `app_*` tables keyed by **opaque record ids, not `facility_id`** — a
+5-hop chain, wired in `build()` with the column names in the CONFIG block:
 
-| Output column   | LMS file (assumed)         | LMS column (assumed)              | Verified? |
-|-----------------|----------------------------|-----------------------------------|-----------|
-| `facility_id`   | `facility.dat`             | `facility_id`                     | ⬜ TODO   |
-| `callsign`      | `facility.dat`             | `fac_callsign`                    | ⬜ TODO   |
-| `service`       | `facility.dat`             | `fac_service` (FM/FX/FL)          | ⬜ TODO   |
-| `city`/`state`  | `facility.dat`             | `comm_city` / `comm_state`        | ⬜ TODO   |
-| `frequency_mhz` | `app_antenna_frequency.dat`| `station_freq` (or channel 200-300)| ⬜ TODO  |
-| `erp_kw`        | `app_antenna_frequency.dat`| `station_erp`                     | ⬜ TODO   |
-| `station_class` | `app_antenna_frequency.dat`| `station_class`                   | ⬜ TODO   |
-| `lat`/`lon`     | `app_location.dat`         | decimal, or DMS + hemisphere      | ⬜ TODO   |
+```
+facility ──license_filing_id──▶ application_facility (afac_facility_id,
+                                   afac_application_id, afac_license_filing_id)
+         ──afac_application_id──▶ app_location (aloc_aapp_application_id)
+                                   → DMS coords + aloc_loc_record_id
+         ──aloc_loc_record_id───▶ app_antenna (aant_aloc_loc_record_id,
+                                   aant_antenna_record_id)
+         ──aant_antenna_record_id▶ app_antenna_frequency → ERP
+```
 
-Notes / gotchas found so far:
-- **Linkage:** facilities are joined to engineering/location **by `facility_id`**.
-  If the flattened files only expose `application_id`, wire that hop in the CONFIG
-  block and pick the record from the *latest granted license* (the current code
-  takes the first row per facility — refine if duplicates appear).
-- **Coordinates** may be decimal (`lat_dec`/`lon_dec`) or DMS
-  (`lat_deg/min/sec` + `lat_dir`). Both are handled in `coords()`.
-- **Frequency** may be MHz directly or an FM channel number (200–300 →
-  87.9–107.9 MHz); both handled.
-- Rows failing validation (non-FM, missing eng/loc, freq out of 87.5–108.1, bad
-  coords) are dropped and **counted** in the build report — watch those counts.
+| Output column   | LMS file                    | LMS column                          | Verified |
+|-----------------|-----------------------------|-------------------------------------|----------|
+| `facility_id`   | `facility.dat`              | `facility_id`                       | ✅ 2026-07-16 |
+| `callsign`      | `facility.dat`              | `callsign`                          | ✅ |
+| `service`       | `facility.dat`              | `service_code` (FM/FX/FL)           | ✅ |
+| `city`/`state`  | `facility.dat`              | `community_served_city`/`_state`    | ✅ |
+| `frequency_mhz` | `facility.dat`              | `frequency` (fallback: `channel`)   | ✅ |
+| `erp_kw`        | `app_antenna_frequency.dat` | `aafq_horiz_erp_kw` → `aafq_power_erp_kw` → `aafq_max_erp_kw` | ✅ |
+| `station_class` | —                           | **not present** — `aafq_class_station_code` is blank in all 339k rows; emitted as NULL | ✅ (absent) |
+| `lat`/`lon`     | `app_location.dat`          | `aloc_lat_deg/mm/ss/dir` + `aloc_long_*` (DMS, NAD83; ignore `_nad27`) | ✅ |
+
+Findings from the real data (2026-07-16 snapshot):
+- **Status filter matters:** of 55,651 active FM-service facilities only
+  **21,484** are on-air licensed (`LICEN` + `LICRP` renewal-pending — KUSC is
+  LICRP). The rest are voided/cancelled/pending and are dropped (`not_licensed`).
+  `LICSL` (licensed-but-**silent**) is deliberately excluded — not receivable.
+- **Current license:** a facility has up to ~30 applications; only those whose
+  `afac_license_filing_id` equals `facility.license_filing_id` are used.
+- **Multiple transmitter sites** per license (main + auxiliaries): the
+  highest-ERP location wins (the licensed main site).
+- **application.dat is not needed** (1.25M rows, largest table) —
+  `facility.license_filing_id` already selects the current license.
+- **Streaming required:** tables are read via `open_dat` one row at a time
+  (~10-30 s, ~150 MB). Materialising them as dicts needs >4 GB — don't.
+- Build report: 20,733 rows kept; skipped = non_fm 125,045 / not_licensed
+  34,167 / no_location 750 / bad_freq 1. Row math reconciles exactly.
 
 ## Output
 

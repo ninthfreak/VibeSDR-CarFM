@@ -44,51 +44,54 @@ APP_DB_PATH = "assets/db/stations.sqlite"
 #   https://enterpriseefiling.fcc.gov/dataentry/public/tv/lmsDatabase.html
 LMS_ZIP_URL = "https://enterpriseefiling.fcc.gov/dataentry/public/tv/lms_db_download/lms_public_database.zip"
 
-# FCC service codes we keep (addendum §3.3). AM is out of scope.
-FM_SERVICES = {"FM", "FX", "FL"}  # full-power FM, FM translator, LPFM
+# FCC service codes we keep (addendum §3.3). AM/TV out of scope. These are the
+# letter codes in facility.service_code (decoded via lkp_service_code.dat).
+FM_SERVICES = {"FM", "FX", "FL"}   # full-power FM, FM translator, LPFM
+# Keep only on-air licensed facilities. facility.dat also carries voided (FVOID),
+# cancelled (LICAN/PRCAN), pending (CPAPP/CPOFF), and unknown records — ~34k of
+# the 55k FM-service rows — which must NOT ship in a tuner's list.
+#   LICEN = licensed; LICRP = licensed, renewal pending (still broadcasting, e.g.
+#   KUSC). LICSL (licensed-but-silent) is intentionally EXCLUDED — a silent
+#   station isn't receivable, which is the whole point of the "nearby" list.
+LICENSED_STATUS = {"LICEN", "LICRP"}
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONFIG — the join. VERIFY every name here against `inspect` output on a real
-# download; the LMS column names are the thing most likely to drift. Each field
-# lists candidate column names (case-insensitive); the first present one wins.
+# CONFIG — the join, VERIFIED against the real LMS per-table files (see README).
+# Identity + frequency come straight from facility.dat. Engineering (ERP/class)
+# and the transmitter coordinate live in app_* tables reachable only through a
+# 5-hop chain keyed by opaque record ids — NOT by facility_id:
+#
+#   facility ──license_filing_id──▶ application_facility (afac_facility_id,
+#                                      afac_application_id, afac_license_filing_id)
+#            ──afac_application_id──▶ app_location (aloc_aapp_application_id)
+#                                      → coordinates + aloc_loc_record_id
+#            ──aloc_loc_record_id───▶ app_antenna (aant_aloc_loc_record_id,
+#                                      aant_antenna_record_id)
+#            ──aant_antenna_record_id▶ app_antenna_frequency → ERP / class
+#
+# application.dat is deliberately NOT read: facility.license_filing_id already
+# identifies the current license, and skipping that 1.25M-row table keeps the
+# build to ~1 min / a few hundred MB. Coordinates are DMS (NAD83, un-suffixed).
 # ─────────────────────────────────────────────────────────────────────────────
 FACILITY_FILE = "facility.dat"
-FACILITY_COLS = {
-    "facility_id": ["facility_id", "fac_facility_id"],
-    "callsign":    ["fac_callsign", "callsign"],
-    "service":     ["fac_service", "service", "service_code"],
-    "status":      ["fac_status", "status"],
-    "city":        ["comm_city", "community_served_city", "city"],
-    "state":       ["comm_state", "community_served_state", "state"],
-}
-# Engineering (frequency / ERP / class) and location (lat/lon). In LMS these live
-# in app_* tables linked facility -> application -> antenna/location. Community
-# tooling and the FCC's own guidance differ on the exact hops, so this is the
-# part to VERIFY first. We link by facility_id where the flattened files expose
-# it; otherwise wire application_id here after inspecting.
-ENG_FILE = "app_antenna_frequency.dat"
-ENG_COLS = {
-    "facility_id":   ["facility_id"],
-    "frequency_mhz": ["station_freq", "freq_mhz", "frequency", "frequency_mhz"],
-    "channel":       ["station_channel", "channel"],   # fallback: FM ch 200..300
-    "erp_kw":        ["station_erp", "erp_kw", "hrz_erp_kw", "erp"],
-    "station_class": ["station_class", "fac_class", "class"],
-}
+F = dict(id="facility_id", call="callsign", svc="service_code", status="facility_status",
+         active="active_ind", freq="frequency", chan="channel",
+         city="community_served_city", state="community_served_state", lfid="license_filing_id")
+
+AF_FILE = "application_facility.dat"
+AF = dict(app="afac_application_id", fac="afac_facility_id", lfid="afac_license_filing_id")
+
 LOC_FILE = "app_location.dat"
-LOC_COLS = {
-    "facility_id": ["facility_id"],
-    # Either decimal degrees, or DMS + hemisphere. Both handled (see coords()).
-    "lat_dec":  ["lat_dec", "latitude", "lat"],
-    "lon_dec":  ["lon_dec", "longitude", "lon", "long"],
-    "lat_deg":  ["lat_deg", "lat_degrees"],
-    "lat_min":  ["lat_min", "lat_minutes"],
-    "lat_sec":  ["lat_sec", "lat_seconds"],
-    "lat_dir":  ["lat_dir", "lat_direction", "nsflag"],
-    "lon_deg":  ["lon_deg", "lon_degrees"],
-    "lon_min":  ["lon_min", "lon_minutes"],
-    "lon_sec":  ["lon_sec", "lon_seconds"],
-    "lon_dir":  ["lon_dir", "lon_direction", "ewflag"],
-}
+LOC = dict(app="aloc_aapp_application_id", rec="aloc_loc_record_id",
+           lat_deg="aloc_lat_deg", lat_min="aloc_lat_mm", lat_sec="aloc_lat_ss", lat_dir="aloc_lat_dir",
+           lon_deg="aloc_long_deg", lon_min="aloc_long_mm", lon_sec="aloc_long_ss", lon_dir="aloc_long_dir")
+
+ANT_FILE = "app_antenna.dat"
+ANT = dict(rec="aant_antenna_record_id", loc="aant_aloc_loc_record_id")
+
+FRQ_FILE = "app_antenna_frequency.dat"
+FRQ = dict(ant="aafq_aant_antenna_record_id", cls="aafq_class_station_code",
+           erp_h="aafq_horiz_erp_kw", erp_p="aafq_power_erp_kw", erp_m="aafq_max_erp_kw")
 
 SCHEMA = """
 CREATE TABLE stations (
@@ -149,15 +152,28 @@ def make_png(size: int, rgb: tuple[int, int, int]) -> bytes:
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
-def resolve(colmap: dict, header_lower: dict) -> dict:
-    """Map our field -> actual header name using the candidate lists."""
-    out = {}
-    for field, candidates in colmap.items():
-        for c in candidates:
-            if c.lower() in header_lower:
-                out[field] = header_lower[c.lower()]
-                break
-    return out
+def open_dat(path: str):
+    """Stream a pipe-delimited LMS .dat WITHOUT materialising it: return
+    (column_index, row_generator) so the big tables (1.25M rows) flow through a
+    single pass and non-matching rows are discarded immediately. Callers pull
+    fields by position via the returned index — this is the low-memory path the
+    join uses; load_dat stays for the human-facing inspect command."""
+    f = open(path, "r", encoding="latin-1", newline="")
+    rd = csv.reader(f, delimiter="|")
+    idx = {h.strip().lower(): i for i, h in enumerate(next(rd))}
+
+    def rows():
+        try:
+            yield from rd
+        finally:
+            f.close()
+    return idx, rows()
+
+
+def cell(row: list, idx: dict, name: str) -> str:
+    """Positional, bounds-safe, stripped field access for open_dat rows."""
+    i = idx.get(name)
+    return row[i].strip() if (i is not None and i < len(row)) else ""
 
 
 def load_dat(path: str) -> tuple[list[str], list[dict]]:
@@ -198,30 +214,11 @@ def dms_to_dec(deg, mn, sec, direction) -> float | None:
     return round(v, 6)
 
 
-def coords(row: dict, lc: dict) -> tuple[float | None, float | None]:
-    """Decimal columns if present, else DMS + hemisphere."""
-    if "lat_dec" in lc and "lon_dec" in lc:
-        try:
-            return round(float(row[lc["lat_dec"]]), 6), round(float(row[lc["lon_dec"]]), 6)
-        except (KeyError, ValueError):
-            pass
-    lat = dms_to_dec(row.get(lc.get("lat_deg", "")), row.get(lc.get("lat_min", "")),
-                     row.get(lc.get("lat_sec", "")), row.get(lc.get("lat_dir", "")))
-    lon = dms_to_dec(row.get(lc.get("lon_deg", "")), row.get(lc.get("lon_min", "")),
-                     row.get(lc.get("lon_sec", "")), row.get(lc.get("lon_dir", "")))
-    return lat, lon
-
-
-def index_by_facility(rows: list[dict], cols: dict) -> dict:
-    key = cols.get("facility_id")
-    out: dict[str, dict] = {}
-    if not key:
-        return out
-    for r in rows:
-        fid = r.get(key, "").strip()
-        if fid and fid not in out:  # first wins; refine to "latest license" if needed
-            out[fid] = r
-    return out
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
 
 
 # ── commands ─────────────────────────────────────────────────────────────────
@@ -280,75 +277,103 @@ def cmd_inspect(args):
 
 
 def build(lms_dir: str, out_path: str, snapshot: str) -> dict:
-    fac_header, fac_rows = load_dat(os.path.join(lms_dir, FACILITY_FILE))
-    eng_header, eng_rows = load_dat(os.path.join(lms_dir, ENG_FILE))
-    loc_header, loc_rows = load_dat(os.path.join(lms_dir, LOC_FILE))
+    p = lambda n: os.path.join(lms_dir, n)
+    for n in (FACILITY_FILE, AF_FILE, LOC_FILE, ANT_FILE, FRQ_FILE):
+        if not os.path.isfile(p(n)):
+            sys.exit(f"missing {n} in {lms_dir}. `build` needs facility, "
+                     "application_facility, app_location, app_antenna, and "
+                     "app_antenna_frequency — run `fetch` for those tables.")
 
-    fc = resolve(FACILITY_COLS, {h.lower(): h for h in fac_header})
-    ec = resolve(ENG_COLS, {h.lower(): h for h in eng_header})
-    lc = resolve(LOC_COLS, {h.lower(): h for h in loc_header})
-    for name, need, got in [("facility", ("facility_id", "callsign", "service"), fc),
-                            ("engineering", ("facility_id",), ec),
-                            ("location", ("facility_id",), lc)]:
-        missing = [k for k in need if k not in got]
-        if missing:
-            sys.exit(f"[{name}] missing required columns {missing}. Run `inspect` "
-                     f"and fix the CONFIG block. Resolved: {got}")
+    skipped = {"non_fm": 0, "not_licensed": 0, "bad_freq": 0, "no_location": 0}
 
-    eng = index_by_facility(eng_rows, ec)
-    loc = index_by_facility(loc_rows, lc)
-
-    stations, skipped = [], {"non_fm": 0, "no_eng": 0, "no_loc": 0, "bad_freq": 0, "bad_coord": 0}
-    for r in fac_rows:
-        service = r.get(fc["service"], "").strip().upper()
-        if service not in FM_SERVICES:
-            skipped["non_fm"] += 1
-            continue
-        fid = r.get(fc["facility_id"], "").strip()
-        e, l = eng.get(fid), loc.get(fid)
-        if not e:
-            skipped["no_eng"] += 1
-            continue
-        if not l:
-            skipped["no_loc"] += 1
-            continue
-
-        # frequency: prefer MHz column, else derive from channel
-        freq = None
-        if "frequency_mhz" in ec and e.get(ec["frequency_mhz"], "").strip():
-            try:
-                freq = round(float(e[ec["frequency_mhz"]]), 1)
-            except ValueError:
-                freq = None
-        if freq is None and "channel" in ec and e.get(ec["channel"], "").strip():
-            try:
-                freq = channel_to_mhz(float(e[ec["channel"]]))
-            except ValueError:
-                freq = None
+    # 1) facility.dat — keep licensed FM/FX/FL. Identity, frequency, city/state
+    #    all come straight from here (the app_* tables carry no callsign/freq).
+    fac, fac_lfid = {}, {}
+    idx, rows = open_dat(p(FACILITY_FILE))
+    for r in rows:
+        if cell(r, idx, F["svc"]).upper() not in FM_SERVICES:
+            skipped["non_fm"] += 1; continue
+        if (cell(r, idx, F["status"]).upper() not in LICENSED_STATUS
+                or cell(r, idx, F["active"]).upper() != "Y"):
+            skipped["not_licensed"] += 1; continue
+        freq = _num(cell(r, idx, F["freq"]))
+        if freq is None:
+            ch = _num(cell(r, idx, F["chan"]))
+            freq = channel_to_mhz(ch) if ch is not None else None
         if freq is None or not (87.5 <= freq <= 108.1):
-            skipped["bad_freq"] += 1
-            continue
+            skipped["bad_freq"] += 1; continue
+        fid = cell(r, idx, F["id"])
+        cs = cell(r, idx, F["call"]).upper()
+        fac[fid] = (cs, round(freq, 1), cell(r, idx, F["svc"]).upper(),
+                    cell(r, idx, F["city"]) or None, cell(r, idx, F["state"]) or None)
+        fac_lfid[fid] = cell(r, idx, F["lfid"])
 
-        lat, lon = coords(l, lc)
+    # 2) application_facility.dat — map the CURRENT license's application_id(s)
+    #    back to each facility (match facility.license_filing_id).
+    app2fac = {}
+    idx, rows = open_dat(p(AF_FILE))
+    for r in rows:
+        fid = cell(r, idx, AF["fac"])
+        if fid in fac and cell(r, idx, AF["lfid"]) == fac_lfid.get(fid):
+            app2fac[cell(r, idx, AF["app"])] = fid
+
+    # 3) app_location.dat — valid transmitter coordinates (DMS, NAD83) per
+    #    location record, tied back to the facility via its application_id.
+    loc_ll, fac_locs = {}, {}
+    idx, rows = open_dat(p(LOC_FILE))
+    for r in rows:
+        fid = app2fac.get(cell(r, idx, LOC["app"]))
+        if fid is None:
+            continue
+        lat = dms_to_dec(cell(r, idx, LOC["lat_deg"]), cell(r, idx, LOC["lat_min"]),
+                         cell(r, idx, LOC["lat_sec"]), cell(r, idx, LOC["lat_dir"]))
+        lon = dms_to_dec(cell(r, idx, LOC["lon_deg"]), cell(r, idx, LOC["lon_min"]),
+                         cell(r, idx, LOC["lon_sec"]), cell(r, idx, LOC["lon_dir"]))
         if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
-            skipped["bad_coord"] += 1
             continue
+        rec = cell(r, idx, LOC["rec"])
+        loc_ll[rec] = (lat, lon)
+        fac_locs.setdefault(fid, set()).add(rec)
 
-        cs = r.get(fc["callsign"], "").strip().upper()
-        def num(v):
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                return None
-        stations.append((
-            cs, callsign_base(cs), freq, service,
-            (e.get(ec.get("station_class", ""), "") or None),
-            num(e.get(ec.get("erp_kw", ""), "")),
-            lat, lon,
-            (r.get(fc.get("city", ""), "") or None),
-            (r.get(fc.get("state", ""), "") or None),
-            int(fid),
-        ))
+    # 4) app_antenna.dat — antenna record -> its location record (ours only).
+    ant_loc = {}
+    idx, rows = open_dat(p(ANT_FILE))
+    for r in rows:
+        loc = cell(r, idx, ANT["loc"])
+        if loc in loc_ll:
+            ant_loc[cell(r, idx, ANT["rec"])] = loc
+
+    # 5) app_antenna_frequency.dat — best ERP (+ class) per location record.
+    loc_erp = {}
+    idx, rows = open_dat(p(FRQ_FILE))
+    for r in rows:
+        loc = ant_loc.get(cell(r, idx, FRQ["ant"]))
+        if loc is None:
+            continue
+        erp = (_num(cell(r, idx, FRQ["erp_h"])) or _num(cell(r, idx, FRQ["erp_p"]))
+               or _num(cell(r, idx, FRQ["erp_m"])))
+        cls = cell(r, idx, FRQ["cls"]) or None
+        prev = loc_erp.get(loc)
+        if prev is None or (erp or -1) > (prev[0] or -1):
+            loc_erp[loc] = (erp, cls)
+
+    # 6) One row per facility, choosing its highest-ERP transmitter location
+    #    (the licensed main site; auxiliaries / STAs have lower ERP).
+    stations = []
+    for fid, (cs, freq, svc, city, state) in fac.items():
+        locs = fac_locs.get(fid)
+        if not locs:
+            skipped["no_location"] += 1; continue
+        best = None
+        for rec in locs:
+            erp, cls = loc_erp.get(rec, (None, None))
+            lat, lon = loc_ll[rec]
+            key = erp if erp is not None else -1.0
+            if best is None or key > best[0]:
+                best = (key, lat, lon, erp, cls)
+        _, lat, lon, erp, cls = best
+        stations.append((cs, callsign_base(cs), freq, svc, cls, erp,
+                         lat, lon, city, state, int(fid)))
 
     if os.path.exists(out_path):
         os.remove(out_path)
@@ -445,7 +470,10 @@ def cmd_sample(args):
 
 
 def cmd_self_test(args):
-    """Prove the transform/filter/emit with synthetic staging files (no FCC)."""
+    """Prove the 5-hop join / filter / emit with synthetic staging files (no FCC).
+    Mirrors the real LMS schema: facility -> application_facility -> app_location
+    -> app_antenna -> app_antenna_frequency, incl. current-license selection, the
+    licensed-only filter, and highest-ERP location choice."""
     import tempfile
     d = tempfile.mkdtemp()
     def w(name, header, rows):
@@ -453,23 +481,42 @@ def cmd_self_test(args):
             wr = csv.writer(f, delimiter="|")
             wr.writerow(header)
             wr.writerows(rows)
-    w(FACILITY_FILE, ["facility_id", "fac_callsign", "fac_service", "fac_status", "comm_city", "comm_state"], [
-        ["1", "KBBB", "FM", "LICEN", "Reno", "NV"],       # keep
-        ["2", "K250XY", "FX", "LICEN", "Reno", "NV"],     # keep (translator)
-        ["3", "WOLD", "AM", "LICEN", "Dallas", "TX"],     # drop (AM)
-        ["4", "KNOLOC", "FM", "LICEN", "Nowhere", "NV"],  # drop (no location)
+    # facility 1 KBBB (keep), 2 K250XY translator (keep), 3 WOLD AM (drop non_fm),
+    # 4 KOLD voided (drop not_licensed), 5 KNOLO licensed but no location (drop).
+    w(FACILITY_FILE, ["facility_id", "callsign", "service_code", "facility_status",
+                      "active_ind", "frequency", "channel", "community_served_city",
+                      "community_served_state", "license_filing_id"], [
+        ["1", "KBBB-FM", "FM", "LICEN", "Y", "101.1", "266", "Reno", "NV", "LF1"],
+        ["2", "K250XY", "FX", "LICEN", "Y", "95.7", "239", "Reno", "NV", "LF2"],
+        ["3", "WOLD", "AM", "LICEN", "Y", "", "", "Dallas", "TX", "LF3"],
+        ["4", "KOLD", "FM", "FVOID", "N", "88.5", "203", "Gone", "NV", "LF4"],
+        ["5", "KNOLO", "FM", "LICEN", "Y", "90.1", "211", "Nowhere", "NV", "LF5"],
     ])
-    w(ENG_FILE, ["facility_id", "station_freq", "station_erp", "station_class"], [
-        ["1", "101.1", "100", "C"],
-        ["2", "95.7", "0.25", ""],
-        ["3", "1080", "50", "B"],
-        ["4", "88.5", "6", "A"],
+    # APPOLD ties fac1 to a NON-current filing (LFX) -> must be ignored.
+    w(AF_FILE, ["afac_application_id", "afac_facility_id", "afac_license_filing_id"], [
+        ["APP1", "1", "LF1"], ["APPOLD", "1", "LFX"],
+        ["APP2", "2", "LF2"], ["APP5", "5", "LF5"],
     ])
-    w(LOC_FILE, ["facility_id", "lat_dec", "lon_dec"], [
-        ["1", "39.5296", "-119.8138"],
-        ["2", "39.50", "-119.80"],
-        ["3", "32.7767", "-96.7970"],
-        # facility 4 intentionally absent -> exercises no_loc skip
+    # KBBB has a main site (LOC1) + a lower-ERP aux (LOC1B); the main must win.
+    # 39 31 46.6 N / 119 48 49.7 W ≈ 39.5296, -119.8138.
+    w(LOC_FILE, ["aloc_aapp_application_id", "aloc_loc_record_id",
+                 "aloc_lat_deg", "aloc_lat_mm", "aloc_lat_ss", "aloc_lat_dir",
+                 "aloc_long_deg", "aloc_long_mm", "aloc_long_ss", "aloc_long_dir"], [
+        ["APP1", "LOC1", "39", "31", "46.6", "N", "119", "48", "49.7", "W"],
+        ["APP1", "LOC1B", "39", "00", "00", "N", "119", "00", "00", "W"],
+        ["APPOLD", "LOCOLD", "10", "0", "0", "N", "10", "0", "0", "W"],
+        ["APP2", "LOC2", "39", "30", "00", "N", "119", "48", "00", "W"],
+        # APP5 (fac 5) intentionally has NO location row -> no_location skip.
+    ])
+    w(ANT_FILE, ["aant_antenna_record_id", "aant_aloc_loc_record_id"], [
+        ["ANT1", "LOC1"], ["ANT1B", "LOC1B"], ["ANT2", "LOC2"], ["ANTOLD", "LOCOLD"],
+    ])
+    w(FRQ_FILE, ["aafq_aant_antenna_record_id", "aafq_class_station_code",
+                 "aafq_horiz_erp_kw", "aafq_power_erp_kw", "aafq_max_erp_kw"], [
+        ["ANT1", "C", "100", "100", ""],     # main
+        ["ANT1B", "C", "5", "5", ""],        # aux, lower ERP
+        ["ANT2", "", "0.25", "0.25", ""],
+        ["ANTOLD", "B", "50", "50", ""],
     ])
     out = os.path.join(d, "out.sqlite")
     rep = build(d, out, "2099-01-01")
@@ -479,12 +526,16 @@ def cmd_self_test(args):
         print(("ok   " if cond else "FAIL ") + name)
         ok = ok and cond
     check("2 FM/FX rows kept", rep["rows"] == 2)
-    check("AM dropped", rep["by_service"].get("AM") is None)
-    check("no-location dropped", rep["skipped"]["no_loc"] == 1)
+    check("AM dropped (non_fm)", rep["skipped"]["non_fm"] == 1)
+    check("voided dropped (not_licensed)", rep["skipped"]["not_licensed"] == 1)
+    check("no-location dropped", rep["skipped"]["no_location"] == 1)
     check("integrity ok", rep["integrity"] == "ok")
     con = sqlite3.connect(out)
-    kbbb = con.execute("SELECT callsign_base, frequency_mhz, erp_kw, lat FROM stations WHERE facility_id=1").fetchone()
-    check("KBBB row correct", kbbb == ("KBBB", 101.1, 100.0, 39.5296))
+    kbbb = con.execute("SELECT callsign, callsign_base, frequency_mhz, erp_kw, station_class, lat, lon "
+                       "FROM stations WHERE facility_id=1").fetchone()
+    check("KBBB identity/freq/class", kbbb[:3] == ("KBBB-FM", "KBBB", 101.1) and kbbb[4] == "C")
+    check("KBBB picked MAIN site ERP (100, not 5)", kbbb[3] == 100.0)
+    check("KBBB coords from DMS", abs(kbbb[5] - 39.5296) < 0.01 and abs(kbbb[6] - (-119.8138)) < 0.01)
     snap = con.execute("SELECT value FROM meta WHERE key='lms_snapshot_date'").fetchone()[0]
     check("meta snapshot set", snap == "2099-01-01")
     ver = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
