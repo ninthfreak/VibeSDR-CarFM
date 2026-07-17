@@ -3931,18 +3931,24 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearTimeout(t);
   }, [connected, route.params.tunerless]);
 
-  // Tunerless carFm: one dongle-connect attempt, shared by the 3s poll below
-  // and the settings panel's RETRY button. Success hot-swaps in a real local
-  // session (navigation.replace remounts this screen connected).
+  // Tunerless carFm: one dongle-connect attempt, driven ONLY by the settings
+  // panel's RETRY button (no background polling — the picker already checked for
+  // a dongle at launch; a dongle plugged in later is grabbed on demand here).
+  // Success hot-swaps in a real local session (navigation.replace remounts this
+  // screen connected). tunerSwapDone latches the successful swap; tunerBusy is an
+  // in-flight guard so a double-tap of RETRY can't start two native sessions and
+  // tear down the one it just handed to navigation.replace.
   const tunerSwapDone = useRef(false);
+  const tunerBusy = useRef(false);
   const tryTunerNow = useCallback(async (): Promise<void> => {
-    if (!route.params.tunerless || tunerSwapDone.current) return;
-    const Local = (NativeModules as { VibeLocalSDR?: {
-      listDevices?: () => Promise<unknown>;
-      startSpectrum?: (opts: object) => Promise<{ port: number; wsBaseUrl: string }>;
-    } }).VibeLocalSDR;
-    if (!Local?.listDevices || !Local.startSpectrum) return;
+    if (!route.params.tunerless || tunerSwapDone.current || tunerBusy.current) return;
+    tunerBusy.current = true;
     try {
+      const Local = (NativeModules as { VibeLocalSDR?: {
+        listDevices?: () => Promise<unknown>;
+        startSpectrum?: (opts: object) => Promise<{ port: number; wsBaseUrl: string }>;
+      } }).VibeLocalSDR;
+      if (!Local?.listDevices || !Local.startSpectrum) return;
       const devs = await Local.listDevices();
       if (tunerSwapDone.current || !Array.isArray(devs) || devs.length === 0) return;
       const res = await Local.startSpectrum({
@@ -3955,20 +3961,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         viewMode: route.params.viewMode, serverType: 'ubersdr',
         isLocal: true, localPort: res.port, localGen: newLocalSession(), carFm: true,
       });
-    } catch { /* not ready yet */ }
+    } catch { /* dongle not ready / permission denied — RETRY tries again */ }
+    finally { tunerBusy.current = false; }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.params.tunerless, route.params.viewMode]);
-
-  useEffect(() => {
-    if (!route.params.tunerless) return;
-    let busy = false;
-    const t = setInterval(async () => {
-      if (busy) return;
-      busy = true;
-      try { await tryTunerNow(); } finally { busy = false; }
-    }, 3000);
-    return () => clearInterval(t);
-  }, [route.params.tunerless, tryTunerNow]);
 
   // CarFM permanent install: ask ONCE to exempt the app from battery
   // optimization — Doze on an idle head unit can throttle/kill the boot-started
@@ -4040,9 +4036,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
 
   const fmPresets = useMemo<CarFmPreset[]>(() => {
-    const base = visibleBookmarks
-      .filter((b: UserBookmark) =>
-        b.mode === 'wfm' || (b.frequency >= 87_000_000 && b.frequency <= 108_500_000))
+    // CarFM presets are GLOBAL — independent of baseUrl, the tuner, or whether a
+    // tuner is connected at all. Read every FM-band bookmark across ALL scopes
+    // (a tunerless session and a live-dongle session have different baseUrls, and
+    // legacy presets may carry an old per-URL scope) and dedupe by channel, so a
+    // preset survives the tunerless→dongle hot-swap and shows on a no-dongle boot.
+    const src = carFm ? userBookmarks : visibleBookmarks;
+    const byChannel = new Map<string, UserBookmark>();
+    for (const b of src) {
+      if (!(b.mode === 'wfm' || (b.frequency >= 87_000_000 && b.frequency <= 108_500_000))) continue;
+      const k = fmKeyOf(b.frequency);
+      if (!byChannel.has(k)) byChannel.set(k, b);   // first wins (global before per-URL dupes)
+    }
+    const base = [...byChannel.values()]
       .map((b: UserBookmark) => ({ name: b.name, frequency: b.frequency }))
       .sort((a, b) => a.frequency - b.frequency);
     if (fmOrder.length === 0) return base;
@@ -4065,7 +4071,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (fmPresets.some((p) => fmKeyOf(p.frequency) === fmKeyOf(hz))) { fmRemoveAt(hz); return; }
     const name = (liveStationRef.current || '').trim()
       || `FM ${(hz / 1e6).toFixed(1)}`;
-    onAddBookmark(name, false);
+    onAddBookmark(name, true);   // GLOBAL scope — preset is independent of the tuner/URL
   }, [status.frequency, fmPresets, fmRemoveAt, onAddBookmark]);
 
   // Reorder/remove from the face's reorder mode (indexes are displayed order).
@@ -4202,10 +4208,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       mode: 'wfm',
       bandwidth_low: null, bandwidth_high: null,
       group: null, comment: null, extension: null,
-      scope: baseUrl,
+      scope: '',   // GLOBAL — a saved FM station never depends on the session's tuner/URL
     };
     persistUserBookmarks(mergeBookmarks(userBookmarks, [bm]));
-  }, [baseUrl, userBookmarks, persistUserBookmarks]);
+  }, [userBookmarks, persistUserBookmarks]);
 
   // First-run guided tour (dismissable). Spotlights the drum, step rate, the
   // disabled back-gesture, and the menu — opening it to show the route back to
