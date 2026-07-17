@@ -150,6 +150,20 @@ export function ChevronShape({ w, h, dir, fill, stroke }: {
   );
 }
 
+/** Rounded warning triangle (tuner-error pill): 2px amber stroke, no fill. */
+export function WarningTriangle({ size = 26, color }: { size?: number; color: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Path
+        d="M10.3 3.9 2.4 17.6a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"
+        stroke={color} strokeWidth="2" strokeLinejoin="round" fill="none"
+      />
+      <Line x1="12" y1="9.5" x2="12" y2="13.5" stroke={color} strokeWidth="2" strokeLinecap="round" />
+      <Circle cx="12" cy="16.8" r="1.15" fill={color} />
+    </Svg>
+  );
+}
+
 /** Backspace key glyph for the numpad. */
 export function BackspaceIcon({ size = 30, color }: { size?: number; color: string }) {
   return (

@@ -14,6 +14,7 @@ export interface CarFmPalette {
   blue: string;
   border: string;
   blueFill: string;
+  amberFill: string;
   backdrop: string;
   meterEmpty: string;
   scrollThumb: string;
@@ -29,6 +30,7 @@ export const LIGHT: CarFmPalette = {
   blue:      '#2E86FF',
   border:    'rgba(20,30,45,0.13)',
   blueFill:  'rgba(46,134,255,0.12)',
+  amberFill: 'rgba(201,118,10,0.08)',
   backdrop:  '#DCE0E6',
   meterEmpty: 'rgba(20,30,45,0.10)',
   scrollThumb: 'rgba(128,134,144,0.6)',
@@ -44,6 +46,7 @@ export const DARK: CarFmPalette = {
   blue:      '#4A9EFF',
   border:    'rgba(255,255,255,0.13)',
   blueFill:  'rgba(74,158,255,0.18)',
+  amberFill: 'rgba(255,184,51,0.10)',
   backdrop:  '#0C1218',
   meterEmpty: 'rgba(255,255,255,0.10)',
   scrollThumb: 'rgba(128,134,144,0.6)',
