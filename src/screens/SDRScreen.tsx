@@ -3898,6 +3898,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     return city ? `${piIdentity.callsign} · ${city}` : piIdentity.callsign;
   }, [liveStation.name, piIdentity]);
 
+  // Tuner-connection error state (design addendum): true whenever there is no
+  // live tuner session. Boot grace: before the FIRST successful connect, allow
+  // 6 s before declaring failure (a healthy local connect lands in ~1-2 s, so a
+  // normal boot never flashes the pill); after that, any drop (dongle yanked,
+  // shim/driver died) shows immediately and clears on reconnect.
+  const [fmTunerError, setFmTunerError] = useState(false);
+  const everConnectedRef = useRef(false);
+  useEffect(() => {
+    if (connected) { everConnectedRef.current = true; setFmTunerError(false); return; }
+    if (everConnectedRef.current) { setFmTunerError(true); return; }
+    const t = setTimeout(() => setFmTunerError(true), 6000);
+    return () => clearTimeout(t);
+  }, [connected]);
+
   // Presets = this-instance FM bookmarks (broadcast band), in the USER'S order
   // (design: presets are an ordered strip, reorderable in the face; PREV/NEXT
   // step displayed order). The order overlay is a persisted list of frequency
@@ -4817,6 +4831,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           ta={liveStation.ta}
           af={liveStation.af}
           ptyText={ptyLabel(liveStation.pty, ituRegion === 2)}
+          tunerError={fmTunerError}
           presets={fmPresets}
           onTuneHz={onTuneHz}
           onToggleSave={onFmToggleSave}

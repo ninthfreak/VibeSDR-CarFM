@@ -22,7 +22,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getNearbyStations } from '../services/stationFinder';
 import type { NearbyStation } from '../services/stationTypes';
-import { ChevronShape, GearIcon, SignalWaves, StarIcon, StereoWave } from './carfm/icons';
+import { ChevronShape, GearIcon, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
 import LogoTile from './carfm/LogoTile';
 import NearbyPicker from './carfm/NearbyPicker';
 import Numpad from './carfm/Numpad';
@@ -51,6 +51,9 @@ export interface CarFmFaceProps {
   af?: boolean;
   /** Programme-type label ("Rock", …) — already region-decoded. */
   ptyText?: string;
+  /** No compatible tuner session (dongle absent/failed) — replaces the whole
+   *  header status cluster with the error pill (design addendum). */
+  tunerError?: boolean;
   presets: CarFmPreset[];   // displayed order (user-arranged)
   onTuneHz: (hz: number) => void;
   onToggleSave: () => void;              // star: save/remove current frequency
@@ -136,7 +139,7 @@ function Tell({ label, on, pulse, pal }: { label: string; on: boolean; pulse?: b
 export default function CarFmFace(props: CarFmFaceProps) {
   const {
     freqHz, stationName, callsignHint, radioText, stereo, signalDb,
-    rdsOk, tp, ta, af, ptyText, presets,
+    rdsOk, tp, ta, af, ptyText, tunerError, presets,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
     onOpenAdvanced,
   } = props;
@@ -246,8 +249,19 @@ export default function CarFmFace(props: CarFmFaceProps) {
         },
       ]}
     >
-      {/* ── Header row (design v2: signal · stereo+tells · PTY · gear) ── */}
+      {/* ── Header row (design v2: signal · stereo+tells · PTY · gear) ──
+          Tuner error is a hard either/or with the status cluster: with no tuner
+          session there is no signal/RDS/stereo/genre to read, so the whole
+          cluster is replaced by the one fault pill (design addendum). */}
       <View style={styles.header}>
+        {tunerError ? (
+        <View style={[styles.tunerErrPill, { borderColor: pal.amber, backgroundColor: pal.amberFill }]}>
+          <WarningTriangle size={26} color={pal.amber} />
+          <Text style={[styles.tunerErrText, { color: pal.amber }]} numberOfLines={1}>
+            Failure to connect to tuner.
+          </Text>
+        </View>
+        ) : (
         <View style={styles.headerLeft}>
           <View style={styles.signalPill}>
             <SignalWaves size={26} strength={waveStrength(signalDb)} on={pal.amber} off={pal.meterEmpty} />
@@ -281,6 +295,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             </View>
           ) : null}
         </View>
+        )}
         <Pressable
           onPress={onOpenAdvanced}
           style={({ pressed }) => [styles.gearBtn, { borderColor: pal.border, backgroundColor: pal.raised }, pressed && { opacity: 0.55 }]}
@@ -445,6 +460,11 @@ const styles = StyleSheet.create({
   oobPill: { borderWidth: 1.5, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 4 },
   oobText: { fontFamily: FONT, fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
   gearBtn: { width: 52, height: 52, borderRadius: 14, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  tunerErrPill: {
+    height: 44, paddingHorizontal: 16, borderRadius: 10, borderWidth: 1.5,
+    flexDirection: 'row', alignItems: 'center', gap: 11, alignSelf: 'flex-start',
+  },
+  tunerErrText: { fontFamily: FONT, fontSize: 17, fontWeight: '700', letterSpacing: 0.3 },
 
   hero: { flex: 1, flexDirection: 'row', gap: 20 },
   sideCol: { width: 86, alignItems: 'center', justifyContent: 'center' },
