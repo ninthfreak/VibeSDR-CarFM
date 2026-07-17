@@ -965,6 +965,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    if (route.params.tunerless) return;   // no server behind the placeholder URL
     fetchUiConfig(baseUrl).then((cfg: ServerUiConfig | null) => {
       if (cancelled) return;
       if (cfg?.spectrum_bg_image) {
@@ -2481,6 +2482,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     let resumeTimer: ReturnType<typeof setTimeout> | null = null;
     const sub = AppState.addEventListener('change', (state: string) => {
+      // Tunerless carFm session: there is NO client, no audio, no spectrum —
+      // none of the resume/reinit machinery below applies, and letting it run
+      // armed a watchdog that escalated into a bogus blocking "Connection
+      // lost" card over the face (device test 2026-07-17).
+      if (route.params.tunerless) { appActiveRef.current = (state === 'active'); return; }
       if (state !== 'active') {
         if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
         // Backgrounded: the spectrum pause starves the link to 0, but that's NOT
@@ -4249,7 +4255,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Auto-start once on the first successful connection, after the controls have
   // laid out (so the drum/step/menu can be measured).
   useEffect(() => {
-    if (!connected) return;
+    if (!connected || carFm) return;   // CarFM: no stock tour over the face
     // Also wait for the launch splash to clear — a first-launch deep-link or
     // default-instance auto-connect can reach the SDR screen while the splash is
     // still holding on the CONTINUE notice; the tour must not draw over it.
@@ -4405,7 +4411,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* OWRX server crashed/restarted (common on OWRX). Keep the app alive and
           tell the user to wait before reconnecting (the server's still booting). */}
-      {serverLost && (() => {
+      {!fmFaceActive && serverLost && (() => {
         const lostLabel = route.params.serverType === 'kiwi' ? 'KiwiSDR'
                         : route.params.serverType === 'owrx' ? 'OpenWebRX'
                         : 'SDR';
@@ -4450,7 +4456,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {serverBusy && (
+      {!fmFaceActive && serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Receiver unavailable</Text>
@@ -4474,7 +4480,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Returning from the background — the spectrum was paused, so show a calm
           reinitialising notice while the waterfall re-subscribes (no buttons; it
           clears itself on the first frame, or escalates to "Connection lost"). */}
-      {reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
+      {!fmFaceActive && reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Reinitialising</Text>
@@ -4488,7 +4494,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Audio resumed fine but the waterfall/spectrum never re-subscribed after
           a background — give the user an escape (the rest of the app is alive). */}
-      {specFailed && !reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
+      {!fmFaceActive && specFailed && !reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Waterfall didn’t resume</Text>
@@ -4509,7 +4515,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {connLost && !reinit && !specFailed && !dataSaverOff && !serverLost && !serverBusy && (
+      {!fmFaceActive && connLost && !reinit && !specFailed && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Connection lost</Text>
@@ -4533,7 +4539,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Initial connect never completed (wedged host/shim/USB). Escape hatch so
           the app can never be permanently stuck on the connecting spinner. */}
-      {connTimedOut && !connected && !serverLost && !serverBusy && !connLost && !dataSaverOff && (
+      {!fmFaceActive && connTimedOut && !connected && !serverLost && !serverBusy && !connLost && !dataSaverOff && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Couldn’t connect</Text>
@@ -4559,7 +4565,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       )}
 
       {/* Paused → disconnected — tap does a full from-scratch reconnect */}
-      {dataSaverOff && !reconnectFailedUi && (
+      {!fmFaceActive && dataSaverOff && !reconnectFailedUi && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
           onPress={() => { setDataSaverOff(false); unmute(); fullReconnect(); }} activeOpacity={0.85}>
           <Text style={styles.mutedBannerText}>⏸ PAUSED — TAP TO RECONNECT</Text>

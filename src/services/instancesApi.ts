@@ -60,8 +60,8 @@ export async function getUserLocation(): Promise<{ lat: number; lon: number } | 
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
         {
-          title: 'Location for nearest servers',
-          message: 'VibeSDR uses your approximate location to sort the instance list by distance and to align the map for local SDR decodes. It is coarsened and only used on-device for sorting.',
+          title: 'Location for nearby stations',
+          message: 'CarFM uses your approximate location to rank nearby FM stations by receivability. It stays on-device.',
           buttonPositive: 'OK',
         },
       );

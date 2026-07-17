@@ -326,7 +326,7 @@ export default function App() {
   });
 
   const [splashDone, setSplashDone]   = useState(false);
-  const [splashLabel, setSplashLabel] = useState('CONNECTING TO INSTANCE LIST');
+  const [splashLabel, setSplashLabel] = useState('STARTING RADIO');
   const splashOpacity = useRef(new Animated.Value(1)).current;
 
   // First launch shows the power-saving info and waits for the user to tap
@@ -338,11 +338,12 @@ export default function App() {
   const [firstOpen, setFirstOpen] = useState<boolean | undefined>(undefined);
   const firstOpenRef = useRef(false);
   useEffect(() => {
-    AsyncStorage.getItem(SPLASH_SEEN_KEY).then((v) => {
-      const first = v !== '1';
-      firstOpenRef.current = first;
-      setFirstOpen(first);
-    }).catch(() => { firstOpenRef.current = false; setFirstOpen(false); });
+    // CarFM: the stock first-open power-saving notice (hold splash + CONTINUE)
+    // is scrubbed — it explains waterfall behaviour that the radio face never
+    // shows. The splash always auto-dismisses.
+    firstOpenRef.current = false;
+    setFirstOpen(false);
+    AsyncStorage.setItem(SPLASH_SEEN_KEY, '1').catch(() => {});
   }, []);
 
   const fadeSplash = useCallback(() => {
@@ -406,7 +407,7 @@ export default function App() {
           }}>
             <SplashSpectrum />
             <Text style={{ color: '#FFB833', fontSize: 22, fontFamily: 'Courier', fontWeight: 'bold' }}>
-              VibeSDR
+              CarFM
             </Text>
             <Text style={{ color: 'rgba(255,184,51,0.6)', fontSize: 11, fontFamily: 'Courier', marginTop: 12, textAlign: 'center' }}>
               {splashLabel}
@@ -428,16 +429,6 @@ export default function App() {
               <ActivityIndicator color="#FFB833" style={{ marginTop: 28 }} />
             )}
 
-            <View style={{ position: 'absolute', bottom: 40, left: 28, right: 28 }}>
-              <Text style={{ color: 'rgba(255,184,51,0.9)', fontSize: 11, fontFamily: 'Courier', fontWeight: 'bold', textAlign: 'center', marginBottom: 10, letterSpacing: 1 }}>
-                POWER-SAVING BEHAVIOUR
-              </Text>
-              <Text style={{ color: 'rgba(255,184,51,0.55)', fontSize: 10.5, fontFamily: 'Courier', textAlign: 'center', lineHeight: 16 }}>
-                When you switch away from VibeSDR the waterfall and spectrum fully freeze to save power. They take a second or two to resume when you return — this is normal.{'\n\n'}
-                After 30 seconds the waterfall and spectrum slow down to save power. This can be turned off in the menu.{'\n\n'}
-                Full pausing in the background is by design and cannot be disabled.
-              </Text>
-            </View>
           </Animated.View>
         )}
       </View>
