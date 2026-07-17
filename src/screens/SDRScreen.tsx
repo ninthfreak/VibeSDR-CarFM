@@ -124,6 +124,7 @@ import {
 import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { fmNowPlaying } from '../services/nowPlaying';
 import { ptyLabel } from '../services/ptyLabels';
+import { getCarAutostart, setCarAutostart } from '../services/carMode';
 import CarFmFace, { type CarFmPreset } from '../components/CarFmFace';
 import { identifyByPi, initLogoService, consumeSharedLogo } from '../services/stationFinder';
 import type { StationIdentity } from '../services/stationTypes';
@@ -3923,38 +3924,63 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearTimeout(t);
   }, [connected, route.params.tunerless]);
 
-  // Tunerless carFm: poll for the dongle and hot-swap in a real local session
-  // the moment it appears (navigation.replace remounts this screen connected).
-  useEffect(() => {
-    if (!route.params.tunerless) return;
+  // Tunerless carFm: one dongle-connect attempt, shared by the 3s poll below
+  // and the settings panel's RETRY button. Success hot-swaps in a real local
+  // session (navigation.replace remounts this screen connected).
+  const tunerSwapDone = useRef(false);
+  const tryTunerNow = useCallback(async (): Promise<void> => {
+    if (!route.params.tunerless || tunerSwapDone.current) return;
     const Local = (NativeModules as { VibeLocalSDR?: {
       listDevices?: () => Promise<unknown>;
       startSpectrum?: (opts: object) => Promise<{ port: number; wsBaseUrl: string }>;
     } }).VibeLocalSDR;
     if (!Local?.listDevices || !Local.startSpectrum) return;
-    let busy = false, stopped = false;
-    const t = setInterval(async () => {
-      if (busy || stopped) return;
-      busy = true;
-      try {
-        const devs = await Local.listDevices!();
-        if (stopped || !Array.isArray(devs) || devs.length === 0) return;
-        const res = await Local.startSpectrum!({
-          centerFreq: 100_000_000, sampleRate: 2_400_000, fftSize: 8192, fftRate: 10, mode: 'wfm',
-        });
-        if (stopped) return;
-        stopped = true;
-        clearInterval(t);
-        navigation.replace('SDR', {
-          baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware',
-          viewMode: route.params.viewMode, serverType: 'ubersdr',
-          isLocal: true, localPort: res.port, localGen: newLocalSession(), carFm: true,
-        });
-      } catch { /* not ready yet — keep polling */ } finally { busy = false; }
-    }, 3000);
-    return () => { stopped = true; clearInterval(t); };
+    try {
+      const devs = await Local.listDevices();
+      if (tunerSwapDone.current || !Array.isArray(devs) || devs.length === 0) return;
+      const res = await Local.startSpectrum({
+        centerFreq: 100_000_000, sampleRate: 2_400_000, fftSize: 8192, fftRate: 10, mode: 'wfm',
+      });
+      if (tunerSwapDone.current) return;
+      tunerSwapDone.current = true;
+      navigation.replace('SDR', {
+        baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware',
+        viewMode: route.params.viewMode, serverType: 'ubersdr',
+        isLocal: true, localPort: res.port, localGen: newLocalSession(), carFm: true,
+      });
+    } catch { /* not ready yet */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route.params.tunerless]);
+  }, [route.params.tunerless, route.params.viewMode]);
+
+  useEffect(() => {
+    if (!route.params.tunerless) return;
+    let busy = false;
+    const t = setInterval(async () => {
+      if (busy) return;
+      busy = true;
+      try { await tryTunerNow(); } finally { busy = false; }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [route.params.tunerless, tryTunerNow]);
+
+  // CarFM settings: theme override + boot autostart, persisted.
+  const [fmTheme, setFmTheme] = useState<'system' | 'light' | 'dark'>('system');
+  const [fmAutostart, setFmAutostart] = useState(true);
+  useEffect(() => {
+    if (!carFm) return;
+    AsyncStorage.getItem('@carfm/theme_v1')
+      .then((v: string | null) => { if (v === 'light' || v === 'dark' || v === 'system') setFmTheme(v); })
+      .catch(() => {});
+    getCarAutostart().then(setFmAutostart).catch(() => {});
+  }, [carFm]);
+  const onFmSetTheme = useCallback((t: 'system' | 'light' | 'dark') => {
+    setFmTheme(t);
+    AsyncStorage.setItem('@carfm/theme_v1', t).catch(() => {});
+  }, []);
+  const onFmSetAutostart = useCallback((on: boolean) => {
+    setFmAutostart(on);
+    void setCarAutostart(on);
+  }, []);
 
   // Presets = this-instance FM bookmarks (broadcast band), in the USER'S order
   // (design: presets are an ordered strip, reorderable in the face; PREV/NEXT
@@ -4876,6 +4902,11 @@ export default function SDRScreen({ route, navigation }: Props) {
           af={liveStation.af}
           ptyText={ptyLabel(liveStation.pty, ituRegion === 2)}
           tunerError={fmTunerError}
+          theme={fmTheme}
+          autostart={fmAutostart}
+          onSetTheme={onFmSetTheme}
+          onSetAutostart={onFmSetAutostart}
+          onRetryTuner={route.params.tunerless ? () => { void tryTunerNow(); } : undefined}
           presets={fmPresets}
           onTuneHz={onTuneHz}
           onToggleSave={onFmToggleSave}

@@ -1,9 +1,12 @@
 {
   "expo": {
-    "name": "VibeSDR",
+    "name": "CarFM",
     "slug": "VibeSDR",
     "version": "9.0.1",
-    "scheme": ["vibesdr", "sdr"],
+    "scheme": [
+      "vibesdr",
+      "sdr"
+    ],
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
