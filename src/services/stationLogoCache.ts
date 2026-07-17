@@ -9,6 +9,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { lookupStationLogo } from './stationLogo';
 import { receiverIso } from './rdsCountry';
+import { AUTO_LOGO_RESOLUTION } from './logoResolver';
 
 const DIR = FileSystem.documentDirectory + 'stationlogos/';
 const INDEX_KEY = 'lsv_logo_cache_v1';
@@ -67,6 +68,12 @@ async function refresh(key: string, name: string, iso?: string): Promise<void> {
  *  3. Offline + not cached → null (caller shows a monogram, no placeholder).
  */
 export async function resolveStationLogo(opts: { pi?: string; name: string; iso?: string }): Promise<string | null> {
+  // TODO(logos): disabled with the rest of AUTO logo resolution (see
+  // logoResolver.AUTO_LOGO_RESOLUTION) — this chain name-matches on
+  // radio-browser and produced completely wrong images (device test
+  // 2026-07-17). The DISK CACHE is skipped too: wrong logos may already be
+  // cached on installed devices, and showing them is worse than showing none.
+  if (!AUTO_LOGO_RESOLUTION) return null;
   const { pi, name, iso } = opts;
   if (!name) return null;
   const key = keyFor(pi, iso);
