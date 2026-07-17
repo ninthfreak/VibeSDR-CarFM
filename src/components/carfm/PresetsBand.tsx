@@ -104,6 +104,7 @@ function Tile({ p, pal, active, reordering, first, last, onPress, onLongPress, o
 export default function PresetsBand({
   pal, presets, activeIndex, reordering,
   onSelect, onEnterReorder, onExitReorder, onMove, onRemove, onOpenNearby,
+  grow = false, bandHeight = 140, showNav = true, showNearby = true,
 }: {
   pal: CarFmPalette;
   presets: PresetItem[];
@@ -115,6 +116,14 @@ export default function PresetsBand({
   onMove: (index: number, dir: 1 | -1) => void;
   onRemove: (index: number) => void;
   onOpenNearby: () => void;
+  /** Tall track: fill remaining height instead of a fixed band height. */
+  grow?: boolean;
+  /** Fixed band height when not growing (per aspect track). */
+  bandHeight?: number;
+  /** Show the ‹ › page buttons (hidden in the tall track). */
+  showNav?: boolean;
+  /** Show the in-band NEARBY/DONE disc (moves to the top bar in the tall track). */
+  showNearby?: boolean;
 }) {
   const scroll = useRef<ScrollView>(null);
   const [viewW, setViewW] = useState(0);
@@ -163,8 +172,9 @@ export default function PresetsBand({
   }, [onRemove]);
 
   return (
-    <View style={styles.band}>
+    <View style={[styles.band, grow ? { flex: 1 } : { height: bandHeight }]}>
       {/* ‹ page-left */}
+      {showNav ? (
       <Pressable
         onPress={() => scroll.current?.scrollTo({ x: Math.max(0, scrollX - viewW * 0.8), animated: true })}
         style={({ pressed }) => [styles.nav, { backgroundColor: pal.raised, borderColor: pal.border }, pressed && { opacity: 0.55 }]}
@@ -172,6 +182,7 @@ export default function PresetsBand({
       >
         <Text style={[styles.navText, { color: pal.text }]}>‹</Text>
       </Pressable>
+      ) : null}
 
       {/* grid + custom scrollbar */}
       <View style={styles.gridWrap}>
@@ -219,6 +230,7 @@ export default function PresetsBand({
       </View>
 
       {/* › page-right */}
+      {showNav ? (
       <Pressable
         onPress={() => scroll.current?.scrollTo({ x: Math.min(maxScroll, scrollX + viewW * 0.8), animated: true })}
         style={({ pressed }) => [styles.nav, { backgroundColor: pal.raised, borderColor: pal.border }, pressed && { opacity: 0.55 }]}
@@ -226,9 +238,11 @@ export default function PresetsBand({
       >
         <Text style={[styles.navText, { color: pal.text }]}>›</Text>
       </Pressable>
+      ) : null}
 
-      {/* NEARBY disc — DONE while reordering */}
-      {reordering ? (
+      {/* NEARBY disc — DONE while reordering. Hidden in the tall track, where it
+          lives in the top bar instead. */}
+      {!showNearby ? null : reordering ? (
         <Pressable
           onPress={onExitReorder}
           style={({ pressed }) => [styles.nearby, { backgroundColor: pal.blue }, pressed && { opacity: 0.7 }]}
@@ -251,7 +265,7 @@ export default function PresetsBand({
 }
 
 const styles = StyleSheet.create({
-  band: { height: 140, flexDirection: 'row', alignItems: 'stretch', gap: 10 },
+  band: { flexDirection: 'row', alignItems: 'stretch', gap: 10 },
   nav: { width: 56, borderRadius: 16, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   navText: { fontSize: 30, fontWeight: '700', fontFamily: FONT },
   gridWrap: { flex: 1 },

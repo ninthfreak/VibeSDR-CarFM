@@ -23,7 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getNearbyStations } from '../services/stationFinder';
 import type { NearbyStation } from '../services/stationTypes';
-import { ChevronShape, GearIcon, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
+import { ChevronShape, GearIcon, MagnifierTower, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
 import LogoTile from './carfm/LogoTile';
 import NearbyPicker from './carfm/NearbyPicker';
 import Numpad from './carfm/Numpad';
@@ -87,7 +87,7 @@ function waveStrength(db: number | null): number {
 }
 
 // ── RadioText strip: static when short, 16s marquee when > 46 chars ──────────
-function RadioTextStrip({ text, colors }: { text: string; colors: { raised: string; border: string; dim: string } }) {
+function RadioTextStrip({ text, colors, height = 52 }: { text: string; colors: { raised: string; border: string; dim: string }; height?: number }) {
   const [w, setW] = useState(0);
   const [tw, setTw] = useState(0);
   const x = useRef(new Animated.Value(0)).current;
@@ -105,7 +105,7 @@ function RadioTextStrip({ text, colors }: { text: string; colors: { raised: stri
 
   return (
     <View
-      style={[styles.rtStrip, { backgroundColor: colors.raised, borderColor: colors.border }]}
+      style={[styles.rtStrip, { height, backgroundColor: colors.raised, borderColor: colors.border }]}
       onLayout={(e: LayoutChangeEvent) => setW(e.nativeEvent.layout.width)}
     >
       {marquee ? (
@@ -170,6 +170,33 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const scanTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   // Measured side-column size -> chevron polygon in true pixels (no distortion).
   const [chev, setChev] = useState({ w: 86, h: 180 });
+  // Measured tall-mode nav button -> its (shorter, wider) chevron polygon.
+  const [tallBtn, setTallBtn] = useState({ w: 160, h: 78 });
+
+  // ── Aspect-ratio layout tracks (handoff: fill the container, switch layout by
+  // measured w/h so the face survives DuduOS splitting the head unit into
+  // vertical thirds). Target 2000×1200 (≈1.67) is the `wide` track.
+  //   tall      : portrait / ⅓ vertical slice — hero stacks, NEARBY -> top bar
+  //   twoRows   : near-square ⅔ slice — taller preset band
+  //   landscape : very wide & short phone — smaller type
+  const [dim, setDim] = useState({ w: 0, h: 0 });
+  const aspect = dim.h > 0 ? dim.w / dim.h : 1.667;
+  const tall = aspect < 0.95;
+  const landscape = aspect > 1.95;
+  const twoRows = !tall && !landscape && aspect < 1.4;
+  const L = useMemo(() => ({
+    padH: tall ? 16 : 24,
+    padTop: tall ? 14 : 18,
+    gap: tall ? 10 : 12,
+    freq: tall ? 52 : landscape ? 48 : 60,
+    mhz: tall ? 20 : landscape ? 18 : 22,
+    call: tall ? 46 : landscape ? 50 : 66,
+    logo: tall ? 72 : landscape ? 70 : 92,
+    star: tall ? 54 : landscape ? 48 : 56,
+    rtMarginTop: tall ? 12 : landscape ? 10 : 18,
+    rtHeight: tall ? 48 : landscape ? 44 : 52,
+    bandHeight: twoRows ? 210 : landscape ? 104 : 140,
+  }), [tall, landscape, twoRows]);
 
   const mhz = mhzOf(freqHz);
   const inBand = mhz >= FM_MIN_MHZ - 0.05 && mhz <= FM_MAX_MHZ + 0.05;
@@ -257,12 +284,15 @@ export default function CarFmFace(props: CarFmFaceProps) {
 
   return (
     <View
+      onLayout={(e: LayoutChangeEvent) => setDim({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
       style={[
         styles.root,
         {
           backgroundColor: pal.bg,
-          paddingTop: insets.top + 18,
-          paddingBottom: insets.bottom + 18,
+          paddingHorizontal: L.padH,
+          gap: L.gap,
+          paddingTop: insets.top + L.padTop,
+          paddingBottom: insets.bottom + L.padTop,
         },
       ]}
     >
@@ -279,7 +309,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
           </Text>
         </View>
         ) : (
-        <View style={styles.headerLeft}>
+        <View style={[styles.headerLeft, tall && { flexWrap: 'wrap', flexShrink: 1 }]}>
           <View style={styles.signalPill}>
             <SignalWaves size={26} strength={waveStrength(signalDb)} on={pal.amber} off={pal.meterEmpty} />
             <Text style={[styles.signalText, { color: pal.text }]}>
@@ -313,119 +343,192 @@ export default function CarFmFace(props: CarFmFaceProps) {
           ) : null}
         </View>
         )}
-        <Pressable
-          onPress={() => setSettingsOpen(true)}
-          style={({ pressed }) => [styles.gearBtn, { borderColor: pal.border, backgroundColor: pal.raised }, pressed && { opacity: 0.55 }]}
-          accessibilityRole="button" accessibilityLabel="Settings"
-        >
-          <GearIcon size={24} color={pal.dim} />
-        </Pressable>
+        {/* Right cluster: gear always; in the tall/portrait track the NEARBY disc
+            (design: it moves into the top bar) rides beneath it — becoming DONE
+            while reordering, since the presets band no longer hosts it here. */}
+        <View style={styles.headerRight}>
+          <Pressable
+            onPress={() => setSettingsOpen(true)}
+            style={({ pressed }) => [styles.gearBtn, { borderColor: pal.border, backgroundColor: pal.raised }, pressed && { opacity: 0.55 }]}
+            accessibilityRole="button" accessibilityLabel="Settings"
+          >
+            <GearIcon size={24} color={pal.dim} />
+          </Pressable>
+          {tall ? (
+            reordering ? (
+              <Pressable
+                onPress={() => setReordering(false)}
+                style={({ pressed }) => [styles.headerNearby, { backgroundColor: pal.blue }, pressed && { opacity: 0.7 }]}
+                accessibilityRole="button" accessibilityLabel="Done reordering"
+              >
+                <Text style={styles.headerDoneCheck}>✓</Text>
+                <Text style={styles.headerDoneText}>DONE</Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                onPress={() => setPickerOpen(true)}
+                style={({ pressed }) => [styles.headerNearby, { backgroundColor: pal.panel, borderWidth: 1, borderColor: pal.border }, pressed && { opacity: 0.7 }]}
+                accessibilityRole="button" accessibilityLabel="Nearby stations"
+              >
+                <MagnifierTower size={52} line={pal.text} glass={pal.raised} />
+              </Pressable>
+            )
+          ) : null}
+        </View>
       </View>
 
-      {/* ── Hero band ── */}
-      <View style={styles.hero}>
-        {/* left column: full-height PREV PRESET chevron (steering-wheel mappable) */}
-        <Pressable
-          onPress={() => stepPreset(-1)}
-          onLayout={(e: LayoutChangeEvent) => setChev({
-            w: Math.round(e.nativeEvent.layout.width), h: Math.round(e.nativeEvent.layout.height),
-          })}
-          style={({ pressed }) => [styles.sideCol, pressed && { opacity: 0.55 }]}
-          accessibilityRole="button" accessibilityLabel="Previous preset"
-        >
-          <ChevronShape w={chev.w} h={chev.h} dir={-1} fill={pal.raised} stroke={pal.border} />
-          <View style={[styles.chevLabelWrap, { transform: [{ translateX: -8 }] }]}>
-            <Text style={[styles.chevLabel, { color: pal.dim }]}>PREV</Text>
-            <Text style={[styles.chevLabel, { color: pal.dim }]}>PRESET</Text>
-          </View>
-        </Pressable>
-
-        {/* center hero */}
-        <View style={styles.center}>
-          {scan ? (
-            <View style={styles.scanWrap}>
-              <Text allowFontScaling={false} style={[styles.call, { color: pal.dim, fontStyle: 'italic' }]}>
-                Scanning…
+      {/* ── Hero band ──
+          `heroCenter` (logo + call letters + star + frequency + RadioText) is
+          the same in every track; only the FRAME around it changes: wide/
+          two-row/landscape keep the horizontal chevron side columns, while the
+          tall/portrait track stacks the hero into a card with a PREV/NEXT nav
+          row below it. */}
+      {(() => {
+        const heroCenter = scan ? (
+          <View style={styles.scanWrap}>
+            <Text allowFontScaling={false} style={[styles.call, { fontSize: L.call, color: pal.dim, fontStyle: 'italic' }]}>
+              Scanning…
+            </Text>
+            <View style={styles.freqRow}>
+              <Text style={[styles.scanArrow, { color: pal.dim }]}>{scan.dir > 0 ? '▲' : '▼'}</Text>
+              <Text allowFontScaling={false} style={[styles.freq, { fontSize: L.freq, color: pal.amber }]}>
+                {fmt(scan.display)}
               </Text>
-              <View style={styles.freqRow}>
-                <Text style={[styles.scanArrow, { color: pal.dim }]}>{scan.dir > 0 ? '▲' : '▼'}</Text>
-                <Text allowFontScaling={false} style={[styles.freq, { color: pal.amber }]}>
-                  {fmt(scan.display)}
-                </Text>
-                <Text style={[styles.mhz, { color: pal.dim }]}>MHz</Text>
-              </View>
+              <Text style={[styles.mhz, { fontSize: L.mhz, color: pal.dim }]}>MHz</Text>
             </View>
-          ) : (
-            <>
-              <View style={styles.stationRow}>
-                <LogoTile name={callsign || undefined} size={92} radius={20} />
-                <Text
-                  allowFontScaling={false}
-                  numberOfLines={1}
-                  style={[
-                    styles.call,
-                    { color: pal.text },
-                    !ps && { fontStyle: 'italic', color: pal.dim },
-                  ]}
-                >
-                  {callsign || 'Tuning…'}
-                </Text>
-                <Pressable
-                  onPress={onToggleSave}
-                  style={({ pressed }) => [
-                    styles.starBtn,
-                    { backgroundColor: saved ? pal.blueFill : pal.raised },
-                    pressed && { opacity: 0.55 },
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: saved }}
-                  accessibilityLabel={saved ? 'Remove this frequency from presets' : 'Save this frequency as a preset'}
-                >
-                  <StarIcon size={30} filled={saved} color={pal.amber} outline={pal.dim} />
-                </Pressable>
-              </View>
-              <Pressable
-                onPress={() => setNumpadOpen(true)}
-                accessibilityRole="button"
-                accessibilityLabel={`Frequency ${fmt(mhz)} megahertz. Tap to enter a frequency.`}
+          </View>
+        ) : (
+          <>
+            <View style={[styles.stationRow, tall && { gap: 14 }]}>
+              <LogoTile name={callsign || undefined} size={L.logo} radius={20} />
+              <Text
+                allowFontScaling={false}
+                numberOfLines={1}
+                style={[
+                  styles.call,
+                  { fontSize: L.call, color: pal.text },
+                  !ps && { fontStyle: 'italic', color: pal.dim },
+                ]}
               >
-                <View style={styles.freqRow}>
-                  <Text allowFontScaling={false} style={[styles.freq, { color: pal.amber }]}>
-                    {fmt(mhz)}
-                  </Text>
-                  <Text style={[styles.mhz, { color: pal.dim }]}>MHz</Text>
+                {callsign || 'Tuning…'}
+              </Text>
+              <Pressable
+                onPress={onToggleSave}
+                style={({ pressed }) => [
+                  styles.starBtn,
+                  { width: L.star, height: L.star, backgroundColor: saved ? pal.blueFill : pal.raised },
+                  pressed && { opacity: 0.55 },
+                ]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: saved }}
+                accessibilityLabel={saved ? 'Remove this frequency from presets' : 'Save this frequency as a preset'}
+              >
+                <StarIcon size={30} filled={saved} color={pal.amber} outline={pal.dim} />
+              </Pressable>
+            </View>
+            <Pressable
+              onPress={() => setNumpadOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel={`Frequency ${fmt(mhz)} megahertz. Tap to enter a frequency.`}
+            >
+              <View style={styles.freqRow}>
+                <Text allowFontScaling={false} style={[styles.freq, { fontSize: L.freq, color: pal.amber }]}>
+                  {fmt(mhz)}
+                </Text>
+                <Text style={[styles.mhz, { fontSize: L.mhz, color: pal.dim }]}>MHz</Text>
+              </View>
+            </Pressable>
+            <View style={[styles.rtArea, { marginTop: L.rtMarginTop }]}>
+              <RadioTextStrip
+                text={rt || ' '}
+                height={L.rtHeight}
+                colors={{ raised: pal.raised, border: pal.border, dim: pal.dim }}
+              />
+            </View>
+          </>
+        );
+
+        return tall ? (
+          <View style={styles.heroTall}>
+            <View style={[styles.heroCard, { backgroundColor: pal.panel, borderColor: pal.border }]}>
+              {heroCenter}
+            </View>
+            {/* PREV/NEXT wrap below the hero as two short chevron buttons */}
+            <View style={styles.tallNavRow}>
+              <Pressable
+                onPress={() => stepPreset(-1)}
+                onLayout={(e: LayoutChangeEvent) => setTallBtn({
+                  w: Math.round(e.nativeEvent.layout.width), h: Math.round(e.nativeEvent.layout.height),
+                })}
+                style={({ pressed }) => [styles.tallNavBtn, pressed && { opacity: 0.55 }]}
+                accessibilityRole="button" accessibilityLabel="Previous preset"
+              >
+                <ChevronShape w={tallBtn.w} h={tallBtn.h} dir={-1} fill={pal.raised} stroke={pal.border} />
+                <View style={[styles.chevLabelWrap, { transform: [{ translateX: -8 }] }]}>
+                  <Text style={[styles.chevLabel, { color: pal.dim }]}>PREV</Text>
+                  <Text style={[styles.chevLabel, { color: pal.dim }]}>PRESET</Text>
                 </View>
               </Pressable>
-              <View style={styles.rtArea}>
-                <RadioTextStrip
-                  text={rt || ' '}
-                  colors={{ raised: pal.raised, border: pal.border, dim: pal.dim }}
-                />
-              </View>
-            </>
-          )}
-        </View>
-
-        {/* right column: full-height NEXT PRESET chevron (mirror of left) */}
-        <Pressable
-          onPress={() => stepPreset(1)}
-          style={({ pressed }) => [styles.sideCol, pressed && { opacity: 0.55 }]}
-          accessibilityRole="button" accessibilityLabel="Next preset"
-        >
-          <ChevronShape w={chev.w} h={chev.h} dir={1} fill={pal.raised} stroke={pal.border} />
-          <View style={[styles.chevLabelWrap, { transform: [{ translateX: 8 }] }]}>
-            <Text style={[styles.chevLabel, { color: pal.dim }]}>NEXT</Text>
-            <Text style={[styles.chevLabel, { color: pal.dim }]}>PRESET</Text>
+              <Pressable
+                onPress={() => stepPreset(1)}
+                style={({ pressed }) => [styles.tallNavBtn, pressed && { opacity: 0.55 }]}
+                accessibilityRole="button" accessibilityLabel="Next preset"
+              >
+                <ChevronShape w={tallBtn.w} h={tallBtn.h} dir={1} fill={pal.raised} stroke={pal.border} />
+                <View style={[styles.chevLabelWrap, { transform: [{ translateX: 8 }] }]}>
+                  <Text style={[styles.chevLabel, { color: pal.dim }]}>NEXT</Text>
+                  <Text style={[styles.chevLabel, { color: pal.dim }]}>PRESET</Text>
+                </View>
+              </Pressable>
+            </View>
           </View>
-        </Pressable>
-      </View>
+        ) : (
+          <View style={styles.hero}>
+            {/* left column: full-height PREV PRESET chevron (steering-wheel mappable) */}
+            <Pressable
+              onPress={() => stepPreset(-1)}
+              onLayout={(e: LayoutChangeEvent) => setChev({
+                w: Math.round(e.nativeEvent.layout.width), h: Math.round(e.nativeEvent.layout.height),
+              })}
+              style={({ pressed }) => [styles.sideCol, pressed && { opacity: 0.55 }]}
+              accessibilityRole="button" accessibilityLabel="Previous preset"
+            >
+              <ChevronShape w={chev.w} h={chev.h} dir={-1} fill={pal.raised} stroke={pal.border} />
+              <View style={[styles.chevLabelWrap, { transform: [{ translateX: -8 }] }]}>
+                <Text style={[styles.chevLabel, { color: pal.dim }]}>PREV</Text>
+                <Text style={[styles.chevLabel, { color: pal.dim }]}>PRESET</Text>
+              </View>
+            </Pressable>
 
-      {/* ── Presets band ── */}
+            <View style={styles.center}>{heroCenter}</View>
+
+            {/* right column: full-height NEXT PRESET chevron (mirror of left) */}
+            <Pressable
+              onPress={() => stepPreset(1)}
+              style={({ pressed }) => [styles.sideCol, pressed && { opacity: 0.55 }]}
+              accessibilityRole="button" accessibilityLabel="Next preset"
+            >
+              <ChevronShape w={chev.w} h={chev.h} dir={1} fill={pal.raised} stroke={pal.border} />
+              <View style={[styles.chevLabelWrap, { transform: [{ translateX: 8 }] }]}>
+                <Text style={[styles.chevLabel, { color: pal.dim }]}>NEXT</Text>
+                <Text style={[styles.chevLabel, { color: pal.dim }]}>PRESET</Text>
+              </View>
+            </Pressable>
+          </View>
+        );
+      })()}
+
+      {/* ── Presets band ── (grows to fill in the tall track; NEARBY + nav move to
+          the top bar there, so they're suppressed in-band) */}
       <PresetsBand
         pal={pal}
         presets={items}
         activeIndex={activeIndex}
         reordering={reordering}
+        grow={tall}
+        bandHeight={L.bandHeight}
+        showNav={!tall}
+        showNearby={!tall}
         onSelect={(p) => onTuneHz(Math.round(p.frequencyMhz * 1e6))}
         onEnterReorder={() => setReordering(true)}
         onExitReorder={() => setReordering(false)}
@@ -474,8 +577,12 @@ const styles = StyleSheet.create({
     zIndex: 60, paddingHorizontal: 24, gap: 12,
   },
 
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 14, flexShrink: 1 },
+  headerRight: { alignItems: 'center', gap: 12, flexShrink: 0 },
+  headerNearby: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center' },
+  headerDoneCheck: { color: '#FFF', fontSize: 22, fontWeight: '700' },
+  headerDoneText: { color: '#FFF', fontFamily: FONT, fontSize: 11, fontWeight: '700', letterSpacing: 1.5 },
   signalPill: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   signalText: { fontFamily: FONT, fontSize: 17, fontWeight: '700', fontVariant: ['tabular-nums'] },
   stereoCol: { alignItems: 'center', gap: 2 },
@@ -496,6 +603,11 @@ const styles = StyleSheet.create({
   tunerErrText: { fontFamily: FONT, fontSize: 17, fontWeight: '700', letterSpacing: 0.3 },
 
   hero: { flex: 1, flexDirection: 'row', gap: 20 },
+  // Tall/portrait track: hero stacks into a card, PREV/NEXT wrap below.
+  heroTall: { flexShrink: 0, gap: 12 },
+  heroCard: { borderWidth: 1, borderRadius: 28, paddingVertical: 22, paddingHorizontal: 20, alignItems: 'center', justifyContent: 'center' },
+  tallNavRow: { flexDirection: 'row', gap: 12, height: 78 },
+  tallNavBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   sideCol: { width: 86, alignItems: 'center', justifyContent: 'center' },
   chevLabelWrap: { alignItems: 'center' },
   chevLabel: { fontFamily: FONT, fontSize: 11, fontWeight: '700', letterSpacing: 1, lineHeight: 14 },
