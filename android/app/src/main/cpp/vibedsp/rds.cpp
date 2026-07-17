@@ -126,6 +126,11 @@ void RdsDecoder::pushBit(int bit) {
     if (++nextBlk_ == 4) { parseGroup(); nextBlk_ = 0; }
 }
 
+void RdsDecoder::pushGroup(const uint16_t blocks[4], const bool ok[4]) {
+    for (int i = 0; i < 4; ++i) { blk_[i] = blocks[i]; blkOk_[i] = ok[i]; }
+    parseGroup();
+}
+
 void RdsDecoder::parseGroup() {
     if (!(blkOk_[0] && blkOk_[1])) return;
     const uint16_t pi = blk_[0];

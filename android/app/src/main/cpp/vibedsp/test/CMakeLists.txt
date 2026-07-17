@@ -54,3 +54,7 @@ target_compile_options(vibedsp_adjacent_tests PRIVATE -O2 -Wall)
 add_executable(vibedsp_passband_tests test_passband.cpp ${DSP_SRC})
 target_include_directories(vibedsp_passband_tests PRIVATE ${DSP})
 target_compile_options(vibedsp_passband_tests PRIVATE -O2 -Wall)
+
+add_executable(vibedsp_rds_replay_tests test_rds_replay.cpp ${DSP_SRC})
+target_include_directories(vibedsp_rds_replay_tests PRIVATE ${DSP})
+target_compile_options(vibedsp_rds_replay_tests PRIVATE -O2 -Wall)
