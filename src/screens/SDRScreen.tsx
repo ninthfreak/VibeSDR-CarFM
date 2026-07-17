@@ -965,6 +965,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    if (route.params.tunerless) return;   // no server behind the placeholder URL
     fetchUiConfig(baseUrl).then((cfg: ServerUiConfig | null) => {
       if (cancelled) return;
       if (cfg?.spectrum_bg_image) {
@@ -2481,6 +2482,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     let resumeTimer: ReturnType<typeof setTimeout> | null = null;
     const sub = AppState.addEventListener('change', (state: string) => {
+      // Tunerless carFm session: there is NO client, no audio, no spectrum —
+      // none of the resume/reinit machinery below applies, and letting it run
+      // armed a watchdog that escalated into a bogus blocking "Connection
+      // lost" card over the face (device test 2026-07-17).
+      if (route.params.tunerless) { appActiveRef.current = (state === 'active'); return; }
       if (state !== 'active') {
         if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
         // Backgrounded: the spectrum pause starves the link to 0, but that's NOT
@@ -3925,18 +3931,24 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearTimeout(t);
   }, [connected, route.params.tunerless]);
 
-  // Tunerless carFm: one dongle-connect attempt, shared by the 3s poll below
-  // and the settings panel's RETRY button. Success hot-swaps in a real local
-  // session (navigation.replace remounts this screen connected).
+  // Tunerless carFm: one dongle-connect attempt, driven ONLY by the settings
+  // panel's RETRY button (no background polling — the picker already checked for
+  // a dongle at launch; a dongle plugged in later is grabbed on demand here).
+  // Success hot-swaps in a real local session (navigation.replace remounts this
+  // screen connected). tunerSwapDone latches the successful swap; tunerBusy is an
+  // in-flight guard so a double-tap of RETRY can't start two native sessions and
+  // tear down the one it just handed to navigation.replace.
   const tunerSwapDone = useRef(false);
+  const tunerBusy = useRef(false);
   const tryTunerNow = useCallback(async (): Promise<void> => {
-    if (!route.params.tunerless || tunerSwapDone.current) return;
-    const Local = (NativeModules as { VibeLocalSDR?: {
-      listDevices?: () => Promise<unknown>;
-      startSpectrum?: (opts: object) => Promise<{ port: number; wsBaseUrl: string }>;
-    } }).VibeLocalSDR;
-    if (!Local?.listDevices || !Local.startSpectrum) return;
+    if (!route.params.tunerless || tunerSwapDone.current || tunerBusy.current) return;
+    tunerBusy.current = true;
     try {
+      const Local = (NativeModules as { VibeLocalSDR?: {
+        listDevices?: () => Promise<unknown>;
+        startSpectrum?: (opts: object) => Promise<{ port: number; wsBaseUrl: string }>;
+      } }).VibeLocalSDR;
+      if (!Local?.listDevices || !Local.startSpectrum) return;
       const devs = await Local.listDevices();
       if (tunerSwapDone.current || !Array.isArray(devs) || devs.length === 0) return;
       const res = await Local.startSpectrum({
@@ -3949,20 +3961,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         viewMode: route.params.viewMode, serverType: 'ubersdr',
         isLocal: true, localPort: res.port, localGen: newLocalSession(), carFm: true,
       });
-    } catch { /* not ready yet */ }
+    } catch { /* dongle not ready / permission denied — RETRY tries again */ }
+    finally { tunerBusy.current = false; }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.params.tunerless, route.params.viewMode]);
-
-  useEffect(() => {
-    if (!route.params.tunerless) return;
-    let busy = false;
-    const t = setInterval(async () => {
-      if (busy) return;
-      busy = true;
-      try { await tryTunerNow(); } finally { busy = false; }
-    }, 3000);
-    return () => clearInterval(t);
-  }, [route.params.tunerless, tryTunerNow]);
 
   // CarFM permanent install: ask ONCE to exempt the app from battery
   // optimization — Doze on an idle head unit can throttle/kill the boot-started
@@ -4034,9 +4036,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
 
   const fmPresets = useMemo<CarFmPreset[]>(() => {
-    const base = visibleBookmarks
-      .filter((b: UserBookmark) =>
-        b.mode === 'wfm' || (b.frequency >= 87_000_000 && b.frequency <= 108_500_000))
+    // CarFM presets are GLOBAL — independent of baseUrl, the tuner, or whether a
+    // tuner is connected at all. Read every FM-band bookmark across ALL scopes
+    // (a tunerless session and a live-dongle session have different baseUrls, and
+    // legacy presets may carry an old per-URL scope) and dedupe by channel, so a
+    // preset survives the tunerless→dongle hot-swap and shows on a no-dongle boot.
+    const src = carFm ? userBookmarks : visibleBookmarks;
+    const byChannel = new Map<string, UserBookmark>();
+    for (const b of src) {
+      if (!(b.mode === 'wfm' || (b.frequency >= 87_000_000 && b.frequency <= 108_500_000))) continue;
+      const k = fmKeyOf(b.frequency);
+      if (!byChannel.has(k)) byChannel.set(k, b);   // first wins (global before per-URL dupes)
+    }
+    const base = [...byChannel.values()]
       .map((b: UserBookmark) => ({ name: b.name, frequency: b.frequency }))
       .sort((a, b) => a.frequency - b.frequency);
     if (fmOrder.length === 0) return base;
@@ -4059,7 +4071,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (fmPresets.some((p) => fmKeyOf(p.frequency) === fmKeyOf(hz))) { fmRemoveAt(hz); return; }
     const name = (liveStationRef.current || '').trim()
       || `FM ${(hz / 1e6).toFixed(1)}`;
-    onAddBookmark(name, false);
+    onAddBookmark(name, true);   // GLOBAL scope — preset is independent of the tuner/URL
   }, [status.frequency, fmPresets, fmRemoveAt, onAddBookmark]);
 
   // Reorder/remove from the face's reorder mode (indexes are displayed order).
@@ -4196,10 +4208,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       mode: 'wfm',
       bandwidth_low: null, bandwidth_high: null,
       group: null, comment: null, extension: null,
-      scope: baseUrl,
+      scope: '',   // GLOBAL — a saved FM station never depends on the session's tuner/URL
     };
     persistUserBookmarks(mergeBookmarks(userBookmarks, [bm]));
-  }, [baseUrl, userBookmarks, persistUserBookmarks]);
+  }, [userBookmarks, persistUserBookmarks]);
 
   // First-run guided tour (dismissable). Spotlights the drum, step rate, the
   // disabled back-gesture, and the menu — opening it to show the route back to
@@ -4249,7 +4261,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Auto-start once on the first successful connection, after the controls have
   // laid out (so the drum/step/menu can be measured).
   useEffect(() => {
-    if (!connected) return;
+    if (!connected || carFm) return;   // CarFM: no stock tour over the face
     // Also wait for the launch splash to clear — a first-launch deep-link or
     // default-instance auto-connect can reach the SDR screen while the splash is
     // still holding on the CONTINUE notice; the tour must not draw over it.
@@ -4405,7 +4417,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* OWRX server crashed/restarted (common on OWRX). Keep the app alive and
           tell the user to wait before reconnecting (the server's still booting). */}
-      {serverLost && (() => {
+      {!fmFaceActive && serverLost && (() => {
         const lostLabel = route.params.serverType === 'kiwi' ? 'KiwiSDR'
                         : route.params.serverType === 'owrx' ? 'OpenWebRX'
                         : 'SDR';
@@ -4450,7 +4462,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {serverBusy && (
+      {!fmFaceActive && serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Receiver unavailable</Text>
@@ -4474,7 +4486,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Returning from the background — the spectrum was paused, so show a calm
           reinitialising notice while the waterfall re-subscribes (no buttons; it
           clears itself on the first frame, or escalates to "Connection lost"). */}
-      {reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
+      {!fmFaceActive && reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Reinitialising</Text>
@@ -4488,7 +4500,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Audio resumed fine but the waterfall/spectrum never re-subscribed after
           a background — give the user an escape (the rest of the app is alive). */}
-      {specFailed && !reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
+      {!fmFaceActive && specFailed && !reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Waterfall didn’t resume</Text>
@@ -4509,7 +4521,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {connLost && !reinit && !specFailed && !dataSaverOff && !serverLost && !serverBusy && (
+      {!fmFaceActive && connLost && !reinit && !specFailed && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Connection lost</Text>
@@ -4533,7 +4545,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Initial connect never completed (wedged host/shim/USB). Escape hatch so
           the app can never be permanently stuck on the connecting spinner. */}
-      {connTimedOut && !connected && !serverLost && !serverBusy && !connLost && !dataSaverOff && (
+      {!fmFaceActive && connTimedOut && !connected && !serverLost && !serverBusy && !connLost && !dataSaverOff && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Couldn’t connect</Text>
@@ -4559,7 +4571,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       )}
 
       {/* Paused → disconnected — tap does a full from-scratch reconnect */}
-      {dataSaverOff && !reconnectFailedUi && (
+      {!fmFaceActive && dataSaverOff && !reconnectFailedUi && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
           onPress={() => { setDataSaverOff(false); unmute(); fullReconnect(); }} activeOpacity={0.85}>
           <Text style={styles.mutedBannerText}>⏸ PAUSED — TAP TO RECONNECT</Text>

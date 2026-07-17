@@ -17,6 +17,22 @@ import { wikidataLogo } from './logoWikidata';
 import { siteFaviconLogo } from './logoSiteFavicon';
 import { fetchRadioBrowser } from './radioBrowser';
 
+/**
+ * TODO(logos): AUTOMATIC logo resolution is DISABLED (2026-07-17 device test:
+ * the auto-downloaded logos were completely wrong — the sources below match on
+ * callsign/name text and happily return unrelated images). The whole chain
+ * needs a redesign around verified identity (e.g. Wikidata P2317 exact-match
+ * ONLY, SVG-preferred per the logo_search findings, with a confidence gate)
+ * before it can be trusted to run unattended. Until then:
+ *   - resolveLogo() is a no-op (returns false, fetches nothing, writes nothing)
+ *   - stations render their monogram tiles
+ *   - MANUAL assignment still works and is never touched: the in-app Commons
+ *     search + the DuckDuckGo share-back flow (stationFinder) both save with
+ *     source='manual'.
+ * Flip this to true only after the redesign.
+ */
+export const AUTO_LOGO_RESOLUTION = false;
+
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_LOGO_BYTES = 200 * 1024;
 
@@ -57,6 +73,7 @@ export async function fetchImage(url: string): Promise<{ bytes: Uint8Array; mime
  * Honors a 30-day TTL (hits and recorded misses) so it isn't chatty.
  */
 export async function resolveLogo(st: LogoStation): Promise<boolean> {
+  if (!AUTO_LOGO_RESOLUTION) return false;   // see TODO(logos) above
   const base = st.base.toUpperCase();
   const at = await logoFetchedAt(base);
   if (at != null && Date.now() - at < CACHE_TTL_MS) return false;

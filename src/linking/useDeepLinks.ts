@@ -19,11 +19,11 @@ import { navigationRef } from '../../App';
 import { getViewMode } from '../services/viewMode';
 import { parseVibeSdrUrl, resolveRequest, type ResolvedTarget } from './DeepLinkHandler';
 import { parseSdrUrl } from './SdrLinkHandler';
-import { markDeepLinkActive, markInitialLinkChecked } from './deepLinkState';
+import { clearDeepLinkActive, markDeepLinkActive, markInitialLinkChecked } from './deepLinkState';
 
 function toast(msg: string) {
   if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.LONG);
-  else Alert.alert('VibeSDR', msg);
+  else Alert.alert('CarFM', msg);
 }
 
 /**
@@ -80,24 +80,25 @@ export function useDeepLinks(ready: boolean) {
     // socket, so ALWAYS confirm (stricter than vibesdr://, which auto-connects).
     if (/^sdr:\/\//i.test(url)) {
       const t = parseSdrUrl(url);
-      if (!t) { toast('Invalid SpyServer link'); return; }
+      if (!t) { toast('Invalid SpyServer link'); clearDeepLinkActive(); return; }
       const onSDR = navigationRef.getCurrentRoute?.()?.name === 'SDR';
       Alert.alert(
         'Connect to SpyServer?',
         `${t.host}:${t.port}\n\nSpyServer links come from third-party sources — only connect to servers you trust.`
           + (onSDR ? '\nThis will disconnect your current session.' : ''),
         [
-          { text: 'Cancel', style: 'cancel' },
+          { text: 'Cancel', style: 'cancel', onPress: () => clearDeepLinkActive() },
           { text: 'Connect', onPress: () => goToSpy(t.host, t.port) },
         ],
+        { cancelable: true, onDismiss: () => clearDeepLinkActive() },
       );
       return;
     }
 
     const req = parseVibeSdrUrl(url);
-    if (!req) { toast('Invalid VibeSDR link'); return; }
+    if (!req) { toast('Invalid link'); clearDeepLinkActive(); return; }
     const res = await resolveRequest(req);
-    if (!res.ok) { toast(res.reason); return; }
+    if (!res.ok) { toast(res.reason); clearDeepLinkActive(); return; }
 
     // Cold start (nothing to interrupt) → connect directly. If we're already on
     // an SDR session, confirm before tearing it down.
@@ -107,9 +108,10 @@ export function useDeepLinks(ready: boolean) {
         'Open instance from link?',
         `Connect to ${res.target.instanceName}?\nThis will disconnect your current session.`,
         [
-          { text: 'Cancel', style: 'cancel' },
+          { text: 'Cancel', style: 'cancel', onPress: () => clearDeepLinkActive() },
           { text: 'Connect', onPress: () => { void goToTarget(res.target); } },
         ],
+        { cancelable: true, onDismiss: () => clearDeepLinkActive() },
       );
     } else {
       void goToTarget(res.target);

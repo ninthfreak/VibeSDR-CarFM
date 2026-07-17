@@ -27,7 +27,9 @@ const DB_NAME = 'stations.sqlite';
 // Bump whenever you rebuild + rebundle the DB (see tools/build_station_db). On a
 // bump the stale copy is replaced with the new asset; logos/wanted are migrated.
 // 3 = first real FCC build (LMS snapshot 2026-07-16, 20733 stations).
-const DB_ASSET_VERSION = '3';
+// 4 = purge of wrong auto-downloaded logos (auto resolution disabled — see
+//     logoResolver TODO(logos)); only MANUAL logos survive the migration.
+const DB_ASSET_VERSION = '4';
 
 const LOGO_DDL = `
   CREATE TABLE IF NOT EXISTS logos (
@@ -63,7 +65,9 @@ async function openDb(): Promise<SQLite.SQLiteDatabase | null> {
       if (dbInfo.exists) {
         try {
           const old = await SQLite.openDatabaseAsync(DB_NAME);
-          carryLogos = await old.getAllAsync<LogoRow>('SELECT * FROM logos WHERE img IS NOT NULL').catch(() => []);
+          // Carry ONLY manual logos: the auto chain produced wrong images
+          // (device test 2026-07-17), so its rows are dropped by this bump.
+          carryLogos = await old.getAllAsync<LogoRow>("SELECT * FROM logos WHERE img IS NOT NULL AND source='manual'").catch(() => []);
           carryWanted = await old.getAllAsync<WantedRow>('SELECT * FROM logo_wanted').catch(() => []);
           await old.closeAsync();
         } catch { /* old copy unreadable — nothing to carry */ }
