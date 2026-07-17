@@ -28,6 +28,15 @@ const checked = new Promise<void>((resolve) => { markChecked = resolve; });
 /** Mark that a deep link is driving this launch (suppress default auto-connect). */
 export function markDeepLinkActive() { active = true; }
 
+/**
+ * Release the claim when the link does NOT end up owning a session — invalid
+ * URL, failed resolve, or the user cancelling the confirm. The flag is set
+ * before validation (it must win the cold-start race), so every bail-out path
+ * must clear it: a stale claim suppressed the carFm launch and default
+ * auto-connect for the whole process lifetime, stranding the stock picker.
+ */
+export function clearDeepLinkActive() { active = false; }
+
 /** True while a deep link owns the session. */
 export function isDeepLinkActive() { return active; }
 

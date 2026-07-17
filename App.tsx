@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { Animated, ActivityIndicator, AppState, LogBox, Text, View } from 'react-native';
+import { Animated, ActivityIndicator, AppState, LogBox, Platform, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { TouchableOpacity } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -278,7 +278,14 @@ export default function App() {
     watchProvider.setInstanceHandler(applyInstance);
 
     // Headless boot: decide what to connect to, with no user to ask.
-    if (startedInBackground) {
+    //
+    // iOS ONLY — this branch exists for the Apple Watch driving a locked phone.
+    // On Android the carFm BootReceiver launches the app behind the keyguard,
+    // which ALSO reads AppState !== 'active': ungated, this branch claimed
+    // watchTargetPending (blocking both carFm entry paths) and, with a saved
+    // default instance, reset the stack to a stock SDR route with no carFm
+    // param — the head unit unlocked straight into the stock waterfall.
+    if (startedInBackground && Platform.OS === 'ios') {
       watchTargetPending.claimed = true;      // the picker must not race us
       watchProvider.setPhoneStatus('starting');
       Promise.all([getDefaultInstance(), getFavourites(), getViewMode()])

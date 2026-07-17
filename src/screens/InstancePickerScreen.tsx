@@ -223,7 +223,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // Learn the user's location for distance sorting (used when a directory is
       // opened), but DON'T fetch any directory here — the landing view is the
       // chooser (favourites + directory cards). Directories load on tap.
-      try { const loc = await getUserLocation(); if (!cancelled) userLocRef.current = loc; } catch {}
+      //
+      // Fire-and-forget, NEVER awaited: on Android this can pop the runtime
+      // location-permission dialog, and awaiting it gated every carFm exit path
+      // below — a fresh install sat on the splash until the driver answered, and
+      // a boot behind the keyguard (no UI to show the dialog) held the splash
+      // indefinitely. Launch does not need location; only directory sorting and
+      // Nearby do, and both read userLocRef when they open.
+      getUserLocation().then(loc => { if (!cancelled) userLocRef.current = loc; }).catch(() => {});
       if (!cancelled) { setLoading(false); }
 
       // Launched by plugging in an RTL-SDR? Go straight to Local Hardware and skip
@@ -363,9 +370,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // V4 local hardware (Android only): start the on-device shim (RTL-SDR over
   // USB OTG) and connect to it on localhost. Audio rides /ws/audio (external
   // PCM); spectrum/control reuse the UberSDR path against ws://127.0.0.1.
-  const connectLocal = useCallback(async (modeOverride?: typeof viewMode) => {
+  // Returns true only when it actually navigated into a session — the carFm
+  // launch paths (tryUsbLaunch/tryCarAutostart) hand the launch back to the
+  // tunerless fallback on failure instead of stranding the stock picker.
+  // `quiet` suppresses the failure Alert on those paths: the FM face's
+  // tuner-error pill + dongle polling are the designed failure surface there.
+  const connectLocal = useCallback(async (modeOverride?: typeof viewMode, quiet?: boolean): Promise<boolean> => {
     const Local = (NativeModules as any).VibeLocalSDR;
-    if (!Local?.startSpectrum) { Alert.alert('Local Hardware', 'Not available on this build.'); return; }
+    if (!Local?.startSpectrum) { if (!quiet) Alert.alert('Local Hardware', 'Not available on this build.'); return false; }
     setConnecting(true);
     try {
       // NB: the shim's WS stays bound to localhost (default). VibeServer will later
@@ -383,9 +395,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         serverType: 'ubersdr', isLocal: true, localPort: res.port,
         localGen: newLocalSession(), carFm: true,
       });
+      return true;
     } catch (e: any) {
       setConnecting(false);
-      Alert.alert('Local Hardware', e?.message ?? 'Could not start local SDR. Is an RTL-SDR plugged in via USB OTG?');
+      if (!quiet) Alert.alert('Local Hardware', e?.message ?? 'Could not start local SDR. Is an RTL-SDR plugged in via USB OTG?');
+      return false;
     }
   }, [navigation, viewMode]);
 
@@ -450,25 +464,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     if (!pending) return false;
     splashBridge.dismiss();
 
-    // Let the user pick how to use the just-plugged-in dongle: listen on this
-    // device, or share it over the network as an RTL-TCP server. (Falls straight
-    // through to listen if the server path isn't available on this build.)
-    if (rtlTcpServerSupported) {
-      Alert.alert(
-        'RTL-SDR connected',
-        'How would you like to use this dongle?',
-        [
-          { text: 'Listen on this device', onPress: () => { connectLocal(modeArg); } },
-          { text: 'Share over network', onPress: () => navigation.navigate('ServerMode', {}) },
-          { text: 'Cancel', style: 'cancel' },
-        ],
-        { cancelable: true },
-      );
-    } else {
-      await connectLocal(modeArg);
-    }
-    return true;
-  }, [connectLocal, navigation]);
+    // CarFM: a plugged-in dongle means LISTEN, always — auto-grab, no prompt.
+    // (The stock three-way "listen / share over network / cancel" Alert let
+    // Cancel and Share strand the launch on the stock picker; network sharing
+    // stays reachable from the picker's own UI via the Advanced view.)
+    // On failure (USB permission denied, shim start error) return false so
+    // loadAndInit falls through to the tunerless FM face instead of the picker.
+    return await connectLocal(modeArg, true);
+  }, [connectLocal]);
   tryUsbLaunchRef.current = tryUsbLaunch;
 
   // CarFM autostart: no attach intent (dongle was already plugged in at boot).
@@ -482,8 +485,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     try { devs = await Local.listDevices(); } catch { return false; }
     if (!Array.isArray(devs) || devs.length === 0) return false;   // no dongle → normal picker
     splashBridge.dismiss();
-    await connectLocal(modeArg);
-    return true;
+    // Claim the launch ONLY if the session actually started. connectLocal used
+    // to be fire-and-forget here: a USB-permission denial or shim failure showed
+    // an Alert, no navigation happened, and the "claimed" return stranded the
+    // user on the stock picker. Returning false hands the launch to the
+    // tunerless FM face, whose tuner-error pill + dongle polling own retries.
+    return await connectLocal(modeArg, true);
   }, [connectLocal]);
   tryCarAutostartRef.current = tryCarAutostart;
 

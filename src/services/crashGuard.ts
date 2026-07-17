@@ -63,10 +63,8 @@ export function installCrashGuard(navRef: NavigationContainerRef<RootStackParamL
       setTimeout(() => {
         recovering = false;
         Alert.alert(
-          'Server connection lost',
-          'The SDR server stopped responding — SDR servers (OpenWebRX especially) '
-          + 'restart from time to time. This is a server issue, not a problem with '
-          + 'VibeSDR. You’ve been returned to the server list.\n\n(detail: '
+          'Radio restarted',
+          'CarFM hit an unexpected error and restarted the radio.\n\n(detail: '
           + info.message + ')',
         );
       }, 350);
