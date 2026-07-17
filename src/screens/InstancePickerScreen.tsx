@@ -24,6 +24,8 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { newLocalSession } from '../services/localSession';
 import UsbSdrIcon from '../components/UsbSdrIcon';
+import { GearIcon, SignalWaves } from '../components/carfm/icons';
+import { DARK as CARFM, FONT as CARFM_FONT } from '../components/carfm/tokens';
 import { themeFor } from '../constants/theme';
 import {
   SDRInstance,
@@ -154,6 +156,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // directory's instance list.
   const [selectedDir, setSelectedDir]   = useState<DirectoryId | null>(null);
 
+  // CarFM: this fork's launch surface is the CAR RADIO, never the stock picker.
+  // With a dongle attached the autostart below goes straight to the FM face;
+  // without one this screen renders a "waiting for tuner" surface that keeps
+  // polling and auto-connects on plug-in. The stock picker still exists for
+  // dev/advanced use, but ONLY behind the gear on that surface — it is no
+  // longer the landing page under any launch path.
+  const [carHome, setCarHome] = useState(Platform.OS === 'android');
+  const carHomeRef = useRef(carHome);
+  carHomeRef.current = carHome;
+
   // First-run tour on the instance list — welcome + the custom-server box.
   const pickerTour = useCoachmarkTour([
     { id: 'welcome', title: 'Welcome to VibeSDR',
@@ -238,6 +250,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           && await tryCarAutostartRef.current?.(mode)) return;
       if (!cancelled) splashBridge.dismiss();
 
+      // CarFM launch surface owns the screen: with no dongle yet we sit on the
+      // "waiting for tuner" surface (which polls and auto-connects) — the
+      // default-instance auto-connect below must NOT fire underneath it and
+      // drop the user into the stock SDR UI. Deep links / the watch still win.
+      if (carHomeRef.current && !isDeepLinkActive() && !watchTargetPending.claimed
+          && !route.params?.noAutoConnect) return;
+
       // A default instance still auto-connects straight through — unless a
       // vibesdr:// deep link is driving this launch (it owns the session and
       // resets us to its target; auto-connecting to the default would stomp it).
@@ -281,6 +300,21 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     if (firstFocusRef.current) { firstFocusRef.current = false; return; }
     tryUsbLaunchRef.current?.();
   }, []));
+
+  // CarFM waiting surface: poll for a dongle while it's on screen. Covers boots
+  // where the dongle enumerates late (head units are slow to power USB) and
+  // devices where no USB_DEVICE_ATTACHED intent fires. One attempt in flight
+  // at a time; navigation away (successful connect) unfocuses and stops it.
+  useFocusEffect(useCallback(() => {
+    if (!carHome) return;
+    let busy = false;
+    const t = setInterval(async () => {
+      if (busy) return;
+      busy = true;
+      try { await tryCarAutostartRef.current?.(); } finally { busy = false; }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [carHome]));
 
   // mDNS/Bonjour: browse for RTL-TCP servers while the picker is on screen; stop
   // on blur so we don't hold the network browser open during an SDR session.
@@ -947,6 +981,41 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       </>
     );
   };
+
+  // ── CarFM launch surface ────────────────────────────────────────────────
+  // The fork's landing state: never the stock picker. A dongle present at
+  // launch never even renders this (autostart navigates first); without one
+  // we wait here, polling, and connect the moment the tuner appears. The gear
+  // is the ONLY route to the stock SDR receiver list (dev/advanced use).
+  if (carHome) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: CARFM.bg }}>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 20, padding: 32 }}>
+          <SignalWaves size={72} strength={0} on={CARFM.amber} off={CARFM.raised} />
+          <Text style={{ fontFamily: CARFM_FONT, fontSize: 40, fontWeight: '700', color: CARFM.text, letterSpacing: 1 }}>
+            CarFM
+          </Text>
+          <ActivityIndicator color={CARFM.dim} />
+          <Text style={{ fontFamily: CARFM_FONT, fontSize: 18, color: CARFM.dim, textAlign: 'center', lineHeight: 26 }}>
+            Waiting for the USB tuner…{'\n'}
+            The radio starts as soon as the RTL-SDR dongle is detected.
+          </Text>
+        </View>
+        <TouchableOpacity
+          onPress={() => setCarHome(false)}
+          style={{
+            position: 'absolute', right: 24, bottom: 24, width: 56, height: 56,
+            borderRadius: 16, borderWidth: 1, borderColor: CARFM.border,
+            backgroundColor: CARFM.raised, alignItems: 'center', justifyContent: 'center',
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Advanced: SDR receiver list"
+        >
+          <GearIcon size={26} color={CARFM.dim} />
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: C.bg }]}>
