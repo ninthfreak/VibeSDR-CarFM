@@ -688,6 +688,28 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         } catch (_: Throwable) {}
     }
 
+    /** Doze/battery-optimization whitelist. A permanent car install boots the
+     *  radio as a foreground service, but Doze can still throttle/kill it on an
+     *  idle head unit; the exemption keeps a cold-boot autostart reliable.
+     *  CarFM prompts once at first car launch (spec §5c). */
+    @ReactMethod
+    fun isIgnoringBatteryOptimizations(promise: Promise) {
+        try {
+            val pm = reactContext.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            promise.resolve(pm.isIgnoringBatteryOptimizations(reactContext.packageName))
+        } catch (_: Throwable) { promise.resolve(true) }   // unknown -> don't nag
+    }
+
+    @ReactMethod
+    fun requestIgnoreBatteryOptimizations() {
+        try {
+            val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                .setData(android.net.Uri.parse("package:" + reactContext.packageName))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            reactContext.startActivity(intent)
+        } catch (_: Throwable) {}
+    }
+
     private fun stopSpectrumInternal() {
         try { VibeLocalSDR.stopSpectrum() } catch (_: Throwable) {}
         tcpWifiLock.release()

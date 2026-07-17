@@ -1029,6 +1029,9 @@ export class UberSDRClient {
         ta: msg.ta === true,
         pty: typeof msg.pty === 'number' ? msg.pty : undefined,
         af: msg.af === true,
+        afMhz: Array.isArray(msg.af_list)
+          ? (msg.af_list as unknown[]).filter((v): v is number => typeof v === 'number')
+          : undefined,
         badge: ps ? 'RDS' : undefined,
         stereo,
         pi,

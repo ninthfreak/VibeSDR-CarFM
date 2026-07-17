@@ -317,10 +317,17 @@ public:
         // Programme flags: TP + PTY ride in every group's block B; TA and
         // AF-present come from group 0A/0B. Fired on change.
         void (*flags)(void* ctx, bool tp, bool ta, uint8_t pty, bool afPresent) = nullptr;
+        // Alternative Frequencies (group 0A block C): the accumulated list in
+        // MHz, re-fired whenever a new code is learned. Drives AF-follow.
+        void (*afList)(void* ctx, const float* mhz, int n) = nullptr;
     };
     void setCallbacks(const Callbacks& c) { cb_ = c; }
     void reset();
     void pushBit(int bit);            // one recovered data bit (post differential)
+    // Hardware-RDS backends (Si470x etc., tuner-backends addendum §1): deliver
+    // one already-synced block group (A..D + per-block validity) straight into
+    // the SAME parser — PS/RT/RT+/PTY/TA/AF all work identically.
+    void pushGroup(const uint16_t blocks[4], const bool ok[4]);
 
     // Exposed for the DSP layer / tests (encoder round-trip).
     static uint16_t checkword(uint16_t data);           // 10-bit, no offset
@@ -348,6 +355,9 @@ private:
     bool tp_ = false, ta_ = false, afSeen_ = false;
     uint8_t pty_ = 0;
     int lastFlags_ = -1;
+    // AF codes 1..204 learned so far (bitmap); count tracks additions.
+    bool afCode_[205] = {false};
+    int afCount_ = 0;
     Callbacks cb_{};
 };
 
@@ -397,6 +407,7 @@ public:
         // Optional: WFM RDS programme-service name (8 chars) + station PI code.
         void (*rdsRtPlus)(void* ctx, const char* artist, const char* title) = nullptr;
         void (*rdsFlags)(void* ctx, bool tp, bool ta, uint8_t pty, bool afPresent) = nullptr;
+        void (*rdsAfList)(void* ctx, const float* mhz, int n) = nullptr;
         void (*rdsPs)(void* ctx, uint16_t pi, const char* ps8) = nullptr;
         // Optional: WFM RDS RadioText (up to 64 chars).
         void (*rdsText)(void* ctx, const char* rt64) = nullptr;

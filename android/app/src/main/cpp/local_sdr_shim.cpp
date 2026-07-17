@@ -1187,6 +1187,7 @@ struct LocalSdrShim::Impl {
     int rdsEcc = 0;                          // RDS Extended Country Code (0 = none)
     bool rdsTp = false, rdsTa = false, rdsAf = false;
     int rdsPty = 0;                          // programme type code (0 = none/undefined)
+    std::vector<float> rdsAfMhz;             // learned AF list (MHz), for AF-follow
     std::atomic<bool> stereoDetected{false};
     // VibeServer ADPCM encoder state. M = (L+R)/2 stays continuous across
     // mono<->stereo transitions (mono also feeds it (L+R)/2), so the mid channel
@@ -1526,6 +1527,10 @@ struct LocalSdrShim::Impl {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
         t->rdsTp = tp; t->rdsTa = ta; t->rdsPty = pty; t->rdsAf = af;
     }
+    static void rdsAfListCb(void* ctx, const float* mhz, int n) {
+        Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
+        t->rdsAfMhz.assign(mhz, mhz + n);
+    }
     static void rdsEccCb(void* ctx, uint8_t ecc) {
         Impl* t = (Impl*)ctx; std::lock_guard<std::mutex> lk(t->rdsMtx);
         t->rdsEcc = ecc;
@@ -1822,6 +1827,7 @@ struct LocalSdrShim::Impl {
         cb.rdsText  = &Impl::rdsTextCb;
         cb.rdsRtPlus = &Impl::rdsRtPlusCb;
         cb.rdsFlags = &Impl::rdsFlagsCb;
+        cb.rdsAfList = &Impl::rdsAfListCb;
         cb.rdsEcc   = &Impl::rdsEccCb;
         cb.stereo   = &Impl::stereoCb;
         fftAccum.assign(fftSize, 0.0f); accumCount = 0;
@@ -1840,13 +1846,22 @@ struct LocalSdrShim::Impl {
     void sendFmMeta(const std::shared_ptr<net::Socket>& sock) {
         std::string ps, rt, artist, title; int pi = -1, ecc = 0, pty = 0;
         bool tp = false, ta = false, af = false;
+        std::vector<float> afMhz;
         bool wfm = (mode == "wfm");
         if (wfm) {
             std::lock_guard<std::mutex> lk(rdsMtx);
             ps = rdsPsName; rt = rdsText; artist = rdsArtist; title = rdsTitle;
             pi = rdsPi; ecc = rdsEcc;
             tp = rdsTp; ta = rdsTa; pty = rdsPty; af = rdsAf;
+            afMhz = rdsAfMhz;
         }
+        // AF list serialized once here; change-detected with the other fields.
+        std::string afJson = "[";
+        for (size_t i = 0; i < afMhz.size(); ++i) {
+            char t2[16]; snprintf(t2, sizeof t2, "%s%.1f", i ? "," : "", afMhz[i]);
+            afJson += t2;
+        }
+        afJson += "]";
         // trim trailing spaces RDS pads with
         auto trim = [](std::string s){ size_t e = s.find_last_not_of(" \t\r\n"); return e==std::string::npos?std::string():s.substr(0,e+1); };
         ps = trim(ps); rt = trim(rt);
@@ -1856,21 +1871,23 @@ struct LocalSdrShim::Impl {
         // and flickers). Change-detect ps/rt/rt+/pi/ecc/stereo and skip otherwise.
         const int fl = ((int)tp << 10) | ((int)ta << 9) | ((int)af << 8) | pty;
         if (ps == lastSentPs_ && rt == lastSentRt_ && artist == lastSentArtist_ && title == lastSentTitle_
-            && pi == lastSentPi_ && ecc == lastSentEcc_ && st == lastSentStereo_ && fl == lastSentFlags_) return;
+            && pi == lastSentPi_ && ecc == lastSentEcc_ && st == lastSentStereo_ && fl == lastSentFlags_
+            && afJson == lastSentAf_) return;
         lastSentPs_ = ps; lastSentRt_ = rt; lastSentArtist_ = artist; lastSentTitle_ = title;
-        lastSentPi_ = pi; lastSentEcc_ = ecc; lastSentStereo_ = st; lastSentFlags_ = fl;
-        char buf[768];
+        lastSentPi_ = pi; lastSentEcc_ = ecc; lastSentStereo_ = st; lastSentFlags_ = fl; lastSentAf_ = afJson;
+        char buf[1280];
         snprintf(buf, sizeof buf,
             "{\"type\":\"rds\",\"stereo\":%s,\"ps\":\"%s\",\"radiotext\":\"%s\",\"rt_artist\":\"%s\",\"rt_title\":\"%s\","
-            "\"pi\":%d,\"ecc\":%d,\"tp\":%s,\"ta\":%s,\"pty\":%d,\"af\":%s}",
+            "\"pi\":%d,\"ecc\":%d,\"tp\":%s,\"ta\":%s,\"pty\":%d,\"af\":%s,\"af_list\":%s}",
             st ? "true" : "false",
             jsonEscape(ps).c_str(), jsonEscape(rt).c_str(),
             jsonEscape(artist).c_str(), jsonEscape(title).c_str(), pi, ecc,
-            tp ? "true" : "false", ta ? "true" : "false", pty, af ? "true" : "false");
+            tp ? "true" : "false", ta ? "true" : "false", pty, af ? "true" : "false",
+            afJson.c_str());
         sendText(sock, buf);
     }
     // Last RDS values pushed to the client (change-detect to avoid marquee re-trigger).
-    std::string lastSentPs_, lastSentRt_, lastSentArtist_, lastSentTitle_;
+    std::string lastSentPs_, lastSentRt_, lastSentArtist_, lastSentTitle_, lastSentAf_;
     int lastSentPi_ = -2; int lastSentEcc_ = -1; bool lastSentStereo_ = false; int lastSentFlags_ = -1;
 
     // retune the demod (and RTL centre if the offset would fall outside span)
@@ -1916,7 +1933,7 @@ struct LocalSdrShim::Impl {
         // showing the previous one's PS/RadioText until its own RDS re-syncs.
         { std::lock_guard<std::mutex> rl(rdsMtx);
           rdsPsName.clear(); rdsText.clear(); rdsArtist.clear(); rdsTitle.clear(); rdsPi = -1;
-          rdsTp = rdsTa = rdsAf = false; rdsPty = 0; }
+          rdsTp = rdsTa = rdsAf = false; rdsPty = 0; rdsAfMhz.clear(); }
         stereoDetected.store(false);
     }
 

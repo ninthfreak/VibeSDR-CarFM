@@ -214,6 +214,10 @@ void RxPipeline::rebuildAudio() {
                 auto* self = (RxPipeline*)c;
                 if (self->cb_.rdsFlags) self->cb_.rdsFlags(self->cb_.ctx, tp, ta, pty, af);
             };
+            rcb.afList = [](void* c, const float* mhz, int n) {
+                auto* self = (RxPipeline*)c;
+                if (self->cb_.rdsAfList) self->cb_.rdsAfList(self->cb_.ctx, mhz, n);
+            };
             rdsDemod_.configure(chFs_, rcb);
             break;
         }

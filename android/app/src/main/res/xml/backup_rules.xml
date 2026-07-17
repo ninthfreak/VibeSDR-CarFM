@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup (Android 11 and below): carry presets + settings across
+     devices/reinstalls. AsyncStorage (RKStorage) holds preset order, theme,
+     autostart, logo targets; shared_prefs hold the cached browse tree. The
+     bundled/runtime station DB (files/SQLite) is EXCLUDED — it is re-copied
+     from the APK asset on first launch and logos re-resolve. -->
+<full-backup-content>
+  <include domain="database" path="RKStorage"/>
+  <include domain="sharedpref" path="."/>
+  <exclude domain="file" path="SQLite"/>
+</full-backup-content>

@@ -18,6 +18,7 @@ import {
   Animated, Easing, Pressable, StyleSheet, Text, View, useColorScheme,
   type LayoutChangeEvent,
 } from 'react-native';
+import { useKeepAwake } from 'expo-keep-awake';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getNearbyStations } from '../services/stationFinder';
@@ -27,6 +28,7 @@ import LogoTile from './carfm/LogoTile';
 import NearbyPicker from './carfm/NearbyPicker';
 import Numpad from './carfm/Numpad';
 import PresetsBand, { type PresetItem } from './carfm/PresetsBand';
+import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
 import { DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, LIGHT } from './carfm/tokens';
 
 export interface CarFmPreset {
@@ -54,6 +56,14 @@ export interface CarFmFaceProps {
   /** No compatible tuner session (dongle absent/failed) — replaces the whole
    *  header status cluster with the error pill (design addendum). */
   tunerError?: boolean;
+  /** Theme override from settings ('system' follows the OS). */
+  theme?: CarFmTheme;
+  /** Start-radio-on-boot setting (shown/edited in the settings panel). */
+  autostart?: boolean;
+  onSetAutostart?: (on: boolean) => void;
+  onSetTheme?: (t: CarFmTheme) => void;
+  /** Immediate tuner reconnect attempt (tunerless sessions). */
+  onRetryTuner?: () => void;
   presets: CarFmPreset[];   // displayed order (user-arranged)
   onTuneHz: (hz: number) => void;
   onToggleSave: () => void;              // star: save/remove current frequency
@@ -139,13 +149,20 @@ function Tell({ label, on, pulse, pal }: { label: string; on: boolean; pulse?: b
 export default function CarFmFace(props: CarFmFaceProps) {
   const {
     freqHz, stationName, callsignHint, radioText, stereo, signalDb,
-    rdsOk, tp, ta, af, ptyText, tunerError, presets,
+    rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
+    onSetAutostart, onSetTheme, onRetryTuner, presets,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
     onOpenAdvanced,
   } = props;
   const insets = useSafeAreaInsets();
-  const pal = useColorScheme() === 'light' ? LIGHT : DARK;
+  const scheme = useColorScheme();
+  const pal = (theme === 'light' || (theme !== 'dark' && scheme === 'light')) ? LIGHT : DARK;
 
+  // A car radio's display never sleeps mid-drive: keep the screen awake for as
+  // long as the face is mounted (released automatically on unmount).
+  useKeepAwake();
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [numpadOpen, setNumpadOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [reordering, setReordering] = useState(false);
@@ -297,9 +314,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
         </View>
         )}
         <Pressable
-          onPress={onOpenAdvanced}
+          onPress={() => setSettingsOpen(true)}
           style={({ pressed }) => [styles.gearBtn, { borderColor: pal.border, backgroundColor: pal.raised }, pressed && { opacity: 0.55 }]}
-          accessibilityRole="button" accessibilityLabel="Settings and advanced SDR view"
+          accessibilityRole="button" accessibilityLabel="Settings"
         >
           <GearIcon size={24} color={pal.dim} />
         </Pressable>
@@ -434,6 +451,18 @@ export default function CarFmFace(props: CarFmFaceProps) {
         onTune={onNearbyTune}
         onSavePreset={onNearbySave}
         onClose={() => setPickerOpen(false)}
+      />
+      <SettingsPanel
+        visible={settingsOpen}
+        pal={pal}
+        tunerError={!!tunerError}
+        autostart={autostart ?? true}
+        theme={theme ?? 'system'}
+        onRetryTuner={onRetryTuner}
+        onSetAutostart={(on) => onSetAutostart?.(on)}
+        onSetTheme={(t) => onSetTheme?.(t)}
+        onAdvanced={() => { setSettingsOpen(false); onOpenAdvanced(); }}
+        onClose={() => setSettingsOpen(false)}
       />
     </View>
   );

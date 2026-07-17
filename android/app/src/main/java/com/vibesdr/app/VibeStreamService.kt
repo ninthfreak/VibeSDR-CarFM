@@ -79,6 +79,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         const val MEDIA_ROOT_ID = "vibesdr_root"
         const val BOOKMARKS_ID = "bookmarks"
         const val BANDS_ID = "bands"
+        const val NEARBY_ID = "nearby"
+        // CarFM custom media actions (notification / Android Auto / AVRCP).
+        const val ACTION_CARFM_SAVE = "com.vibesdr.app.carfm.SAVE_PRESET"
+        const val ACTION_CARFM_SEEK_UP = "com.vibesdr.app.carfm.SEEK_UP"
+        const val ACTION_CARFM_SEEK_DOWN = "com.vibesdr.app.carfm.SEEK_DOWN"
         const val ACTION_PLAY = "com.vibesdr.app.PLAY"
         const val ACTION_PAUSE = "com.vibesdr.app.PAUSE"
         const val ACTION_STOP = "com.vibesdr.app.STOP"
@@ -257,6 +262,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     )
     @Volatile private var browseBookmarks: List<BrowseItem> = emptyList()
     @Volatile private var browseBands: List<BrowseItem> = emptyList()
+    // CarFM: presets ride the bookmarks slot; nearby (FCC DB) is its own folder,
+    // and the payload's carfm flag relabels the tree + enables the car actions.
+    @Volatile private var browseNearby: List<BrowseItem> = emptyList()
+    @Volatile private var carfmBrowse = false
     private var carConnection: CarConnection? = null
     private var carObserver: Observer<Int>? = null
 
@@ -1781,11 +1790,17 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         val items = ArrayList<MediaBrowserCompat.MediaItem>()
         when (parentId) {
             MEDIA_ROOT_ID -> {
-                items.add(browsableFolder(BOOKMARKS_ID, "Bookmarks"))
-                items.add(browsableFolder(BANDS_ID, "Band Plan"))
+                if (carfmBrowse) {
+                    items.add(browsableFolder(BOOKMARKS_ID, "Presets"))
+                    items.add(browsableFolder(NEARBY_ID, "Nearby stations"))
+                } else {
+                    items.add(browsableFolder(BOOKMARKS_ID, "Bookmarks"))
+                    items.add(browsableFolder(BANDS_ID, "Band Plan"))
+                }
             }
             BOOKMARKS_ID -> browseBookmarks.forEach { items.add(playableItem(it)) }
             BANDS_ID -> browseBands.forEach { items.add(playableItem(it)) }
+            NEARBY_ID -> browseNearby.forEach { items.add(playableItem(it)) }
         }
         result.sendResult(items)
     }
@@ -1827,15 +1842,39 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             val obj = JSONObject(json)
             browseBookmarks = parseBrowseArr(obj.optJSONArray("bookmarks"), isBand = false)
             browseBands = parseBrowseArr(obj.optJSONArray("bands"), isBand = true)
+            browseNearby = parseBrowseArr(obj.optJSONArray("nearby"), isBand = false)
+            carfmBrowse = obj.optBoolean("carfm", false)
             getSharedPreferences("vibesdr_browse", MODE_PRIVATE)
                 .edit().putString("payload", json).apply()
             mainHandler.post {
+                notifyChildrenChanged(MEDIA_ROOT_ID)
                 notifyChildrenChanged(BOOKMARKS_ID)
                 notifyChildrenChanged(BANDS_ID)
+                notifyChildrenChanged(NEARBY_ID)
+                updateQueue()
             }
         } catch (e: Exception) {
             Log.w(TAG, "setBrowseItems parse failed: ${e.message}")
         }
+    }
+
+    /** CarFM: the presets ARE the queue — lock screen / Android Auto show the
+     *  strip and onSkipToQueueItem tunes straight to the tapped preset. */
+    private fun updateQueue() {
+        val session = mediaSession ?: return
+        if (!carfmBrowse) { session.setQueue(null); return }
+        session.setQueueTitle("Presets")
+        session.setQueue(browseBookmarks.mapIndexed { i, it ->
+            val mhz = String.format(java.util.Locale.US, "%.1f MHz", it.freq / 1_000_000.0)
+            MediaSessionCompat.QueueItem(
+                MediaDescriptionCompat.Builder()
+                    .setMediaId("${it.freq}|${it.mode}|${it.step}|0")
+                    .setTitle(it.name)
+                    .setSubtitle(mhz)
+                    .build(),
+                i.toLong(),
+            )
+        })
     }
 
     private fun parseBrowseArr(arr: org.json.JSONArray?, isBand: Boolean): List<BrowseItem> {
@@ -1858,6 +1897,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             val obj = JSONObject(json)
             browseBookmarks = parseBrowseArr(obj.optJSONArray("bookmarks"), isBand = false)
             browseBands = parseBrowseArr(obj.optJSONArray("bands"), isBand = true)
+            browseNearby = parseBrowseArr(obj.optJSONArray("nearby"), isBand = false)
+            carfmBrowse = obj.optBoolean("carfm", false)
         } catch (_: Exception) {}
     }
 
@@ -2054,12 +2095,19 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
                 PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
         }
-        mediaSession?.setPlaybackState(
-            PlaybackStateCompat.Builder()
-                .setState(state, 0L, 1f, SystemClock.elapsedRealtime())
-                .setActions(actions)
-                .build()
-        )
+        val b = PlaybackStateCompat.Builder()
+            .setState(state, 0L, 1f, SystemClock.elapsedRealtime())
+            .setActions(actions)
+        if (carfmBrowse) {
+            // Car radio extras for Android Auto / AVRCP / notification surfaces.
+            b.addCustomAction(PlaybackStateCompat.CustomAction.Builder(
+                ACTION_CARFM_SEEK_DOWN, "Seek down", R.drawable.ic_carfm_seek_down).build())
+            b.addCustomAction(PlaybackStateCompat.CustomAction.Builder(
+                ACTION_CARFM_SAVE, "Save preset", R.drawable.ic_carfm_star).build())
+            b.addCustomAction(PlaybackStateCompat.CustomAction.Builder(
+                ACTION_CARFM_SEEK_UP, "Seek up", R.drawable.ic_carfm_seek_up).build())
+        }
+        mediaSession?.setPlaybackState(b.build())
     }
 
     private fun updateNotification() {
@@ -2077,6 +2125,26 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 override fun onStop() { stopEngine(); stopSelf() }
                 override fun onSkipToNext() { tuneByStep(+1) }
                 override fun onSkipToPrevious() { tuneByStep(-1) }
+                override fun onSkipToQueueItem(id: Long) {
+                    // CarFM: the queue is the preset strip; id = index.
+                    val it = browseBookmarks.getOrNull(id.toInt()) ?: return
+                    playFromBrowseId("${it.freq}|${it.mode}|${it.step}|0")
+                    setMutedNative(false)
+                }
+                override fun onPlayFromSearch(query: String?, extras: Bundle?) {
+                    // Voice ("play 94.1" / "play WJJO"): resolved in JS against
+                    // presets/bands/frequencies — same path as the Siri intent.
+                    val q = query?.trim().orEmpty()
+                    if (q.isEmpty()) { setMutedNative(false); return }
+                    emitEvent("VibeVoiceQuery") { it.putString("query", q) }
+                }
+                override fun onCustomAction(action: String?, extras: Bundle?) {
+                    when (action) {
+                        ACTION_CARFM_SAVE -> emitEvent("VibeCarAction") { it.putString("action", "save") }
+                        ACTION_CARFM_SEEK_UP -> emitEvent("VibeCarAction") { it.putString("action", "seek_up") }
+                        ACTION_CARFM_SEEK_DOWN -> emitEvent("VibeCarAction") { it.putString("action", "seek_down") }
+                    }
+                }
                 // Car browse-list pick → hand the tune to JS (owns region logic)
                 override fun onPlayFromMediaId(mediaId: String?, extras: Bundle?) {
                     playFromBrowseId(mediaId)
