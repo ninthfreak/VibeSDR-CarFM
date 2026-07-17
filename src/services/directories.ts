@@ -21,7 +21,12 @@ export const DIRECTORIES: DirectoryMeta[] = [
   { id: 'ubersdr',     name: 'UberSDR',     desc: 'Official UberSDR instances',                 kinds: ['ubersdr'] },
   { id: 'receiverbook', name: 'Receiverbook', desc: 'OpenWebRX + KiwiSDR (receiverbook.de)',     kinds: ['owrx', 'kiwi'] },
   { id: 'kiwisdr',     name: 'KiwiSDR',     desc: 'Public KiwiSDR network (kiwisdr.com)',        kinds: ['kiwi'] },
-  { id: 'fmdx',        name: 'FM-DX',       desc: 'FM-DX Webserver network (servers.fmdx.org)',  kinds: ['fmdx'] },
+  // FM-DX Webserver directory HIDDEN for the CarFM fork (2026-07-16). FM-DX is a
+  // remote-tuner (DXing) feature; this build is a local-dongle car radio, so the
+  // network tuner list is obscured from the picker. fetchFmdx + the 'fmdx'
+  // dispatch below and the whole FmdxAdapter backend stay in place (dormant but
+  // trivially revived — just restore this row) in case it's ever rewired in.
+  // { id: 'fmdx',      name: 'FM-DX',       desc: 'FM-DX Webserver network (servers.fmdx.org)',  kinds: ['fmdx'] },
   // SpyServer directory listing DELIBERATELY NOT shown (2026-07-09). The public
   // directory is 219 random hobbyist servers, most full/unreachable/session-
   // limited, so browsing it is a wall of try-and-fail. fetchSpyServers + the

@@ -24,9 +24,21 @@ static void feedBlock(RdsDecoder& d, uint32_t blk) {
     for (int i = 25; i >= 0; --i) d.pushBit((blk >> i) & 1);
 }
 
-struct Cap { uint16_t pi = 0; char ps[9] = {0}; int psCalls = 0; };
+struct Cap {
+    uint16_t pi = 0; char ps[9] = {0}; int psCalls = 0;
+    char artist[65] = {0}; char title[65] = {0}; int rtpCalls = 0;
+};
 static void onPs(void* c, uint16_t pi, const char* ps) {
     auto* p = (Cap*)c; p->pi = pi; std::strncpy(p->ps, ps, 8); p->psCalls++;
+}
+static void onRtPlus(void* c, const char* artist, const char* title) {
+    auto* p = (Cap*)c;
+    std::strncpy(p->artist, artist, 64); std::strncpy(p->title, title, 64);
+    p->rtpCalls++;
+}
+struct FlagCap { bool tp = false, ta = false, af = false; int pty = -1; int calls = 0; };
+static void onFlags(void* c, bool tp, bool ta, uint8_t pty, bool af) {
+    auto* p = (FlagCap*)c; p->tp = tp; p->ta = ta; p->pty = pty; p->af = af; p->calls++;
 }
 
 int main() {
@@ -68,6 +80,91 @@ int main() {
     check(cap.psCalls > 0, "PS callback fired");
     check(cap.pi == PI, "PI recovered");
     check(std::strcmp(cap.ps, PS) == 0, "PS name recovered exactly");
+
+    // ── RadioText Plus (ODA 0x4BD7): 2A fills RT, 3A registers, 11A tags ──────
+    {
+        RdsDecoder d2;
+        Cap c2;
+        RdsDecoder::Callbacks cb2; cb2.ctx = &c2; cb2.rtPlus = onRtPlus;
+        d2.setCallbacks(cb2);
+        d2.reset();
+
+        //           0123456789012345678901234567
+        const char* RT = "Enter Sandman by Metallica  ";   // 28 chars = 7 x 2A segments
+        for (int rep = 0; rep < 2; ++rep) {
+            for (int addr = 0; addr < 7; ++addr) {
+                const uint16_t B = (2 << 12) | (0 << 11) | (addr & 0xF);           // 2A
+                const uint16_t C = ((uint8_t)RT[addr*4]   << 8) | (uint8_t)RT[addr*4+1];
+                const uint16_t D = ((uint8_t)RT[addr*4+2] << 8) | (uint8_t)RT[addr*4+3];
+                feedBlock(d2, encodeBlock(PI, 0)); feedBlock(d2, encodeBlock(B, 1));
+                feedBlock(d2, encodeBlock(C, 2));  feedBlock(d2, encodeBlock(D, 4));
+            }
+        }
+
+        // 3A: RT+ (AID 0x4BD7) rides in group 11A (application group code 0x16).
+        {
+            const uint16_t B = (3 << 12) | (0 << 11) | 0x16;
+            feedBlock(d2, encodeBlock(PI, 0)); feedBlock(d2, encodeBlock(B, 1));
+            feedBlock(d2, encodeBlock(0, 2));  feedBlock(d2, encodeBlock(0x4BD7, 4));
+        }
+        check(c2.rtpCalls == 0, "RT+ not fired before a tag group arrives");
+
+        // 11A: toggle=0 running=1; tag1 = ITEM.TITLE(1) start 0 len 12 ("Enter Sandman"),
+        // tag2 = ITEM.ARTIST(4) start 17 len 8 ("Metallica"). Type 1 = hi3 000 lo3 001;
+        // type 4 = hi1 0 lo5 00100. Length markers are length-1.
+        {
+            const uint16_t B = (11 << 12) | (0 << 11) | (0 << 4) | (1 << 3) | 0x0;
+            const uint16_t C = (uint16_t)((1 << 13) | (0 << 7) | (12 << 1) | 0);
+            const uint16_t D = (uint16_t)((4 << 11) | (17 << 5) | 8);
+            feedBlock(d2, encodeBlock(PI, 0)); feedBlock(d2, encodeBlock(B, 1));
+            feedBlock(d2, encodeBlock(C, 2));  feedBlock(d2, encodeBlock(D, 4));
+        }
+        std::printf("  RT+ artist=\"%s\" title=\"%s\" (callbacks=%d)\n", c2.artist, c2.title, c2.rtpCalls);
+        check(c2.rtpCalls == 1, "RT+ callback fired once");
+        check(std::strcmp(c2.artist, "Metallica") == 0, "RT+ ITEM.ARTIST sliced correctly");
+        check(std::strcmp(c2.title, "Enter Sandman") == 0, "RT+ ITEM.TITLE sliced correctly");
+
+        // Re-sending the SAME tags must not re-fire (change detection).
+        {
+            const uint16_t B = (11 << 12) | (0 << 11) | (0 << 4) | (1 << 3) | 0x0;
+            const uint16_t C = (uint16_t)((1 << 13) | (0 << 7) | (12 << 1) | 0);
+            const uint16_t D = (uint16_t)((4 << 11) | (17 << 5) | 8);
+            feedBlock(d2, encodeBlock(PI, 0)); feedBlock(d2, encodeBlock(B, 1));
+            feedBlock(d2, encodeBlock(C, 2));  feedBlock(d2, encodeBlock(D, 4));
+        }
+        check(c2.rtpCalls == 1, "identical RT+ group does not re-fire");
+
+        // Item toggle flip with dummy tags = new item -> tags cleared (both empty).
+        {
+            const uint16_t B = (11 << 12) | (0 << 11) | (1 << 4) | (1 << 3) | 0x0;
+            feedBlock(d2, encodeBlock(PI, 0)); feedBlock(d2, encodeBlock(B, 1));
+            feedBlock(d2, encodeBlock(0, 2));  feedBlock(d2, encodeBlock(0, 4));
+        }
+        check(c2.rtpCalls == 2, "toggle flip fires a clear");
+        check(c2.artist[0] == 0 && c2.title[0] == 0, "toggle flip clears artist/title");
+    }
+
+    // ── Programme flags: TP + PTY (every block B), TA + AF (group 0A) ─────────
+    {
+        RdsDecoder d3;
+        FlagCap fc;
+        RdsDecoder::Callbacks cb3; cb3.ctx = &fc; cb3.flags = onFlags;
+        d3.setCallbacks(cb3);
+        d3.reset();
+        // 0A with TP=1 (bit 10), PTY=5 (bits 9-5), TA=1 (bit 4), AF code 42 in C.
+        const uint16_t B = (0 << 12) | (0 << 11) | (1 << 10) | (5 << 5) | (1 << 4) | 0x0;
+        const uint16_t C = (42 << 8) | 240;                    // one AF freq + a filler
+        feedBlock(d3, encodeBlock(PI, 0)); feedBlock(d3, encodeBlock(B, 1));
+        feedBlock(d3, encodeBlock(C, 2));  feedBlock(d3, encodeBlock(0, 4));
+        std::printf("  flags: tp=%d ta=%d pty=%d af=%d (callbacks=%d)\n", fc.tp, fc.ta, fc.pty, fc.af, fc.calls);
+        check(fc.calls == 1, "flags callback fired");
+        check(fc.tp && fc.ta && fc.af, "TP/TA/AF decoded");
+        check(fc.pty == 5, "PTY code decoded");
+        // Same group again -> no re-fire (change detection).
+        feedBlock(d3, encodeBlock(PI, 0)); feedBlock(d3, encodeBlock(B, 1));
+        feedBlock(d3, encodeBlock(C, 2));  feedBlock(d3, encodeBlock(0, 4));
+        check(fc.calls == 1, "identical flags do not re-fire");
+    }
 
     std::printf(failures ? "\n%d FAILURE(S)\n" : "\nALL PASS\n", failures);
     return failures ? 1 : 0;

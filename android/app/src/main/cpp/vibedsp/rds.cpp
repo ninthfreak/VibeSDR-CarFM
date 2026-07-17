@@ -86,6 +86,10 @@ void RdsDecoder::reset() {
     std::memset(ps_, 0, sizeof ps_);
     std::memset(rt_, 0, sizeof rt_);
     ecc_ = 0;
+    rtpGroup_ = -1; rtpToggle_ = false; rtpHaveToggle_ = false;
+    std::memset(rtpArtist_, 0, sizeof rtpArtist_);
+    std::memset(rtpTitle_, 0, sizeof rtpTitle_);
+    tp_ = false; ta_ = false; afSeen_ = false; pty_ = 0; lastFlags_ = -1;
 }
 
 void RdsDecoder::pushBit(int bit) {
@@ -126,6 +130,25 @@ void RdsDecoder::parseGroup() {
     const int gtype = (blk_[1] >> 12) & 0xF;
     const int ver   = (blk_[1] >> 11) & 1;
 
+    // Every group's block B carries TP (bit 10) + PTY (bits 9-5); TA and the
+    // AF list only ride in group 0. Collected here, emitted change-detected.
+    tp_  = (blk_[1] >> 10) & 1;
+    pty_ = (uint8_t)((blk_[1] >> 5) & 0x1F);
+    if (gtype == 0) {
+        ta_ = (blk_[1] >> 4) & 1;
+        // 0A block C carries AF pairs; codes 1..204 are actual frequencies
+        // (224+ are "count" markers, 205/206+ fillers) — any real code = has AF.
+        if (ver == 0 && blkOk_[2]) {
+            const uint8_t a = (blk_[2] >> 8) & 0xFF, b = blk_[2] & 0xFF;
+            if ((a >= 1 && a <= 204) || (b >= 1 && b <= 204)) afSeen_ = true;
+        }
+    }
+    const int packed = ((int)tp_ << 7) | ((int)ta_ << 6) | ((int)afSeen_ << 5) | pty_;
+    if (packed != lastFlags_) {
+        lastFlags_ = packed;
+        if (cb_.flags) cb_.flags(cb_.ctx, tp_, ta_, pty_, afSeen_);
+    }
+
     if (gtype == 0) {                                  // 0A/0B — programme service name
         const int addr = blk_[1] & 0x3;
         if (blkOk_[3]) {
@@ -154,7 +177,62 @@ void RdsDecoder::parseGroup() {
             ecc_ = (uint8_t)(blk_[2] & 0xFF);
             if (ecc_ && cb_.ecc) cb_.ecc(cb_.ctx, pi, ecc_);
         }
+    } else if (gtype == 3 && ver == 0) {                // 3A — ODA registration
+        // Block D carries the Application ID, block B's low 5 bits name the
+        // group type that application's data rides in. We only care about
+        // RadioText Plus (AID 0x4BD7, typically assigned group 11A).
+        if (blkOk_[3] && blk_[3] == 0x4BD7)
+            rtpGroup_ = blk_[1] & 0x1F;
+    } else if (rtpGroup_ >= 0 && ((blk_[1] >> 11) & 0x1F) == rtpGroup_) {
+        parseRtPlus();                                  // the announced RT+ group
     }
+}
+
+// RadioText Plus (RDS Forum R06/040_1 / IEC 62106 ODA 0x4BD7): each group tags
+// two substrings of the CURRENT RadioText as (content-type, start, length-1).
+// Only ITEM.TITLE (1) and ITEM.ARTIST (4) matter to a car radio's now-playing.
+void RdsDecoder::parseRtPlus() {
+    if (!(blkOk_[2] && blkOk_[3])) return;
+    const bool toggle  = (blk_[1] >> 4) & 1;   // flips when the item (song) changes
+    const bool running = (blk_[1] >> 3) & 1;   // clear = nothing playing right now
+    bool changed = false;
+
+    // New item or item over -> the previous artist/title no longer apply.
+    if ((rtpHaveToggle_ && toggle != rtpToggle_) || !running) {
+        if (rtpArtist_[0] || rtpTitle_[0]) {
+            rtpArtist_[0] = 0; rtpTitle_[0] = 0;
+            changed = true;
+        }
+    }
+    rtpToggle_ = toggle; rtpHaveToggle_ = true;
+
+    if (running) {
+        const struct { int type, start, len; } tag[2] = {
+            { ((blk_[1] & 0x7) << 3) | ((blk_[2] >> 13) & 0x7),   // 6-bit content type
+              (blk_[2] >> 7) & 0x3F,                              // 6-bit start
+              (blk_[2] >> 1) & 0x3F },                            // 6-bit length-1
+            { ((blk_[2] & 0x1) << 5) | ((blk_[3] >> 11) & 0x1F),
+              (blk_[3] >> 5) & 0x3F,
+              blk_[3] & 0x1F },                                   // 5-bit length-1
+        };
+        for (const auto& t : tag) {
+            if (t.type != 1 && t.type != 4) continue;             // TITLE / ARTIST only
+            char* dst = (t.type == 1) ? rtpTitle_ : rtpArtist_;
+            char buf[65] = {0};
+            int n = 0;
+            for (int i = 0; i <= t.len && t.start + i < 64; ++i) {
+                const char c = rt_[t.start + i];
+                if (!c) break;
+                buf[n++] = c;
+            }
+            while (n > 0 && (buf[n - 1] == ' ' || buf[n - 1] == '\r')) buf[--n] = 0;
+            if (n > 0 && std::strcmp(dst, buf) != 0) {
+                std::memcpy(dst, buf, sizeof buf);
+                changed = true;
+            }
+        }
+    }
+    if (changed && cb_.rtPlus) cb_.rtPlus(cb_.ctx, rtpArtist_, rtpTitle_);
 }
 
 } // namespace vibedsp

@@ -206,6 +206,14 @@ void RxPipeline::rebuildAudio() {
                 auto* self = (RxPipeline*)c;
                 if (self->cb_.rdsEcc) self->cb_.rdsEcc(self->cb_.ctx, ecc);
             };
+            rcb.rtPlus = [](void* c, const char* artist, const char* title) {
+                auto* self = (RxPipeline*)c;
+                if (self->cb_.rdsRtPlus) self->cb_.rdsRtPlus(self->cb_.ctx, artist, title);
+            };
+            rcb.flags = [](void* c, bool tp, bool ta, uint8_t pty, bool af) {
+                auto* self = (RxPipeline*)c;
+                if (self->cb_.rdsFlags) self->cb_.rdsFlags(self->cb_.ctx, tp, ta, pty, af);
+            };
             rdsDemod_.configure(chFs_, rcb);
             break;
         }

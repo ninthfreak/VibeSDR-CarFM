@@ -311,6 +311,12 @@ public:
         void (*ps)(void* ctx, uint16_t pi, const char* ps8) = nullptr;        // 8-char station name
         void (*radiotext)(void* ctx, const char* rt64) = nullptr;             // up to 64 chars
         void (*ecc)(void* ctx, uint16_t pi, uint8_t ecc) = nullptr;           // Extended Country Code (group 1A)
+        // RadioText Plus (RT+, ODA 0x4BD7): ITEM.ARTIST / ITEM.TITLE sliced out
+        // of the current RadioText. Fired on change; both empty = item ended.
+        void (*rtPlus)(void* ctx, const char* artist, const char* title) = nullptr;
+        // Programme flags: TP + PTY ride in every group's block B; TA and
+        // AF-present come from group 0A/0B. Fired on change.
+        void (*flags)(void* ctx, bool tp, bool ta, uint8_t pty, bool afPresent) = nullptr;
     };
     void setCallbacks(const Callbacks& c) { cb_ = c; }
     void reset();
@@ -323,6 +329,7 @@ public:
 
 private:
     void parseGroup();
+    void parseRtPlus();
     uint32_t reg_ = 0;
     bool synced_ = false;
     int bitsLeft_ = 0, nextBlk_ = 0, badRun_ = 0;
@@ -331,6 +338,16 @@ private:
     char ps_[9] = {0};
     char rt_[65] = {0};
     uint8_t ecc_ = 0;                 // last decoded Extended Country Code (0 = none)
+    // RadioText Plus (ODA 0x4BD7). rtpGroup_ = the 5-bit application group code
+    // (gtype<<1|ver) announced by 3A, -1 until seen. Toggle flip = new item.
+    int rtpGroup_ = -1;
+    bool rtpToggle_ = false, rtpHaveToggle_ = false;
+    char rtpArtist_[65] = {0};
+    char rtpTitle_[65] = {0};
+    // Programme flags (TP/TA/PTY/AF-present), change-detected as one packed word.
+    bool tp_ = false, ta_ = false, afSeen_ = false;
+    uint8_t pty_ = 0;
+    int lastFlags_ = -1;
     Callbacks cb_{};
 };
 
@@ -378,6 +395,8 @@ public:
         // channels=2 -> interleaved L,R (length 2*frames). WFM stereo uses 2.
         void (*audio)(void* ctx, const float* pcm, int frames, int channels, int outRate) = nullptr;
         // Optional: WFM RDS programme-service name (8 chars) + station PI code.
+        void (*rdsRtPlus)(void* ctx, const char* artist, const char* title) = nullptr;
+        void (*rdsFlags)(void* ctx, bool tp, bool ta, uint8_t pty, bool afPresent) = nullptr;
         void (*rdsPs)(void* ctx, uint16_t pi, const char* ps8) = nullptr;
         // Optional: WFM RDS RadioText (up to 64 chars).
         void (*rdsText)(void* ctx, const char* rt64) = nullptr;

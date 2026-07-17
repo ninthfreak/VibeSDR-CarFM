@@ -3,7 +3,7 @@
  * (all icons in the design are inline SVG; no external icon assets).
  */
 import React from 'react';
-import Svg, { Circle, Line, Path, Rect } from 'react-native-svg';
+import Svg, { Circle, Line, Path, Polygon, Rect } from 'react-native-svg';
 
 /**
  * Three concentric broadcast waves around a dot; `strength` 0–4 controls how
@@ -99,6 +99,53 @@ export function StereoDot({ size = 16, color }: { size?: number; color: string }
     <Svg width={size} height={size} viewBox="0 0 16 16">
       <Circle cx="8" cy="8" r="6" stroke={color} strokeWidth="1.8" fill="none" />
       <Circle cx="8" cy="8" r="2.2" fill={color} />
+    </Svg>
+  );
+}
+
+/** Trio of curved sound waves flanking the STEREO label (design v2). `flip`
+ *  mirrors it for the left side. */
+export function StereoWave({ color, flip }: { color: string; flip?: boolean }) {
+  return (
+    <Svg width={20} height={28} viewBox="0 0 24 30" style={flip ? { transform: [{ scaleX: -1 }] } : undefined}>
+      <Path d="M4 9 Q9 15 4 21" stroke={color} strokeWidth="2" strokeLinecap="round" fill="none" />
+      <Path d="M9 6 Q15 15 9 24" stroke={color} strokeWidth="2" strokeLinecap="round" fill="none" />
+      <Path d="M14 3 Q21 15 14 27" stroke={color} strokeWidth="2" strokeLinecap="round" fill="none" />
+    </Svg>
+  );
+}
+
+/** Gear/settings icon (design v2 header — placeholder for the Advanced panel). */
+export function GearIcon({ size = 24, color }: { size?: number; color: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Circle cx="12" cy="12" r="3" stroke={color} strokeWidth="2" fill="none" />
+      <Path
+        d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+        stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"
+      />
+    </Svg>
+  );
+}
+
+/**
+ * PREV/NEXT PRESET chevron silhouette (design v2): a notched hexagon-arrow
+ * polygon computed in TRUE pixel coordinates from the measured button size, so
+ * the chevron angle never distorts (the design explicitly forbids a fixed
+ * viewBox stretched with preserveAspectRatio="none").
+ */
+export function ChevronShape({ w, h, dir, fill, stroke }: {
+  w: number; h: number; dir: 1 | -1; fill: string; stroke: string;
+}) {
+  if (w <= 0 || h <= 0) return null;
+  const pd = Math.min(22, w * 0.42);
+  const my = h / 2;
+  const points = dir < 0
+    ? `${pd},2 ${w - 2},2 ${w - pd},${my} ${w - 2},${h - 2} ${pd},${h - 2} 2,${my}`
+    : `2,2 ${w - pd},2 ${w - 2},${my} ${w - pd},${h - 2} 2,${h - 2} ${pd},${my}`;
+  return (
+    <Svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ position: 'absolute', top: 0, left: 0 }}>
+      <Polygon points={points} fill={fill} stroke={stroke} strokeWidth="2.5" strokeLinejoin="round" />
     </Svg>
   );
 }

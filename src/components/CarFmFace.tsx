@@ -22,7 +22,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getNearbyStations } from '../services/stationFinder';
 import type { NearbyStation } from '../services/stationTypes';
-import { SeekIcon, SignalWaves, StarIcon, StereoDot } from './carfm/icons';
+import { ChevronShape, GearIcon, SignalWaves, StarIcon, StereoWave } from './carfm/icons';
 import LogoTile from './carfm/LogoTile';
 import NearbyPicker from './carfm/NearbyPicker';
 import Numpad from './carfm/Numpad';
@@ -41,6 +41,16 @@ export interface CarFmFaceProps {
   radioText?: string;       // RDS RT
   stereo: boolean;
   signalDb: number | null;
+  /** RDS decoder has a lock (PI/PS seen) — drives the RDS tell. */
+  rdsOk?: boolean;
+  /** RDS Traffic Programme flag. */
+  tp?: boolean;
+  /** RDS Traffic Announcement in progress (pulses amber). */
+  ta?: boolean;
+  /** Station transmits an AF list. */
+  af?: boolean;
+  /** Programme-type label ("Rock", …) — already region-decoded. */
+  ptyText?: string;
   presets: CarFmPreset[];   // displayed order (user-arranged)
   onTuneHz: (hz: number) => void;
   onToggleSave: () => void;              // star: save/remove current frequency
@@ -102,9 +112,31 @@ function RadioTextStrip({ text, colors }: { text: string; colors: { raised: stri
   );
 }
 
+// The header's little status letters ("tells"): lit when true, ghosted when
+// not. HD is never lit — an RTL-SDR pipeline doesn't decode IBOC — but the
+// slot stays so the strip reads the same as a factory head unit's.
+function Tell({ label, on, pulse, pal }: { label: string; on: boolean; pulse?: boolean; pal: { text: string; amber: string } }) {
+  const op = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!pulse) { op.setValue(1); return; }
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(op, { toValue: 0.35, duration: 550, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      Animated.timing(op, { toValue: 1, duration: 550, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [pulse, op]);
+  return (
+    <Animated.Text style={[styles.tell, { color: pulse ? pal.amber : pal.text, opacity: pulse ? op : (on ? 1 : 0.32) }]}>
+      {label}
+    </Animated.Text>
+  );
+}
+
 export default function CarFmFace(props: CarFmFaceProps) {
   const {
-    freqHz, stationName, callsignHint, radioText, stereo, signalDb, presets,
+    freqHz, stationName, callsignHint, radioText, stereo, signalDb,
+    rdsOk, tp, ta, af, ptyText, presets,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
     onOpenAdvanced,
   } = props;
@@ -116,8 +148,11 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const [reordering, setReordering] = useState(false);
   const [scan, setScan] = useState<{ dir: 1 | -1; display: number } | null>(null);
   const scanTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Measured side-column size -> chevron polygon in true pixels (no distortion).
+  const [chev, setChev] = useState({ w: 86, h: 180 });
 
   const mhz = mhzOf(freqHz);
+  const inBand = mhz >= FM_MIN_MHZ - 0.05 && mhz <= FM_MAX_MHZ + 0.05;
   const ps = (stationName ?? '').trim();
   const rt = (radioText ?? '').trim();
   const callsign = ps || callsignHint || '';
@@ -200,12 +235,6 @@ export default function CarFmFace(props: CarFmFaceProps) {
     onSaveStationPreset(st.callsign, st.frequencyMhz);
   }, [onSaveStationPreset]);
 
-  const sideBtn = (pressed: boolean) => [
-    styles.sideBtn,
-    { backgroundColor: pal.raised, borderColor: pal.border },
-    pressed && { opacity: 0.55 },
-  ];
-
   return (
     <View
       style={[
@@ -217,7 +246,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         },
       ]}
     >
-      {/* ── Header row ── */}
+      {/* ── Header row (design v2: signal · stereo+tells · PTY · gear) ── */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <View style={styles.signalPill}>
@@ -226,53 +255,68 @@ export default function CarFmFace(props: CarFmFaceProps) {
               {signalDb == null ? '—' : `${Math.round(signalDb)} dB`}
             </Text>
           </View>
-          <View style={[styles.fmBadge, { borderColor: pal.amber }]}>
-            <Text style={[styles.fmBadgeText, { color: pal.amber }]}>FM</Text>
+          <View style={styles.stereoCol}>
+            <View style={styles.stereoRow}>
+              {stereo ? <StereoWave color={pal.blue} flip /> : <View style={styles.waveSpacer} />}
+              <Text style={[styles.stereoText, { color: stereo ? pal.blue : pal.dim }]}>
+                {stereo ? 'STEREO' : 'MONO'}
+              </Text>
+              {stereo ? <StereoWave color={pal.blue} /> : <View style={styles.waveSpacer} />}
+            </View>
+            <View style={styles.tellStrip}>
+              <Tell label="RDS" on={!!rdsOk} pal={pal} />
+              <Tell label="HD" on={false} pal={pal} />
+              {ta ? <Tell label="TA" on pulse pal={pal} /> : <Tell label="TP" on={!!tp} pal={pal} />}
+              <Tell label="AF" on={!!af} pal={pal} />
+            </View>
           </View>
-          <View style={[styles.stereoPill, { borderColor: stereo ? pal.blue : pal.border, backgroundColor: stereo ? pal.blueFill : 'transparent' }]}>
-            <StereoDot size={15} color={stereo ? pal.blue : pal.dim} />
-            <Text style={[styles.stereoText, { color: stereo ? pal.blue : pal.dim }]}>
-              {stereo ? 'STEREO' : 'MONO'}
-            </Text>
-          </View>
+          {ptyText ? (
+            <View style={[styles.ptyPill, { borderColor: pal.border, backgroundColor: pal.raised }]}>
+              <Text style={[styles.ptyText, { color: pal.dim }]}>{ptyText}</Text>
+            </View>
+          ) : null}
+          {!inBand ? (
+            <View style={[styles.oobPill, { borderColor: pal.amber }]}>
+              <Text style={[styles.oobText, { color: pal.amber }]}>⚠ OUT OF FM BAND</Text>
+            </View>
+          ) : null}
         </View>
         <Pressable
           onPress={onOpenAdvanced}
-          style={({ pressed }) => [styles.advBtn, { borderColor: pal.border, backgroundColor: pal.raised }, pressed && { opacity: 0.55 }]}
-          accessibilityRole="button" accessibilityLabel="Advanced SDR view"
+          style={({ pressed }) => [styles.gearBtn, { borderColor: pal.border, backgroundColor: pal.raised }, pressed && { opacity: 0.55 }]}
+          accessibilityRole="button" accessibilityLabel="Settings and advanced SDR view"
         >
-          <Text style={[styles.advText, { color: pal.dim }]}>ADVANCED ›</Text>
+          <GearIcon size={24} color={pal.dim} />
         </Pressable>
       </View>
 
       {/* ── Hero band ── */}
       <View style={styles.hero}>
-        {/* left column: SEEK ◄ over PREV */}
-        <View style={styles.sideCol}>
-          <Pressable
-            onPress={() => runSeek(-1)}
-            style={({ pressed }) => [...sideBtn(pressed), styles.seekBtn]}
-            accessibilityRole="button" accessibilityLabel="Seek down to previous station"
-          >
-            <SeekIcon size={30} dir={-1} color={pal.text} />
-            <Text style={[styles.sideLabel, { color: pal.dim }]}>SEEK</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => stepPreset(-1)}
-            style={({ pressed }) => [...sideBtn(pressed), styles.prevNextBtn]}
-            accessibilityRole="button" accessibilityLabel="Previous preset"
-          >
-            <Text style={[styles.chevrons, { color: pal.text }]}>‹‹</Text>
-            <Text style={[styles.sideLabel, { color: pal.dim }]}>PREV</Text>
-          </Pressable>
-        </View>
+        {/* left column: full-height PREV PRESET chevron (steering-wheel mappable) */}
+        <Pressable
+          onPress={() => stepPreset(-1)}
+          onLayout={(e: LayoutChangeEvent) => setChev({
+            w: Math.round(e.nativeEvent.layout.width), h: Math.round(e.nativeEvent.layout.height),
+          })}
+          style={({ pressed }) => [styles.sideCol, pressed && { opacity: 0.55 }]}
+          accessibilityRole="button" accessibilityLabel="Previous preset"
+        >
+          <ChevronShape w={chev.w} h={chev.h} dir={-1} fill={pal.raised} stroke={pal.border} />
+          <View style={[styles.chevLabelWrap, { transform: [{ translateX: -8 }] }]}>
+            <Text style={[styles.chevLabel, { color: pal.dim }]}>PREV</Text>
+            <Text style={[styles.chevLabel, { color: pal.dim }]}>PRESET</Text>
+          </View>
+        </Pressable>
 
         {/* center hero */}
         <View style={styles.center}>
           {scan ? (
             <View style={styles.scanWrap}>
-              <Text style={[styles.scanArrow, { color: pal.dim }]}>{scan.dir > 0 ? '▲' : '▼'}</Text>
+              <Text allowFontScaling={false} style={[styles.call, { color: pal.dim, fontStyle: 'italic' }]}>
+                Scanning…
+              </Text>
               <View style={styles.freqRow}>
+                <Text style={[styles.scanArrow, { color: pal.dim }]}>{scan.dir > 0 ? '▲' : '▼'}</Text>
                 <Text allowFontScaling={false} style={[styles.freq, { color: pal.amber }]}>
                   {fmt(scan.display)}
                 </Text>
@@ -330,25 +374,18 @@ export default function CarFmFace(props: CarFmFaceProps) {
           )}
         </View>
 
-        {/* right column: SEEK ► over NEXT */}
-        <View style={styles.sideCol}>
-          <Pressable
-            onPress={() => runSeek(1)}
-            style={({ pressed }) => [...sideBtn(pressed), styles.seekBtn]}
-            accessibilityRole="button" accessibilityLabel="Seek up to next station"
-          >
-            <SeekIcon size={30} dir={1} color={pal.text} />
-            <Text style={[styles.sideLabel, { color: pal.dim }]}>SEEK</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => stepPreset(1)}
-            style={({ pressed }) => [...sideBtn(pressed), styles.prevNextBtn]}
-            accessibilityRole="button" accessibilityLabel="Next preset"
-          >
-            <Text style={[styles.chevrons, { color: pal.text }]}>››</Text>
-            <Text style={[styles.sideLabel, { color: pal.dim }]}>NEXT</Text>
-          </Pressable>
-        </View>
+        {/* right column: full-height NEXT PRESET chevron (mirror of left) */}
+        <Pressable
+          onPress={() => stepPreset(1)}
+          style={({ pressed }) => [styles.sideCol, pressed && { opacity: 0.55 }]}
+          accessibilityRole="button" accessibilityLabel="Next preset"
+        >
+          <ChevronShape w={chev.w} h={chev.h} dir={1} fill={pal.raised} stroke={pal.border} />
+          <View style={[styles.chevLabelWrap, { transform: [{ translateX: 8 }] }]}>
+            <Text style={[styles.chevLabel, { color: pal.dim }]}>NEXT</Text>
+            <Text style={[styles.chevLabel, { color: pal.dim }]}>PRESET</Text>
+          </View>
+        </Pressable>
       </View>
 
       {/* ── Presets band ── */}
@@ -369,7 +406,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
       <Numpad
         visible={numpadOpen}
         pal={pal}
-        currentMHz={fmt(mhz)}
+        currentMHz={fmt(scan ? scan.display : mhz)}
+        scanning={!!scan}
+        onSeek={runSeek}
         onTune={(f) => { setNumpadOpen(false); onTuneHz(Math.round(f * 1e6)); }}
         onClose={() => setNumpadOpen(false)}
       />
@@ -392,26 +431,25 @@ const styles = StyleSheet.create({
   },
 
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   signalPill: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   signalText: { fontFamily: FONT, fontSize: 17, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  fmBadge: { borderWidth: 2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 4 },
-  fmBadgeText: { fontFamily: FONT, fontSize: 16, fontWeight: '700', letterSpacing: 1 },
-  stereoPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 7,
-    borderWidth: 1.5, borderRadius: 999, paddingHorizontal: 13, paddingVertical: 5,
-  },
+  stereoCol: { alignItems: 'center', gap: 2 },
+  stereoRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  waveSpacer: { width: 20, height: 28 },
   stereoText: { fontFamily: FONT, fontSize: 14, fontWeight: '700', letterSpacing: 1.5 },
-  advBtn: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 10 },
-  advText: { fontFamily: FONT, fontSize: 14, fontWeight: '700', letterSpacing: 2 },
+  tellStrip: { flexDirection: 'row', gap: 10 },
+  tell: { fontFamily: FONT, fontSize: 11, fontWeight: '700', letterSpacing: 1, lineHeight: 12 },
+  ptyPill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 4 },
+  ptyText: { fontFamily: FONT, fontSize: 13, fontWeight: '700' },
+  oobPill: { borderWidth: 1.5, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 4 },
+  oobText: { fontFamily: FONT, fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
+  gearBtn: { width: 52, height: 52, borderRadius: 14, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 
   hero: { flex: 1, flexDirection: 'row', gap: 20 },
-  sideCol: { width: 72, gap: 12 },
-  sideBtn: { borderWidth: 1, borderRadius: 18, alignItems: 'center', justifyContent: 'center', gap: 4 },
-  seekBtn: { flex: 0.73 },
-  prevNextBtn: { flex: 0.27 },
-  sideLabel: { fontFamily: FONT, fontSize: 12, fontWeight: '700', letterSpacing: 1.5 },
-  chevrons: { fontFamily: FONT, fontSize: 22, fontWeight: '700', lineHeight: 24 },
+  sideCol: { width: 86, alignItems: 'center', justifyContent: 'center' },
+  chevLabelWrap: { alignItems: 'center' },
+  chevLabel: { fontFamily: FONT, fontSize: 11, fontWeight: '700', letterSpacing: 1, lineHeight: 14 },
 
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   stationRow: { flexDirection: 'row', alignItems: 'center', gap: 18 },

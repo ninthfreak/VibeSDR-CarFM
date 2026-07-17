@@ -217,6 +217,19 @@ export interface StationMeta {
   stationName?: string;
   /** WFM RDS radiotext (scrolling now-playing/info), if any. */
   text?: string;
+  /** RT+ (RadioText Plus) ITEM.ARTIST — typed slice of the radiotext, when the
+   *  station transmits the 0x4BD7 ODA (local-hardware decode only). */
+  rtArtist?: string;
+  /** RT+ ITEM.TITLE — see rtArtist. */
+  rtTitle?: string;
+  /** RDS Traffic Programme flag (block B bit 10). */
+  tp?: boolean;
+  /** RDS Traffic Announcement in progress (group 0). */
+  ta?: boolean;
+  /** RDS Programme Type code 0–31 (RBDS table in region 2). */
+  pty?: number;
+  /** Station transmits an Alternative Frequencies list. */
+  af?: boolean;
   /** DAB ensemble (multiplex) label. */
   ensemble?: string;
   /** DAB programmes in the ensemble — drives the programme picker. */

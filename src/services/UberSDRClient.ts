@@ -1010,6 +1010,10 @@ export class UberSDRClient {
     if (msg.type === 'rds') {
       const ps = typeof msg.ps === 'string' ? msg.ps.trim() : '';
       const rt = typeof msg.radiotext === 'string' ? msg.radiotext.trim() : '';
+      // RT+ (ODA 0x4BD7) typed slices of the radiotext — empty when the station
+      // doesn't transmit RT+ (most don't) or between items.
+      const rtArtist = typeof msg.rt_artist === 'string' ? msg.rt_artist.trim() : '';
+      const rtTitle = typeof msg.rt_title === 'string' ? msg.rt_title.trim() : '';
       const stereo = msg.stereo === true;
       // PI (hex) + ECC → station country (for the flag + logo lookup), same as
       // the FM-DX backend. The shim sends pi (int, -1 = none) and ecc (0 = none).
@@ -1019,6 +1023,12 @@ export class UberSDRClient {
       (this.callbacks as any).onMetadata?.({
         stationName: ps || undefined,
         text: rt || undefined,
+        rtArtist: rtArtist || undefined,
+        rtTitle: rtTitle || undefined,
+        tp: msg.tp === true,
+        ta: msg.ta === true,
+        pty: typeof msg.pty === 'number' ? msg.pty : undefined,
+        af: msg.af === true,
         badge: ps ? 'RDS' : undefined,
         stereo,
         pi,

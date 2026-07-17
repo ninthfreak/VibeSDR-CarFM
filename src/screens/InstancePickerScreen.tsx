@@ -55,7 +55,9 @@ const PROTO_LABEL: Record<BackendType, string> = {
 const PROTO_CHOICES: Array<[BackendType | 'auto', string]> = [
   ['auto', 'Auto'], ['vibeserver', 'VibeServer'], ['rtltcp', 'rtl_tcp'],
   ['spyserver', 'SpyServer'], ['owrx', 'OpenWebRX'], ['kiwi', 'KiwiSDR'],
-  ['ubersdr', 'UberSDR'], ['fmdx', 'FM-DX'],
+  ['ubersdr', 'UberSDR'],
+  // 'fmdx' chip hidden for the CarFM fork (remote-tuner feature; see directories.ts).
+  // The fmdx connect() route stays, so a saved FM-DX favourite still works if present.
 ];
 
 function parseHostPort(raw: string, hint?: BackendType): { host: string; port: number } | null {

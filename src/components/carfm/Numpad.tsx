@@ -1,7 +1,9 @@
 /**
- * Direct-entry frequency numpad (design §3): 440px card, amber display row,
- * 3×4 keypad (1-9, ".", 0, ⌫), CANCEL / TUNE. Max 4 digits, one decimal;
- * TUNE parses, validates 87.5–108.0, rounds to 0.1.
+ * Direct-entry TUNE card (design v2): amber display row, a ‹‹SEEK / SEEK››
+ * row (seek moved here from the face's side columns), 3×4 keypad (1-9, ".",
+ * 0, ⌫), CANCEL / TUNE. Max 4 digits, one decimal; TUNE validates 87.5–108.0
+ * and rounds to 0.1. A seek sweep runs with the card open — the display
+ * follows the sweep and settles on the found station.
  */
 import React, { useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -11,10 +13,12 @@ import { FONT, FM_MAX_MHZ, FM_MIN_MHZ, type CarFmPalette } from './tokens';
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', '⌫'] as const;
 
-export default function Numpad({ visible, pal, currentMHz, onTune, onClose }: {
+export default function Numpad({ visible, pal, currentMHz, scanning, onSeek, onTune, onClose }: {
   visible: boolean;
   pal: CarFmPalette;
-  currentMHz: string;              // shown as placeholder until typing starts
+  currentMHz: string;              // live (or sweeping) frequency, shown until typing starts
+  scanning: boolean;
+  onSeek: (dir: 1 | -1) => void;
   onTune: (mhz: number) => void;
   onClose: () => void;
 }) {
@@ -23,6 +27,7 @@ export default function Numpad({ visible, pal, currentMHz, onTune, onClose }: {
 
   const reset = () => { setBuf(''); setError(false); };
   const close = () => { reset(); onClose(); };
+  const seek = (dir: 1 | -1) => { reset(); onSeek(dir); };
 
   const press = (k: string) => {
     setError(false);
@@ -46,16 +51,34 @@ export default function Numpad({ visible, pal, currentMHz, onTune, onClose }: {
     <Modal visible={visible} transparent animationType="fade" onRequestClose={close}>
       <Pressable style={styles.scrim} onPress={close}>
         <Pressable style={[styles.card, { backgroundColor: pal.panel }]} onPress={() => {}}>
-          <Text style={[styles.title, { color: pal.dim }]}>ENTER FREQUENCY</Text>
+          <Text style={[styles.title, { color: pal.dim }]}>TUNE</Text>
           <View style={[styles.display, { backgroundColor: pal.raised, borderColor: error ? pal.amber : pal.border }]}>
-            <Text allowFontScaling={false} style={[styles.value, { color: pal.amber, opacity: buf ? 1 : 0.45 }]}>
+            <Text allowFontScaling={false} style={[styles.value, { color: pal.amber, opacity: buf || scanning ? 1 : 0.45 }]}>
               {buf || currentMHz}
             </Text>
             <Text style={[styles.unit, { color: pal.dim }]}>MHz</Text>
           </View>
+          <View style={styles.seekRow}>
+            <Pressable
+              onPress={() => seek(-1)}
+              style={({ pressed }) => [styles.seekBtn, { backgroundColor: pal.raised, borderColor: pal.border }, pressed && { opacity: 0.55 }]}
+              accessibilityRole="button" accessibilityLabel="Seek down to previous station"
+            >
+              <Text style={[styles.seekIcon, { color: pal.text }]}>‹‹</Text>
+              <Text style={[styles.seekText, { color: pal.dim }]}>SEEK</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => seek(1)}
+              style={({ pressed }) => [styles.seekBtn, { backgroundColor: pal.raised, borderColor: pal.border }, pressed && { opacity: 0.55 }]}
+              accessibilityRole="button" accessibilityLabel="Seek up to next station"
+            >
+              <Text style={[styles.seekText, { color: pal.dim }]}>SEEK</Text>
+              <Text style={[styles.seekIcon, { color: pal.text }]}>››</Text>
+            </Pressable>
+          </View>
           {error ? (
             <Text style={[styles.err, { color: pal.amber }]}>
-              {FM_MIN_MHZ.toFixed(1)}–{FM_MAX_MHZ.toFixed(1)} MHz
+              ⚠ Outside {FM_MIN_MHZ.toFixed(1)}–{FM_MAX_MHZ.toFixed(1)} MHz band
             </Text>
           ) : null}
           <View style={styles.grid}>
@@ -121,6 +144,13 @@ const styles = StyleSheet.create({
   },
   value: { fontFamily: FONT, fontSize: 46, fontWeight: '700', fontVariant: ['tabular-nums'] },
   unit: { fontFamily: FONT, fontSize: 18, fontWeight: '700', marginTop: 14 },
+  seekRow: { flexDirection: 'row', gap: 12, marginTop: 12 },
+  seekBtn: {
+    flex: 1, height: 56, borderRadius: 14, borderWidth: 1,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+  },
+  seekIcon: { fontFamily: FONT, fontSize: 24, fontWeight: '700', lineHeight: 26 },
+  seekText: { fontFamily: FONT, fontSize: 14, fontWeight: '700', letterSpacing: 2 },
   err: { fontFamily: FONT, fontSize: 13, fontWeight: '700', textAlign: 'center', marginTop: 6 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 16 },
   key: {
