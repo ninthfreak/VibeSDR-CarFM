@@ -44,7 +44,7 @@ import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberS
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
 import { KiwiAdapter } from '../services/KiwiAdapter';
-import { localSessionGen } from '../services/localSession';
+import { localSessionGen, newLocalSession } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
          getLearnedBookmarksNow } from '../services/vibeServer';
 import { setReceiverIso } from '../services/rdsCountry';
@@ -778,7 +778,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     client.current?.setDabAudioScale?.(saved);
   }, []);
   const [status, setStatus]       = useState<SDRStatus>({
-    frequency: 14_074_000, mode: 'usb',
+    // CarFM starts on the FM dial (matters for a tunerless launch, where no
+    // last-tune restore runs — the face must not show the ham default).
+    frequency: route.params.carFm ? 98_500_000 : 14_074_000,
+    mode: route.params.carFm ? 'wfm' : 'usb',
     bandwidthLow: -3000, bandwidthHigh: 3000,
     binCount: 1024, binBandwidth: 0, centerHz: 0, bwHz: 0,
   });
@@ -2008,6 +2011,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── Connect ───────────────────────────────────────────────────────────────
 
   useEffect(() => {
+    // CarFM tunerless session: no tuner, so no backend at all — the face shows
+    // the tuner-error pill and the poll effect below hot-swaps in a real
+    // session when a dongle appears. Creating a client against the placeholder
+    // URL would just spin a reconnect loop against a dead socket.
+    if (route.params.tunerless) return;
     destroyed.current = false;
     const c = createBackend(route.params.serverType ?? 'ubersdr', baseUrl, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
@@ -3899,18 +3907,54 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [liveStation.name, piIdentity]);
 
   // Tuner-connection error state (design addendum): true whenever there is no
-  // live tuner session. Boot grace: before the FIRST successful connect, allow
-  // 6 s before declaring failure (a healthy local connect lands in ~1-2 s, so a
-  // normal boot never flashes the pill); after that, any drop (dongle yanked,
-  // shim/driver died) shows immediately and clears on reconnect.
-  const [fmTunerError, setFmTunerError] = useState(false);
+  // live tuner session. A tunerless launch shows it immediately (that IS the
+  // no-tuner presentation — no separate waiting screen). Otherwise: before the
+  // FIRST successful connect, allow 6 s before declaring failure (a healthy
+  // local connect lands in ~1-2 s, so a normal boot never flashes the pill);
+  // after that, any drop (dongle yanked, shim/driver died) shows immediately
+  // and clears on reconnect.
+  const [fmTunerError, setFmTunerError] = useState(!!route.params.tunerless);
   const everConnectedRef = useRef(false);
   useEffect(() => {
+    if (route.params.tunerless) { setFmTunerError(true); return; }
     if (connected) { everConnectedRef.current = true; setFmTunerError(false); return; }
     if (everConnectedRef.current) { setFmTunerError(true); return; }
     const t = setTimeout(() => setFmTunerError(true), 6000);
     return () => clearTimeout(t);
-  }, [connected]);
+  }, [connected, route.params.tunerless]);
+
+  // Tunerless carFm: poll for the dongle and hot-swap in a real local session
+  // the moment it appears (navigation.replace remounts this screen connected).
+  useEffect(() => {
+    if (!route.params.tunerless) return;
+    const Local = (NativeModules as { VibeLocalSDR?: {
+      listDevices?: () => Promise<unknown>;
+      startSpectrum?: (opts: object) => Promise<{ port: number; wsBaseUrl: string }>;
+    } }).VibeLocalSDR;
+    if (!Local?.listDevices || !Local.startSpectrum) return;
+    let busy = false, stopped = false;
+    const t = setInterval(async () => {
+      if (busy || stopped) return;
+      busy = true;
+      try {
+        const devs = await Local.listDevices!();
+        if (stopped || !Array.isArray(devs) || devs.length === 0) return;
+        const res = await Local.startSpectrum!({
+          centerFreq: 100_000_000, sampleRate: 2_400_000, fftSize: 8192, fftRate: 10, mode: 'wfm',
+        });
+        if (stopped) return;
+        stopped = true;
+        clearInterval(t);
+        navigation.replace('SDR', {
+          baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware',
+          viewMode: route.params.viewMode, serverType: 'ubersdr',
+          isLocal: true, localPort: res.port, localGen: newLocalSession(), carFm: true,
+        });
+      } catch { /* not ready yet — keep polling */ } finally { busy = false; }
+    }, 3000);
+    return () => { stopped = true; clearInterval(t); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.params.tunerless]);
 
   // Presets = this-instance FM bookmarks (broadcast band), in the USER'S order
   // (design: presets are an ordered strip, reorderable in the face; PREV/NEXT

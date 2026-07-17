@@ -81,6 +81,10 @@ export type RootStackParamList = {
     // ESP32 display expects (RT->title, PS->artist, freq->album) and defaults
     // media ⏮/⏭ to stepping presets. Non-car SDR sessions leave it unset.
     carFm?:          boolean;
+    // CarFM launched with NO tuner present: no backend client is created; the
+    // FM face renders with the tuner-error pill and the screen polls for a
+    // dongle, replacing itself with a real local session when one appears.
+    tunerless?:      boolean;
   };
   // Server mode (Android): pick a sharing protocol (VibeServer / RTL-TCP) for
   // this device's USB dongle, with shared PIN + auto-discovery options.
