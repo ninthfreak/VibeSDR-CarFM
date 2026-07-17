@@ -230,6 +230,8 @@ export interface StationMeta {
   pty?: number;
   /** Station transmits an Alternative Frequencies list. */
   af?: boolean;
+  /** The learned AF frequencies (MHz) — drives AF-follow on weak signal. */
+  afMhz?: number[];
   /** DAB ensemble (multiplex) label. */
   ensemble?: string;
   /** DAB programmes in the ensemble — drives the programme picker. */

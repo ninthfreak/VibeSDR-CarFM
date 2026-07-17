@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ backup/transfer rules (same policy as backup_rules.xml:
+     presets + settings travel; the regenerable station DB does not). -->
+<data-extraction-rules>
+  <cloud-backup>
+    <include domain="database" path="RKStorage"/>
+    <include domain="sharedpref" path="."/>
+    <exclude domain="file" path="SQLite"/>
+  </cloud-backup>
+  <device-transfer>
+    <include domain="database" path="RKStorage"/>
+    <include domain="sharedpref" path="."/>
+    <exclude domain="file" path="SQLite"/>
+  </device-transfer>
+</data-extraction-rules>

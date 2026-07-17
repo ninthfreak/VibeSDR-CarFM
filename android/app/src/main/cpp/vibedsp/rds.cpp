@@ -90,6 +90,8 @@ void RdsDecoder::reset() {
     std::memset(rtpArtist_, 0, sizeof rtpArtist_);
     std::memset(rtpTitle_, 0, sizeof rtpTitle_);
     tp_ = false; ta_ = false; afSeen_ = false; pty_ = 0; lastFlags_ = -1;
+    std::memset(afCode_, 0, sizeof afCode_);
+    afCount_ = 0;
 }
 
 void RdsDecoder::pushBit(int bit) {
@@ -137,10 +139,23 @@ void RdsDecoder::parseGroup() {
     if (gtype == 0) {
         ta_ = (blk_[1] >> 4) & 1;
         // 0A block C carries AF pairs; codes 1..204 are actual frequencies
-        // (224+ are "count" markers, 205/206+ fillers) — any real code = has AF.
+        // (87.5 + code*0.1 MHz; 224+ are "count" markers, 205+ fillers). Learn
+        // the accumulated list and re-emit it whenever a new code appears.
         if (ver == 0 && blkOk_[2]) {
-            const uint8_t a = (blk_[2] >> 8) & 0xFF, b = blk_[2] & 0xFF;
-            if ((a >= 1 && a <= 204) || (b >= 1 && b <= 204)) afSeen_ = true;
+            bool grew = false;
+            const uint8_t code[2] = { (uint8_t)((blk_[2] >> 8) & 0xFF), (uint8_t)(blk_[2] & 0xFF) };
+            for (uint8_t c : code) {
+                if (c < 1 || c > 204) continue;
+                afSeen_ = true;
+                if (!afCode_[c]) { afCode_[c] = true; ++afCount_; grew = true; }
+            }
+            if (grew && cb_.afList) {
+                float mhz[205];
+                int n = 0;
+                for (int c = 1; c <= 204; ++c)
+                    if (afCode_[c]) mhz[n++] = 87.5f + c * 0.1f;
+                cb_.afList(cb_.ctx, mhz, n);
+            }
         }
     }
     const int packed = ((int)tp_ << 7) | ((int)ta_ << 6) | ((int)afSeen_ << 5) | pty_;

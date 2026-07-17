@@ -18,6 +18,7 @@ import {
   Animated, Easing, Pressable, StyleSheet, Text, View, useColorScheme,
   type LayoutChangeEvent,
 } from 'react-native';
+import { useKeepAwake } from 'expo-keep-awake';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getNearbyStations } from '../services/stationFinder';
@@ -156,6 +157,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const insets = useSafeAreaInsets();
   const scheme = useColorScheme();
   const pal = (theme === 'light' || (theme !== 'dark' && scheme === 'light')) ? LIGHT : DARK;
+
+  // A car radio's display never sleeps mid-drive: keep the screen awake for as
+  // long as the face is mounted (released automatically on unmount).
+  useKeepAwake();
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [numpadOpen, setNumpadOpen] = useState(false);

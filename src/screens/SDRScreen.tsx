@@ -126,7 +126,7 @@ import { fmNowPlaying } from '../services/nowPlaying';
 import { ptyLabel } from '../services/ptyLabels';
 import { getCarAutostart, setCarAutostart } from '../services/carMode';
 import CarFmFace, { type CarFmPreset } from '../components/CarFmFace';
-import { identifyByPi, initLogoService, consumeSharedLogo } from '../services/stationFinder';
+import { identifyByPi, initLogoService, consumeSharedLogo, getNearbyStations } from '../services/stationFinder';
 import type { StationIdentity } from '../services/stationTypes';
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation } from '../services/instancesApi';
@@ -723,7 +723,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [aircraft, setAircraft] = useState<Aircraft[]>([]);
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
-  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; rtArtist?: string; rtTitle?: string; tp?: boolean; ta?: boolean; pty?: number; af?: boolean; badge?: string; countryIso?: string; pi?: string }>({});
+  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; rtArtist?: string; rtTitle?: string; tp?: boolean; ta?: boolean; pty?: number; af?: boolean; afMhz?: number[]; badge?: string; countryIso?: string; pi?: string }>({});
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
   const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
@@ -2160,7 +2160,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // so a live station name shows uniformly regardless of source.
         liveStationRef.current = meta.stationName ?? '';
         liveBadgeRef.current = meta.badge;
-        setLiveStation({ name: meta.stationName, text: meta.text, rtArtist: meta.rtArtist, rtTitle: meta.rtTitle, tp: meta.tp, ta: meta.ta, pty: meta.pty, af: meta.af, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi });
+        setLiveStation({ name: meta.stationName, text: meta.text, rtArtist: meta.rtArtist, rtTitle: meta.rtTitle, tp: meta.tp, ta: meta.ta, pty: meta.pty, af: meta.af, afMhz: meta.afMhz, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi });
         if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
@@ -3487,6 +3487,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // region-deduped. Native caches it and serves Android Auto / CarPlay; a no-op
   // until a car connects. mediaId encodes freq|mode|step|isBand for the tap.
   const pushCarBrowse = useCallback((bookmarks: ServerBookmark[]) => {
+    if (carFm) return;   // the carFm effect below owns the browse payload (Presets + Nearby)
     const bandSeen = new Set<string>();
     const bands = BAND_PLAN.filter((b: Band) => {
       if (b.regions && b.regions.length && ituRegion && !b.regions.includes(ituRegion)) return false;
@@ -3963,6 +3964,39 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearInterval(t);
   }, [route.params.tunerless, tryTunerNow]);
 
+  // CarFM permanent install: ask ONCE to exempt the app from battery
+  // optimization — Doze on an idle head unit can throttle/kill the boot-started
+  // radio service. The system dialog does the actual grant; declining is
+  // remembered and never re-asked (the setting stays reachable via App info).
+  useEffect(() => {
+    if (!carFm) return;
+    const Local = (NativeModules as { VibeLocalSDR?: {
+      isIgnoringBatteryOptimizations?: () => Promise<boolean>;
+      requestIgnoreBatteryOptimizations?: () => void;
+    } }).VibeLocalSDR;
+    if (!Local?.isIgnoringBatteryOptimizations) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        if (await AsyncStorage.getItem('@carfm/battery_prompted_v1')) return;
+        if (await Local.isIgnoringBatteryOptimizations!()) return;
+        if (cancelled) return;
+        await AsyncStorage.setItem('@carfm/battery_prompted_v1', '1');
+        Alert.alert(
+          'Keep the radio running',
+          'For a permanent car install, CarFM should be exempt from battery '
+          + 'optimization so the radio always starts with the car and never '
+          + 'gets paused in the background.',
+          [
+            { text: 'Not now', style: 'cancel' },
+            { text: 'Allow', onPress: () => Local.requestIgnoreBatteryOptimizations?.() },
+          ],
+        );
+      } catch { /* best effort */ }
+    })();
+    return () => { cancelled = true; };
+  }, [carFm]);
+
   // CarFM settings: theme override + boot autostart, persisted.
   const [fmTheme, setFmTheme] = useState<'system' | 'light' | 'dark'>('system');
   const [fmAutostart, setFmAutostart] = useState(true);
@@ -4040,6 +4074,119 @@ export default function SDRScreen({ route, navigation }: Props) {
     const p = fmPresets[index];
     if (p) fmRemoveAt(p.frequency);
   }, [fmPresets, fmRemoveAt]);
+
+  // CarFM media surface: push Presets + Nearby (FCC DB) as the browse tree +
+  // queue. Nearby is fetched once per session (offline-first facade) and the
+  // payload re-pushes whenever the presets change so Android Auto / AVRCP /
+  // the lock-screen queue stay current.
+  const fmNearbyRef = useRef<{ name: string; frequency: number }[]>([]);
+  useEffect(() => {
+    if (!carFm) return;
+    let cancelled = false;
+    (async () => {
+      if (fmNearbyRef.current.length === 0) {
+        try {
+          const r = await getNearbyStations({ enrich: false, limit: 100 });
+          if (cancelled) return;
+          fmNearbyRef.current = r.stations.map((s) => ({
+            name: `${s.frequencyMhz.toFixed(1)} ${s.callsign}`,
+            frequency: Math.round(s.frequencyMhz * 1e6),
+          }));
+        } catch { /* no GPS / no DB — nearby folder stays empty */ }
+      }
+      if (cancelled) return;
+      VibePowerModule?.setBrowseItems?.(JSON.stringify({
+        carfm: true,
+        bookmarks: fmPresets.map((p) => ({ name: p.name, frequency: p.frequency, mode: 'wfm' })),
+        bands: [],
+        nearby: fmNearbyRef.current.map((n) => ({ ...n, mode: 'wfm' })),
+      }));
+    })();
+    return () => { cancelled = true; };
+  }, [carFm, fmPresets]);
+
+  // Seek from a media surface (notification / Android Auto custom action):
+  // next/previous station in the local FCC list, wrapping. No sweep animation —
+  // this path isn't the on-screen face.
+  const onFmMediaSeek = useCallback((dir: 1 | -1) => {
+    const freqs = [...new Set(fmNearbyRef.current.map((n) => n.frequency))].sort((a, b) => a - b);
+    if (freqs.length === 0) return;
+    const cur = client.current?.getStatus().frequency ?? status.frequency;
+    const next = dir > 0
+      ? (freqs.find((f) => f > cur + 50_000) ?? freqs[0])
+      : ([...freqs].reverse().find((f) => f < cur - 50_000) ?? freqs[freqs.length - 1]);
+    onTuneHz(next);
+  }, [status.frequency, onTuneHz]);
+
+  useEffect(() => {
+    if (!carFm) return;
+    const em = new NativeEventEmitter(NativeModules.VibePowerModule);
+    const sub = em.addListener('VibeCarAction', (e: { action?: string }) => {
+      if (e.action === 'save') onFmToggleSave();
+      else if (e.action === 'seek_up') onFmMediaSeek(1);
+      else if (e.action === 'seek_down') onFmMediaSeek(-1);
+    });
+    return () => sub.remove();
+  }, [carFm, onFmToggleSave, onFmMediaSeek]);
+
+  // TA: a real car radio breaks mute for traffic announcements. If TA rises
+  // while muted, unmute for the announcement and restore the mute when it
+  // ends. Only ever restores a mute THIS effect lifted.
+  const taLiftedMute = useRef(false);
+  useEffect(() => {
+    if (!carFm) return;
+    const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
+    if (liveStation.ta && isMutedRef.current && !taLiftedMute.current) {
+      taLiftedMute.current = true;
+      VM?.setMuted?.(false);
+    } else if (!liveStation.ta && taLiftedMute.current) {
+      taLiftedMute.current = false;
+      VM?.setMuted?.(true);
+    }
+  }, [carFm, liveStation.ta]);
+
+  // AF-follow: when the signal has been weak for a sustained stretch and the
+  // station transmits an AF list, probe an alternative: keep it ONLY if it is
+  // provably the same station (PI match) with a clearly better signal, else
+  // revert. Deliberately conservative — one probe at most every 30 s, only
+  // after 10 s of continuous weakness, never within 10 s of any retune.
+  const afCtx = useRef({ db: null as number | null, pi: undefined as string | undefined,
+                         afMhz: undefined as number[] | undefined, freq: 0 });
+  afCtx.current = { db: fmSignalDb, pi: liveStation.pi, afMhz: liveStation.afMhz, freq: status.frequency };
+  const afState = useRef({
+    weakSince: null as number | null, lastTry: 0, freqChangedAt: 0, tryIdx: 0,
+    probe: null as null | { fromHz: number; pi?: string; db: number; started: number },
+  });
+  useEffect(() => { afState.current.freqChangedAt = Date.now(); }, [status.frequency]);
+  useEffect(() => {
+    if (!carFm || route.params.tunerless) return;
+    const WEAK_DB = 8, HOLD_MS = 10_000, RETRY_MS = 30_000, PROBE_MS = 4_000, IMPROVE_DB = 5;
+    const t = setInterval(() => {
+      const c = afCtx.current, s = afState.current, now = Date.now();
+      if (s.probe) {
+        if (now - s.probe.started < PROBE_MS) return;
+        // Same PI + clearly stronger keeps the AF; anything else goes back.
+        const keep = c.pi != null && c.pi === s.probe.pi && (c.db ?? -99) >= s.probe.db + IMPROVE_DB;
+        const from = s.probe.fromHz;
+        s.probe = null; s.weakSince = null;
+        if (!keep) onTuneHzRef.current?.(from);
+        return;
+      }
+      if (c.db == null || c.db >= WEAK_DB) { s.weakSince = null; return; }
+      if (s.weakSince == null) { s.weakSince = now; return; }
+      if (now - s.weakSince < HOLD_MS || now - s.lastTry < RETRY_MS
+          || now - s.freqChangedAt < HOLD_MS || c.pi == null) return;
+      const afs = (c.afMhz ?? []).map((m) => Math.round(m * 1e6))
+        .filter((f) => Math.abs(f - c.freq) > 50_000);
+      if (afs.length === 0) return;
+      const cand = afs[s.tryIdx % afs.length];
+      s.tryIdx += 1;
+      s.lastTry = now;
+      s.probe = { fromHz: c.freq, pi: c.pi, db: c.db, started: now };
+      onTuneHzRef.current?.(cand);
+    }, 1000);
+    return () => clearInterval(t);
+  }, [carFm, route.params.tunerless]);
 
   // Save a station straight from the Nearby picker (hold a row).
   const onFmSaveStationPreset = useCallback((name: string, freqMhz: number) => {

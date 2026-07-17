@@ -36,9 +36,17 @@ static void onRtPlus(void* c, const char* artist, const char* title) {
     std::strncpy(p->artist, artist, 64); std::strncpy(p->title, title, 64);
     p->rtpCalls++;
 }
-struct FlagCap { bool tp = false, ta = false, af = false; int pty = -1; int calls = 0; };
+struct FlagCap {
+    bool tp = false, ta = false, af = false; int pty = -1; int calls = 0;
+    float afMhz[205] = {0}; int afN = 0; int afCalls = 0;
+};
 static void onFlags(void* c, bool tp, bool ta, uint8_t pty, bool af) {
     auto* p = (FlagCap*)c; p->tp = tp; p->ta = ta; p->pty = pty; p->af = af; p->calls++;
+}
+static void onAfList(void* c, const float* mhz, int n) {
+    auto* p = (FlagCap*)c;
+    p->afN = n; for (int i = 0; i < n && i < 205; ++i) p->afMhz[i] = mhz[i];
+    p->afCalls++;
 }
 
 int main() {
@@ -164,6 +172,32 @@ int main() {
         feedBlock(d3, encodeBlock(PI, 0)); feedBlock(d3, encodeBlock(B, 1));
         feedBlock(d3, encodeBlock(C, 2));  feedBlock(d3, encodeBlock(0, 4));
         check(fc.calls == 1, "identical flags do not re-fire");
+    }
+
+    // ── AF list: codes accumulate; 87.5 + code*0.1 MHz; only new codes re-fire ──
+    {
+        RdsDecoder d4;
+        FlagCap fc;
+        RdsDecoder::Callbacks cb4; cb4.ctx = &fc; cb4.afList = onAfList;
+        d4.setCallbacks(cb4);
+        d4.reset();
+        // 0A carrying AF pair (110, 66): 98.5 and 94.1 MHz.
+        const uint16_t B = (0 << 12) | (0 << 11);
+        feedBlock(d4, encodeBlock(PI, 0)); feedBlock(d4, encodeBlock(B, 1));
+        feedBlock(d4, encodeBlock((uint16_t)((110 << 8) | 66), 2)); feedBlock(d4, encodeBlock(0, 4));
+        check(fc.afCalls == 1 && fc.afN == 2, "AF pair learned");
+        check(fc.afN == 2 && fc.afMhz[0] > 94.05f && fc.afMhz[0] < 94.15f
+              && fc.afMhz[1] > 98.45f && fc.afMhz[1] < 98.55f, "AF codes -> 94.1 / 98.5 MHz");
+        // Same pair again: nothing new -> no re-fire. Filler codes ignored.
+        feedBlock(d4, encodeBlock(PI, 0)); feedBlock(d4, encodeBlock(B, 1));
+        feedBlock(d4, encodeBlock((uint16_t)((110 << 8) | 66), 2)); feedBlock(d4, encodeBlock(0, 4));
+        feedBlock(d4, encodeBlock(PI, 0)); feedBlock(d4, encodeBlock(B, 1));
+        feedBlock(d4, encodeBlock((uint16_t)((225 << 8) | 205), 2)); feedBlock(d4, encodeBlock(0, 4));
+        check(fc.afCalls == 1, "known/filler AF codes do not re-fire");
+        // A new code grows the list.
+        feedBlock(d4, encodeBlock(PI, 0)); feedBlock(d4, encodeBlock(B, 1));
+        feedBlock(d4, encodeBlock((uint16_t)((32 << 8) | 205), 2)); feedBlock(d4, encodeBlock(0, 4));
+        check(fc.afCalls == 2 && fc.afN == 3, "new AF code re-fires with grown list");
     }
 
     std::printf(failures ? "\n%d FAILURE(S)\n" : "\nALL PASS\n", failures);
