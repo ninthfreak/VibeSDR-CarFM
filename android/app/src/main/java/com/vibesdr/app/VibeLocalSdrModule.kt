@@ -700,6 +700,87 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         } catch (_: Throwable) { promise.resolve(true) }   // unknown -> don't nag
     }
 
+    // ── Si470x USB FM dongle (Backend C, tuner-backends addendum) ────────────
+    // Additive surface: nothing here runs unless JS asks. Events:
+    //   VibeSi470xMeta   { json }  — shared-decoder RDS state (same fields as
+    //                                the shim's {"type":"rds"} frame)
+    //   VibeSi470xStatus { rssi, stereo, freqKHz }
+    private var si470x: Si470xSession? = null
+
+    private fun findSi470x(): UsbDevice? {
+        val mgr = reactContext.getSystemService(Context.USB_SERVICE) as UsbManager
+        return mgr.deviceList.values.firstOrNull { Si470xTuner.matches(it) }
+    }
+
+    private fun emitJs(name: String, params: com.facebook.react.bridge.WritableMap) {
+        try {
+            reactContext.getJSModule(
+                com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java,
+            ).emit(name, params)
+        } catch (_: Throwable) {}
+    }
+
+    /** [{deviceName, vendorId, productId}] for attached Si470x dongles. */
+    @ReactMethod
+    fun listSi470x(promise: Promise) {
+        val mgr = reactContext.getSystemService(Context.USB_SERVICE) as UsbManager
+        val arr = Arguments.createArray()
+        mgr.deviceList.values.filter { Si470xTuner.matches(it) }.forEach {
+            val m = Arguments.createMap()
+            m.putString("deviceName", it.deviceName)
+            m.putInt("vendorId", it.vendorId)
+            m.putInt("productId", it.productId)
+            arr.pushMap(m)
+        }
+        promise.resolve(arr)
+    }
+
+    /** Start a Si470x session at freqKHz. Resolves {freqKHz} on success. */
+    @ReactMethod
+    fun startSi470x(freqKHz: Int, promise: Promise) {
+        val dev = findSi470x() ?: run { promise.reject("nodev", "No Si470x dongle attached"); return }
+        val mgr = reactContext.getSystemService(Context.USB_SERVICE) as UsbManager
+        val begin = {
+            si470x?.stop()
+            val s = Si470xSession(reactContext, dev,
+                onMeta = { json ->
+                    val m = Arguments.createMap(); m.putString("json", json)
+                    emitJs("VibeSi470xMeta", m)
+                },
+                onStatus = { rssi, stereo, f ->
+                    val m = Arguments.createMap()
+                    m.putInt("rssi", rssi); m.putBoolean("stereo", stereo); m.putInt("freqKHz", f)
+                    emitJs("VibeSi470xStatus", m)
+                })
+            if (s.start(freqKHz)) {
+                si470x = s
+                val m = Arguments.createMap(); m.putInt("freqKHz", freqKHz)
+                promise.resolve(m)
+            } else promise.reject("start", "Si470x init failed (see log)")
+        }
+        if (mgr.hasPermission(dev)) begin() else openAndProbeThen(mgr, dev, promise) { begin() }
+    }
+
+    @ReactMethod
+    fun stopSi470x() { si470x?.stop(); si470x = null }
+
+    /** Tune; resolves the landed freqKHz. */
+    @ReactMethod
+    fun si470xTune(freqKHz: Int, promise: Promise) {
+        val f = si470x?.tune(freqKHz) ?: -1
+        if (f > 0) promise.resolve(f) else promise.reject("tune", "no Si470x session")
+    }
+
+    /** Hardware seek; resolves landed freqKHz or null at a band limit. */
+    @ReactMethod
+    fun si470xSeek(up: Boolean, promise: Promise) {
+        val s = si470x ?: run { promise.reject("seek", "no Si470x session"); return }
+        Thread {
+            val f = s.seek(up)
+            if (f != null) promise.resolve(f) else promise.resolve(null)
+        }.start()
+    }
+
     @ReactMethod
     fun requestIgnoreBatteryOptimizations() {
         try {
