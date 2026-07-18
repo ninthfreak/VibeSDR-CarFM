@@ -643,7 +643,10 @@ const styles = StyleSheet.create({
   heroRowTall: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 0 },
   heroCard: { borderWidth: 1, borderRadius: 28, paddingVertical: 22, paddingHorizontal: 20, alignItems: 'center', justifyContent: 'center', maxWidth: '100%', elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 } },
 
-  stationRow: { flexDirection: 'row', alignItems: 'center', gap: 18 },
+  // maxWidth + justify-center keep the logo/callsign/star group INSIDE the hero
+  // card: the callsign (flexShrink) gives way so the fixed logo tile and star
+  // never spill past the card's rounded bounds (design stationRowStyle).
+  stationRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 22, maxWidth: '100%' },
   call: { fontFamily: FONT, fontSize: 66, fontWeight: '700', letterSpacing: -1, flexShrink: 1 },
   starBtn: { width: 56, height: 56, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   freqRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 6 },
