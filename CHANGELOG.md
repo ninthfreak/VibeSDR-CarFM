@@ -1,4 +1,64 @@
-# VibeSDR — Changelog
+# CarFM — Changelog
+
+Running log of changes to the CarFM fork, newest first. Keep entries short.
+
+## Unreleased
+
+### 2026-07-18
+- Tall preset band: content-sized, 46% cap
+- Delivered Settings panel (diagnostics, backend picker, battery, logos)
+- Compact numpad for short screens
+- Side preset cards (static; slide animation pending)
+- Aspect-ratio layout: preset grids, hero card, header scaling
+- Portrait vertical-distribution fix
+- NEARBY icon redrawn to approved design
+- Removed "Welcome to VibeSDR" startup tour
+- Dev rules: no silent defers, no false completions
+
+### 2026-07-17
+- Responsive aspect-ratio face layout
+- Presets made tuner-independent
+- Dropped tunerless auto-poll (retry in settings)
+- Closed six stock-UI launch escapes
+- Settings pop-up design handoff
+- Disabled auto logo download (both chains)
+- Scrubbed stock launch chrome + blocking overlays
+- Si470x USB tuner backend (dormant)
+- RDS block-group entry + replay test harness
+- Platform integration sweep (six items)
+- Renamed to CarFM + tower icon + settings panel
+- Tunerless launch goes straight to the face
+- Tuner-connection error state
+
+### 2026-07-16
+- Design v2 face: tells strip, chevron presets, TUNE-card seek
+- RT+ (RadioText Plus) decode on local dongle
+- Hid FM-DX Webserver (dormant, revivable)
+- Implemented radio-face design handoff
+- Bundled real FCC station DB (5-hop LMS join)
+
+### 2026-07-15
+- SVG-first logo search tool
+- Logo search GUI + query inspector
+- Dropped RadioDNS (removes DoH dependency)
+- No-Google logo search + browser share-back
+- Layered logo sources + manual assignment
+- Logos stored in DB + prefetch/lazy/sweep
+- Station Explorer DB-browser tool
+- PI→live station identity in the FM face
+- Build-time LMS→SQLite ETL
+- On-device station DB + enrichment facade
+- PI↔callsign decode + geo receivability ranking
+- CarFM design brief + RN workflow docs
+
+### 2026-07-14
+- Auto-start on boot, auto-grab USB, resume last station
+- FM-only car face over the existing pipeline
+- RDS→MediaSession mapping for the ESP32 display
+
+---
+
+# VibeSDR — Changelog (upstream base)
 
 VibeSDR is free software under the **GNU GPL v3**. Source: https://github.com/Stuey3D/VibeSDR
 
