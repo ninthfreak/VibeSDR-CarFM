@@ -155,8 +155,8 @@ the hero card.
 - **Tall:** the hero region takes all leftover height and its content is
   **vertically centered** (`Modifier.weight(1f)` + `Arrangement.Center`), so the
   extra height on a tall surface sits as balanced margin above and below rather
-  than a gap. The prev/next **peek cards** (§5) are not shown on the tall track —
-  the hero card stands alone.
+  than a gap. The prev/next **peek cards** (§5) still flank the hero here, tucked
+  in tighter against it (a smaller negative overlap than on the wide track).
 - **Wide:** hero is a fixed-proportion centered card (~62% width, clamped
   470–720dp) flanked by the prev/next **peek cards**.
 
@@ -185,19 +185,19 @@ the hero card.
   the ★".
 
 ### 4.4 Prev/Next preset stepper
-Step through the preset list and retune. On the wide track this is driven by
-tapping the **peek cards** (§5). (A chevron-button variant exists in the
-prototype but is disabled; do not build it unless asked.)
+Step through the preset list and retune by tapping the **peek cards** (§5) that
+flank the hero on both tracks.
 
 ---
 
-## 5. Prev/Next peek cards (wide track only)
+## 5. Prev/Next peek cards
 
 Flanking the hero, the previous and next presets show as **smaller cards**
 (≈ scale 0.88, ≈ 60% opacity, outer edge softened by a fade gradient) that peek in
 from the sides and sit slightly behind the hero. Tapping one steps to that preset.
-They are shown on the wide track only. Build them as real sibling composables at
-the smaller size/alpha, clipped by the screen edges (not via negative margins).
+They flank the hero on **both** tracks whenever a previous/next preset exists —
+tucked in tighter on the tall track than on wide. Build them as real sibling
+composables at the smaller size/alpha, clipped by the screen edges.
 Scale/alpha values are starting points.
 
 ---
@@ -235,17 +235,19 @@ and a footer ("FCC data as of <snapshot date>").
   Rows are sorted best-signal-first.
 - **Filter — two levels:**
   - **Bucket row:** `All` · `Music` · `Talk` (Music/Talk shown only when the list
-    actually contains such stations). While the bucket is **All**, all three
-    chips show. When **Music** or **Talk** is selected, the bucket row collapses
-    to just the **All** chip (the other two hide); tapping **All** restores all
-    three and clears the genre filter.
+    actually contains such stations), shown **only while All is active**. Selecting
+    **Music** or **Talk** hides this row entirely and shows the genre row below (the
+    genre row's leading chip is the way back — see below).
   - **Genre row** (shown only inside Music/Talk when >1 genre exists): genre chips
     laid out in **exactly two rows**, flowing column-by-column and scrolling
-    horizontally when they overflow. Selecting a genre filters the list; tapping
-    it again clears it.
-- **Alternate states:** **no-GPS** (crosshair glyph, "Waiting for GPS…", a
-  "CHOOSE CITY MANUALLY" button) and **empty** ("Station database not installed
-  yet" with install guidance) replace the list.
+    horizontally when they overflow. When drilled into Music/Talk there is **no
+    separate bucket row** — an **icon-only back-arrow reset** chip (raised fill,
+    spanning both rows) followed by a thin vertical **divider** leads the genre
+    row and returns to the All/Music/Talk buckets. Selecting a genre filters the
+    list; tapping it again clears it.
+- **Alternate states:** **no-GPS** (crosshair glyph, "Waiting for GPS…") and
+  **empty** ("Station database not installed yet" with install guidance) replace
+  the list. Both are placeholder scaffolding for edge cases, not built-out flows.
 
 ### 6.3 Settings (`SettingsPanel`)
 A header ("Settings" + close ✕) over a scrolling body of grouped sections:

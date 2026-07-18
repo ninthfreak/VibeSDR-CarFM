@@ -79,19 +79,6 @@
 
   <div style="{{ heroBandStyle }}">
     <div style="{{ heroRowStyle }}">
-      <sc-if value="{{ showHeroChevrons }}" hint-placeholder-val="{{ true }}">
-      <div style="{{ sideColStyle }}">
-        <div style="{{ prevStepStyle }}" onClick="{{ onPrevPreset }}" ref="{{ chevRef }}">
-          <svg style="{{ chevSvgStyle }}" viewBox="{{ chevViewBox }}" preserveAspectRatio="none">
-            <polygon points="{{ chevPrevPoints }}" fill="{{ chevFill }}" stroke="{{ chevStroke }}" stroke-width="2.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"></polygon>
-          </svg>
-          <div style="{{ prevLabelWrapStyle }}">
-            <span style="{{ chevLabelStyle }}">PREV</span>
-            <span style="{{ chevLabelStyle }}">PRESET</span>
-          </div>
-        </div>
-      </div>
-      </sc-if>
       <sc-if value="{{ wideHero }}" hint-placeholder-val="{{ false }}">
         <div style="{{ prevCardStyle }}" onClick="{{ navPrev }}" ref="{{ prevCardRef }}">
           <div style="{{ prevCardLogoStyle }}">{{ prevCardLogo }}</div>
@@ -121,19 +108,6 @@
           <div style="{{ nextCardLogoStyle }}">{{ nextCardLogo }}</div>
           <span style="{{ sideCardCallStyle }}">{{ nextCardCall }}</span>
         </div>
-      </sc-if>
-      <sc-if value="{{ showHeroChevrons }}" hint-placeholder-val="{{ true }}">
-      <div style="{{ sideColStyle }}">
-        <div style="{{ nextStepStyle }}" onClick="{{ onNextPreset }}">
-          <svg style="{{ chevSvgStyle }}" viewBox="{{ chevViewBox }}" preserveAspectRatio="none">
-            <polygon points="{{ chevNextPoints }}" fill="{{ chevFill }}" stroke="{{ chevStroke }}" stroke-width="2.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"></polygon>
-          </svg>
-          <div style="{{ nextLabelWrapStyle }}">
-            <span style="{{ chevLabelStyle }}">NEXT</span>
-            <span style="{{ chevLabelStyle }}">PRESET</span>
-          </div>
-        </div>
-      </div>
       </sc-if>
     </div>
     <div style="{{ rtZoneStyle }}">
@@ -203,10 +177,9 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1024,&quot;height&quot;:600},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light'|'dark'&quot;},&quot;freq&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;101.1&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;ps&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;BBC R2&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;logoText&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;R2&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;rt&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Now playing: Fleetwood Mac — Dreams&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;stereo&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;rds&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;tp&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;ta&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;af&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;hd&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:0,&quot;min&quot;:0,&quot;max&quot;:3,&quot;tsType&quot;:&quot;number&quot;},&quot;pty&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Rock&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;signalDb&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:-58,&quot;min&quot;:-120,&quot;max&quot;:0,&quot;unit&quot;:&quot;dB&quot;,&quot;tsType&quot;:&quot;number&quot;},&quot;segs&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:10,&quot;min&quot;:0,&quot;max&quot;:12,&quot;tsType&quot;:&quot;number&quot;},&quot;outOfBand&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;scroll&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;saved&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;reordering&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;nearbyLine&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#111111&quot;,&quot;options&quot;:[&quot;#111111&quot;,&quot;#FFFFFF&quot;,&quot;#1B74E4&quot;,&quot;#0E7C4A&quot;,&quot;#B0402A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyFill&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#1B74E4&quot;,&quot;options&quot;:[&quot;#1B74E4&quot;,&quot;#FFFFFF&quot;,&quot;#111111&quot;,&quot;#E9EEF5&quot;,&quot;#0E7C4A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyGlass&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#FFFFFF29&quot;,&quot;options&quot;:[&quot;#FFFFFF29&quot;,&quot;#FFFFFF&quot;,&quot;#DCE7F5&quot;,&quot;#111111&quot;,&quot;#1B74E4&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyBorder&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyBorderColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#111111&quot;,&quot;options&quot;:[&quot;#111111&quot;,&quot;#FFFFFF&quot;,&quot;#D5DAE1&quot;,&quot;#1B74E4&quot;,&quot;#0E7C4A&quot;,&quot;#B0402A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyLineDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#E9EEF4&quot;,&quot;options&quot;:[&quot;#E9EEF4&quot;,&quot;#FFFFFF&quot;,&quot;#4A9EFF&quot;,&quot;#7FD6A0&quot;,&quot;#E6A24A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyFillDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#212B38&quot;,&quot;options&quot;:[&quot;#212B38&quot;,&quot;#161E29&quot;,&quot;#2A3644&quot;,&quot;#0E2A52&quot;,&quot;#FFFFFF&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyGlassDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#2A3644&quot;,&quot;options&quot;:[&quot;#2A3644&quot;,&quot;#212B38&quot;,&quot;#0E2A52&quot;,&quot;#000000&quot;,&quot;#E9EEF4&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyBorderColorDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#3A4655&quot;,&quot;options&quot;:[&quot;#3A4655&quot;,&quot;#FFFFFF&quot;,&quot;#4A9EFF&quot;,&quot;#7FD6A0&quot;,&quot;#E6A24A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;seekStyle&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;seekbar&quot;,&quot;chevrons&quot;,&quot;ffwd&quot;,&quot;skip&quot;],&quot;default&quot;:&quot;seekbar&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;presets&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{name:string;freq:string;active?:boolean}[]&quot;}}">
 class Component extends DCLogic {
-  state = { canPrev: false, canNext: false, thumbW: 0.3, thumbL: 0, showBar: false, chevW: 66, chevH: 180 };
+  state = { canPrev: false, canNext: false, thumbW: 0.3, thumbL: 0, showBar: false };
   gridRef = React.createRef();
   trackRef = React.createRef();
-  chevRef = React.createRef();
   heroCardRef = React.createRef();
   prevCardRef = React.createRef();
   nextCardRef = React.createRef();
@@ -245,19 +218,7 @@ class Component extends DCLogic {
   componentDidMount() {
     this.updateScroll();
     window.addEventListener('resize', this.updateScroll);
-    this.measureChev();
-    if (window.ResizeObserver && this.chevRef.current) {
-      this._chevRO = new ResizeObserver(() => this.measureChev());
-      this._chevRO.observe(this.chevRef.current);
-    }
   }
-  componentWillUnmount() { if (this._chevRO) this._chevRO.disconnect(); }
-  measureChev = () => {
-    const el = this.chevRef.current; if (!el) return;
-    const r = el.getBoundingClientRect();
-    const w = Math.round(r.width), h = Math.round(r.height);
-    if (w && h && (w !== this.state.chevW || h !== this.state.chevH)) this.setState({ chevW: w, chevH: h });
-  };
   componentDidUpdate(prevProps) {
     this.updateScroll();
     if (this._flipRects) { const first = this._flipRects; this._flipRects = null; this.runFlip(first); }
@@ -551,12 +512,6 @@ class Component extends DCLogic {
       };
     });
 
-    const cw = this.state.chevW || 66, ch = this.state.chevH || 180;
-    const pd = Math.min(22, cw * 0.42);
-    const my = ch / 2;
-    const chevVB = '0 0 ' + cw + ' ' + ch;
-    const chevPrev = pd + ',2 ' + (cw - 2) + ',2 ' + (cw - pd) + ',' + my + ' ' + (cw - 2) + ',' + (ch - 2) + ' ' + pd + ',' + (ch - 2) + ' 2,' + my;
-    const chevNext = '2,2 ' + (cw - pd) + ',2 ' + (cw - 2) + ',' + my + ' ' + (cw - pd) + ',' + (ch - 2) + ' 2,' + (ch - 2) + ' ' + pd + ',' + my;
 
     const pIdx = presets.findIndex(pp => bool(pp.active));
     let prevP = null, nextP = null;
@@ -569,7 +524,7 @@ class Component extends DCLogic {
 
     return {
       scroll, notScroll: !scroll, oob,
-      showHeroChevrons: false, showPresetNav: !tall,
+      showPresetNav: !tall,
       wideHero: presets.length > 0,
       prevCardLogo: prevP ? (prevP.logo || 'FM') : '', prevCardCall: prevP ? (prevP.name || ('FM ' + prevP.freq)) : '',
       nextCardLogo: nextP ? (nextP.logo || 'FM') : '', nextCardCall: nextP ? (nextP.name || ('FM ' + nextP.freq)) : '',
@@ -578,7 +533,6 @@ class Component extends DCLogic {
       nextCardStyle: Object.assign({}, sideCardBase, { marginLeft: tall ? -46 : -72, WebkitMaskImage:'linear-gradient(to left, #000 55%, rgba(0,0,0,0.1) 100%)', maskImage:'linear-gradient(to left, #000 55%, rgba(0,0,0,0.1) 100%)' }),
       sideCardCallStyle: { fontSize:15, fontWeight:700, color:t.text, textAlign:'center', maxWidth:'100%', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', lineHeight:1.1 },
       nearbyInTopbar: tall && !reordering, nearbyInBand: !tall && !reordering,
-      chevRef: this.chevRef, chevViewBox: chevVB, chevPrevPoints: chevPrev, chevNextPoints: chevNext,
       freq: p.freq || '--', station: scanning ? 'Scanning…' : (ps || 'Tuning…'), logoText: logo || 'FM',
       scanning, notScanning: !scanning,
       onFreqTap: p.onFreqTap, onTuneDown: p.onTuneDown, onTuneUp: p.onTuneUp, onNearby: p.onNearby, onSettings: p.onSettings, onSave: p.onSave, onScanDown: p.onScanDown, onScanUp: p.onScanUp, onPrevPreset: p.onPrevPreset, onNextPreset: p.onNextPreset,
@@ -636,18 +590,7 @@ class Component extends DCLogic {
 
       heroBandStyle: { flex: tall ? '1 1 auto' : 1, marginTop: tall ? 26 : 0, display:'flex', flexDirection:'column', justifyContent: tall ? 'center' : 'flex-start', gap: tall ? 12 : (twoRows ? 8 : 16), minHeight:0 },
       heroRowStyle: { flex:1, position:'relative', display:'flex', flexDirection:'row', alignItems:'center', justifyContent:'center', gap:0, minHeight:0 },
-      sideColStyle: tall
-        ? { flex:'1 1 40%', minWidth:120, display:'flex', flexDirection:'column', gap:12, minHeight:82 }
-        : { width:86, flexShrink:0, display:'flex', flexDirection:'column', justifyContent: twoRows ? 'center' : 'flex-start', gap:12, minHeight:0 },
       sideBtnStyle: { width:'100%', flex:'2.8 1 0', minHeight:0, flexShrink:0, backgroundColor:t.raised, border:'1px solid ' + t.border, borderRadius:18, cursor:'pointer', display:'flex', flexDirection:'column', gap:8, alignItems:'center', justifyContent:'center', boxSizing:'border-box' },
-      prevStepStyle: { position:'relative', width:'100%', flex: twoRows ? '0 0 auto' : '1 1 0', height: twoRows ? 150 : undefined, minHeight: tall ? 78 : 0, flexShrink:0, cursor:'pointer', boxSizing:'border-box' },
-      nextStepStyle: { position:'relative', width:'100%', flex: twoRows ? '0 0 auto' : '1 1 0', height: twoRows ? 150 : undefined, minHeight: tall ? 78 : 0, flexShrink:0, cursor:'pointer', boxSizing:'border-box' },
-      chevSvgStyle: { position:'absolute', inset:0, width:'100%', height:'100%', display:'block' },
-      chevFill: t.raised, chevStroke: t.border,
-      chevLabelWrapStyle: { position:'absolute', inset:0, display:'flex', flexDirection:'column', gap:1, alignItems:'center', justifyContent:'center', pointerEvents:'none' },
-      prevLabelWrapStyle: { position:'absolute', inset:0, display:'flex', flexDirection:'column', gap:1, alignItems:'center', justifyContent:'center', paddingRight:16, pointerEvents:'none' },
-      nextLabelWrapStyle: { position:'absolute', inset:0, display:'flex', flexDirection:'column', gap:1, alignItems:'center', justifyContent:'center', paddingLeft:16, pointerEvents:'none' },
-      chevLabelStyle: { fontSize:11, fontWeight:700, letterSpacing:0.3, color:t.dim, lineHeight:1.15 },
       presetStepIconStyle: { fontSize:44, fontWeight:700, color:t.text, lineHeight:1 },
       sideIconStyle: { fontSize:38, fontWeight:700, color:t.text, lineHeight:1 },
       sideLabelStyle: { fontSize:15, fontWeight:700, letterSpacing:1, color:t.text },

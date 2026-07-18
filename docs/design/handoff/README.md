@@ -17,6 +17,14 @@ the visual + behavioral spec to build against, not a finished feature set.
 > anatomy, assets). Where the two differ, follow `ANDROID-IMPLEMENTATION.md` — it reflects the
 > current design; older phrasing in this README has been corrected inline below.
 
+> **Build by closing a visual loop, not by copying CSS values.** Read
+> **`CORRECTION-LOOP.md`** first: it defines the render → screenshot → diff-against-reference →
+> fix-to-the-picture process, and lists every target surface with its reference image in
+> `screenshots/`. Then read **`LOSSY-ELEMENTS.md`** — the specific elements (mask fades, CSS
+> grid, marquee, SVG icons) that will *not* port by re-typing values, each with the RN/Compose
+> strategy that reproduces them. Every surface is "done" only when the built screen matches its
+> reference PNG — "compiles" and "values copied" are not done.
+
 ## About the Design Files
 The files in this bundle are **design references authored in HTML** (a component framework we
 use for high‑fidelity prototypes). They are **not production code to copy**. Your task is to
@@ -59,12 +67,11 @@ presets, and open Nearby search.
 2. **Hero band** — the tuned station, centered:
    - **Center hero card:** station logo tile + call letters + star save button, then frequency
      (amber) + "MHz". The **RadioText strip** sits below the hero (marquee when text > 46 chars).
-   - **Prev/Next peek cards** flank the hero on the **wide track only**: the previous and next
-     presets rendered as smaller, ~0.88-scale, ~60%-opacity cards that peek in from the sides and
-     sit slightly behind the hero; tapping one steps to that preset. Hidden on the tall track,
-     where the hero card stands alone and is vertically centered in the leftover height.
-   - *(A chevron/arrow PREV/NEXT-button variant exists in the prototype code but is **disabled**;
-     the peek cards are the shipping design. Do not build the chevron buttons unless asked.)*
+   - **Prev/Next peek cards** flank the hero: the previous and next presets rendered as smaller,
+     ~0.88-scale, ~60%-opacity cards that peek in from the sides and sit slightly behind the hero;
+     tapping one steps to that preset. Shown on **both** tracks whenever a prev/next preset exists,
+     tucked in tighter on the tall track. On the tall track the hero is also vertically centered in
+     the leftover height.
 3. **Presets band** — **wide:** **‹** nav button · horizontally scrolling preset rail · **›** nav
    button · **NEARBY** round button (→ **DONE** in reorder mode). **twoRows** (Dudu7 ⅔): a 2-row
    horizontal grid. **tall:** a 3-column vertical grid pinned as a bottom shelf, capped at ~45% of
@@ -82,14 +89,11 @@ presets, and open Nearby search.
   tile shows a 26×3 amber bar at bottom. Long‑press enters reorder mode.
 - **SEEK controls:** now inside the tap‑to‑tune / numpad window (in `CarFmLive.dc.html`), not on
   the main face. Scan icon = a vertical bar + chevron (down/up variants).
-- **Prev/Next peek cards (wide track):** stepping to the previous/next preset is driven by the
-  **peek cards** flanking the hero — smaller (~0.88 scale, ~60% opacity) cards showing the prev
-  and next presets, edge-softened with a fade gradient, peeking in from the sides and sitting
-  slightly behind the hero; tap to step. Hidden on the tall track. Build as real sibling
-  composables clipped by the screen edges. *(A chevron/arrow-silhouette PREV/NEXT-button variant
-  is still present in the prototype source — inline SVG polygon computed in true pixel coordinates
-  via a `ResizeObserver` — but it is **disabled** and is not the shipping design. Do not build it
-  unless asked.)*
+- **Prev/Next peek cards:** stepping to the previous/next preset is driven by the **peek cards**
+  flanking the hero — smaller (~0.88 scale, ~60% opacity) cards showing the prev and next presets,
+  edge-softened with a fade gradient, peeking in from the sides and sitting slightly behind the
+  hero; tap to step. Shown on both tracks (tucked tighter on tall). Build as real sibling
+  composables clipped by the screen edges.
 - **Custom scrollbar** (under the preset grid): 6px track (`bg:meterEmpty`, `radius:999`), thumb
   `rgba(128,134,144,0.6)`, width = viewport/scrollWidth, left = scroll fraction. **No arrows.**
   Track/thumb are draggable (pointer maps x → scrollLeft). Native scrollbar is hidden.
@@ -105,16 +109,17 @@ presets, and open Nearby search.
 instead of clipping (never hard-code the pixel size). Header (78px) with title "Nearby stations",
 subtitle ("Tap to tune · hold to save a preset · best signal first"), and ✕ close (52×52).
 Scrollable list (rows, 10px gap, 16/22px padding). Footer (48px): "FCC data as of &lt;date&gt;".
-Also has `nogps` and `empty` states.
+Also has `nogps` ("Waiting for GPS…") and `empty` states — placeholder scaffolding, not built-out flows.
 
 **Two-level filter:**
 - **Bucket row** — `All · Music · Talk` (Music/Talk only appear when the list contains such
-  stations). While **All** is active, all three chips show. Selecting **Music** or **Talk**
-  collapses the bucket row to just the **All** chip (the other two hide); tapping **All** restores
-  all three and clears the genre filter.
-- **Genre row** (inside Music/Talk, when >1 genre exists) — genre chips laid out in **exactly two
-  rows**, flowing column-by-column and scrolling horizontally on overflow. Select to filter; tap
-  again to clear.
+  stations), shown **only while All is active**. Selecting **Music** or **Talk** replaces this row
+  with the genre row below (no standalone bucket row remains).
+- **Genre row** (inside Music/Talk) — genre chips laid out in **exactly two rows**, flowing
+  column-by-column and scrolling horizontally on overflow. In this drilled-in state there is **no
+  separate bucket row**: an **icon-only back-arrow reset** chip (raised fill, spanning both rows)
+  plus a thin vertical **divider** leads the row and returns to All/Music/Talk. Select a genre to
+  filter; tap again to clear.
 
 **Row anatomy** (min‑height 92, `bg:raised`, `1px solid border`, `radius:16`, 18px gap):
 - Brand logo (60×60).

@@ -25,7 +25,7 @@
     <div style="{{ closeStyle }}" onClick="{{ onClose }}">✕</div>
   </div>
 
-  <sc-if value="{{ showFilter }}" hint-placeholder-val="{{ false }}">
+  <sc-if value="{{ showBucketBar }}" hint-placeholder-val="{{ false }}">
     <div style="{{ filterBarStyle }}" data-filter-bar="1">
       <sc-for list="{{ bucketChips }}" as="g" hint-placeholder-count="3">
         <div style="{{ g.style }}" onClick="{{ g.onClick }}">{{ g.label }}</div>
@@ -33,11 +33,15 @@
     </div>
   </sc-if>
 
-  <sc-if value="{{ showSubFilter }}" hint-placeholder-val="{{ false }}">
-    <div style="{{ subBarStyle }}" data-filter-bar="1">
-      <sc-for list="{{ subChips }}" as="g" hint-placeholder-count="4">
-        <div style="{{ g.style }}" onClick="{{ g.onClick }}">{{ g.label }}</div>
-      </sc-for>
+  <sc-if value="{{ showGenreBar }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ genreBarStyle }}">
+      <div style="{{ allResetStyle }}" onClick="{{ resetBucket }}">{{ allResetIcon }}</div>
+      <div style="{{ allDividerStyle }}"></div>
+      <div style="{{ subBarStyle }}" data-filter-bar="1">
+        <sc-for list="{{ subChips }}" as="g" hint-placeholder-count="4">
+          <div style="{{ g.style }}" onClick="{{ g.onClick }}">{{ g.label }}</div>
+        </sc-for>
+      </div>
     </div>
   </sc-if>
 
@@ -79,8 +83,7 @@
     <div style="{{ centerStyle }}">
       <div style="{{ centerGlyphStyle }}">⌖</div>
       <div style="{{ centerTitleStyle }}">Waiting for GPS…</div>
-      <div style="{{ centerSubStyle }}">No position fix yet. You can pick a city manually to see stations for that location.</div>
-      <div style="{{ cityBtnStyle }}" onClick="{{ onCity }}">CHOOSE CITY MANUALLY</div>
+      <div style="{{ centerSubStyle }}">No position fix yet. Waiting for a location fix to list nearby stations.</div>
     </div>
   </sc-if>
 
@@ -143,7 +146,7 @@ class Component extends DCLogic {
     const mkChip = (label, active, onClick) => ({ label, onClick, style: active
       ? Object.assign({}, chipBase, { border:'1.5px solid ' + t.blue, backgroundColor:t.blueFill, color:t.blue })
       : Object.assign({}, chipBase, { border:'1px solid ' + t.border, backgroundColor:'transparent', color:t.dim }) });
-    const bucketChips = (bucket === 'All' ? buckets : ['All']).map(b => mkChip(b, b === bucket, () => this.pickBucket(b)));
+    const bucketChips = buckets.map(b => mkChip(b, b === bucket, () => this.pickBucket(b)));
     const subChips = subGenres.map(g => mkChip(g, g === sub, () => this.pickSub(g)));
 
     const heights = [11, 14, 17, 20, 23];
@@ -200,9 +203,14 @@ class Component extends DCLogic {
 
     return {
       showList, showEmpty, showNoGps, rows,
-      showFilter: showList && hasMusic && hasTalk, bucketChips,
-      showSubFilter: showList && bucket !== 'All' && subGenres.length > 1, subChips,
-      onClose: p.onClose, onCity: p.onCity,
+      showBucketBar: showList && hasMusic && hasTalk && bucket === 'All', bucketChips,
+      showGenreBar: showList && bucket !== 'All', subChips,
+      resetBucket: () => this.pickBucket('All'),
+      allResetIcon: React.createElement('svg', { width:22, height:22, viewBox:'0 0 24 24', fill:'none', stroke:t.dim, strokeWidth:2.2, strokeLinecap:'round', strokeLinejoin:'round' }, [
+        React.createElement('polyline', { key:'a', points:'11 5 4 12 11 19' }),
+        React.createElement('path', { key:'l', d:'M4 12 H19' })
+      ]),
+      onClose: p.onClose,
       subtitle: 'Tap to tune  ·  hold to save a preset  ·  best signal first',
       showFooter: showList && !!snapshot,
       footerText: 'FCC data as of ' + snapshot,
@@ -216,13 +224,15 @@ class Component extends DCLogic {
 
       listStyle: { flex:1, overflowY:'auto', padding:'16px 22px', display:'flex', flexDirection:'column', gap:10, minHeight:0 },
       filterBarStyle: { display:'flex', gap:10, overflowX:'auto', padding:'14px 22px 0', flexShrink:0, scrollbarWidth:'none' },
-      subBarStyle: { display:'grid', gridTemplateRows:'repeat(2, auto)', gridAutoFlow:'column', gridAutoColumns:'max-content', justifyContent:'start', gap:8, overflowX:'auto', padding:'10px 22px 0', flexShrink:0, scrollbarWidth:'none' },
+      genreBarStyle: { display:'flex', alignItems:'stretch', gap:12, padding:'10px 22px 0', flexShrink:0, minWidth:0 },
+      allResetStyle: { alignSelf:'stretch', display:'flex', alignItems:'center', justifyContent:'center', padding:'0 12px', borderRadius:8, border:'1px solid ' + t.border, backgroundColor:t.raised, cursor:'pointer', flexShrink:0, boxSizing:'border-box' },
+      allDividerStyle: { alignSelf:'stretch', width:1, backgroundColor:t.border, flexShrink:0 },
+      subBarStyle: { display:'grid', gridTemplateRows:'repeat(2, auto)', gridAutoFlow:'column', gridAutoColumns:'max-content', justifyContent:'start', gap:8, overflowX:'auto', flex:1, minWidth:0, scrollbarWidth:'none' },
 
       centerStyle: { flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:14, padding:'0 80px', textAlign:'center' },
       centerGlyphStyle: { fontSize:52, color:t.dim, lineHeight:1 },
       centerTitleStyle: { fontSize:24, fontWeight:700, color:t.text },
       centerSubStyle: { fontSize:16, fontWeight:400, color:t.dim, lineHeight:1.5, maxWidth:520 },
-      cityBtnStyle: { marginTop:10, height:56, padding:'0 26px', borderRadius:14, cursor:'pointer', border:'1.5px solid ' + t.blue, backgroundColor:t.blueFill, color:t.blue, fontSize:17, fontWeight:700, letterSpacing:1, display:'flex', alignItems:'center', boxSizing:'border-box' },
 
       footerStyle: { height:48, padding:'0 28px', display:'flex', alignItems:'center', borderTop:'1px solid ' + t.border, color:t.dim, fontSize:14, fontWeight:400, flexShrink:0 }
     };

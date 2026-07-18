@@ -248,9 +248,12 @@ export default function CarFmFace(props: CarFmFaceProps) {
     return [items[(activeIndex - 1 + items.length) % items.length], items[(activeIndex + 1) % items.length]];
   }, [items, activeIndex]);
   const sideCardW = Math.min(206, Math.max(120, Math.round((dim.w > 0 ? dim.w : 1024) * 0.18)));
-  // Tall/portrait track sizing: a narrower hero card (78%) that stands alone —
-  // no flanking peek cards on this track (design §4.2/§5).
+  // Tall/portrait track sizing: a narrower hero card (78%) flanked by smaller
+  // peek cards tucked tight. The design's reference screenshots (surface-portrait
+  // / surface-slice-one-third) show the peek cards present on the tall track too,
+  // not just wide — so they render in every track, only the sizing differs.
   const tallHeroW = Math.min(520, Math.round((dim.w > 0 ? dim.w : 470) * 0.78));
+  const tallSideW = Math.min(150, Math.max(88, Math.round((dim.w > 0 ? dim.w : 470) * 0.2)));
 
   // Tall track (PHONEPORTRAITFIXES §2): hero band grows + centers; the preset
   // band sizes to its 3-column grid content but is CAPPED at 46% of the screen
@@ -500,20 +503,21 @@ export default function CarFmFace(props: CarFmFaceProps) {
           </>
         );
 
-        // PREV/NEXT preset peek cards flank the hero on the WIDE track only
-        // (design §4.2/§5: hidden on the tall track — the hero card stands
-        // alone). Chevrons are never used. Wide/landscape use the clamped hero
-        // card and a -72 overlap tuck.
+        // PREV/NEXT preset peek cards flank the hero in EVERY track — the design
+        // reference screenshots show them tucked on both sides in tall too, not
+        // just wide. Chevrons are never used. Only the sizing differs: tall tucks
+        // smaller cards with a -46 overlap; wide/landscape use the clamped hero
+        // card and a -72 overlap.
         const heroRow = (
           <View style={tall ? styles.heroRowTall : styles.hero}>
-            {!tall && prevP ? (
-              <SidePresetCard name={prevP.name} pal={pal} side="left" width={sideCardW} overlap={-72} onPress={() => stepPreset(-1)} />
+            {prevP ? (
+              <SidePresetCard name={prevP.name} pal={pal} side="left" width={tall ? tallSideW : sideCardW} overlap={tall ? -46 : -72} onPress={() => stepPreset(-1)} />
             ) : null}
             <View style={[tall ? styles.heroCard : styles.heroCardWide, styles.heroCardZ, { width: tall ? tallHeroW : L.heroCardW, backgroundColor: pal.panel, borderColor: pal.border }]}>
               {heroCenter}
             </View>
-            {!tall && nextP ? (
-              <SidePresetCard name={nextP.name} pal={pal} side="right" width={sideCardW} overlap={-72} onPress={() => stepPreset(1)} />
+            {nextP ? (
+              <SidePresetCard name={nextP.name} pal={pal} side="right" width={tall ? tallSideW : sideCardW} overlap={tall ? -46 : -72} onPress={() => stepPreset(1)} />
             ) : null}
           </View>
         );
