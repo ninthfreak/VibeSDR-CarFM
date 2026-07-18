@@ -492,14 +492,6 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 <Text style={[styles.mhz, { fontSize: L.mhz, color: pal.dim }]}>MHz</Text>
               </View>
             </Pressable>
-            <View style={[styles.rtArea, { marginTop: L.rtMarginTop }]}>
-              <RadioTextStrip
-                text={rt}
-                height={L.rtHeight}
-                fontSize={L.rtFont}
-                colors={{ raised: pal.raised, border: pal.border, dim: pal.dim, text: pal.text }}
-              />
-            </View>
           </>
         );
 
@@ -521,7 +513,25 @@ export default function CarFmFace(props: CarFmFaceProps) {
             ) : null}
           </View>
         );
-        return tall ? <View style={styles.heroTall}>{heroRow}</View> : heroRow;
+        // The RadioText strip is a SIBLING BELOW the hero row (design heroBand =
+        // column of [heroRow, rtZone]) — NOT inside the hero card. Keeping it out
+        // of the card matches the compact hero + full-width RT bar in the refs.
+        const rtBand = (
+          <View style={styles.rtZone}>
+            <RadioTextStrip
+              text={rt}
+              height={L.rtHeight}
+              fontSize={L.rtFont}
+              colors={{ raised: pal.raised, border: pal.border, dim: pal.dim, text: pal.text }}
+            />
+          </View>
+        );
+        return (
+          <View style={tall ? styles.heroBandTall : styles.heroBand}>
+            {heroRow}
+            {rtBand}
+          </View>
+        );
       })()}
 
       {/* ── Presets band ── (grows to fill in the tall track; NEARBY + nav move to
@@ -627,7 +637,9 @@ const styles = StyleSheet.create({
   heroCardZ: { zIndex: 3 },
   // Tall/portrait track: hero band grows + centers (PHONEPORTRAITFIXES §2); the
   // hero card is flanked by the same side preset cards as every other track.
-  heroTall: { flex: 1, justifyContent: 'center' },
+  // Hero band = column of [hero row, RadioText zone] (design heroBand).
+  heroBand: { flex: 1, gap: 16, minHeight: 0 },
+  heroBandTall: { flex: 1, justifyContent: 'center', gap: 12, marginTop: 26, minHeight: 0 },
   heroRowTall: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 0 },
   heroCard: { borderWidth: 1, borderRadius: 28, paddingVertical: 22, paddingHorizontal: 20, alignItems: 'center', justifyContent: 'center', maxWidth: '100%', elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 } },
 
@@ -637,10 +649,10 @@ const styles = StyleSheet.create({
   freqRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 6 },
   freq: { fontFamily: FONT, fontSize: 60, fontWeight: '700', fontVariant: ['tabular-nums'] },
   mhz: { fontFamily: FONT, fontSize: 20, fontWeight: '700' },
-  rtArea: { alignSelf: 'stretch', flexGrow: 0, marginTop: 18, justifyContent: 'center' },
+  rtZone: { flexShrink: 0, alignItems: 'stretch', justifyContent: 'center' },
   rtStrip: {
-    borderWidth: 1, borderRadius: 14, height: 52,
-    justifyContent: 'center', overflow: 'hidden', paddingHorizontal: 16,
+    borderWidth: 1, borderRadius: 16, height: 52, width: '100%', maxWidth: 880, alignSelf: 'center',
+    justifyContent: 'center', overflow: 'hidden', paddingHorizontal: 28,
   },
   rtText: { fontFamily: FONT, fontSize: 22 },
 
