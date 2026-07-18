@@ -104,16 +104,13 @@ function Row({ st, pal, saved, strength, onTune, onSave }: {
   );
 }
 
-export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePreset, onClose, onChooseCity }: {
+export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePreset, onClose }: {
   visible: boolean;
   pal: CarFmPalette;
   presetMHz: Set<number>;                          // saved presets, MHz*10 (int)
   onTune: (st: NearbyStation) => void;
   onSavePreset: (st: NearbyStation) => void;
   onClose: () => void;
-  /** No-GPS "CHOOSE CITY MANUALLY" action. Optional — the manual city picker
-   *  is not built yet, so the button is a visual entry point when unset. */
-  onChooseCity?: () => void;
 }) {
   const [res, setRes] = useState<NearbyResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -190,15 +187,8 @@ export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePr
               <Text style={[styles.stateGlyph, { color: pal.dim }]}>⌖</Text>
               <Text style={[styles.stateTitle, { color: pal.text }]}>Waiting for GPS…</Text>
               <Text style={[styles.stateBody, { color: pal.dim }]}>
-                No position fix yet. You can pick a city manually to see stations for that location.
+                No position fix yet. Nearby stations will appear once a location is available.
               </Text>
-              <Pressable
-                onPress={() => onChooseCity?.()}
-                style={({ pressed }) => [styles.cityBtn, { borderColor: pal.blue, backgroundColor: pal.blueFill }, pressed && { opacity: 0.6 }]}
-                accessibilityRole="button" accessibilityLabel="Choose city manually"
-              >
-                <Text style={[styles.cityBtnText, { color: pal.blue }]}>CHOOSE CITY MANUALLY</Text>
-              </Pressable>
             </View>
           ) : empty ? (
             <View style={styles.stateWrap}>
@@ -314,8 +304,6 @@ const styles = StyleSheet.create({
   stateGlyph: { fontSize: 52, lineHeight: 56 },
   stateTitle: { fontFamily: FONT, fontSize: 24, fontWeight: '700', textAlign: 'center' },
   stateBody: { fontFamily: FONT, fontSize: 16, textAlign: 'center', lineHeight: 24, maxWidth: 520 },
-  cityBtn: { marginTop: 10, height: 56, paddingHorizontal: 26, borderRadius: 14, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
-  cityBtnText: { fontFamily: FONT, fontSize: 17, fontWeight: '700', letterSpacing: 1 },
 
   footer: { height: 48, justifyContent: 'center', paddingHorizontal: 22, borderTopWidth: 1 },
   footerText: { fontFamily: FONT, fontSize: 14 },
