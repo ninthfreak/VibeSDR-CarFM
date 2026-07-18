@@ -177,7 +177,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
   //   landscape : very wide & short phone — smaller type
   const [dim, setDim] = useState({ w: 0, h: 0 });
   const aspect = dim.h > 0 ? dim.w / dim.h : 1.667;
-  const tall = aspect < 0.95;
+  // Spec (CarFmLive): tall = w/h < 1. twoRows/landscape are keyed to named device
+  // presets in the prototype (⅔ slice 900×810 ≈ 1.11; Galaxy landscape 1080×486
+  // ≈ 2.22), mapped here to ratio bands. Dudu7 full 1024×614 ≈ 1.67 stays wide.
+  const tall = aspect < 1;
   const landscape = aspect > 1.95;
   const twoRows = !tall && !landscape && aspect < 1.4;
   const L = useMemo(() => ({
