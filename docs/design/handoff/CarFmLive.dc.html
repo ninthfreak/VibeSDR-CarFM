@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+</helmet>
+<div style="{{ pageStyle }}">
+  <div style="{{ stageStyle }}" data-stage="1">
+
+    <dc-import name="RadioFace"
+      theme="{{ theme }}" freq="{{ freq }}" ps="{{ ps }}" logo-text="{{ logoText }}"
+      rt="{{ rt }}" stereo="{{ stereo }}" signal-db="{{ signalDb }}" segs="{{ segs }}"
+      rds="{{ rds }}" tp="{{ tp }}" ta="{{ ta }}" af="{{ af }}" hd="{{ hd }}" pty="{{ pty }}"
+      out-of-band="{{ outOfBand }}" scroll="{{ scroll }}" saved="{{ saved }}"
+      logo-bg="{{ logoBg }}" logo-fg="{{ logoFg }}" logo-shape="{{ logoShape }}"
+      presets="{{ presets }}" seek-style="{{ seekStyle }}" reordering="{{ reordering }}"
+      scanning="{{ scanning }}" scan-dir="{{ scanDir }}" tuner-error="{{ tunerError }}" nearby-line="{{ nearbyLine }}" nearby-fill="{{ nearbyFill }}" nearby-border="{{ nearbyBorder }}" nearby-glass="{{ nearbyGlass }}" nearby-border-color="{{ nearbyBorderColor }}" nearby-line-dark="{{ nearbyLineDark }}" nearby-fill-dark="{{ nearbyFillDark }}" nearby-glass-dark="{{ nearbyGlassDark }}" nearby-border-color-dark="{{ nearbyBorderColorDark }}"
+      on-freq-tap="{{ openNumpad }}" on-tune-down="{{ tuneDown }}" on-tune-up="{{ tuneUp }}"
+      on-preset-hold="{{ startReorder }}" on-preset-move="{{ movePreset }}" on-preset-remove="{{ removePreset }}" on-done-reorder="{{ doneReorder }}"
+      on-scan-down="{{ scanDown }}" on-scan-up="{{ scanUp }}" on-prev-preset="{{ prevPreset }}" on-next-preset="{{ nextPreset }}"
+      on-nearby="{{ openPicker }}" on-settings="{{ openSettings }}" on-save="{{ toggleSave }}" on-preset-tap="{{ tuneTo }}"
+      tall="{{ tall }}" two-rows="{{ twoRows }}" landscape="{{ landscape }}"
+      style="width:100%;height:100%;" hint-size="100%,100%"></dc-import>
+
+    <sc-if value="{{ pickerOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ scrimStyle }}" onClick="{{ closeAll }}"></div>
+      <div style="{{ overlayCenterStyle }}">
+        <div style="{{ cardWrapStyle }}">
+          <dc-import name="NearbyPicker"
+            theme="{{ theme }}" state="list" snapshot-date="2026-06-14" stations="{{ nearby }}"
+            on-select="{{ pickAndTune }}" on-save-station="{{ savePresetFreq }}"
+            on-close="{{ closeAll }}" on-city="{{ noop }}"
+            style="width:900px;height:600px;" hint-size="900px,600px"></dc-import>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ settingsOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ scrimStyle }}" onClick="{{ closeAll }}"></div>
+      <div style="{{ overlayCenterStyle }}">
+        <div style="{{ cardWrapStyle }}">
+          <dc-import name="SettingsPanel"
+            theme="{{ theme }}" tuner-error="{{ tunerError }}" theme-choice="{{ themeChoice }}" autostart="{{ autostart }}"
+            on-set-theme="{{ setThemeChoice }}" on-set-autostart="{{ setAutostart }}"
+            on-retry-tuner="{{ retryTuner }}" on-advanced="{{ openAdvanced }}" on-close="{{ closeAll }}"
+            style="width:700px;height:576px;" hint-size="700px,576px"></dc-import>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ numpadOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ scrimStyle }}" onClick="{{ cancelNumpad }}"></div>
+      <div style="{{ overlayCenterStyle }}">
+        <div style="{{ numpadCardStyle }}">
+          <div style="{{ npTitleStyle }}">TUNE</div>
+          <div style="{{ npDisplayStyle }}">
+            <span style="{{ npValStyle }}">{{ npDisplay }}</span>
+            <span style="{{ npUnitStyle }}">MHz</span>
+          </div>
+          <div style="{{ npSeekRowStyle }}">
+            <div style="{{ npSeekBtnStyle }}" onClick="{{ scanDown }}">
+              <span style="{{ npSeekIconStyle }}">‹‹</span>
+              <span>SEEK</span>
+            </div>
+            <div style="{{ npSeekBtnStyle }}" onClick="{{ scanUp }}">
+              <span>SEEK</span>
+              <span style="{{ npSeekIconStyle }}">››</span>
+            </div>
+          </div>
+          <sc-if value="{{ npError }}" hint-placeholder-val="{{ false }}">
+            <div style="{{ npErrStyle }}">⚠ Outside 87.5–108.0 MHz band</div>
+          </sc-if>
+          <div style="{{ npGridStyle }}">
+            <sc-for list="{{ npKeys }}" as="k" hint-placeholder-count="12">
+              <div style="{{ k.style }}" onClick="{{ k.onClick }}">{{ k.label }}</div>
+            </sc-for>
+          </div>
+          <div style="{{ npActionsStyle }}">
+            <div style="{{ npCancelStyle }}" onClick="{{ cancelNumpad }}">CANCEL</div>
+            <div style="{{ npTuneStyle }}" onClick="{{ commitNumpad }}">TUNE</div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;aspect&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Dudu7 full&quot;,&quot;Dudu7 ⅔ slice&quot;,&quot;Dudu7 ⅓ slice&quot;,&quot;Galaxy S landscape&quot;,&quot;Galaxy S portrait&quot;],&quot;default&quot;:&quot;Dudu7 full&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Layout&quot;},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light'|'dark'&quot;,&quot;section&quot;:&quot;Prototype&quot;},&quot;tunerError&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Prototype&quot;}}">
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.DB = {
+      '88.7':  { ps:'WERN', logo:'WPR', bg:'#0E6E6E', fg:'#FFFFFF', shape:'rounded', sig:4, pty:'Classical', tp:false, af:true,  ta:false, hd:1, rt:'Wisconsin Public Radio  ·  Beethoven: Symphony No. 7' },
+      '89.9':  { ps:'WORT', logo:'WORT', bg:'#6B3FA0', fg:'#FFFFFF', shape:'rounded', sig:4, pty:'Community', tp:false, af:false, ta:false, hd:0, rt:'WORT 89.9 FM  ·  Community radio for south-central Wisconsin' },
+      '91.7':  { ps:'WSUM', logo:'WSUM', bg:'#B02A37', fg:'#FFFFFF', shape:'rounded', sig:3, pty:'College', tp:false, af:false, ta:false, hd:0, rt:'WSUM 91.7 — UW–Madison Student Radio' },
+      '94.1':  { ps:'WJJO', logo:'JJO', bg:'#1C1F24', fg:'#E23B3B', shape:'rounded', sig:5, pty:'Rock', tp:false, af:false, ta:false, hd:0, rt:'94.1 WJJO — Rock — Metallica — Enter Sandman' },
+      '98.1':  { ps:'WMGN', logo:'MAGIC', bg:'#C21E7A', fg:'#FFFFFF', shape:'rounded', sig:4, pty:'Adult Hits', tp:false, af:true, ta:false, hd:1, rt:'Magic 98 — Elton John — Your Song' },
+      '100.5': { ps:'WMLI', logo:'STAR', bg:'#2E7D46', fg:'#FFFFFF', shape:'rounded', sig:3, pty:'Country', tp:true, af:false, ta:false, hd:0, rt:'Star Country 100.5 — Luke Combs — Fast Car' },
+      '101.5': { ps:'WIBA-FM', logo:'WIBA', bg:'#2B2F36', fg:'#FFC24D', shape:'rounded', sig:3, pty:'Classic Rock', tp:true, af:true, ta:true, hd:0, rt:'101.5 WIBA — Led Zeppelin — Black Dog' },
+      '102.1': { ps:'WQLF-FM', logo:'Q102', bg:'#1F6FEB', fg:'#FFFFFF', shape:'rounded', sig:2, pty:'Classic Rock', tp:false, af:false, ta:false, hd:0, rt:"The Big Rock Q102 — Rockford, IL — Tom Petty — Free Fallin'" },
+      '104.1': { ps:'WZEE', logo:'Z104', bg:'#0EA5C4', fg:'#FFFFFF', shape:'rounded', sig:5, pty:'Top 40', tp:false, af:true, ta:false, hd:2, rt:'Z104 — Dua Lipa — Levitating' },
+      '105.1': { ps:'WMHX', logo:'HOT', bg:'#E8590C', fg:'#FFFFFF', shape:'rounded', sig:4, pty:'Hot AC', tp:false, af:false, ta:false, hd:0, rt:'Hot 105.1 — Harry Styles — As It Was' },
+      '105.9': { ps:'WWHG-FM', logo:'HOG', bg:'#161616', fg:'#E2711D', shape:'rounded', sig:5, pty:'Rock', tp:false, af:false, ta:false, hd:0, rt:'Everything That Rocks — Foo Fighters — Everlong' }
+    };
+    this.nearby = [
+      { freq:'104.1', callsign:'WZEE', service:'FM', city:'Madison, WI', genre:'Top 40', logo:'Z104', logoBg:'#0EA5C4', logoFg:'#FFFFFF', logoShape:'rounded', bars:5, distanceKm:5 },
+      { freq:'94.1',  callsign:'WJJO', service:'FM', city:'Watertown, WI', genre:'Active Rock', logo:'JJO', logoBg:'#1C1F24', logoFg:'#E23B3B', logoShape:'rounded', bars:5, distanceKm:6 },
+      { freq:'105.9', callsign:'WWHG-FM', service:'FM', city:'Madison, WI', genre:'Rock', logo:'HOG', logoBg:'#161616', logoFg:'#E2711D', logoShape:'rounded', bars:5, distanceKm:7 },
+      { freq:'98.1',  callsign:'WMGN', service:'FM', city:'Madison, WI', genre:'Adult Contemporary', logo:'MAGIC', logoBg:'#C21E7A', logoFg:'#FFFFFF', logoShape:'rounded', bars:4, distanceKm:6 },
+      { freq:'89.9',  callsign:'WORT', service:'FM', city:'Madison, WI', genre:'Community', logo:'WORT', logoBg:'#6B3FA0', logoFg:'#FFFFFF', logoShape:'rounded', bars:4, distanceKm:5 },
+      { freq:'88.7',  callsign:'WERN', service:'FM', city:'Madison, WI', genre:'Classical · WPR', logo:'WPR', logoBg:'#0E6E6E', logoFg:'#FFFFFF', logoShape:'rounded', bars:4, distanceKm:9 },
+      { freq:'102.1', callsign:'WQLF-FM', service:'FM', city:'Rockford, IL', genre:'Classic Rock', logo:'Q102', logoBg:'#1F6FEB', logoFg:'#FFFFFF', logoShape:'rounded', bars:1, distanceKm:112 },
+      { freq:'105.1', callsign:'WMHX', service:'FM', city:'Waunakee, WI', genre:'Hot AC', logo:'HOT', logoBg:'#E8590C', logoFg:'#FFFFFF', logoShape:'rounded', bars:4, distanceKm:14 },
+      { freq:'101.5', callsign:'WIBA-FM', service:'FM', city:'Madison, WI', genre:'Classic Rock', logo:'WIBA', logoBg:'#2B2F36', logoFg:'#FFC24D', logoShape:'rounded', bars:3, distanceKm:12 },
+      { freq:'91.7',  callsign:'WSUM', service:'FM', city:'Madison, WI', genre:'UW Student Radio', logo:'WSUM', logoBg:'#B02A37', logoFg:'#FFFFFF', logoShape:'rounded', bars:3, distanceKm:8 },
+      { freq:'100.5', callsign:'WMLI', service:'FM', city:'Sauk City, WI', genre:'Country', logo:'STAR', logoBg:'#2E7D46', logoFg:'#FFFFFF', logoShape:'rounded', bars:2, distanceKm:29 }
+    ];
+    this.state = {
+      freq: '88.7',
+      presets: [
+        { name:'WERN', freq:'88.7' },
+        { name:'WIBA-FM', freq:'101.5' },
+        { name:'WQLF-FM', freq:'102.1' },
+        { name:'WWHG-FM', freq:'105.9' }
+      ],
+      numpadOpen: false, pickerOpen: false, settingsOpen: false, npBuf: '', npError: false, reordering: false, scale: 1, scanning: false, scanDir: 0, scanDisplay: '', themeChoice: 'system', autostart: true
+    };
+  }
+
+  componentDidMount() {
+    try {
+      const raw = localStorage.getItem('carfm-live-v2');
+      if (raw) {
+        const s = JSON.parse(raw);
+        this.setState({ freq: s.freq || this.state.freq, presets: Array.isArray(s.presets) ? s.presets : this.state.presets });
+      }
+    } catch (e) {}
+    window.addEventListener('resize', this.fit);
+  }
+  componentWillUnmount() { window.removeEventListener('resize', this.fit); }
+  fit = () => this.forceUpdate();
+  aspectDims() {
+    const M = {
+      'Dudu7 full':          { w: 1024, h: 614 },
+      'Dudu7 ⅔ slice':       { w: 900,  h: 810 },
+      'Dudu7 ⅓ slice':       { w: 470,  h: 845 },
+      'Galaxy S landscape':  { w: 1100, h: 508 },
+      'Galaxy S portrait':   { w: 470,  h: 1018 }
+    };
+    return M[this.props.aspect] || M['Dudu7 full'];
+  }
+  persist(extra) {
+    const s = Object.assign({ freq: this.state.freq, presets: this.state.presets }, extra || {});
+    try { localStorage.setItem('carfm-live-v2', JSON.stringify({ freq: s.freq, presets: s.presets })); } catch (e) {}
+  }
+  step() { return 0.1; }
+  round1(n) { return (Math.round(n * 10) / 10).toFixed(1); }
+
+  setFreq = (f, opts) => { const keep = opts && opts.keepNumpad; this.setState({ freq: f, numpadOpen: keep ? this.state.numpadOpen : false, pickerOpen: false, npBuf: '' }, () => this.persist()); };
+  tuneUp = () => { let f = parseFloat(this.state.freq) + this.step(); if (f > 108.0 + 1e-6) f = 87.5; this.setFreq(this.round1(f)); };
+  tuneDown = () => { let f = parseFloat(this.state.freq) - this.step(); if (f < 87.5 - 1e-6) f = 108.0; this.setFreq(this.round1(f)); };
+  tuneTo = (freq) => this.setFreq(this.round1(parseFloat(freq)));
+  pickAndTune = (freq) => this.setFreq(this.round1(parseFloat(freq)));
+
+  scanUp = () => this.runScan(1);
+  scanDown = () => this.runScan(-1);
+  runScan = (dir) => {
+    clearInterval(this._scan);
+    const fs = Object.keys(this.DB).map(f => parseFloat(f)).sort((a, b) => a - b);
+    const cur = parseFloat(this.state.freq);
+    let target;
+    if (dir > 0) { target = fs.find(f => f > cur + 1e-3); if (target === undefined) target = fs[0]; }
+    else { target = null; for (const f of fs) { if (f < cur - 1e-3) target = f; } if (target === null) target = fs[fs.length - 1]; }
+    let val = cur, frames = 0;
+    this.setState({ scanning: true, scanDir: dir, scanDisplay: this.round1(cur), npBuf: '' });
+    this._scan = setInterval(() => {
+      frames++;
+      val = Math.round((val + dir * 0.1) * 10) / 10;
+      if (val > 108.0) val = 87.5;
+      if (val < 87.5) val = 108.0;
+      if (Math.abs(val - target) < 0.05 || frames > 260) {
+        clearInterval(this._scan);
+        this.setState({ scanning: false, scanDir: 0 }, () => this.setFreq(this.round1(target), { keepNumpad: true }));
+      } else {
+        this.setState({ scanDisplay: this.round1(val) });
+      }
+    }, 34);
+  };
+
+  nextPreset = () => {
+    const list = this.state.presets;
+    if (!list.length) return;
+    const cur = this.round1(parseFloat(this.state.freq));
+    const i = list.findIndex(p => this.round1(parseFloat(p.freq)) === cur);
+    const nxt = list[(i + 1 + list.length) % list.length] || list[0];
+    this.setFreq(this.round1(parseFloat(nxt.freq)));
+  };
+  prevPreset = () => {
+    const list = this.state.presets;
+    if (!list.length) return;
+    const cur = this.round1(parseFloat(this.state.freq));
+    const i = list.findIndex(p => this.round1(parseFloat(p.freq)) === cur);
+    const prev = i < 0 ? list[list.length - 1] : list[(i - 1 + list.length) % list.length];
+    this.setFreq(this.round1(parseFloat(prev.freq)));
+  };
+
+  toggleSave = () => {
+    const f = this.state.freq; const info = this.DB[f];
+    const exists = this.state.presets.some(p => p.freq === f);
+    const presets = exists
+      ? this.state.presets.filter(p => p.freq !== f)
+      : [...this.state.presets, { name: info ? info.ps : ('FM ' + f), freq: f }];
+    this.setState({ presets }, () => this.persist());
+  };
+  savePresetFreq = (freq) => {
+    const f = this.round1(parseFloat(freq)); const info = this.DB[f];
+    if (this.state.presets.some(p => p.freq === f)) return;
+    this.setState({ presets: [...this.state.presets, { name: info ? info.ps : ('FM ' + f), freq: f }] }, () => this.persist());
+  };
+
+  startReorder = () => this.setState({ reordering: true });
+  doneReorder = () => this.setState({ reordering: false });
+  movePreset = (freq, dir) => {
+    const list = [...this.state.presets];
+    const i = list.findIndex(p => p.freq === freq);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    const tmp = list[i]; list[i] = list[j]; list[j] = tmp;
+    this.setState({ presets: list }, () => this.persist());
+  };
+  removePreset = (freq) => {
+    const presets = this.state.presets.filter(p => p.freq !== freq);
+    this.setState({ presets, reordering: presets.length > 0 ? this.state.reordering : false }, () => this.persist());
+  };
+
+  openNumpad = () => this.setState({ numpadOpen: true, pickerOpen: false, npBuf: '', npError: false, npOrigFreq: this.state.freq });
+  cancelNumpad = () => { clearInterval(this._scan); this.setState({ scanning: false, scanDir: 0 }, () => this.setFreq(this.state.npOrigFreq || this.state.freq)); };
+  openPicker = () => this.setState({ pickerOpen: true, numpadOpen: false, settingsOpen: false });
+  openSettings = () => this.setState({ settingsOpen: true, numpadOpen: false, pickerOpen: false });
+  closeAll = () => this.setState({ numpadOpen: false, pickerOpen: false, settingsOpen: false });
+  setThemeChoice = (v) => this.setState({ themeChoice: v });
+  setAutostart = (on) => this.setState({ autostart: on });
+  retryTuner = () => {};
+  openAdvanced = () => this.setState({ settingsOpen: false });
+  noop = () => {};
+
+  tapNum = (d) => this.setState(s => {
+    if (d === '.' && s.npBuf.includes('.')) return null;
+    if (s.npBuf.replace('.', '').length >= 4) return null;
+    return { npBuf: s.npBuf + d, npError: false };
+  });
+  npBack = () => this.setState(s => ({ npBuf: s.npBuf.slice(0, -1), npError: false }));
+  commitNumpad = () => {
+    clearInterval(this._scan);
+    const v = parseFloat(this.state.npBuf);
+    if (isNaN(v)) { this.setState({ scanning: false, scanDir: 0, numpadOpen: false }); return; }
+    this.setFreq(this.round1(v));
+  };
+
+  renderVals() {
+    const tokens = {
+      light: { bg:'#EEF1F5', panel:'#FFFFFF', raised:'#F5F7FA', amber:'#C9760A', text:'#1B222C', dim:'#67717F', blue:'#2E86FF', border:'rgba(20,30,45,0.13)', blueFill:'rgba(46,134,255,0.12)', page:'#DAA', scrim:'rgba(20,28,40,0.42)' },
+      dark:  { bg:'#161E29', panel:'#212B38', raised:'#2A3644', amber:'#FFB833', text:'#E9EEF4', dim:'#8B97A7', blue:'#4A9EFF', border:'rgba(255,255,255,0.13)', blueFill:'rgba(74,158,255,0.18)', scrim:'rgba(6,10,16,0.55)' }
+    };
+    const theme = (this.state.themeChoice === 'light' || this.state.themeChoice === 'dark') ? this.state.themeChoice : (this.props.theme === 'dark' ? 'dark' : 'light');
+    const t = tokens[theme];
+    const font = '"Atkinson Hyperlegible", system-ui, sans-serif';
+    const s = this.state;
+    const dims = this.aspectDims();
+    const tall = dims.w / dims.h < 1;
+    const twoRows = this.props.aspect === 'Dudu7 ⅔ slice';
+    const landscape = this.props.aspect === 'Galaxy S landscape';
+    const scale = (typeof window !== 'undefined' && window.innerWidth)
+      ? Math.min((window.innerWidth - 80) / dims.w, (window.innerHeight - 80) / dims.h)
+      : 1;
+    const freq = s.freq;
+    const info = this.DB[freq];
+    const fn = parseFloat(freq);
+    const rt = info ? info.rt : '';
+    const rating = info ? (info.sig || 3) : 0;
+    const sig = info ? { seg: Math.max(1, Math.round(rating / 5 * 12)), db: -95 + rating * 8 } : { seg: 0, db: -110 };
+    const presets = s.presets.map(pp => { const di = this.DB[pp.freq]; return Object.assign({}, pp, { active: pp.freq === freq, logo: di ? di.logo : '', logoBg: di ? di.bg : '', logoFg: di ? di.fg : '' }); });
+
+    const keyStyle = { width: 'calc((100% - 24px) / 3)', height: 64, borderRadius: 14, backgroundColor: t.raised, border: '1px solid ' + t.border, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, fontWeight: 700, color: t.text, cursor: 'pointer', boxSizing: 'border-box' };
+    const npCompact = dims.h < 560;
+    const npW = Math.max(320, Math.min(440, dims.w - 36));
+    const npKeyH = npCompact ? 46 : 64;
+    const npGap = npCompact ? 9 : 12;
+    const npKeys = ['1','2','3','4','5','6','7','8','9','.','0','⌫'].map(lbl => ({
+      label: lbl, style: Object.assign({}, keyStyle, { height: npKeyH, fontSize: npCompact ? 22 : 26, borderRadius: npCompact ? 12 : 14 }),
+      onClick: lbl === '⌫' ? this.npBack : () => this.tapNum(lbl)
+    }));
+
+    return {
+      theme, freq: s.scanning ? s.scanDisplay : freq,
+      scanning: s.scanning, scanDir: s.scanDir,
+      ps: s.scanning ? '' : (info ? info.ps : ''),
+      logoText: s.scanning ? '' : (info ? info.logo : ''),
+      logoBg: s.scanning ? '' : (info ? info.bg : ''),
+      logoFg: s.scanning ? '' : (info ? info.fg : ''),
+      logoShape: info ? info.shape : '',
+      rt: s.scanning ? '' : rt, stereo: !s.scanning && rating >= 3,
+      rds: !s.scanning && !!info,
+      tp: !s.scanning && !!(info && info.tp),
+      ta: !s.scanning && !!(info && info.ta),
+      af: !s.scanning && !!(info && info.af),
+      hd: s.scanning ? 0 : (info ? (info.hd || 0) : 0),
+      pty: s.scanning ? '' : (info ? (info.pty || '') : ''),
+      signalDb: sig.db, segs: sig.seg,
+      seekStyle: this.props.seekStyle || 'seekbar',
+      nearbyLine: this.props.nearbyLine || '#111111',
+      nearbyFill: this.props.nearbyFill || '#FFFFFF',
+      nearbyBorder: this.props.nearbyBorder === undefined ? true : !!this.props.nearbyBorder,
+      nearbyGlass: this.props.nearbyGlass || '#DCE7F5',
+      nearbyBorderColor: this.props.nearbyBorderColor || '#D5DAE1',
+      nearbyLineDark: this.props.nearbyLineDark || '',
+      nearbyFillDark: this.props.nearbyFillDark || '',
+      nearbyGlassDark: this.props.nearbyGlassDark || '',
+      nearbyBorderColorDark: this.props.nearbyBorderColorDark || '',
+      outOfBand: !(fn >= 87.5 && fn <= 108.0),
+      tunerError: this.props.tunerError === undefined ? false : !!this.props.tunerError,
+      scroll: rt.length > 46,
+      saved: presets.some(pp => pp.freq === freq),
+      reordering: s.reordering,
+      presets, nearby: this.nearby.map(st => Object.assign({}, st, { saved: presets.some(pp => pp.freq === this.round1(parseFloat(st.freq))) })),
+      numpadOpen: s.numpadOpen, pickerOpen: s.pickerOpen, settingsOpen: s.settingsOpen,
+      npDisplay: s.npBuf || (s.scanning ? s.scanDisplay : freq), npError: s.npError, npKeys,
+
+      openNumpad: this.openNumpad, openPicker: this.openPicker, openSettings: this.openSettings, closeAll: this.closeAll, cancelNumpad: this.cancelNumpad, noop: this.noop,
+      themeChoice: s.themeChoice, autostart: s.autostart,
+      setThemeChoice: this.setThemeChoice, setAutostart: this.setAutostart, retryTuner: this.retryTuner, openAdvanced: this.openAdvanced,
+      tuneUp: this.tuneUp, tuneDown: this.tuneDown, prevPreset: this.prevPreset, nextPreset: this.nextPreset,
+      startReorder: this.startReorder, doneReorder: this.doneReorder, movePreset: this.movePreset, removePreset: this.removePreset,
+      tuneTo: this.tuneTo, toggleSave: this.toggleSave, pickAndTune: this.pickAndTune, savePresetFreq: this.savePresetFreq,
+      commitNumpad: this.commitNumpad, scanUp: this.scanUp, scanDown: this.scanDown,
+
+      pageStyle: { minHeight: '100vh', backgroundColor: theme === 'dark' ? '#0C1218' : '#DCE0E6', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, boxSizing: 'border-box', fontFamily: font },
+      tall, twoRows, landscape,
+      stageStyle: { position: 'relative', width: dims.w, height: dims.h, flexShrink: 0, transform: 'scale(' + scale + ')', transformOrigin: 'center center', borderRadius: 24, overflow: 'hidden', border: '1px solid ' + t.border, boxShadow: '0 24px 70px rgba(0,0,0,0.4)' },
+
+      scrimStyle: { position: 'absolute', inset: 0, zIndex: 100, backgroundColor: t.scrim },
+      overlayCenterStyle: { position: 'absolute', inset: 0, zIndex: 101, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' },
+      cardWrapStyle: { borderRadius: 22, overflow: 'hidden', border: '1px solid ' + t.border, pointerEvents: 'auto', boxShadow: '0 20px 50px rgba(0,0,0,0.35)' },
+
+      numpadCardStyle: { width: npW, padding: npCompact ? '16px 18px' : 24, borderRadius: npCompact ? 20 : 24, backgroundColor: t.panel, border: '1px solid ' + t.border, display: 'flex', flexDirection: 'column', gap: npCompact ? 9 : 14, pointerEvents: 'auto', fontFamily: font, boxShadow: '0 20px 50px rgba(0,0,0,0.35)', maxHeight: (dims.h - 24) + 'px', boxSizing: 'border-box' },
+      npTitleStyle: { fontSize: 14, fontWeight: 700, letterSpacing: 2, color: t.dim, textAlign: 'center', display: npCompact ? 'none' : 'block' },
+      npSeekRowStyle: { display: 'flex', gap: npGap },
+      npSeekBtnStyle: { flex: 1, height: npCompact ? 46 : 56, borderRadius: npCompact ? 12 : 14, border: '1px solid ' + t.border, backgroundColor: t.raised, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, fontSize: 15, fontWeight: 700, letterSpacing: 1.5, color: t.text, cursor: 'pointer', boxSizing: 'border-box' },
+      npSeekIconStyle: { fontSize: 22, fontWeight: 700, color: t.blue, lineHeight: 1 },
+      npDisplayStyle: { height: npCompact ? 60 : 78, borderRadius: npCompact ? 12 : 14, backgroundColor: t.raised, border: '1px solid ' + t.border, display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 10, flexShrink: 0 },
+      npValStyle: { fontSize: npCompact ? 38 : 46, fontWeight: 700, color: t.amber, fontVariantNumeric: 'tabular-nums', letterSpacing: -1 },
+      npUnitStyle: { fontSize: 18, fontWeight: 700, color: t.dim },
+      npErrStyle: { fontSize: 14, fontWeight: 700, color: t.amber, textAlign: 'center', letterSpacing: 0.5 },
+      npGridStyle: { display: 'flex', flexWrap: 'wrap', gap: npGap },
+      npActionsStyle: { display: 'flex', gap: npGap, marginTop: npCompact ? 2 : 4 },
+      npCancelStyle: { flex: 1, height: npCompact ? 52 : 60, borderRadius: npCompact ? 12 : 14, border: '1px solid ' + t.border, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, letterSpacing: 1, color: t.dim, cursor: 'pointer', boxSizing: 'border-box' },
+      npTuneStyle: { flex: 1, height: npCompact ? 52 : 60, borderRadius: npCompact ? 12 : 14, border: '1.5px solid ' + t.blue, backgroundColor: t.blueFill, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, letterSpacing: 1, color: t.blue, cursor: 'pointer', boxSizing: 'border-box' }
+    };
+  }
+}
+</script>
+</body>
+</html>

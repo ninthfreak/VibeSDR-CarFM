@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+[data-filter-bar]::-webkit-scrollbar { display: none; }
+</style>
+</helmet>
+<div style="{{ containerStyle }}">
+
+  <div style="{{ headerStyle }}">
+    <div style="{{ headerLeftStyle }}">
+      <div style="{{ titleStyle }}">Nearby stations</div>
+      <div style="{{ subtitleStyle }}">{{ subtitle }}</div>
+    </div>
+    <div style="{{ closeStyle }}" onClick="{{ onClose }}">✕</div>
+  </div>
+
+  <sc-if value="{{ showFilter }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ filterBarStyle }}" data-filter-bar="1">
+      <sc-for list="{{ bucketChips }}" as="g" hint-placeholder-count="3">
+        <div style="{{ g.style }}" onClick="{{ g.onClick }}">{{ g.label }}</div>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showSubFilter }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ subBarStyle }}" data-filter-bar="1">
+      <sc-for list="{{ subChips }}" as="g" hint-placeholder-count="4">
+        <div style="{{ g.style }}" onClick="{{ g.onClick }}">{{ g.label }}</div>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showList }}" hint-placeholder-val="{{ true }}">
+    <div style="{{ listStyle }}">
+      <sc-for list="{{ rows }}" as="row" hint-placeholder-count="5">
+        <div style="{{ row.rowStyle }}" onPointerDown="{{ row.onDown }}" onPointerUp="{{ row.onUp }}" onPointerLeave="{{ row.onLeave }}">
+          <sc-if value="{{ row.hasLogo }}" hint-placeholder-val="{{ false }}">
+            <div style="{{ row.logoStyle }}">{{ row.logo }}</div>
+          </sc-if>
+          <div style="{{ row.mainStyle }}">
+            <div style="{{ row.line1Style }}">
+              <span style="{{ row.freqStyle }}">{{ row.freq }}</span>
+              <span style="{{ row.mhzStyle }}">MHz</span>
+              <span style="{{ row.callStyle }}">{{ row.callsign }}</span>
+              <sc-if value="{{ row.hasSvc }}" hint-placeholder-val="{{ false }}">
+                <span style="{{ row.svcStyle }}">{{ row.service }}</span>
+              </sc-if>
+            </div>
+            <sc-if value="{{ row.hasMeta }}" hint-placeholder-val="{{ true }}">
+              <div style="{{ row.metaStyle }}">{{ row.metaText }}</div>
+            </sc-if>
+          </div>
+          <sc-if value="{{ row.saved }}" hint-placeholder-val="{{ false }}">
+            <span style="{{ row.starStyle }}">{{ row.starIcon }}</span>
+          </sc-if>
+          <div style="{{ row.spacerStyle }}"></div>
+          <div style="{{ row.trailingStyle }}">
+            {{ row.signalIcon }}
+            <span style="{{ row.distStyle }}">{{ row.distText }}</span>
+          </div>
+          <span style="{{ row.chevStyle }}">›</span>
+        </div>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showNoGps }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ centerStyle }}">
+      <div style="{{ centerGlyphStyle }}">⌖</div>
+      <div style="{{ centerTitleStyle }}">Waiting for GPS…</div>
+      <div style="{{ centerSubStyle }}">No position fix yet. You can pick a city manually to see stations for that location.</div>
+      <div style="{{ cityBtnStyle }}" onClick="{{ onCity }}">CHOOSE CITY MANUALLY</div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showEmpty }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ centerStyle }}">
+      <div style="{{ centerGlyphStyle }}">▤</div>
+      <div style="{{ centerTitleStyle }}">Station database not installed yet</div>
+      <div style="{{ centerSubStyle }}">Install the FCC dataset via tools/build_station_db to list nearby stations here.</div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showFooter }}" hint-placeholder-val="{{ true }}">
+    <div style="{{ footerStyle }}">{{ footerText }}</div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:900,&quot;height&quot;:600},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light'|'dark'&quot;},&quot;state&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;list&quot;,&quot;nogps&quot;,&quot;empty&quot;],&quot;default&quot;:&quot;list&quot;,&quot;tsType&quot;:&quot;'list'|'nogps'|'empty'&quot;},&quot;snapshotDate&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;2026-06-14&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;stations&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;NearbyStation[]&quot;}}">
+class Component extends DCLogic {
+  state = { bucket: 'All', sub: null };
+  pickBucket = (b) => this.setState({ bucket: b, sub: null });
+  pickSub = (g) => this.setState(s => ({ sub: s.sub === g ? null : g }));
+  pressStart(freq) { this._long = false; clearTimeout(this._t); this._t = setTimeout(() => { this._long = true; if (this.props.onSaveStation) this.props.onSaveStation(freq); }, 550); }
+  pressEnd(freq) { clearTimeout(this._t); if (!this._long && this.props.onSelect) this.props.onSelect(freq); }
+  pressCancel() { clearTimeout(this._t); this._long = false; }
+  renderVals() {
+    const p = this.props;
+    const theme = p.theme === 'light' ? 'light' : 'dark';
+    const T = {
+      light: { bg:'#EEF1F5', panel:'#FFFFFF', raised:'#F5F7FA', amber:'#C9760A', text:'#1B222C', dim:'#67717F', blue:'#2E86FF', border:'rgba(20,30,45,0.13)', meterEmpty:'rgba(20,30,45,0.10)', blueFill:'rgba(46,134,255,0.12)' },
+      dark:  { bg:'#161E29', panel:'#212B38', raised:'#2A3644', amber:'#FFB833', text:'#E9EEF4', dim:'#8B97A7', blue:'#4A9EFF', border:'rgba(255,255,255,0.13)', meterEmpty:'rgba(255,255,255,0.10)', blueFill:'rgba(74,158,255,0.18)' }
+    };
+    const t = T[theme];
+    const font = '"Atkinson Hyperlegible", system-ui, sans-serif';
+
+    const stations = Array.isArray(p.stations) ? p.stations : [];
+    const state = p.state || 'list';
+    const showList = state === 'list' && stations.length > 0;
+    const showEmpty = state === 'empty' || (state === 'list' && stations.length === 0);
+    const showNoGps = state === 'nogps';
+    const snapshot = (p.snapshotDate || '').trim();
+
+    const isMusic = (s) => {
+      if (typeof s.music === 'boolean') return s.music;
+      const g = (s.genre || '').toLowerCase();
+      if (/(news|talk|sports|public|community|college|student|weather|information|personality|religious talk)/.test(g)) return false;
+      return true;
+    };
+    const TALK = 'Talk';
+    const hasMusic = stations.some(isMusic);
+    const hasTalk = stations.some(s => !isMusic(s));
+    const buckets = ['All'].concat(hasMusic ? ['Music'] : [], hasTalk ? [TALK] : []);
+    const bucket = buckets.indexOf(this.state.bucket) >= 0 ? this.state.bucket : 'All';
+    const bucketStations = bucket === 'All' ? stations : (bucket === 'Music' ? stations.filter(isMusic) : stations.filter(s => !isMusic(s)));
+    const subGenres = [];
+    if (bucket !== 'All') bucketStations.forEach(s => { const g = (s.genre || '').trim(); if (g && subGenres.indexOf(g) < 0) subGenres.push(g); });
+    const sub = subGenres.indexOf(this.state.sub) >= 0 ? this.state.sub : null;
+    const filtered = sub ? bucketStations.filter(s => (s.genre || '').trim() === sub) : bucketStations;
+    const chipBase = { flexShrink:0, height:32, padding:'0 13px', borderRadius:8, display:'flex', alignItems:'center', fontSize:13, fontWeight:700, letterSpacing:0.3, cursor:'pointer', boxSizing:'border-box', whiteSpace:'nowrap' };
+    const mkChip = (label, active, onClick) => ({ label, onClick, style: active
+      ? Object.assign({}, chipBase, { border:'1.5px solid ' + t.blue, backgroundColor:t.blueFill, color:t.blue })
+      : Object.assign({}, chipBase, { border:'1px solid ' + t.border, backgroundColor:'transparent', color:t.dim }) });
+    const bucketChips = buckets.map(b => mkChip(b, b === bucket, () => this.pickBucket(b)));
+    const subChips = subGenres.map(g => mkChip(g, g === sub, () => this.pickSub(g)));
+
+    const heights = [11, 14, 17, 20, 23];
+    const rows = filtered.map(s => {
+      const bars = Math.max(0, Math.min(5, Number(s.bars) || 0));
+      const logo = (s.logo || '').trim();
+      const lbg = (s.logoBg || '').trim();
+      const lfg = (s.logoFg || '').trim();
+      const lcircle = s.logoShape === 'circle';
+      const meta = [s.city, s.genre].filter(x => x && String(x).trim()).join('  ·  ');
+      const svc = (s.service && s.service !== 'FM') ? s.service : '';
+      return {
+        freq: s.freq, callsign: s.callsign || '', service: svc, hasSvc: !!svc,
+        logo, hasLogo: !!logo,
+        metaText: meta, hasMeta: !!meta,
+        distText: (s.distanceKm != null ? s.distanceKm : '--') + ' km',
+        onDown: () => this.pressStart(s.freq), onUp: () => this.pressEnd(s.freq), onLeave: () => this.pressCancel(),
+        saved: !!s.saved,
+        starIcon: React.createElement('svg', { width:26, height:26, viewBox:'0 0 24 24' },
+          React.createElement('path', { d:'M12 17.3 L18.2 21 16.5 13.9 22 9.2 14.8 8.6 12 2 9.2 8.6 2 9.2 7.5 13.9 5.8 21 Z', fill:t.amber, stroke:t.amber, strokeWidth:1.4, strokeLinejoin:'round' })),
+        starStyle: { flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center', marginLeft:10 },
+        spacerStyle: { flex:1, minWidth:8 },
+        barArr: heights.map((h, i) => ({ style: { width:7, height:h, borderRadius:2, backgroundColor: i < bars ? t.amber : t.meterEmpty } })),
+        signalIcon: (() => {
+          const lvl = Math.max(0, Math.min(4, Math.round(bars / 5 * 4)));
+          const arc = (d, on) => React.createElement('path', { key:d, d, fill:'none', stroke: on ? t.amber : t.meterEmpty, strokeWidth:2.2, strokeLinecap:'round' });
+          return React.createElement('svg', { width:33, height:22, viewBox:'0 0 34 24' }, [
+            React.createElement('circle', { key:'dot', cx:15, cy:12, r:2.6, fill: lvl >= 1 ? t.amber : t.meterEmpty }),
+            arc('M11 8 A 5 5 0 0 0 11 16', lvl >= 2),
+            arc('M19 8 A 5 5 0 0 1 19 16', lvl >= 2),
+            arc('M7.5 5 A 8.7 8.7 0 0 0 7.5 19', lvl >= 3),
+            arc('M22.5 5 A 8.7 8.7 0 0 1 22.5 19', lvl >= 3),
+            arc('M4 2 A 12.5 12.5 0 0 0 4 22', lvl >= 4),
+            arc('M26 2 A 12.5 12.5 0 0 1 26 22', lvl >= 4)
+          ]);
+        })(),
+        rowStyle: { minHeight:92, padding:'0 18px', borderRadius:16, cursor:'pointer', backgroundColor:t.raised, border:'1px solid ' + t.border, display:'flex', alignItems:'center', gap:18, boxSizing:'border-box' },
+        logoStyle: lbg
+          ? { width:60, height:60, borderRadius: lcircle ? 30 : 15, flexShrink:0, backgroundColor:lbg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, fontWeight:700, color: lfg || '#FFFFFF' }
+          : { width:60, height:60, borderRadius:13, flexShrink:0, backgroundColor:t.panel, border:'1px solid ' + t.border, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, fontWeight:700, color:t.blue },
+        mainStyle: { flex:'0 1 auto', display:'flex', flexDirection:'column', gap:5, minWidth:0 },
+        line1Style: { display:'flex', alignItems:'baseline', gap:8 },
+        freqStyle: { fontSize:32, fontWeight:700, color:t.text, fontVariantNumeric:'tabular-nums', letterSpacing:-0.5 },
+        mhzStyle: { fontSize:15, fontWeight:700, color:t.dim },
+        callStyle: { fontSize:20, fontWeight:700, color:t.text, marginLeft:6 },
+        svcStyle: { fontSize:12, fontWeight:700, letterSpacing:1, color:t.dim, border:'1px solid ' + t.border, borderRadius:6, padding:'2px 7px', marginLeft:2 },
+        metaStyle: { fontSize:15, fontWeight:400, color:t.dim, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' },
+        trailingStyle: { display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8, flexShrink:0 },
+        barsStyle: { display:'flex', alignItems:'flex-end', gap:4, height:23 },
+        distStyle: { fontSize:15, fontWeight:700, color:t.dim, fontVariantNumeric:'tabular-nums' },
+        chevStyle: { fontSize:26, fontWeight:700, color:t.dim, marginLeft:2, flexShrink:0 }
+      };
+    });
+
+    return {
+      showList, showEmpty, showNoGps, rows,
+      showFilter: showList && hasMusic && hasTalk, bucketChips,
+      showSubFilter: showList && bucket !== 'All' && subGenres.length > 1, subChips,
+      onClose: p.onClose, onCity: p.onCity,
+      subtitle: 'Tap to tune  ·  hold to save a preset  ·  best signal first',
+      showFooter: showList && !!snapshot,
+      footerText: 'FCC data as of ' + snapshot,
+
+      containerStyle: { width:900, height:600, backgroundColor:t.bg, color:t.text, fontFamily:font, display:'flex', flexDirection:'column', boxSizing:'border-box', overflow:'hidden' },
+      headerStyle: { height:78, padding:'0 28px', display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:'1px solid ' + t.border, flexShrink:0 },
+      headerLeftStyle: { display:'flex', flexDirection:'column', gap:4 },
+      titleStyle: { fontSize:26, fontWeight:700 },
+      subtitleStyle: { fontSize:14, fontWeight:400, color:t.dim, letterSpacing:0.3 },
+      closeStyle: { width:52, height:52, borderRadius:12, cursor:'pointer', border:'1px solid ' + t.border, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, color:t.dim, boxSizing:'border-box' },
+
+      listStyle: { flex:1, overflowY:'auto', padding:'16px 22px', display:'flex', flexDirection:'column', gap:10, minHeight:0 },
+      filterBarStyle: { display:'flex', gap:10, overflowX:'auto', padding:'14px 22px 0', flexShrink:0, scrollbarWidth:'none' },
+      subBarStyle: { display:'flex', flexWrap:'wrap', gap:8, padding:'10px 22px 0', flexShrink:0 },
+
+      centerStyle: { flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:14, padding:'0 80px', textAlign:'center' },
+      centerGlyphStyle: { fontSize:52, color:t.dim, lineHeight:1 },
+      centerTitleStyle: { fontSize:24, fontWeight:700, color:t.text },
+      centerSubStyle: { fontSize:16, fontWeight:400, color:t.dim, lineHeight:1.5, maxWidth:520 },
+      cityBtnStyle: { marginTop:10, height:56, padding:'0 26px', borderRadius:14, cursor:'pointer', border:'1.5px solid ' + t.blue, backgroundColor:t.blueFill, color:t.blue, fontSize:17, fontWeight:700, letterSpacing:1, display:'flex', alignItems:'center', boxSizing:'border-box' },
+
+      footerStyle: { height:48, padding:'0 28px', display:'flex', alignItems:'center', borderTop:'1px solid ' + t.border, color:t.dim, fontSize:14, fontWeight:400, flexShrink:0 }
+    };
+  }
+}
+</script>
+</body>
+</html>

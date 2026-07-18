@@ -5,6 +5,7 @@ Running log of changes to the CarFM fork, newest first. Keep entries short.
 ## Unreleased
 
 ### 2026-07-18
+- Chevrons removed from all tracks — side cards everywhere
 - Tall preset band: content-sized, 46% cap
 - Delivered Settings panel (diagnostics, backend picker, battery, logos)
 - Compact numpad for short screens
