@@ -1,0 +1,40 @@
+1.2.0 — 2026-07-18
+
+Android Car FM Radio Face — design handoff bundle.
+
+Changelog
+---------
+1.2.0 (2026-07-18)
+  - Tall-track vertical distribution reworked: the hero sits upper-middle and is
+    slightly enlarged, and the RadioText strip is centered in the gap between the
+    hero and the preset shelf (three equal flexible gaps) instead of the hero+
+    RadioText being centered as a group with all empty space pooling below. Fixes
+    the large empty bands on a true 1080-tall phone portrait. Spec: ANDROID §4.2.
+  - Re-shot the tall reference screenshots against the new layout.
+
+1.1.1 (2026-07-18)
+  - Replaced the tall reference screenshots with clean, tight 1:1 captures
+    (surface-portrait-light, surface-portrait-dark, surface-slice-one-third) —
+    the earlier ones were letterboxed with dead space and read as cropped.
+
+1.1.0 (2026-07-18)
+  - Single source of truth for values: all color/radius/spacing/shadow tokens now
+    live only in ANDROID-IMPLEMENTATION.md §3 (nearby-icon colors + anatomy in §7);
+    README points to them instead of restating (removes the drift risk).
+  - Folded the tuner-error state into the main spec (ANDROID §4.1, with the exact
+    pill visual + production wiring) and deleted the standalone TUNER-ERROR-STATE.md
+    issue handoff.
+
+1.0.0 (2026-07-18)
+  - First versioned bundle.
+  - Removed the dead chevron PREV/NEXT stepper from source and all docs.
+  - Corrected peek cards: shown on BOTH layout tracks (tucked tighter on tall);
+    only the preset-band ‹/› nav buttons are wide-only.
+  - Fixed nearby-icon defaults: dark strokes (#111111) on a white disc (#FFFFFF),
+    light-gray border (#D5DAE1), faint-blue lens (#DCE7F5).
+  - Dropped the stale external reference to uploads/settingspanelhandoff.md;
+    SettingsPanel.dc.html (700×576) is the in-bundle source of truth.
+  - Added CORRECTION-LOOP.md, LOSSY-ELEMENTS.md, and the full surface-*.png
+    reference screenshot set (head unit, portrait, slices, landscape, light/dark,
+    tuner-error).
+  - De-staled framing across README / ANDROID-IMPLEMENTATION.

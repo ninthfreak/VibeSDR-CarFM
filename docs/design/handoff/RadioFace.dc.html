@@ -588,8 +588,8 @@ class Component extends DCLogic {
       nearbyTopStyle: { cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
       advIconColor: t.dim,
 
-      heroBandStyle: { flex: tall ? '1 1 auto' : 1, marginTop: tall ? 26 : 0, display:'flex', flexDirection:'column', justifyContent: tall ? 'center' : 'flex-start', gap: tall ? 12 : (twoRows ? 8 : 16), minHeight:0 },
-      heroRowStyle: { flex:1, position:'relative', display:'flex', flexDirection:'row', alignItems:'center', justifyContent:'center', gap:0, minHeight:0 },
+      heroBandStyle: { flex: tall ? '1 1 auto' : 1, marginTop: tall ? 26 : 0, display:'flex', flexDirection:'column', justifyContent: 'flex-start', gap: tall ? 12 : (twoRows ? 8 : 16), minHeight:0 },
+      heroRowStyle: { flex: tall ? '0 0 auto' : 1, marginTop: tall ? 'auto' : 0, position:'relative', display:'flex', flexDirection:'row', alignItems:'center', justifyContent:'center', gap:0, minHeight:0 },
       sideBtnStyle: { width:'100%', flex:'2.8 1 0', minHeight:0, flexShrink:0, backgroundColor:t.raised, border:'1px solid ' + t.border, borderRadius:18, cursor:'pointer', display:'flex', flexDirection:'column', gap:8, alignItems:'center', justifyContent:'center', boxSizing:'border-box' },
       presetStepIconStyle: { fontSize:44, fontWeight:700, color:t.text, lineHeight:1 },
       sideIconStyle: { fontSize:38, fontWeight:700, color:t.text, lineHeight:1 },
@@ -597,20 +597,20 @@ class Component extends DCLogic {
       sideSubStyle: { fontSize:12, fontWeight:700, letterSpacing:1.5, color:t.dim },
       heroStyle: { flex:1, display:'flex', flexDirection:'column', alignItems:'stretch', justifyContent:'flex-start', gap:0, minHeight:0 },
       heroMainStyle: tall
-        ? { position:'relative', zIndex:3, flex:'0 0 auto', width:'78%', maxWidth:520, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:14, padding:'26px 22px', boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:28, boxShadow: dark ? '0 20px 44px rgba(0,0,0,0.5)' : '0 20px 44px rgba(20,30,45,0.16)' }
+        ? { position:'relative', zIndex:3, flex:'0 0 auto', width:'82%', maxWidth:560, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16, padding:'30px 26px', boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:28, boxShadow: dark ? '0 20px 44px rgba(0,0,0,0.5)' : '0 20px 44px rgba(20,30,45,0.16)' }
         : { position:'relative', zIndex:3, flex:'0 0 auto', width:'clamp(470px, 62%, 720px)', height:'98%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:14, padding:'24px 30px', boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:28, boxShadow: dark ? '0 20px 44px rgba(0,0,0,0.5)' : '0 20px 44px rgba(20,30,45,0.16)' },
       freqRowStyle: { display:'flex', alignItems:'baseline', gap:9, cursor:'pointer' },
-      freqStyle: { fontSize: tall ? 52 : (landscape ? 48 : 60), lineHeight:0.95, fontWeight:700, color:t.amber, letterSpacing:-1, fontVariantNumeric:'tabular-nums' },
+      freqStyle: { fontSize: tall ? 58 : (landscape ? 48 : 60), lineHeight:0.95, fontWeight:700, color:t.amber, letterSpacing:-1, fontVariantNumeric:'tabular-nums' },
       scanArrowStyle: { fontSize:34, fontWeight:700, color:t.blue, lineHeight:1 },
-      mhzStyle: { fontSize: tall ? 20 : (landscape ? 18 : 22), fontWeight:700, color:t.amber, opacity:0.9 },
+      mhzStyle: { fontSize: tall ? 22 : (landscape ? 18 : 22), fontWeight:700, color:t.amber, opacity:0.9 },
       capStyle: { fontSize:13, fontWeight:700, letterSpacing:1.5, color: oob ? t.amber : t.dim },
-      stationStyle: { fontSize: tall ? 48 : (landscape ? 50 : 66), fontWeight:700, color: ps ? t.text : t.dim, fontStyle: ps ? 'normal' : 'italic', lineHeight:1.02, letterSpacing:-1, textAlign:'center', maxWidth:'100%', overflowWrap:'break-word' },
+      stationStyle: { fontSize: tall ? 52 : (landscape ? 50 : 66), fontWeight:700, color: ps ? t.text : t.dim, fontStyle: ps ? 'normal' : 'italic', lineHeight:1.02, letterSpacing:-1, textAlign:'center', maxWidth:'100%', overflowWrap:'break-word' },
       stationRowStyle: { display:'flex', alignItems:'center', justifyContent:'center', gap: tall ? 14 : 22, maxWidth:'100%' },
-      starBtnStyle: { width: tall ? 54 : (landscape ? 48 : 56), height: tall ? 54 : (landscape ? 48 : 56), borderRadius:16, flexShrink:0, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', backgroundColor: saved ? t.blueFill : 'transparent', border: '1px solid ' + (saved ? 'transparent' : t.border) },
+      starBtnStyle: { width: tall ? 58 : (landscape ? 48 : 56), height: tall ? 58 : (landscape ? 48 : 56), borderRadius:16, flexShrink:0, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', backgroundColor: saved ? t.blueFill : 'transparent', border: '1px solid ' + (saved ? 'transparent' : t.border) },
       logoTileStyle: logoBg
-        ? { width: tall ? 72 : (landscape ? 70 : 92), height: tall ? 72 : (landscape ? 70 : 92), borderRadius: circle ? (tall ? 36 : 46) : 20, flexShrink:0, backgroundColor:logoBg, display:'flex', alignItems:'center', justifyContent:'center', fontSize: tall ? 28 : (landscape ? 26 : 34), fontWeight:700, letterSpacing:0.5, color: logoFg || '#FFFFFF' }
-        : { width: tall ? 72 : (landscape ? 70 : 92), height: tall ? 72 : (landscape ? 70 : 92), borderRadius:20, flexShrink:0, backgroundColor:t.raised, border:'1px solid ' + t.border, display:'flex', alignItems:'center', justifyContent:'center', fontSize: tall ? 28 : (landscape ? 26 : 32), fontWeight:700, letterSpacing:0.5, color: logo ? t.blue : t.dim },
-      rtZoneStyle: { flexShrink:0, height: tall ? 60 : (landscape ? 50 : (twoRows ? 56 : 76)), display:'flex', alignItems:'center', justifyContent:'center' },
+        ? { width: tall ? 80 : (landscape ? 70 : 92), height: tall ? 80 : (landscape ? 70 : 92), borderRadius: circle ? (tall ? 40 : 46) : 20, flexShrink:0, backgroundColor:logoBg, display:'flex', alignItems:'center', justifyContent:'center', fontSize: tall ? 28 : (landscape ? 26 : 34), fontWeight:700, letterSpacing:0.5, color: logoFg || '#FFFFFF' }
+        : { width: tall ? 80 : (landscape ? 70 : 92), height: tall ? 80 : (landscape ? 70 : 92), borderRadius:20, flexShrink:0, backgroundColor:t.raised, border:'1px solid ' + t.border, display:'flex', alignItems:'center', justifyContent:'center', fontSize: tall ? 28 : (landscape ? 26 : 32), fontWeight:700, letterSpacing:0.5, color: logo ? t.blue : t.dim },
+      rtZoneStyle: { flexShrink:0, marginTop: tall ? 'auto' : 0, marginBottom: tall ? 'auto' : 0, height: tall ? 60 : (landscape ? 50 : (twoRows ? 56 : 76)), display:'flex', alignItems:'center', justifyContent:'center' },
       rtStripStyle: { alignSelf:'center', width:'100%', maxWidth:880, height:64, padding:'0 28px', boxSizing:'border-box', display:'flex', alignItems:'center', justifyContent: scroll ? 'flex-start' : 'center', overflow:'hidden', borderRadius:16, backgroundColor:t.raised, border:'1px solid ' + t.border },
       rtMarqueeStyle: { display:'flex', gap:100, whiteSpace:'nowrap', animation:'carfm-ticker 16s linear infinite' },
       rtItemStyle: { fontSize: landscape ? 26 : 30, fontWeight:400, whiteSpace:'nowrap', color: rtRaw ? t.text : t.dim, fontStyle: rtRaw ? 'normal' : 'italic' },

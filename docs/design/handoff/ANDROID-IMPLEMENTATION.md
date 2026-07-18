@@ -1,5 +1,7 @@
 # DUDU OS FM Radio — Android implementation spec
 
+*Bundle v1.2.0 — 2026-07-18 (see `VERSION`).*
+
 A complete build spec for the DUDU OS FM radio front-end on Android (Jetpack
 Compose primary; View/XML notes where helpful). It describes **intent, structure,
 tokens, and behavior** so the app can be built natively — not by translating web
@@ -105,8 +107,10 @@ Amber differs by theme only for contrast against the two backgrounds; it is not 
 themeable brand color — keep it out of accent/theming logic.
 
 Card radius ≈ 28dp (hero), 16–18dp (tiles/cards/overlay panels), 12–14dp
-(pills/inputs/keys). Hero + overlay shadow: soft and large (≈ `0 20dp 44dp`,
-~16% opacity light / ~50% dark).
+(pills/inputs/keys); station-logo tiles ≈ 15–20dp (circle = fully round); the
+nearby disc is fully round. Spacing: page padding ≈ 18–24dp, hero gap ≈ 20dp,
+general gaps 8–12dp. Shadow: soft and large — hero ≈ `0 20dp 44dp`, modal/overlay
+≈ `0 20dp 50dp`, ~16% opacity light / ~50% dark.
 
 ---
 
@@ -129,8 +133,17 @@ Left cluster + right cluster, spaced apart.
     ~1.1s scale pulse).
   - **PTY** — program-type text (e.g. "Classic Rock"), dim, ellipsized.
   - **OUT OF FM BAND** warning pill (amber) when tuned outside 87.5–108.0.
-  - **Tuner-error pill** — amber warning triangle + "Failure to connect to
-    tuner." Replaces the whole OK cluster when the backend is down.
+  - **Tuner-error pill** — when no compatible tuner is connected, one pill
+    **replaces the entire OK cluster** (signal / stereo / tells / PTY / out-of-band);
+    the two never show together. Amber warning triangle (≈26dp, 2dp stroke, no
+    fill) + "Failure to connect to tuner." (≈17sp/700, amber, `letter-spacing 0.3`,
+    nowrap) in an amber pill (height ≈44dp, padding 0 16dp, radius 10–12dp, 1.5dp
+    amber border, amber-tint fill ≈ `rgba(201,118,10,0.08)` light /
+    `rgba(255,184,51,0.10)` dark, gap 11dp). Wire to real tuner/SDR connection
+    status: `true` whenever there is no compatible tuner session, clearing once one
+    is connected and streaming — while `true`, signal / RDS / stereo / PTY are
+    unavailable and must not be shown. The settings gear (right cluster) stays
+    visible; its TUNER section (§6.3) is where the driver recovers.
 - **Right cluster:**
   - **Settings** gear button (44dp square, bordered, dim icon).
   - **Nearby-search** button — lives **here on the tall track**; on the wide
@@ -152,11 +165,13 @@ the hero card.
   static; dim italic placeholder when empty.
 
 **Vertical behavior:**
-- **Tall:** the hero region takes all leftover height and its content is
-  **vertically centered** (`Modifier.weight(1f)` + `Arrangement.Center`), so the
-  extra height on a tall surface sits as balanced margin above and below rather
-  than a gap. The prev/next **peek cards** (§5) still flank the hero here, tucked
-  in tighter against it (a smaller negative overlap than on the wide track).
+- **Tall:** the leftover height is **distributed, not pooled**. The hero sits in the
+  upper-middle (roughly a third down from the status bar) at a **slightly enlarged**
+  size, and the **RadioText strip** is **centered in the gap between the hero and the
+  preset shelf** — equal space above and below it. (Three equal flexible gaps: above
+  the hero, hero→RadioText, RadioText→presets; in Compose, three `weight(1f)` spacers
+  or equivalent `Arrangement`.) The prev/next **peek cards** (§5) still flank the hero
+  here, tucked in tighter against it (a smaller negative overlap than on the wide track).
 - **Wide:** hero is a fixed-proportion centered card (~62% width, clamped
   470–720dp) flanked by the prev/next **peek cards**.
 
@@ -265,19 +280,25 @@ A header ("Settings" + close ✕) over a scrolling body of grouped sections:
 - **ADVANCED** — "Advanced SDR view" row → opens the stock SDR interface.
 - Footer about line (app name · version · data snapshot).
 
-Full tuner-backend detail (RTL-SDR / Si470x / rtl_tcp behaviors) is in
-`uploads/settingspanelhandoff.md`.
+The built panel (`SettingsPanel.dc.html`, in this bundle) is the exact reference
+for these sections, values, and copy.
 
 ---
 
 ## 7. Nearby-search icon (match exactly — do not improvise)
 
 A **magnifier whose lens contains a broadcast tower**: a circular lens (thin
-stroke) over a faint glass fill; inside it a narrow **A-frame tower** with
-cross-bracing and a short mast; a tip dot; and **two broadcast-wave arcs on each
-side** of the tip. A magnifier **handle** runs off the lower-right at ~45°.
-Default is white strokes on a blue disc; disc / line / glass / border colors are
-themeable (light + dark variants). Render as a vector drawable and reproduce the
+stroke) over a faint glass fill; inside it a narrow **A-frame tower** with a
+single low cross-brace and a short antenna mast; a tip dot; and **two broadcast-
+wave arcs on each side** of the tip. A subtle barrel / lens-refraction warp bows
+the tower slightly. A magnifier **handle** runs off the lower-right at ~45°
+(~5 o'clock, stubby butt cap).
+Default is themeable, but **as shipped (via `CarFmLive`) it is dark strokes
+(`#111111`) on a white disc (`#FFFFFF`)**, with a light-gray border (`#D5DAE1`) and
+a faint blue-tinted lens (`#DCE7F5`). In **dark** theme the shipped colors are
+light strokes (`#E9EEF4`) on a raised disc (`#2A3644`), lens `#2A3644`, border
+`#3A4655`. Disc / line / glass / border colors are themeable — a blue disc is
+available but is not the default. Render as a vector drawable and reproduce the
 tower + waves precisely — `RadioFace` (`lensTower` / `nearbyIcon`) is the exact
 reference geometry.
 
@@ -285,7 +306,7 @@ reference geometry.
 
 ## 8. Motion
 
-- **Preset-change hero animation (wide track):** the current hero **shrinks and
+- **Preset-change hero animation (both tracks):** the current hero **shrinks and
   translates into the previous peek slot** while the next card **grows and moves
   into center** — a real position/size morph (FLIP), not a slide or crossfade. The
   dropped far card fades out (0.6 → 0); a new far card fades in (0 → 0.6). Scale
@@ -329,8 +350,9 @@ signal). Persist `freq` + `presets` (DataStore/prefs).
 - Glance-legible type; nothing critical below ~15sp.
 
 ## 11. Verify on device
-- Portrait (360×800): hero vertically centered with balanced margin; 3-col preset
-  shelf pinned bottom, scrolls past the ~45% cap; peek cards hidden.
+- Portrait (360×800): hero upper-middle and slightly enlarged; RadioText centered
+  in the gap between hero and presets; 3-col preset shelf pinned bottom, scrolls
+  past the ~45% cap; peek cards flank the hero, tucked tight.
 - Landscape (800×360): hero + peek cards + preset rail fit with no vertical
   clipping.
 - Dudu7 full, ⅔ slice (twoRows) and ⅓ slice (narrow tall) all hold up.

@@ -192,11 +192,11 @@ export default function CarFmFace(props: CarFmFaceProps) {
     padH: tall ? 16 : 24,
     padTop: tall ? 14 : 18,
     gap: tall ? 10 : 12,
-    freq: tall ? 52 : landscape ? 48 : 60,
-    mhz: tall ? 20 : landscape ? 18 : 22,
-    call: tall ? 48 : landscape ? 50 : 66,
-    logo: tall ? 72 : landscape ? 70 : 92,
-    star: tall ? 54 : landscape ? 48 : 56,
+    freq: tall ? 58 : landscape ? 48 : 60,
+    mhz: tall ? 22 : landscape ? 18 : 22,
+    call: tall ? 52 : landscape ? 50 : 66,
+    logo: tall ? 80 : landscape ? 70 : 92,
+    star: tall ? 58 : landscape ? 48 : 56,
     rtMarginTop: tall ? 12 : landscape ? 10 : 18,
     rtHeight: tall ? 56 : landscape ? 50 : 60,
     rtFont: landscape ? 26 : 30,
@@ -252,7 +252,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // peek cards tucked tight. The design's reference screenshots (surface-portrait
   // / surface-slice-one-third) show the peek cards present on the tall track too,
   // not just wide — so they render in every track, only the sizing differs.
-  const tallHeroW = Math.min(520, Math.round((dim.w > 0 ? dim.w : 470) * 0.78));
+  const tallHeroW = Math.min(560, Math.round((dim.w > 0 ? dim.w : 470) * 0.82));
   const tallSideW = Math.min(150, Math.max(88, Math.round((dim.w > 0 ? dim.w : 470) * 0.2)));
 
   // Tall track (PHONEPORTRAITFIXES §2): hero band grows + centers; the preset
@@ -517,7 +517,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         // column of [heroRow, rtZone]) — NOT inside the hero card. Keeping it out
         // of the card matches the compact hero + full-width RT bar in the refs.
         const rtBand = (
-          <View style={styles.rtZone}>
+          <View style={[styles.rtZone, tall && { marginTop: 'auto', marginBottom: 'auto' }]}>
             <RadioTextStrip
               text={rt}
               height={L.rtHeight}
@@ -639,9 +639,12 @@ const styles = StyleSheet.create({
   // hero card is flanked by the same side preset cards as every other track.
   // Hero band = column of [hero row, RadioText zone] (design heroBand).
   heroBand: { flex: 1, gap: 16, minHeight: 0 },
-  heroBandTall: { flex: 1, justifyContent: 'center', gap: 12, marginTop: 26, minHeight: 0 },
-  heroRowTall: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 0 },
-  heroCard: { borderWidth: 1, borderRadius: 28, paddingVertical: 22, paddingHorizontal: 20, alignItems: 'center', justifyContent: 'center', maxWidth: '100%', elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 } },
+  // Tall: leftover height is DISTRIBUTED, not pooled (design §4.2). The hero row
+  // (marginTop:auto) and the RadioText zone (marginTop+Bottom:auto) create three
+  // equal flexible gaps: above hero, hero→RadioText, RadioText→presets.
+  heroBandTall: { flex: 1, justifyContent: 'flex-start', gap: 0, marginTop: 26, minHeight: 0 },
+  heroRowTall: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 0, marginTop: 'auto' },
+  heroCard: { borderWidth: 1, borderRadius: 28, paddingVertical: 30, paddingHorizontal: 26, gap: 16, alignItems: 'center', justifyContent: 'center', maxWidth: '100%', elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 } },
 
   // maxWidth + justify-center keep the logo/callsign/star group INSIDE the hero
   // card: the callsign (flexShrink) gives way so the fixed logo tile and star
