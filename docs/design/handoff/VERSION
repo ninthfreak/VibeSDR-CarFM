@@ -1,9 +1,31 @@
-1.2.0 — 2026-07-18
+1.2.3 — 2026-07-18
 
 Android Car FM Radio Face — design handoff bundle.
 
 Changelog
 ---------
+1.2.3 (2026-07-18)
+  - Removed the overlay-state screenshots (nearby picker, numpad, reorder): the
+    capture tooling non-deterministically persisted a stale cached build for these
+    interactive states, so shipping them risked wrong references. They are now
+    documented as "render live from CarFmLive.dc.html; spec in ANDROID §6". The 8
+    per-surface face captures remain (verified current on disk).
+
+1.2.2 (2026-07-18)
+  - Regenerated the overlay/state references (02-nearby-picker, 03-numpad,
+    04-reorder-mode) against the CURRENT design — the old ones showed the retired
+    face (SEEK buttons + PREV/NEXT chevrons + FM badge + ENTER-FREQUENCY numpad).
+    Picker now shows the All/Music/Talk filter; numpad is TUNE + SEEK; reorder
+    shows move handles + ✕ + DONE.
+  - Removed redundant 01-radio-face-light.png (identical to surface-head-unit-light).
+
+1.2.1 (2026-07-18)
+  - Re-shot ALL remaining reference screenshots as clean, tight 1:1 captures
+    (head-unit light/dark, landscape, ⅔ slice, tuner-error) — 1.1.1 had only
+    done the tall ones, so these were still letterboxed with clipped presets.
+    The ⅔-slice reference now clearly shows the 2-row preset grid (ANDROID §4.3 /
+    LOSSY-ELEMENTS #3).
+
 1.2.0 (2026-07-18)
   - Tall-track vertical distribution reworked: the hero sits upper-middle and is
     slightly enlarged, and the RadioText strip is centered in the gap between the

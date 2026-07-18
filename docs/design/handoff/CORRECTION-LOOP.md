@@ -37,10 +37,11 @@ The design has **two layout tracks** chosen by aspect ratio (`w/h < 1` → tall)
 | `surface-slice-two-thirds.png`      | Dudu7 ⅔ slice           | 900 × 810   | wide*     |
 | `surface-slice-one-third.png`       | Dudu7 ⅓ slice           | 470 × 845   | tall      |
 | `surface-tuner-error.png`           | Full, tuner-error state | 1024 × 614  | wide      |
-| `01-radio-face-light.png`           | Face detail (full)      | 1024 × 614  | wide      |
-| `02-nearby-picker.png`              | Nearby picker overlay   | overlay     | —         |
-| `03-numpad.png`                     | Numpad overlay          | overlay     | —         |
-| `04-reorder-mode.png`               | Preset reorder mode     | 1024 × 614  | wide      |
+
+**Overlay states are not shipped as screenshots** (numpad, nearby picker, settings,
+reorder). Render them live from `CarFmLive.dc.html` (they open over the face) and
+check against ANDROID §6; `NearbyPicker.dc.html` and `SettingsPanel.dc.html` open
+standalone too.
 
 \* ⅔ slice is a wide track with a **two-row** preset grid (`twoRows` flag).
 
@@ -66,7 +67,8 @@ against that.
 4. **Preset carousel** — active card highlight, peek cards on both sides with
    their fade (see `LOSSY-ELEMENTS.md`).
 5. **Overlays** — nearby picker (collapsed bucket row + two-row genres), numpad,
-   settings, reorder — diff each against its reference at the target surface.
+   settings, reorder — render each live from `CarFmLive.dc.html` and check against
+   ANDROID §6 (no shipped screenshot for these states).
 6. **Cosmetics last** — radii, shadows, exact spacing, weights.
 
 ## Dark theme

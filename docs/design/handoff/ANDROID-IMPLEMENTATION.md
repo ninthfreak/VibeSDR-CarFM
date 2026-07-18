@@ -1,6 +1,6 @@
 # DUDU OS FM Radio — Android implementation spec
 
-*Bundle v1.2.0 — 2026-07-18 (see `VERSION`).*
+*Bundle v1.2.3 — 2026-07-18 (see `VERSION`).*
 
 A complete build spec for the DUDU OS FM radio front-end on Android (Jetpack
 Compose primary; View/XML notes where helpful). It describes **intent, structure,

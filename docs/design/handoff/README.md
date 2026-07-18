@@ -1,6 +1,6 @@
 # Handoff: Android Car Head‑Unit — FM Radio Face
 
-**Bundle v1.2.0 — 2026-07-18.** Version is tracked in `VERSION`; check it matches
+**Bundle v1.2.3 — 2026-07-18.** Version is tracked in `VERSION`; check it matches
 your copy before building (stale downloads were the source of earlier drift).
 
 ## Overview
@@ -226,11 +226,11 @@ To view the prototype, open `CarFmLive.dc.html` in a browser. The exposed tweak 
 colors and seek style are fixed style parameters in the prototype, not user‑facing controls.
 
 ## Screenshots
-`screenshots/` holds the reference captures to diff the built app against. **`CORRECTION-LOOP.md`
+`screenshots/` holds the per-surface reference captures to diff the built app against. **`CORRECTION-LOOP.md`
 maps every target surface (head unit, portrait, slices, landscape, light/dark, tuner-error) to its
-reference image** — use that as the checklist. Detail captures:
-- `01-radio-face-light.png` — main radio face (tuned station, presets, peek cards, custom scrollbar, NEARBY icon).
-- `02-nearby-picker.png` — Nearby stations modal (saved‑preset stars, signal + distance, right‑aligned).
-- `03-numpad.png` — direct frequency entry.
-- `04-reorder-mode.png` — preset reorder mode (move ‹ ›, remove ✕, DONE button).
-- `surface-*.png` — the full per-surface set referenced by `CORRECTION-LOOP.md`.
+reference image** — use that as the checklist; the clean full head-unit face is `surface-head-unit-light.png`.
+
+**Overlay states (numpad, nearby picker, settings, reorder) are not shipped as static screenshots** —
+render them live by opening `CarFmLive.dc.html` (tap the frequency for the numpad, the NEARBY disc for
+the picker, the gear for settings, long-press a preset for reorder) and check against `ANDROID-IMPLEMENTATION.md`
+§6. `NearbyPicker.dc.html` and `SettingsPanel.dc.html` also open standalone.

@@ -196,7 +196,9 @@ export default function PresetsBand({
       return { w, h: 128, logo: 50, logoRadius: 13, nameFont: 15 };
     }
     if (twoRows) {
-      const rowH = viewH > 0 ? (viewH - GAP) / 2 : 118;
+      // Fixed row height from the band height (no measure dependency) so the two
+      // rows are stable from the first frame.
+      const rowH = Math.max(96, Math.round((bandHeight - GAP) / 2));
       return { w: 150, h: rowH, logo: 46, logoRadius: 12, nameFont: 15 };
     }
     const big = active && !reordering;
@@ -249,17 +251,20 @@ export default function PresetsBand({
       </ScrollView>
     );
   } else if (twoRows) {
-    // 2-row horizontal grid (columns of two).
+    // 2-row grid: explicit stacked columns of two (column-major, matching the
+    // design). Built as real rows rather than a flexWrap-by-measured-height,
+    // which collapses to a single row before the height is known (LOSSY-ELEMENTS
+    // #3). tile i and i+1 share a column, so the grid reads top-to-bottom then
+    // left-to-right.
+    const cols: React.ReactNode[][] = [];
+    for (let i = 0; i < tiles.length; i += 2) cols.push(tiles.slice(i, i + 2));
     gridArea = (
-      <ScrollView
-        ref={scroll}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        onLayout={(e: LayoutChangeEvent) => setViewH(e.nativeEvent.layout.height)}
-      >
-        <View style={[styles.gridTwoRow, { height: viewH || undefined }]}>
-          {presets.length === 0 ? empty : tiles}
-        </View>
+      <ScrollView ref={scroll} horizontal showsHorizontalScrollIndicator={false}>
+        {presets.length === 0 ? empty : (
+          <View style={styles.gridTwoRow}>
+            {cols.map((col, ci) => <View key={ci} style={styles.twoRowCol}>{col}</View>)}
+          </View>
+        )}
       </ScrollView>
     );
   } else {
@@ -348,7 +353,8 @@ const styles = StyleSheet.create({
   gridWrap: { flex: 1 },
   grid: { gap: GAP, alignItems: 'stretch', paddingVertical: 2 },
   gridWrapTall: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignContent: 'flex-start', paddingHorizontal: 4, paddingVertical: 3 },
-  gridTwoRow: { flexDirection: 'column', flexWrap: 'wrap', gap: GAP, alignContent: 'flex-start', paddingVertical: 2 },
+  gridTwoRow: { flexDirection: 'row', gap: GAP, alignItems: 'flex-start', paddingVertical: 2 },
+  twoRowCol: { gap: GAP },
   emptyWrap: { justifyContent: 'center', paddingHorizontal: 14, maxWidth: 340 },
   empty: { fontFamily: FONT, fontSize: 15 },
   tile: {
