@@ -23,7 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getNearbyStations } from '../services/stationFinder';
 import type { NearbyStation } from '../services/stationTypes';
-import { ChevronShape, GearIcon, MagnifierTower, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
+import { GearIcon, MagnifierTower, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
 import LogoTile from './carfm/LogoTile';
 import NearbyPicker from './carfm/NearbyPicker';
 import Numpad from './carfm/Numpad';
@@ -169,9 +169,6 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const [reordering, setReordering] = useState(false);
   const [scan, setScan] = useState<{ dir: 1 | -1; display: number } | null>(null);
   const scanTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Measured tall-mode nav button -> its (shorter, wider) chevron polygon.
-  const [tallBtn, setTallBtn] = useState({ w: 160, h: 78 });
-
   // ── Aspect-ratio layout tracks (handoff: fill the container, switch layout by
   // measured w/h so the face survives DuduOS splitting the head unit into
   // vertical thirds). Target 2000×1200 (≈1.67) is the `wide` track.
@@ -237,6 +234,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
     return [items[(activeIndex - 1 + items.length) % items.length], items[(activeIndex + 1) % items.length]];
   }, [items, activeIndex]);
   const sideCardW = Math.min(206, Math.max(120, Math.round((dim.w > 0 ? dim.w : 1024) * 0.18)));
+  // Tall/portrait track sizing: a narrower hero card (78%) with smaller flanking
+  // side cards (design tall heroMain 78% / side 20%, overlap -46).
+  const tallHeroW = Math.min(520, Math.round((dim.w > 0 ? dim.w : 470) * 0.78));
+  const tallSideW = Math.min(150, Math.max(88, Math.round((dim.w > 0 ? dim.w : 470) * 0.2)));
 
   // Tall track (PHONEPORTRAITFIXES §2): hero band grows + centers; the preset
   // band sizes to its 3-column grid content but is CAPPED at 46% of the screen
@@ -481,58 +482,25 @@ export default function CarFmFace(props: CarFmFaceProps) {
           </>
         );
 
-        return tall ? (
-          <View style={styles.heroTall}>
-            <View style={[styles.heroCard, { backgroundColor: pal.panel, borderColor: pal.border }]}>
-              {heroCenter}
-            </View>
-            {/* PREV/NEXT wrap below the hero as two short chevron buttons */}
-            <View style={styles.tallNavRow}>
-              <Pressable
-                onPress={() => stepPreset(-1)}
-                onLayout={(e: LayoutChangeEvent) => setTallBtn({
-                  w: Math.round(e.nativeEvent.layout.width), h: Math.round(e.nativeEvent.layout.height),
-                })}
-                style={({ pressed }) => [styles.tallNavBtn, pressed && { opacity: 0.55 }]}
-                accessibilityRole="button" accessibilityLabel="Previous preset"
-              >
-                <ChevronShape w={tallBtn.w} h={tallBtn.h} dir={-1} fill={pal.raised} stroke={pal.border} />
-                <View style={[styles.chevLabelWrap, { transform: [{ translateX: -8 }] }]}>
-                  <Text style={[styles.chevLabel, { color: pal.dim }]}>PREV</Text>
-                  <Text style={[styles.chevLabel, { color: pal.dim }]}>PRESET</Text>
-                </View>
-              </Pressable>
-              <Pressable
-                onPress={() => stepPreset(1)}
-                style={({ pressed }) => [styles.tallNavBtn, pressed && { opacity: 0.55 }]}
-                accessibilityRole="button" accessibilityLabel="Next preset"
-              >
-                <ChevronShape w={tallBtn.w} h={tallBtn.h} dir={1} fill={pal.raised} stroke={pal.border} />
-                <View style={[styles.chevLabelWrap, { transform: [{ translateX: 8 }] }]}>
-                  <Text style={[styles.chevLabel, { color: pal.dim }]}>NEXT</Text>
-                  <Text style={[styles.chevLabel, { color: pal.dim }]}>PRESET</Text>
-                </View>
-              </Pressable>
-            </View>
-          </View>
-        ) : (
-          <View style={styles.hero}>
-            {/* PREV preset as a faded side card tucked behind the hero (design
-                wideHero — replaces the chevron PREV button) */}
+        // PREV/NEXT preset side cards flank the hero in EVERY track (design:
+        // chevrons removed everywhere). Only the sizing differs by track: the
+        // tall/portrait hero band grows + centers its row and tucks the cards
+        // with a smaller (-46) overlap; wide/landscape use the clamped card and
+        // a -72 overlap.
+        const heroRow = (
+          <View style={tall ? styles.heroRowTall : styles.hero}>
             {prevP ? (
-              <SidePresetCard name={prevP.name} pal={pal} side="left" width={sideCardW} overlap={-72} onPress={() => stepPreset(-1)} />
+              <SidePresetCard name={prevP.name} pal={pal} side="left" width={tall ? tallSideW : sideCardW} overlap={tall ? -46 : -72} onPress={() => stepPreset(-1)} />
             ) : null}
-
-            <View style={[styles.heroCardWide, styles.heroCardZ, { width: L.heroCardW, backgroundColor: pal.panel, borderColor: pal.border }]}>
+            <View style={[tall ? styles.heroCard : styles.heroCardWide, styles.heroCardZ, { width: tall ? tallHeroW : L.heroCardW, backgroundColor: pal.panel, borderColor: pal.border }]}>
               {heroCenter}
             </View>
-
-            {/* NEXT preset side card (mirror) */}
             {nextP ? (
-              <SidePresetCard name={nextP.name} pal={pal} side="right" width={sideCardW} overlap={-72} onPress={() => stepPreset(1)} />
+              <SidePresetCard name={nextP.name} pal={pal} side="right" width={tall ? tallSideW : sideCardW} overlap={tall ? -46 : -72} onPress={() => stepPreset(1)} />
             ) : null}
           </View>
         );
+        return tall ? <View style={styles.heroTall}>{heroRow}</View> : heroRow;
       })()}
 
       {/* ── Presets band ── (grows to fill in the tall track; NEARBY + nav move to
@@ -633,14 +601,11 @@ const styles = StyleSheet.create({
     elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 },
   },
   heroCardZ: { zIndex: 3 },
-  // Tall/portrait track: hero band grows + centers (PHONEPORTRAITFIXES §2), hero
-  // stacks into a card, PREV/NEXT wrap below.
-  heroTall: { flex: 1, justifyContent: 'center', gap: 12 },
-  heroCard: { borderWidth: 1, borderRadius: 28, paddingVertical: 22, paddingHorizontal: 20, alignItems: 'center', justifyContent: 'center' },
-  tallNavRow: { flexDirection: 'row', gap: 12, height: 78 },
-  tallNavBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  chevLabelWrap: { alignItems: 'center' },
-  chevLabel: { fontFamily: FONT, fontSize: 11, fontWeight: '700', letterSpacing: 1, lineHeight: 14 },
+  // Tall/portrait track: hero band grows + centers (PHONEPORTRAITFIXES §2); the
+  // hero card is flanked by the same side preset cards as every other track.
+  heroTall: { flex: 1, justifyContent: 'center' },
+  heroRowTall: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 0 },
+  heroCard: { borderWidth: 1, borderRadius: 28, paddingVertical: 22, paddingHorizontal: 20, alignItems: 'center', justifyContent: 'center', maxWidth: '100%', elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 } },
 
   stationRow: { flexDirection: 'row', alignItems: 'center', gap: 18 },
   call: { fontFamily: FONT, fontSize: 66, fontWeight: '700', letterSpacing: -1, flexShrink: 1 },
