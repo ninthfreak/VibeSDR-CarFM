@@ -163,18 +163,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       body: 'Got a private UberSDR, OpenWebRX or KiwiSDR? Enter its address here to connect to it directly.',
       target: tourRef('customUrl') },
   ], { storageKey: 'lsv_tour_picker_v1' });
-  useEffect(() => {
-    // Wait for the launch splash to fully dismiss before auto-starting the tour —
-    // on first launch the splash holds open on the CONTINUE / power-saving notice,
-    // and the tutorial must not draw on top of it. whenDismissed fires immediately
-    // on later launches (splash already gone), preserving the original ~1.1s settle.
-    let t: ReturnType<typeof setTimeout>;
-    const unsub = splashBridge.whenDismissed(() => {
-      t = setTimeout(() => { pickerTour.maybeAutoStart(); }, 1100);
-    });
-    return () => { unsub(); clearTimeout(t); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // CarFM: the stock "Welcome to VibeSDR" picker tour is never auto-started. The
+  // picker is not a destination in this fork (launch goes straight to the FM
+  // face; the picker only exists behind the Advanced view), and its coachmark
+  // modal renders ABOVE the face, so a 1.1s-after-splash auto-start popped a
+  // "Welcome to VibeSDR" card over the radio on every startup. Left mounted for
+  // dev use, but it no longer auto-shows.
+  void pickerTour;
   const userLocRef = useRef<{ lat: number; lon: number } | null>(null);
 
   const openDirectory = useCallback((id: DirectoryId) => {

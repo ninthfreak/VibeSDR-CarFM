@@ -69,26 +69,58 @@ export function SeekIcon({ size = 30, dir, color }: { size?: number; dir: 1 | -1
  * stubby handle) with a radio tower inside (A-frame legs, one low X-brace,
  * antenna mast + radiating waves). Colour anatomy per the handoff tweaks.
  */
+// Faithful port of the APPROVED nearby icon (RadioFace.dc.html `lensTower` +
+// `nearbyIcon`, viewBox 32×32): a thin-line magnifier lens containing a radio
+// tower — straight A-frame legs that widen to the base, a single X-brace, an
+// antenna mast + tip dot, and symmetric radiating arc waves, all bowed by a
+// subtle barrel warp (lens refraction). The earlier in-app drawing diverged
+// from this; the exact source math is reproduced so it matches pixel-for-pixel.
 export function MagnifierTower({ size = 92, line, glass }: {
   size?: number; line: string; glass: string;
 }) {
+  const cx = 14.8, apex = 12.7, base = 22.3;
+  const lcx = 14.8, lcy = 14.3, R = 12, K = 0.075;   // subtle barrel magnification
+  const warp = (x: number, y: number): [number, number] => {
+    const dx = x - lcx, dy = y - lcy, r = Math.hypot(dx, dy) || 1e-4;
+    const f = 1 + K * (1 - (r / R) * (r / R));
+    return [lcx + dx * f, lcy + dy * f];
+  };
+  const poly = (x1: number, y1: number, x2: number, y2: number, n = 8): string => {
+    let d = '';
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      const [x, y] = warp(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t);
+      d += (i ? ' L' : 'M') + x.toFixed(2) + ' ' + y.toFixed(2);
+    }
+    return d;
+  };
+  const half = (y: number) => 0.8 + 3.4 * ((y - apex) / (base - apex));
+  const xl = (y: number) => cx - half(y), xr = (y: number) => cx + half(y);
+  const yTop = apex + 3.8, yBot = base - 0.6, tipY = 9.1;
+  const [wtx, wty] = warp(cx, tipY);
+  const waveD = (r: number, side: 1 | -1): string =>
+    `M${wtx + side * r * 0.62} ${wty - r * 0.66} A ${r} ${r} 0 0 ${side > 0 ? 1 : 0} ${wtx + side * r * 0.62} ${wty + r * 0.66}`;
+
   return (
-    <Svg width={size} height={size} viewBox="0 0 64 64">
-      {/* lens */}
-      <Circle cx="29" cy="27" r="18" fill={glass} stroke={line} strokeWidth="3" />
-      {/* stubby butt-capped handle toward 5 o'clock */}
-      <Line x1="42" y1="40.5" x2="51" y2="50" stroke={line} strokeWidth="6" strokeLinecap="round" />
-      {/* tower: A-frame legs with slight barrel bow (lens refraction) */}
-      <Path d="M24.5 37 Q26.5 26 28.2 17.5" stroke={line} strokeWidth="2.2" strokeLinecap="round" fill="none" />
-      <Path d="M33.5 37 Q31.5 26 29.8 17.5" stroke={line} strokeWidth="2.2" strokeLinecap="round" fill="none" />
-      {/* single X-brace low in the body */}
-      <Line x1="25.4" y1="33.4" x2="32.8" y2="29.2" stroke={line} strokeWidth="1.7" strokeLinecap="round" />
-      <Line x1="25.2" y1="29.2" x2="32.6" y2="33.4" stroke={line} strokeWidth="1.7" strokeLinecap="round" />
-      {/* antenna mast */}
-      <Line x1="29" y1="17.5" x2="29" y2="12.5" stroke={line} strokeWidth="2" strokeLinecap="round" />
-      {/* radiating waves from the mast tip */}
-      <Path d="M24.6 12.4a6.2 6.2 0 0 1 8.8 0" stroke={line} strokeWidth="1.7" strokeLinecap="round" fill="none" />
-      <Path d="M22.2 9.9a9.6 9.6 0 0 1 13.6 0" stroke={line} strokeWidth="1.7" strokeLinecap="round" fill="none" />
+    <Svg width={size} height={size} viewBox="0 0 32 32" fill="none">
+      <Circle cx={14.8} cy={14.3} r={11.2} fill={glass} />
+      <Circle cx={14.8} cy={14.3} r={12.0} fill="none" stroke={line} strokeWidth={1.6} />
+      {/* tower: A-frame legs */}
+      <Path d={poly(cx - half(base), base, cx - half(apex), apex)} stroke={line} strokeWidth={1.1} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      <Path d={poly(cx + half(base), base, cx + half(apex), apex)} stroke={line} strokeWidth={1.1} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      {/* X-brace */}
+      <Path d={poly(xl(yTop), yTop, xr(yBot), yBot)} stroke={line} strokeWidth={1.0} strokeLinecap="round" fill="none" />
+      <Path d={poly(xr(yTop), yTop, xl(yBot), yBot)} stroke={line} strokeWidth={1.0} strokeLinecap="round" fill="none" />
+      {/* mast + tip */}
+      <Path d={poly(cx, apex, cx, tipY)} stroke={line} strokeWidth={1.2} strokeLinecap="round" fill="none" />
+      <Circle cx={wtx} cy={wty} r={0.9} fill={line} />
+      {/* symmetric radiating waves */}
+      <Path d={waveD(2.6, -1)} stroke={line} strokeWidth={1.1} strokeLinecap="round" fill="none" />
+      <Path d={waveD(4.4, -1)} stroke={line} strokeWidth={1.1} strokeLinecap="round" fill="none" />
+      <Path d={waveD(2.6, 1)} stroke={line} strokeWidth={1.1} strokeLinecap="round" fill="none" />
+      <Path d={waveD(4.4, 1)} stroke={line} strokeWidth={1.1} strokeLinecap="round" fill="none" />
+      {/* butt-capped handle toward 5 o'clock */}
+      <Line x1={21.3} y1={25.6} x2={24.5} y2={31.1} stroke={line} strokeWidth={3.2} strokeLinecap="butt" />
     </Svg>
   );
 }
