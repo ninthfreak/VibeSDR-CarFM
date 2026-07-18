@@ -264,7 +264,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
     if (!tall) return L.bandHeight;
     const rows = Math.ceil(items.length / 3);
     const contentH = rows > 0 ? rows * 128 + (rows - 1) * 12 + 8 : 0;   // tiles(128) + 12 gaps + 8 pad
-    const cap = Math.round((dim.h > 0 ? dim.h : 800) * 0.46);
+    const cap = Math.round((dim.h > 0 ? dim.h : 800) * 0.42);   // ~45% shelf (§4.3), trimmed so the shorter ⅓ slice still fits the hero + RadioText above it
     return Math.min(cap, Math.max(96, contentH));                        // ≥96 so an empty band still reads
   }, [tall, items.length, dim.h, L.bandHeight]);
 
@@ -642,7 +642,7 @@ const styles = StyleSheet.create({
   // Tall: leftover height is DISTRIBUTED, not pooled (design §4.2). The hero row
   // (marginTop:auto) and the RadioText zone (marginTop+Bottom:auto) create three
   // equal flexible gaps: above hero, hero→RadioText, RadioText→presets.
-  heroBandTall: { flex: 1, justifyContent: 'flex-start', gap: 0, marginTop: 26, minHeight: 0 },
+  heroBandTall: { flex: 1, justifyContent: 'flex-start', gap: 0, marginTop: 14, minHeight: 0 },
   heroRowTall: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 0, marginTop: 'auto' },
   heroCard: { borderWidth: 1, borderRadius: 28, paddingVertical: 30, paddingHorizontal: 26, gap: 16, alignItems: 'center', justifyContent: 'center', maxWidth: '100%', elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 } },
 
