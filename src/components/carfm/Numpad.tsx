@@ -13,7 +13,7 @@ import { FONT, FM_MAX_MHZ, FM_MIN_MHZ, type CarFmPalette } from './tokens';
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', '⌫'] as const;
 
-export default function Numpad({ visible, pal, currentMHz, scanning, onSeek, onTune, onClose }: {
+export default function Numpad({ visible, pal, currentMHz, scanning, onSeek, onTune, onClose, compact = false, maxHeight }: {
   visible: boolean;
   pal: CarFmPalette;
   currentMHz: string;              // live (or sweeping) frequency, shown until typing starts
@@ -21,9 +21,21 @@ export default function Numpad({ visible, pal, currentMHz, scanning, onSeek, onT
   onSeek: (dir: 1 | -1) => void;
   onTune: (mhz: number) => void;
   onClose: () => void;
+  /** Short screens (design npCompact, height < 560): shrink keys/display/gaps
+   *  and drop the title so the whole card fits without clipping. */
+  compact?: boolean;
+  maxHeight?: number;
 }) {
   const [buf, setBuf] = useState('');
   const [error, setError] = useState(false);
+  // Per-size metrics (design npCompact branch).
+  const gap = compact ? 9 : 12;
+  const S = {
+    cardPadV: compact ? 16 : 20, cardPadH: compact ? 18 : 20, cardRadius: compact ? 20 : 24,
+    dispH: compact ? 60 : 78, dispRadius: compact ? 12 : 14, value: compact ? 38 : 46,
+    seekH: compact ? 46 : 56, keyH: compact ? 46 : 64, keyRadius: compact ? 12 : 14, keyFont: compact ? 22 : 26,
+    actionH: compact ? 52 : 60, actionRadius: compact ? 12 : 14,
+  };
 
   const reset = () => { setBuf(''); setError(false); };
   const close = () => { reset(); onClose(); };
@@ -50,18 +62,18 @@ export default function Numpad({ visible, pal, currentMHz, scanning, onSeek, onT
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={close}>
       <Pressable style={styles.scrim} onPress={close}>
-        <Pressable style={[styles.card, { backgroundColor: pal.panel }]} onPress={() => {}}>
-          <Text style={[styles.title, { color: pal.dim }]}>TUNE</Text>
-          <View style={[styles.display, { backgroundColor: pal.raised, borderColor: error ? pal.amber : pal.border }]}>
-            <Text allowFontScaling={false} style={[styles.value, { color: pal.amber, opacity: buf || scanning ? 1 : 0.45 }]}>
+        <Pressable style={[styles.card, { backgroundColor: pal.panel, paddingVertical: S.cardPadV, paddingHorizontal: S.cardPadH, borderRadius: S.cardRadius }, maxHeight ? { maxHeight } : null]} onPress={() => {}}>
+          {compact ? null : <Text style={[styles.title, { color: pal.dim }]}>TUNE</Text>}
+          <View style={[styles.display, { height: S.dispH, borderRadius: S.dispRadius, backgroundColor: pal.raised, borderColor: error ? pal.amber : pal.border }]}>
+            <Text allowFontScaling={false} style={[styles.value, { fontSize: S.value, color: pal.amber, opacity: buf || scanning ? 1 : 0.45 }]}>
               {buf || currentMHz}
             </Text>
             <Text style={[styles.unit, { color: pal.dim }]}>MHz</Text>
           </View>
-          <View style={styles.seekRow}>
+          <View style={[styles.seekRow, { gap, marginTop: gap }]}>
             <Pressable
               onPress={() => seek(-1)}
-              style={({ pressed }) => [styles.seekBtn, { backgroundColor: pal.raised, borderColor: pal.border }, pressed && { opacity: 0.55 }]}
+              style={({ pressed }) => [styles.seekBtn, { height: S.seekH, backgroundColor: pal.raised, borderColor: pal.border }, pressed && { opacity: 0.55 }]}
               accessibilityRole="button" accessibilityLabel="Seek down to previous station"
             >
               <Text style={[styles.seekIcon, { color: pal.text }]}>‹‹</Text>
@@ -69,7 +81,7 @@ export default function Numpad({ visible, pal, currentMHz, scanning, onSeek, onT
             </Pressable>
             <Pressable
               onPress={() => seek(1)}
-              style={({ pressed }) => [styles.seekBtn, { backgroundColor: pal.raised, borderColor: pal.border }, pressed && { opacity: 0.55 }]}
+              style={({ pressed }) => [styles.seekBtn, { height: S.seekH, backgroundColor: pal.raised, borderColor: pal.border }, pressed && { opacity: 0.55 }]}
               accessibilityRole="button" accessibilityLabel="Seek up to next station"
             >
               <Text style={[styles.seekText, { color: pal.dim }]}>SEEK</Text>
@@ -81,14 +93,14 @@ export default function Numpad({ visible, pal, currentMHz, scanning, onSeek, onT
               ⚠ Outside {FM_MIN_MHZ.toFixed(1)}–{FM_MAX_MHZ.toFixed(1)} MHz band
             </Text>
           ) : null}
-          <View style={styles.grid}>
+          <View style={[styles.grid, { gap, marginTop: gap + 4 }]}>
             {KEYS.map((k) => (
               <Pressable
                 key={k}
                 onPress={() => press(k)}
                 style={({ pressed }) => [
                   styles.key,
-                  { backgroundColor: pal.raised, borderColor: pal.border },
+                  { height: S.keyH, borderRadius: S.keyRadius, backgroundColor: pal.raised, borderColor: pal.border },
                   pressed && { opacity: 0.55 },
                 ]}
                 accessibilityRole="button"
@@ -96,14 +108,14 @@ export default function Numpad({ visible, pal, currentMHz, scanning, onSeek, onT
               >
                 {k === '⌫'
                   ? <BackspaceIcon size={30} color={pal.text} />
-                  : <Text allowFontScaling={false} style={[styles.keyText, { color: pal.text }]}>{k}</Text>}
+                  : <Text allowFontScaling={false} style={[styles.keyText, { fontSize: S.keyFont, color: pal.text }]}>{k}</Text>}
               </Pressable>
             ))}
           </View>
-          <View style={styles.actions}>
+          <View style={[styles.actions, { gap, marginTop: gap + 4 }]}>
             <Pressable
               onPress={close}
-              style={({ pressed }) => [styles.action, { borderColor: pal.border }, pressed && { opacity: 0.55 }]}
+              style={({ pressed }) => [styles.action, { height: S.actionH, borderRadius: S.actionRadius, borderColor: pal.border }, pressed && { opacity: 0.55 }]}
               accessibilityRole="button" accessibilityLabel="Cancel"
             >
               <Text style={[styles.actionText, { color: pal.dim }]}>CANCEL</Text>
@@ -113,7 +125,7 @@ export default function Numpad({ visible, pal, currentMHz, scanning, onSeek, onT
               disabled={!buf}
               style={({ pressed }) => [
                 styles.action,
-                { borderColor: pal.blue, backgroundColor: pal.blueFill, opacity: buf ? 1 : 0.4 },
+                { height: S.actionH, borderRadius: S.actionRadius, borderColor: pal.blue, backgroundColor: pal.blueFill, opacity: buf ? 1 : 0.4 },
                 pressed && { opacity: 0.55 },
               ]}
               accessibilityRole="button" accessibilityLabel="Tune"

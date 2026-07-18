@@ -125,6 +125,17 @@ export function MagnifierTower({ size = 92, line, glass }: {
   );
 }
 
+/** Battery-with-bolt glyph (settings SYSTEM row); colour encodes exempt/not. */
+export function BatteryBolt({ size = 32, color }: { size?: number; color: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Rect x={3} y={8} width={15} height={9} rx={2} stroke={color} strokeWidth={2} strokeLinejoin="round" />
+      <Line x1={20.5} y1={11} x2={20.5} y2={14} stroke={color} strokeWidth={2} strokeLinecap="round" />
+      <Path d="M10.5 9.5 L8.5 12.5 L11 12.5 L9.5 15.5" stroke={color} strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </Svg>
+  );
+}
+
 /** Small ◎ target glyph for the STEREO pill. */
 export function StereoDot({ size = 16, color }: { size?: number; color: string }) {
   return (

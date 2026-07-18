@@ -28,6 +28,7 @@ import LogoTile from './carfm/LogoTile';
 import NearbyPicker from './carfm/NearbyPicker';
 import Numpad from './carfm/Numpad';
 import PresetsBand, { type PresetItem } from './carfm/PresetsBand';
+import SidePresetCard from './carfm/SidePresetCard';
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
 import { DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, LIGHT } from './carfm/tokens';
 
@@ -168,8 +169,6 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const [reordering, setReordering] = useState(false);
   const [scan, setScan] = useState<{ dir: 1 | -1; display: number } | null>(null);
   const scanTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Measured side-column size -> chevron polygon in true pixels (no distortion).
-  const [chev, setChev] = useState({ w: 86, h: 180 });
   // Measured tall-mode nav button -> its (shorter, wider) chevron polygon.
   const [tallBtn, setTallBtn] = useState({ w: 160, h: 78 });
 
@@ -233,6 +232,15 @@ export default function CarFmFace(props: CarFmFaceProps) {
     () => new Set(items.map((p) => Math.round(p.frequencyMhz * 10))),
     [items],
   );
+
+  // Adjacent presets for the flanking side cards (design wideHero): with no
+  // active preset, prev = last / next = first, matching the design.
+  const [prevP, nextP] = useMemo<[PresetItem | null, PresetItem | null]>(() => {
+    if (items.length === 0) return [null, null];
+    if (activeIndex < 0) return [items[items.length - 1], items[0]];
+    return [items[(activeIndex - 1 + items.length) % items.length], items[(activeIndex + 1) % items.length]];
+  }, [items, activeIndex]);
+  const sideCardW = Math.min(206, Math.max(120, Math.round((dim.w > 0 ? dim.w : 1024) * 0.18)));
 
   // ── Seek: scan to the next/previous station in the local FCC DB ────────────
   // The frequency list loads lazily (offline-first facade; enrich off since only
@@ -500,40 +508,20 @@ export default function CarFmFace(props: CarFmFaceProps) {
           </View>
         ) : (
           <View style={styles.hero}>
-            {/* left column: full-height PREV PRESET chevron (steering-wheel mappable) */}
-            <Pressable
-              onPress={() => stepPreset(-1)}
-              onLayout={(e: LayoutChangeEvent) => setChev({
-                w: Math.round(e.nativeEvent.layout.width), h: Math.round(e.nativeEvent.layout.height),
-              })}
-              style={({ pressed }) => [styles.sideCol, pressed && { opacity: 0.55 }]}
-              accessibilityRole="button" accessibilityLabel="Previous preset"
-            >
-              <ChevronShape w={chev.w} h={chev.h} dir={-1} fill={pal.raised} stroke={pal.border} />
-              <View style={[styles.chevLabelWrap, { transform: [{ translateX: -8 }] }]}>
-                <Text style={[styles.chevLabel, { color: pal.dim }]}>PREV</Text>
-                <Text style={[styles.chevLabel, { color: pal.dim }]}>PRESET</Text>
-              </View>
-            </Pressable>
+            {/* PREV preset as a faded side card tucked behind the hero (design
+                wideHero — replaces the chevron PREV button) */}
+            {prevP ? (
+              <SidePresetCard name={prevP.name} pal={pal} side="left" width={sideCardW} overlap={-72} onPress={() => stepPreset(-1)} />
+            ) : null}
 
-            <View style={styles.center}>
-              <View style={[styles.heroCardWide, { width: L.heroCardW, backgroundColor: pal.panel, borderColor: pal.border }]}>
-                {heroCenter}
-              </View>
+            <View style={[styles.heroCardWide, styles.heroCardZ, { width: L.heroCardW, backgroundColor: pal.panel, borderColor: pal.border }]}>
+              {heroCenter}
             </View>
 
-            {/* right column: full-height NEXT PRESET chevron (mirror of left) */}
-            <Pressable
-              onPress={() => stepPreset(1)}
-              style={({ pressed }) => [styles.sideCol, pressed && { opacity: 0.55 }]}
-              accessibilityRole="button" accessibilityLabel="Next preset"
-            >
-              <ChevronShape w={chev.w} h={chev.h} dir={1} fill={pal.raised} stroke={pal.border} />
-              <View style={[styles.chevLabelWrap, { transform: [{ translateX: 8 }] }]}>
-                <Text style={[styles.chevLabel, { color: pal.dim }]}>NEXT</Text>
-                <Text style={[styles.chevLabel, { color: pal.dim }]}>PRESET</Text>
-              </View>
-            </Pressable>
+            {/* NEXT preset side card (mirror) */}
+            {nextP ? (
+              <SidePresetCard name={nextP.name} pal={pal} side="right" width={sideCardW} overlap={-72} onPress={() => stepPreset(1)} />
+            ) : null}
           </View>
         );
       })()}
@@ -566,6 +554,8 @@ export default function CarFmFace(props: CarFmFaceProps) {
         pal={pal}
         currentMHz={fmt(scan ? scan.display : mhz)}
         scanning={!!scan}
+        compact={dim.h > 0 && dim.h < 560}
+        maxHeight={dim.h > 0 ? dim.h - 24 : undefined}
         onSeek={runSeek}
         onTune={(f) => { setNumpadOpen(false); onTuneHz(Math.round(f * 1e6)); }}
         onClose={() => setNumpadOpen(false)}
@@ -625,25 +615,24 @@ const styles = StyleSheet.create({
   },
   tunerErrText: { fontFamily: FONT, fontSize: 17, fontWeight: '700', letterSpacing: 0.3 },
 
-  hero: { flex: 1, flexDirection: 'row', gap: 20, alignItems: 'center' },
-  // Non-tall hero: a panel card of clamped width (design heroMainStyle), sized
-  // inline; the flex:1 `center` keeps it between the chevron columns.
+  hero: { flex: 1, flexDirection: 'row', gap: 0, alignItems: 'center', justifyContent: 'center' },
+  // Non-tall hero: a panel card of clamped width (design heroMainStyle). It sits
+  // ABOVE the flanking side preset cards (heroCardZ) so they tuck behind it.
   heroCardWide: {
     borderWidth: 1, borderRadius: 28, paddingVertical: 24, paddingHorizontal: 30,
     alignItems: 'center', justifyContent: 'center', maxWidth: '100%',
-    elevation: 6, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 },
+    elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 },
   },
+  heroCardZ: { zIndex: 3 },
   // Tall/portrait track: hero band grows + centers (PHONEPORTRAITFIXES §2), hero
   // stacks into a card, PREV/NEXT wrap below.
   heroTall: { flex: 1, justifyContent: 'center', gap: 12 },
   heroCard: { borderWidth: 1, borderRadius: 28, paddingVertical: 22, paddingHorizontal: 20, alignItems: 'center', justifyContent: 'center' },
   tallNavRow: { flexDirection: 'row', gap: 12, height: 78 },
   tallNavBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  sideCol: { width: 86, alignItems: 'center', justifyContent: 'center' },
   chevLabelWrap: { alignItems: 'center' },
   chevLabel: { fontFamily: FONT, fontSize: 11, fontWeight: '700', letterSpacing: 1, lineHeight: 14 },
 
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   stationRow: { flexDirection: 'row', alignItems: 'center', gap: 18 },
   call: { fontFamily: FONT, fontSize: 66, fontWeight: '700', letterSpacing: -1, flexShrink: 1 },
   starBtn: { width: 56, height: 56, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
