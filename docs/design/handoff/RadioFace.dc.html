@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+@keyframes carfm-ticker { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@keyframes carfm-wiggle { 0% { transform: rotate(-1.1deg); } 50% { transform: rotate(1.1deg); } 100% { transform: rotate(-1.1deg); } }
+@keyframes carfm-scan-up { 0% { transform: translateY(14px); opacity: 0.25; } 100% { transform: translateY(0); opacity: 1; } }
+@keyframes carfm-scan-down { 0% { transform: translateY(-14px); opacity: 0.25; } 100% { transform: translateY(0); opacity: 1; } }
+@keyframes carfm-ta-pulse { 0%,100% { opacity:1; transform:scale(1.3); } 50% { opacity:0.5; transform:scale(1.45); } }
+[data-preset-grid]::-webkit-scrollbar { display: none; }
+</style>
+</helmet>
+<div style="{{ containerStyle }}">
+
+  <div style="{{ topbarStyle }}">
+    <div style="{{ leftClusterStyle }}">
+      <sc-if value="{{ tunerError }}" hint-placeholder-val="{{ false }}">
+        <div style="{{ tunerErrStyle }}">
+          {{ tunerErrIcon }}
+          <span>Failure to connect to tuner.</span>
+        </div>
+      </sc-if>
+      <sc-if value="{{ tunerOk }}" hint-placeholder-val="{{ true }}">
+        <div style="{{ okClusterStyle }}">
+      <div style="{{ signalWrapStyle }}">
+        {{ signalIcon }}
+        <span style="{{ signalDbStyle }}">{{ dbText }}</span>
+      </div>
+      <div style="{{ topRowStyle }}">
+        <div style="{{ stereoColStyle }}">
+          <div style="{{ stereoStyle }}">
+            {{ stereoWaveL }}
+            <span>{{ stereoText }}</span>
+            {{ stereoWaveR }}
+          </div>
+          <div style="{{ tellStripStyle }}">
+            <sc-for list="{{ tells }}" as="tt" hint-placeholder-count="4">
+              <span style="{{ tt.style }}">{{ tt.label }}</span>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+      <sc-if value="{{ hasPty }}" hint-placeholder-val="{{ false }}">
+        <div style="{{ ptyStyle }}">{{ ptyText }}</div>
+      </sc-if>
+      <sc-if value="{{ oob }}" hint-placeholder-val="{{ false }}">
+        <div style="{{ oobStyle }}">
+          <span style="{{ oobGlyphStyle }}">⚠</span>
+          <span>OUT OF FM BAND</span>
+        </div>
+      </sc-if>
+        </div>
+      </sc-if>
+    </div>
+    <div style="{{ topRightColStyle }}">
+      <div style="{{ advStyle }}" onClick="{{ onSettings }}">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="{{ advIconColor }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
+      </div>
+      <sc-if value="{{ nearbyInTopbar }}" hint-placeholder-val="{{ false }}">
+        <div style="{{ nearbyTopStyle }}" onClick="{{ onNearby }}">
+          <div style="{{ nearbyDiscStyle }}">{{ nearbyIcon }}</div>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="{{ heroBandStyle }}">
+    <div style="{{ heroRowStyle }}">
+      <sc-if value="{{ showHeroChevrons }}" hint-placeholder-val="{{ true }}">
+      <div style="{{ sideColStyle }}">
+        <div style="{{ prevStepStyle }}" onClick="{{ onPrevPreset }}" ref="{{ chevRef }}">
+          <svg style="{{ chevSvgStyle }}" viewBox="{{ chevViewBox }}" preserveAspectRatio="none">
+            <polygon points="{{ chevPrevPoints }}" fill="{{ chevFill }}" stroke="{{ chevStroke }}" stroke-width="2.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"></polygon>
+          </svg>
+          <div style="{{ prevLabelWrapStyle }}">
+            <span style="{{ chevLabelStyle }}">PREV</span>
+            <span style="{{ chevLabelStyle }}">PRESET</span>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+      <sc-if value="{{ wideHero }}" hint-placeholder-val="{{ false }}">
+        <div style="{{ prevCardStyle }}" onClick="{{ navPrev }}" ref="{{ prevCardRef }}">
+          <div style="{{ prevCardLogoStyle }}">{{ prevCardLogo }}</div>
+          <span style="{{ sideCardCallStyle }}">{{ prevCardCall }}</span>
+        </div>
+      </sc-if>
+      <div style="{{ heroMainStyle }}" ref="{{ heroCardRef }}">
+        <div style="{{ stationRowStyle }}">
+          <sc-if value="{{ notScanning }}" hint-placeholder-val="{{ true }}">
+            <div style="{{ logoTileStyle }}">{{ logoText }}</div>
+          </sc-if>
+          <div style="{{ stationStyle }}">{{ station }}</div>
+          <sc-if value="{{ notScanning }}" hint-placeholder-val="{{ true }}">
+            <div style="{{ starBtnStyle }}" onClick="{{ onSave }}">{{ starIcon }}</div>
+          </sc-if>
+        </div>
+        <div style="{{ freqRowStyle }}" onClick="{{ onFreqTap }}">
+          <span style="{{ freqStyle }}">{{ freq }}</span>
+          <span style="{{ mhzStyle }}">MHz</span>
+        </div>
+        <sc-if value="{{ oob }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ capStyle }}">{{ capText }}</div>
+        </sc-if>
+      </div>
+      <sc-if value="{{ wideHero }}" hint-placeholder-val="{{ false }}">
+        <div style="{{ nextCardStyle }}" onClick="{{ navNext }}" ref="{{ nextCardRef }}">
+          <div style="{{ nextCardLogoStyle }}">{{ nextCardLogo }}</div>
+          <span style="{{ sideCardCallStyle }}">{{ nextCardCall }}</span>
+        </div>
+      </sc-if>
+      <sc-if value="{{ showHeroChevrons }}" hint-placeholder-val="{{ true }}">
+      <div style="{{ sideColStyle }}">
+        <div style="{{ nextStepStyle }}" onClick="{{ onNextPreset }}">
+          <svg style="{{ chevSvgStyle }}" viewBox="{{ chevViewBox }}" preserveAspectRatio="none">
+            <polygon points="{{ chevNextPoints }}" fill="{{ chevFill }}" stroke="{{ chevStroke }}" stroke-width="2.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"></polygon>
+          </svg>
+          <div style="{{ nextLabelWrapStyle }}">
+            <span style="{{ chevLabelStyle }}">NEXT</span>
+            <span style="{{ chevLabelStyle }}">PRESET</span>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+    </div>
+    <div style="{{ rtZoneStyle }}">
+      <div style="{{ rtStripStyle }}">
+        <sc-if value="{{ scroll }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ rtMarqueeStyle }}">
+            <span style="{{ rtItemStyle }}">{{ rtText }}</span>
+            <span style="{{ rtItemStyle }}">{{ rtText }}</span>
+          </div>
+        </sc-if>
+        <sc-if value="{{ notScroll }}" hint-placeholder-val="{{ true }}">
+          <span style="{{ rtItemStyle }}">{{ rtText }}</span>
+        </sc-if>
+      </div>
+    </div>
+  </div>
+
+  <div style="{{ presetsBandStyle }}">
+    <sc-if value="{{ showPresetNav }}" hint-placeholder-val="{{ true }}">
+    <div style="{{ prevNavStyle }}" onClick="{{ scrollPrev }}"><span style="{{ presetNavIconStyle }}">‹</span></div>
+    </sc-if>
+    <div style="{{ presetGridWrapStyle }}">
+      <sc-if value="{{ hasChips }}" hint-placeholder-val="{{ true }}">
+        <div style="{{ presetGridStyle }}" data-preset-grid="1" ref="{{ gridRef }}" onScroll="{{ onGridScroll }}">
+          <sc-for list="{{ chips }}" as="chip" hint-placeholder-count="5">
+            <div style="{{ chip.tileStyle }}" data-freq="{{ chip.dataFreq }}" onClick="{{ chip.onClick }}" onPointerDown="{{ chip.onHoldStart }}" onPointerUp="{{ chip.onHoldEnd }}" onPointerLeave="{{ chip.onHoldEnd }}">
+              <div style="{{ chip.logoStyle }}">{{ chip.logoText }}</div>
+              <span style="{{ chip.callStyle }}">{{ chip.callText }}</span>
+              <sc-if value="{{ chip.active }}" hint-placeholder-val="{{ false }}">
+                <div style="{{ chip.activeBarStyle }}"></div>
+              </sc-if>
+              <sc-if value="{{ chip.reordering }}" hint-placeholder-val="{{ false }}">
+                <div style="{{ chip.reorderRowStyle }}">
+                  <div style="{{ chip.moveLeftStyle }}" onClick="{{ chip.onMoveLeft }}">‹</div>
+                  <div style="{{ chip.moveRightStyle }}" onClick="{{ chip.onMoveRight }}">›</div>
+                </div>
+                <div style="{{ chip.removeStyle }}" onClick="{{ chip.onRemove }}">✕</div>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+        <div style="{{ scrollBarTrackStyle }}" ref="{{ trackRef }}" onPointerDown="{{ onBarDown }}">
+          <div style="{{ scrollBarThumbStyle }}"></div>
+        </div>
+      </sc-if>
+      <sc-if value="{{ noChips }}" hint-placeholder-val="{{ false }}">
+        <div style="{{ emptyStyle }}">No presets yet — tune a station and tap the ★</div>
+      </sc-if>
+    </div>
+    <sc-if value="{{ showPresetNav }}" hint-placeholder-val="{{ true }}">
+    <div style="{{ nextNavStyle }}" onClick="{{ scrollNext }}"><span style="{{ presetNavIconStyle }}">›</span></div>
+    </sc-if>
+    <sc-if value="{{ reordering }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ doneStyle }}" onClick="{{ onDoneReorder }}">
+        <span style="{{ doneGlyphStyle }}">✓</span>
+        <span>DONE</span>
+      </div>
+    </sc-if>
+    <sc-if value="{{ nearbyInBand }}" hint-placeholder-val="{{ true }}">
+      <div style="{{ nearbyStyle }}" onClick="{{ onNearby }}">
+        <div style="{{ nearbyDiscStyle }}">{{ nearbyIcon }}</div>
+      </div>
+    </sc-if>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1024,&quot;height&quot;:600},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light'|'dark'&quot;},&quot;freq&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;101.1&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;ps&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;BBC R2&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;logoText&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;R2&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;rt&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Now playing: Fleetwood Mac — Dreams&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;stereo&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;rds&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;tp&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;ta&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;af&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;hd&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:0,&quot;min&quot;:0,&quot;max&quot;:3,&quot;tsType&quot;:&quot;number&quot;},&quot;pty&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Rock&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;signalDb&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:-58,&quot;min&quot;:-120,&quot;max&quot;:0,&quot;unit&quot;:&quot;dB&quot;,&quot;tsType&quot;:&quot;number&quot;},&quot;segs&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:10,&quot;min&quot;:0,&quot;max&quot;:12,&quot;tsType&quot;:&quot;number&quot;},&quot;outOfBand&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;scroll&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;saved&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;reordering&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;nearbyLine&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#111111&quot;,&quot;options&quot;:[&quot;#111111&quot;,&quot;#FFFFFF&quot;,&quot;#1B74E4&quot;,&quot;#0E7C4A&quot;,&quot;#B0402A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyFill&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#1B74E4&quot;,&quot;options&quot;:[&quot;#1B74E4&quot;,&quot;#FFFFFF&quot;,&quot;#111111&quot;,&quot;#E9EEF5&quot;,&quot;#0E7C4A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyGlass&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#FFFFFF29&quot;,&quot;options&quot;:[&quot;#FFFFFF29&quot;,&quot;#FFFFFF&quot;,&quot;#DCE7F5&quot;,&quot;#111111&quot;,&quot;#1B74E4&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyBorder&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyBorderColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#111111&quot;,&quot;options&quot;:[&quot;#111111&quot;,&quot;#FFFFFF&quot;,&quot;#D5DAE1&quot;,&quot;#1B74E4&quot;,&quot;#0E7C4A&quot;,&quot;#B0402A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyLineDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#E9EEF4&quot;,&quot;options&quot;:[&quot;#E9EEF4&quot;,&quot;#FFFFFF&quot;,&quot;#4A9EFF&quot;,&quot;#7FD6A0&quot;,&quot;#E6A24A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyFillDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#212B38&quot;,&quot;options&quot;:[&quot;#212B38&quot;,&quot;#161E29&quot;,&quot;#2A3644&quot;,&quot;#0E2A52&quot;,&quot;#FFFFFF&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyGlassDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#2A3644&quot;,&quot;options&quot;:[&quot;#2A3644&quot;,&quot;#212B38&quot;,&quot;#0E2A52&quot;,&quot;#000000&quot;,&quot;#E9EEF4&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyBorderColorDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#3A4655&quot;,&quot;options&quot;:[&quot;#3A4655&quot;,&quot;#FFFFFF&quot;,&quot;#4A9EFF&quot;,&quot;#7FD6A0&quot;,&quot;#E6A24A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;seekStyle&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;seekbar&quot;,&quot;chevrons&quot;,&quot;ffwd&quot;,&quot;skip&quot;],&quot;default&quot;:&quot;seekbar&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;presets&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{name:string;freq:string;active?:boolean}[]&quot;}}">
+class Component extends DCLogic {
+  state = { canPrev: false, canNext: false, thumbW: 0.3, thumbL: 0, showBar: false, chevW: 66, chevH: 180 };
+  gridRef = React.createRef();
+  trackRef = React.createRef();
+  chevRef = React.createRef();
+  heroCardRef = React.createRef();
+  prevCardRef = React.createRef();
+  nextCardRef = React.createRef();
+  cloneOver(el) {
+    if (!el || !el.parentElement) return null;
+    const clone = el.cloneNode(true);
+    clone.style.position = 'absolute';
+    clone.style.left = el.offsetLeft + 'px';
+    clone.style.top = el.offsetTop + 'px';
+    clone.style.width = el.offsetWidth + 'px';
+    clone.style.height = el.offsetHeight + 'px';
+    clone.style.boxSizing = 'border-box';
+    clone.style.margin = '0';
+    clone.style.zIndex = 6;
+    clone.style.pointerEvents = 'none';
+    el.parentElement.appendChild(clone);
+    return clone;
+  }
+  snapHero(dir) {
+    const el = this.heroCardRef.current; if (!el || !el.parentElement) return;
+    const dropEl = dir > 0 ? this.prevCardRef.current : this.nextCardRef.current; // far card that fades away
+    const fadeClone = this.cloneOver(dropEl);
+    if (fadeClone) fadeClone.style.zIndex = 5;
+    const R = (n) => n ? n.getBoundingClientRect() : null;
+    // Slot geometry is stable before the click — capture the natural resting rects here.
+    this._anim = {
+      dir, fadeClone,
+      prevRect: R(this.prevCardRef.current),
+      centerRect: R(el),
+      nextRect: R(this.nextCardRef.current),
+      sf: (el.offsetWidth && el.getBoundingClientRect().width / el.offsetWidth) || 1
+    };
+  }
+  navPrev = () => { this.snapHero(-1); this.props.onPrevPreset && this.props.onPrevPreset(); };
+  navNext = () => { this.snapHero(1); this.props.onNextPreset && this.props.onNextPreset(); };
+  componentDidMount() {
+    this.updateScroll();
+    window.addEventListener('resize', this.updateScroll);
+    this.measureChev();
+    if (window.ResizeObserver && this.chevRef.current) {
+      this._chevRO = new ResizeObserver(() => this.measureChev());
+      this._chevRO.observe(this.chevRef.current);
+    }
+  }
+  componentWillUnmount() { if (this._chevRO) this._chevRO.disconnect(); }
+  measureChev = () => {
+    const el = this.chevRef.current; if (!el) return;
+    const r = el.getBoundingClientRect();
+    const w = Math.round(r.width), h = Math.round(r.height);
+    if (w && h && (w !== this.state.chevW || h !== this.state.chevH)) this.setState({ chevW: w, chevH: h });
+  };
+  componentDidUpdate(prevProps) {
+    this.updateScroll();
+    if (this._flipRects) { const first = this._flipRects; this._flipRects = null; this.runFlip(first); }
+    this.scrollActiveIntoView();
+    if (this._anim && prevProps && prevProps.freq !== this.props.freq) {
+      const A = this._anim; this._anim = null;
+      const fade = 'ease', dur = 520;
+      const center = this.heroCardRef.current;
+      const landSlot = A.dir > 0 ? this.prevCardRef.current : this.nextCardRef.current; // current card lands here
+      const srcSlot = A.dir > 0 ? this.nextCardRef.current : this.prevCardRef.current;  // new center emerges from here (+ new far card)
+      const srcRect = A.dir > 0 ? A.nextRect : A.prevRect;   // stable source-slot rect
+      const landRect = A.dir > 0 ? A.prevRect : A.nextRect;  // stable landing-slot rect
+      const sf = A.sf || 1;                                  // stage scale factor (uniform)
+      const easeMove = (p) => 1 - Math.pow(1 - p, 3);   // smooth glide for position
+      const easeScale = (p) => 1 - Math.pow(1 - p, 5);  // faster settle for size
+      // Side cards carry a base transform (scale(0.88)); the FLIP must resolve TO that base,
+      // never to identity, or the card pops when the animation clears. b = base scale of el.
+      const baseScale = (el) => { const m = (el.style.transform || '').match(/scale\(([\d.]+)/); return m ? parseFloat(m[1]) : 1; };
+      const flip = (el, first, last) => {
+        if (!el || !first || !last) return;
+        const b = baseScale(el);
+        const sx = first.width / last.width, sy = first.height / last.height;
+        const dx = ((first.left + first.width/2) - (last.left + last.width/2)) / sf;
+        const dy = ((first.top + first.height/2) - (last.top + last.height/2)) / sf;
+        const steps = 12, frames = [];
+        for (let i = 0; i <= steps; i++) {
+          const p = i / steps, m = easeMove(p), s = easeScale(p);
+          const tx = dx * (1 - m), ty = dy * (1 - m);
+          const cx = b * (sx + (1 - sx) * s), cy = b * (sy + (1 - sy) * s);
+          frames.push({ transform:'translate(' + tx + 'px,' + ty + 'px) scale(' + cx + ',' + cy + ')' });
+        }
+        el.style.transformOrigin = 'center center';
+        el.animate(frames, { duration:dur, easing:'linear' });
+      };
+      // New center card grows + moves out of the source side slot.
+      flip(center, srcRect, A.centerRect);
+      // Current card shrinks + moves into the landing slot.
+      flip(landSlot, A.centerRect, landRect);
+      // Dropped far card fades away.
+      // Dropped far card fades away (from its base 0.6 side-card opacity).
+      if (A.fadeClone) {
+        const a = A.fadeClone.animate([ { opacity:0.6 }, { opacity:0 } ], { duration:dur, easing:fade, fill:'forwards' });
+        a.onfinish = () => A.fadeClone.remove();
+        a.oncancel = () => A.fadeClone.remove();
+      }
+      // Brand-new far card fades into existence in the source slot (to base 0.6).
+      if (srcSlot) {
+        srcSlot.style.opacity = 0;
+        const a = srcSlot.animate([ { opacity:0 }, { opacity:0.6 } ], { duration:dur, easing:fade, delay:120 });
+        a.onfinish = () => { srcSlot.style.opacity = ''; };
+        a.oncancel = () => { srcSlot.style.opacity = ''; };
+      }
+    }
+  }
+  scrollActiveIntoView = () => {
+    const grid = this.gridRef && this.gridRef.current; if (!grid) return;
+    const cur = this.props.freq;
+    if (cur === this._lastActiveFreq) return;
+    this._lastActiveFreq = cur;
+    const active = grid.querySelector('[data-freq="' + cur + '"]');
+    if (!active) return;
+    const target = active.offsetLeft - (grid.clientWidth - active.clientWidth) / 2;
+    grid.scrollTo({ left: Math.max(0, target), behavior: 'smooth' });
+  };
+  captureRects = () => {
+    const grid = this.gridRef && this.gridRef.current; if (!grid) return;
+    const m = {}; grid.querySelectorAll('[data-freq]').forEach(el => { m[el.getAttribute('data-freq')] = el.getBoundingClientRect().left; });
+    this._flipRects = m;
+  };
+  runFlip = (first) => {
+    const grid = this.gridRef && this.gridRef.current; if (!grid) return;
+    grid.querySelectorAll('[data-freq]').forEach(el => {
+      const prev = first[el.getAttribute('data-freq')]; if (prev == null) return;
+      const dx = prev - el.getBoundingClientRect().left;
+      if (Math.abs(dx) < 1) return;
+      el.animate([{ transform:'translateX(' + dx + 'px)' }, { transform:'translateX(0)' }], { duration:300, easing:'cubic-bezier(.2,.8,.2,1)', composite:'add' });
+    });
+  };
+  componentWillUnmount() { window.removeEventListener('resize', this.updateScroll); clearTimeout(this._hold); }
+  updateScroll = () => {
+    const el = this.gridRef.current;
+    if (!el) return;
+    const canPrev = el.scrollLeft > 4;
+    const canNext = el.scrollLeft + el.clientWidth < el.scrollWidth - 4;
+    const sw = el.scrollWidth, cw = el.clientWidth, sl = el.scrollLeft;
+    const showBar = sw > cw + 1;
+    const thumbW = showBar ? Math.max(0.14, cw / sw) : 1;
+    const thumbL = sw > cw ? sl / (sw - cw) : 0;
+    if (canPrev !== this.state.canPrev || canNext !== this.state.canNext || showBar !== this.state.showBar || Math.abs(thumbW - this.state.thumbW) > 0.001 || Math.abs(thumbL - this.state.thumbL) > 0.001) this.setState({ canPrev, canNext, showBar, thumbW, thumbL });
+  };
+  scrollGrid = (dir) => {
+    const el = this.gridRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: 'smooth' });
+    setTimeout(this.updateScroll, 380);
+  };
+  onBarDown = (e) => {
+    const grid = this.gridRef.current, track = this.trackRef.current;
+    if (!grid || !track) return;
+    const rect = track.getBoundingClientRect();
+    const move = (clientX) => {
+      const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+      grid.scrollLeft = frac * (grid.scrollWidth - grid.clientWidth);
+      this.updateScroll();
+    };
+    move(e.clientX);
+    const mm = (ev) => move(ev.clientX);
+    const up = () => { window.removeEventListener('pointermove', mm); window.removeEventListener('pointerup', up); };
+    window.addEventListener('pointermove', mm);
+    window.addEventListener('pointerup', up);
+  };
+  holdStart = (freq) => {
+    clearTimeout(this._hold);
+    this._hold = setTimeout(() => { this.props.onPresetHold && this.props.onPresetHold(freq); }, 550);
+  };
+  holdEnd = () => { clearTimeout(this._hold); };
+  renderVals() {
+    const p = this.props;
+    const bool = v => v === true || v === 'true';
+    const reordering = bool(p.reordering);
+    const theme = p.theme === 'light' ? 'light' : 'dark';
+    const T = {
+      light: { bg:'#EEF1F5', panel:'#FFFFFF', raised:'#F5F7FA', amber:'#C9760A', text:'#1B222C', dim:'#67717F', blue:'#2E86FF', border:'rgba(20,30,45,0.13)', meterEmpty:'rgba(20,30,45,0.10)', blueFill:'rgba(46,134,255,0.12)' },
+      dark:  { bg:'#161E29', panel:'#212B38', raised:'#2A3644', amber:'#FFB833', text:'#E9EEF4', dim:'#8B97A7', blue:'#4A9EFF', border:'rgba(255,255,255,0.13)', meterEmpty:'rgba(255,255,255,0.10)', blueFill:'rgba(74,158,255,0.18)' }
+    };
+    const t = T[theme];
+    const font = '"Atkinson Hyperlegible", system-ui, sans-serif';
+
+    const stereo = bool(p.stereo);
+    const rds = bool(p.rds);
+    const tp = bool(p.tp);
+    const af = bool(p.af);
+    const ta = bool(p.ta);
+    const hd = Math.max(0, Number(p.hd) || 0);
+    const pty = (p.pty || '').trim();
+    const oob = bool(p.outOfBand);
+    const tunerError = bool(p.tunerError);
+    const scroll = bool(p.scroll);
+    const saved = bool(p.saved);
+    const scanning = bool(p.scanning);
+    const tall = bool(p.tall);
+    const twoRows = !bool(p.tall) && bool(p.twoRows);
+    const landscape = !bool(p.tall) && bool(p.landscape);
+    const scanDir = Number(p.scanDir) || 0;
+    const ps = (p.ps || '').trim();
+    const rtRaw = (p.rt || '').trim();
+    const segs = Math.max(0, Math.min(12, Number(p.segs) || 0));
+    const db = (p.signalDb === undefined || p.signalDb === null || p.signalDb === '') ? '--' : String(p.signalDb);
+    const presets = Array.isArray(p.presets) ? p.presets : [];
+    const logo = (p.logoText || '').trim();
+    const logoBg = (p.logoBg || '').trim();
+    const logoFg = (p.logoFg || '').trim();
+    const circle = p.logoShape === 'circle';
+
+    const pill = (extra) => Object.assign({ display:'flex', alignItems:'center', gap: tall ? 10 : 8, height: tall ? 46 : 36, padding: tall ? '0 18px' : '0 14px', borderRadius: tall ? 12 : 10, fontSize: tall ? 18 : 15, fontWeight:700, letterSpacing:1, boxSizing:'border-box' }, extra);
+
+    const segArr = Array.from({ length:12 }, (_,i) => ({
+      style: { flex:1, height:'100%', borderRadius:3, backgroundColor: i < segs ? t.amber : t.meterEmpty }
+    }));
+
+    const sigLvl = Math.max(0, Math.min(4, Math.round(segs / 3)));
+    const arc = (d, on) => React.createElement('path', { key:d, d, fill:'none', stroke: on ? t.amber : t.meterEmpty, strokeWidth:2.2, strokeLinecap:'round' });
+    const signalIcon = React.createElement('svg', { width: tall ? 46 : 33, height: tall ? 30 : 22, viewBox:'0 0 34 24' }, [
+      React.createElement('circle', { key:'dot', cx:15, cy:12, r:2.6, fill: sigLvl >= 1 ? t.amber : t.meterEmpty }),
+      arc('M11 8 A 5 5 0 0 0 11 16', sigLvl >= 2),
+      arc('M19 8 A 5 5 0 0 1 19 16', sigLvl >= 2),
+      arc('M7.5 5 A 8.7 8.7 0 0 0 7.5 19', sigLvl >= 3),
+      arc('M22.5 5 A 8.7 8.7 0 0 1 22.5 19', sigLvl >= 3),
+      arc('M4 2 A 12.5 12.5 0 0 0 4 22', sigLvl >= 4),
+      arc('M26 2 A 12.5 12.5 0 0 1 26 22', sigLvl >= 4)
+    ]);
+
+    const starIcon = React.createElement('svg', { width:34, height:34, viewBox:'0 0 24 24' },
+      React.createElement('path', { d:'M12 17.3 L18.2 21 16.5 13.9 22 9.2 14.8 8.6 12 2 9.2 8.6 2 9.2 7.5 13.9 5.8 21 Z', fill: saved ? t.amber : 'none', stroke: saved ? t.amber : t.dim, strokeWidth:1.7, strokeLinejoin:'round' })
+    );
+    const towerAt = (cx, cy, k) => {
+      k = k || 1;
+      const topY = cy - 3.6 * k, baseY = cy + 5.6 * k, topH = 1.1 * k, baseH = 3.7 * k;
+      const lx = (y, s) => cx + s * (topH + (baseH - topH) * ((y - topY) / (baseY - topY)));
+      const midY = cy + 1 * k;
+      const els = [];
+      els.push(React.createElement('path', { key:'lL', d:'M'+lx(topY,-1)+' '+topY+' L'+lx(baseY,-1)+' '+baseY, strokeWidth:1.7 }));
+      els.push(React.createElement('path', { key:'lR', d:'M'+lx(topY,1)+' '+topY+' L'+lx(baseY,1)+' '+baseY, strokeWidth:1.7 }));
+      [topY, midY, baseY].forEach((y, i) => els.push(React.createElement('path', { key:'b'+i, d:'M'+lx(y,-1)+' '+y+' L'+lx(y,1)+' '+y, strokeWidth:1.3 })));
+      [[topY, midY], [midY, baseY]].forEach((s, i) => {
+        els.push(React.createElement('path', { key:'xa'+i, d:'M'+lx(s[0],-1)+' '+s[0]+' L'+lx(s[1],1)+' '+s[1], strokeWidth:1 }));
+        els.push(React.createElement('path', { key:'xb'+i, d:'M'+lx(s[0],1)+' '+s[0]+' L'+lx(s[1],-1)+' '+s[1], strokeWidth:1 }));
+      });
+      els.push(React.createElement('path', { key:'ft', d:'M'+(lx(baseY,-1)-1.1)+' '+baseY+' L'+(lx(baseY,-1)+1.1)+' '+baseY+' M'+(lx(baseY,1)-1.1)+' '+baseY+' L'+(lx(baseY,1)+1.1)+' '+baseY, strokeWidth:1.4 }));
+      els.push(React.createElement('path', { key:'mast', d:'M'+cx+' '+topY+' L'+cx+' '+(topY-1.8*k), strokeWidth:1.4 }));
+      els.push(React.createElement('circle', { key:'tip', cx:cx, cy:topY-2.6*k, r:0.9*k, fill:'#FFFFFF', stroke:'none' }));
+      return els;
+    };
+    const arcPair = (cx, cy, r, keyp) => ([
+      React.createElement('path', { key:keyp+'l', d:'M'+(cx-r*0.7)+' '+(cy-r*0.7)+' A '+r+' '+r+' 0 0 0 '+(cx-r*0.7)+' '+(cy+r*0.7), strokeWidth:1.4 }),
+      React.createElement('path', { key:keyp+'r', d:'M'+(cx+r*0.7)+' '+(cy-r*0.7)+' A '+r+' '+r+' 0 0 1 '+(cx+r*0.7)+' '+(cy+r*0.7), strokeWidth:1.4 })
+    ]);
+    const magBase = { width: tall ? 59 : 74, height: tall ? 59 : 74, viewBox:'0 0 32 32', fill:'none', stroke:'#FFFFFF', strokeWidth:2.6, strokeLinecap:'round', strokeLinejoin:'round' };
+    // Clean, legible tower drawn inside the lens: narrow A-frame + antenna, white on blue.
+    const lensTower = (bk) => {
+      const cx = 14.8, apex = 12.7, base = 22.3;
+      const lcx = 14.8, lcy = 14.3, R = 12, K = 0.075; // subtle barrel magnification
+      const warp = (x, y) => { const dx=x-lcx, dy=y-lcy, r=Math.hypot(dx,dy)||1e-4, f=1+K*(1-(r/R)*(r/R)); return [lcx+dx*f, lcy+dy*f]; };
+      const poly = (x1, y1, x2, y2, n) => { n=n||8; let d=''; for(let i=0;i<=n;i++){ const t=i/n, [x,y]=warp(x1+(x2-x1)*t, y1+(y2-y1)*t); d+=(i?' L':'M')+x.toFixed(2)+' '+y.toFixed(2); } return d; };
+      const half = (y) => 0.8 + 3.4 * ((y - apex) / (base - apex));
+      const xl = (y) => cx - half(y), xr = (y) => cx + half(y);
+      const yTop = apex + 3.8, yBot = base - 0.6;
+      const tipY = 9.1;
+      const [wtx, wty] = warp(cx, tipY);
+      const wave = (r, side, key) => React.createElement('path', {
+        key, stroke:bk, strokeWidth:1.1, fill:'none',
+        d:'M'+(wtx+side*r*0.62)+' '+(wty-r*0.66)+' A '+r+' '+r+' 0 0 '+(side>0?1:0)+' '+(wtx+side*r*0.62)+' '+(wty+r*0.66)
+      });
+      return [
+        React.createElement('path', { key:'lgl', d:poly(cx-half(base),base, cx-half(apex),apex), stroke:bk, strokeWidth:1.1 }),
+        React.createElement('path', { key:'lgr', d:poly(cx+half(base),base, cx+half(apex),apex), stroke:bk, strokeWidth:1.1 }),
+        React.createElement('path', { key:'x1', d:poly(xl(yTop),yTop, xr(yBot),yBot), stroke:bk, strokeWidth:1.0 }),
+        React.createElement('path', { key:'x2', d:poly(xr(yTop),yTop, xl(yBot),yBot), stroke:bk, strokeWidth:1.0 }),
+        React.createElement('path', { key:'mast', d:poly(cx,apex, cx,tipY), stroke:bk, strokeWidth:1.2 }),
+        React.createElement('circle', { key:'tip', cx:wtx, cy:wty, r:0.9, fill:bk, stroke:'none' }),
+        wave(2.6, -1, 'wl1'), wave(4.4, -1, 'wl2'),
+        wave(2.6, 1, 'wr1'), wave(4.4, 1, 'wr2')
+      ];
+    };
+    const dark = theme === 'dark';
+    const nearbyBorder = !!p.nearbyBorder;
+    const nearbyLine = dark ? (p.nearbyLineDark || '#E9EEF4') : (p.nearbyLine || '#111111');
+    const nearbyFill = dark ? (p.nearbyFillDark || t.raised) : (p.nearbyFill || t.blue);
+    const nearbyGlass = dark ? (p.nearbyGlassDark || '#2A3644') : (p.nearbyGlass || 'rgba(255,255,255,0.16)');
+    const nearbyBorderColor = dark ? (p.nearbyBorderColorDark || '#3A4655') : (p.nearbyBorderColor || nearbyLine);
+    const nearbyIcon = React.createElement('svg', magBase, [
+      React.createElement('circle', { key:'glaze', cx:14.8, cy:14.3, r:11.2, fill:nearbyGlass, stroke:'none' }),
+      React.createElement('circle', { key:'lens', cx:14.8, cy:14.3, r:12.0, fill:'none', stroke:nearbyLine, strokeWidth:1.6 }),
+      ...lensTower(nearbyLine),
+      React.createElement('line', { key:'handle', x1:21.3, y1:25.6, x2:24.5, y2:31.1, stroke:nearbyLine, strokeWidth:3.2, strokeLinecap:'butt' })
+    ]);
+
+    const ce = React.createElement;
+    const svg = (kids) => ce('svg', { width:34, height:34, viewBox:'0 0 24 24', fill:'none', stroke:t.text, strokeWidth:2.4, strokeLinecap:'round', strokeLinejoin:'round' }, kids);
+    const pth = (d, filled) => ce('path', { key:d, d, fill: filled ? t.text : 'none' });
+    const rct = (x) => ce('rect', { key:'r'+x, x, y:5, width:2.6, height:14, rx:1, fill:t.text, stroke:'none' });
+    const ICONS = {
+      seekbar: {
+        down: svg([ce('line',{key:'b',x1:5,y1:5,x2:5,y2:19}), pth('M19 6 L11 12 L19 18')]),
+        up:   svg([ce('line',{key:'b',x1:19,y1:5,x2:19,y2:19}), pth('M5 6 L13 12 L5 18')])
+      },
+      chevrons: {
+        down: svg([pth('M13 6 L7 12 L13 18'), pth('M19 6 L13 12 L19 18')]),
+        up:   svg([pth('M11 6 L17 12 L11 18'), pth('M5 6 L11 12 L5 18')])
+      },
+      ffwd: {
+        down: svg([pth('M12 5 L5 12 L12 19 Z', true), pth('M20 5 L13 12 L20 19 Z', true)]),
+        up:   svg([pth('M12 5 L19 12 L12 19 Z', true), pth('M4 5 L11 12 L4 19 Z', true)])
+      },
+      skip: {
+        down: svg([rct(5), pth('M19 5 L10 12 L19 19 Z', true)]),
+        up:   svg([pth('M5 5 L14 12 L5 19 Z', true), rct(16.4)])
+      }
+    };
+    const seekStyle = ICONS[p.seekStyle] ? p.seekStyle : 'seekbar';
+
+    const chips = presets.map((pr, idx) => {
+      const active = bool(pr.active);
+      const plogo = (pr.logo || '').trim();
+      const pbg = (pr.logoBg || '').trim();
+      const pfg = (pr.logoFg || '').trim();
+      const call = (pr.name || '').trim();
+      const big = !tall && !twoRows && active && !reordering;
+      const w = big ? (landscape ? 134 : 150) : (landscape ? 106 : 118), lg = big ? (landscape ? 50 : 58) : (landscape ? 38 : 44), lr = big ? 15 : 12, lf = big ? (landscape ? 18 : 20) : (landscape ? 14 : 16), cf = big ? (landscape ? 16 : 18) : (landscape ? 13 : 15);
+      return {
+        active, reordering, dataFreq: pr.freq,
+        logoText: plogo || 'FM',
+        callText: call || ('FM ' + pr.freq),
+        freqText: pr.freq + ' MHz',
+        canLeft: idx > 0, canRight: idx < presets.length - 1,
+        tileStyle: { position:'relative', width: (tall || twoRows) ? 'auto' : w, height: tall ? 128 : ((twoRows || big) ? '100%' : '80%'), alignSelf: (tall || twoRows || big) ? 'stretch' : 'center', borderRadius:16, cursor: reordering ? 'default' : 'pointer', flexShrink:0, boxSizing:'border-box', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap: big ? 8 : 6, padding: big ? '12px 8px 16px' : '8px 6px 12px', backgroundColor: t.panel, border: active && !reordering ? ('2px solid ' + t.blue) : ('1px solid ' + t.border), animation: reordering ? 'carfm-wiggle 0.42s ease-in-out infinite' : 'none', transition:'width .25s ease, height .25s ease' },
+        logoStyle: { width:lg, height:lg, borderRadius:lr, flexShrink:0, backgroundColor: plogo ? (pbg || t.raised) : t.raised, border: plogo ? 'none' : ('1px solid ' + t.border), display:'flex', alignItems:'center', justifyContent:'center', fontSize: big ? 20 : 16, fontWeight:700, letterSpacing:0.5, color: plogo ? (pfg || '#FFFFFF') : t.dim, transition:'width .25s ease, height .25s ease' },
+        callStyle: { fontSize:cf, fontWeight:700, color:t.text, lineHeight:1.12, maxWidth:'100%', textAlign:'center', whiteSpace:'normal', wordBreak:'break-word' },
+        freqTextStyle: { fontSize:13, fontWeight:700, color:t.dim, letterSpacing:0.3, lineHeight:1, fontVariantNumeric:'tabular-nums' },
+        activeBarStyle: { position:'absolute', bottom:6, left:'50%', marginLeft:-13, width:26, height:3, borderRadius:2, backgroundColor: t.blue },
+        reorderRowStyle: { position:'absolute', top:6, left:0, width:'100%', display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 6px', boxSizing:'border-box' },
+        moveLeftStyle: { width:34, height:34, borderRadius:10, display:'flex', alignItems:'center', justifyContent:'center', fontSize:20, fontWeight:700, cursor: idx > 0 ? 'pointer' : 'default', backgroundColor: t.raised, color: idx > 0 ? t.text : t.meterEmpty, border:'1px solid ' + t.border },
+        moveRightStyle: { width:34, height:34, borderRadius:10, display:'flex', alignItems:'center', justifyContent:'center', fontSize:20, fontWeight:700, cursor: idx < presets.length - 1 ? 'pointer' : 'default', backgroundColor: t.raised, color: idx < presets.length - 1 ? t.text : t.meterEmpty, border:'1px solid ' + t.border },
+        removeStyle: { position:'absolute', top:-9, right:-9, width:28, height:28, borderRadius:14, display:'flex', alignItems:'center', justifyContent:'center', fontSize:17, fontWeight:700, cursor:'pointer', backgroundColor: t.amber, color:'#FFFFFF', border:'2px solid ' + t.panel, lineHeight:1 },
+        onClick: () => { if (!reordering) p.onPresetTap && p.onPresetTap(pr.freq); },
+        onHoldStart: () => { if (!reordering) this.holdStart(pr.freq); },
+        onHoldEnd: this.holdEnd,
+        onMoveLeft: () => { if (idx > 0) { this.captureRects(); p.onPresetMove && p.onPresetMove(pr.freq, -1); } },
+        onMoveRight: () => { if (idx < presets.length - 1) { this.captureRects(); p.onPresetMove && p.onPresetMove(pr.freq, 1); } },
+        onRemove: () => p.onPresetRemove && p.onPresetRemove(pr.freq)
+      };
+    });
+
+    const cw = this.state.chevW || 66, ch = this.state.chevH || 180;
+    const pd = Math.min(22, cw * 0.42);
+    const my = ch / 2;
+    const chevVB = '0 0 ' + cw + ' ' + ch;
+    const chevPrev = pd + ',2 ' + (cw - 2) + ',2 ' + (cw - pd) + ',' + my + ' ' + (cw - 2) + ',' + (ch - 2) + ' ' + pd + ',' + (ch - 2) + ' 2,' + my;
+    const chevNext = '2,2 ' + (cw - pd) + ',2 ' + (cw - 2) + ',' + my + ' ' + (cw - pd) + ',' + (ch - 2) + ' 2,' + (ch - 2) + ' ' + pd + ',' + my;
+
+    const pIdx = presets.findIndex(pp => bool(pp.active));
+    let prevP = null, nextP = null;
+    if (presets.length) {
+      if (pIdx < 0) { prevP = presets[presets.length - 1]; nextP = presets[0]; }
+      else { prevP = presets[(pIdx - 1 + presets.length) % presets.length]; nextP = presets[(pIdx + 1) % presets.length]; }
+    }
+    const sideLogoStyle = (pp) => ({ width:'58%', maxWidth:92, aspectRatio:'1 / 1', borderRadius:16, flexShrink:0, backgroundColor: pp && pp.logoBg ? pp.logoBg : t.raised, color: pp && pp.logoFg ? pp.logoFg : t.dim, border: pp && pp.logoBg ? 'none' : ('1px solid ' + t.border), display:'flex', alignItems:'center', justifyContent:'center', fontSize:24, fontWeight:700, letterSpacing:0.5 });
+    const sideCardBase = { position:'relative', zIndex:1, flexShrink:0, width:'20%', maxWidth:206, aspectRatio:'1 / 1', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, padding:16, boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:24, cursor:'pointer', opacity:0.6, transform:'scale(0.88)' };
+
+    return {
+      scroll, notScroll: !scroll, oob,
+      showHeroChevrons: false, showPresetNav: !tall,
+      wideHero: presets.length > 0,
+      prevCardLogo: prevP ? (prevP.logo || 'FM') : '', prevCardCall: prevP ? (prevP.name || ('FM ' + prevP.freq)) : '',
+      nextCardLogo: nextP ? (nextP.logo || 'FM') : '', nextCardCall: nextP ? (nextP.name || ('FM ' + nextP.freq)) : '',
+      prevCardLogoStyle: sideLogoStyle(prevP), nextCardLogoStyle: sideLogoStyle(nextP),
+      prevCardStyle: Object.assign({}, sideCardBase, { marginRight: tall ? -46 : -72, WebkitMaskImage:'linear-gradient(to right, #000 55%, rgba(0,0,0,0.1) 100%)', maskImage:'linear-gradient(to right, #000 55%, rgba(0,0,0,0.1) 100%)' }),
+      nextCardStyle: Object.assign({}, sideCardBase, { marginLeft: tall ? -46 : -72, WebkitMaskImage:'linear-gradient(to left, #000 55%, rgba(0,0,0,0.1) 100%)', maskImage:'linear-gradient(to left, #000 55%, rgba(0,0,0,0.1) 100%)' }),
+      sideCardCallStyle: { fontSize:15, fontWeight:700, color:t.text, textAlign:'center', maxWidth:'100%', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', lineHeight:1.1 },
+      nearbyInTopbar: tall && !reordering, nearbyInBand: !tall && !reordering,
+      chevRef: this.chevRef, chevViewBox: chevVB, chevPrevPoints: chevPrev, chevNextPoints: chevNext,
+      freq: p.freq || '--', station: scanning ? 'Scanning…' : (ps || 'Tuning…'), logoText: logo || 'FM',
+      scanning, notScanning: !scanning,
+      onFreqTap: p.onFreqTap, onTuneDown: p.onTuneDown, onTuneUp: p.onTuneUp, onNearby: p.onNearby, onSettings: p.onSettings, onSave: p.onSave, onScanDown: p.onScanDown, onScanUp: p.onScanUp, onPrevPreset: p.onPrevPreset, onNextPreset: p.onNextPreset,
+      heroCardRef: this.heroCardRef, prevCardRef: this.prevCardRef, nextCardRef: this.nextCardRef, navPrev: this.navPrev, navNext: this.navNext,
+      reordering, notReordering: !reordering, onDoneReorder: p.onDoneReorder,
+      gridRef: this.gridRef, onGridScroll: this.updateScroll,
+      scrollPrev: () => this.scrollGrid(-1), scrollNext: () => this.scrollGrid(1), trackRef: this.trackRef, onBarDown: this.onBarDown,
+      canPrev: this.state.canPrev, canNext: this.state.canNext,
+      stereoGlyph: stereo ? '◎' : '○', stereoText: stereo ? 'STEREO' : 'MONO',
+      stereoWaveL: stereo ? (() => { const P = ['M4 9 Q9 15 4 21','M9 6 Q15 15 9 24','M14 3 Q21 15 14 27']; return React.createElement('svg', { width: tall?28:20, height: tall?40:28, viewBox:'0 0 24 30', fill:'none', stroke:t.blue, strokeWidth:2, strokeLinecap:'round', style:{ transform:'scaleX(-1)', flexShrink:0 } }, P.map((d,i)=>React.createElement('path',{key:i,d}))); })() : React.createElement('span', { style:{ width: tall?28:20, height: tall?40:28, flexShrink:0, display:'inline-block' } }),
+      stereoWaveR: stereo ? (() => { const P = ['M4 9 Q9 15 4 21','M9 6 Q15 15 9 24','M14 3 Q21 15 14 27']; return React.createElement('svg', { width: tall?28:20, height: tall?40:28, viewBox:'0 0 24 30', fill:'none', stroke:t.blue, strokeWidth:2, strokeLinecap:'round', style:{ flexShrink:0 } }, P.map((d,i)=>React.createElement('path',{key:i,d}))); })() : React.createElement('span', { style:{ width: tall?28:20, height: tall?40:28, flexShrink:0, display:'inline-block' } }),
+      tunerError, tunerOk: !tunerError,
+      tunerErrIcon: React.createElement('svg', { width:26, height:26, viewBox:'0 0 24 24', fill:'none', stroke:t.amber, strokeWidth:2, strokeLinecap:'round', strokeLinejoin:'round', style:{ flexShrink:0 } }, [
+        React.createElement('path', { key:'t', d:'M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z' }),
+        React.createElement('line', { key:'l', x1:12, y1:9, x2:12, y2:13 }),
+        React.createElement('line', { key:'d', x1:12, y1:17, x2:12.01, y2:17 })
+      ]),
+      tunerErrStyle: pill({ gap:11, height:44, padding:'0 16px', border:'1.5px solid ' + t.amber, color:t.amber, fontSize:17, letterSpacing:0.3, whiteSpace:'nowrap', backgroundColor: dark ? 'rgba(255,184,51,0.10)' : 'rgba(201,118,10,0.08)' }),
+      okClusterStyle: tall
+        ? { display:'flex', flexDirection:'row', flexWrap:'wrap', alignItems:'center', columnGap:18, rowGap:10 }
+        : { display:'flex', flexDirection:'row', alignItems:'flex-start', gap:14 },
+      hasPty: !!pty, ptyText: pty,
+      tells: [
+        { label:'RDS', on:rds }, { label: hd > 1 ? ('HD'+hd) : 'HD', on: hd > 0 },
+        (ta ? { label:'TA', pulse:true } : { label:'TP', on:tp }), { label:'AF', on:af }
+      ].map(x => x.pulse
+        ? { label:x.label, style: { fontSize: tall ? 14 : 11, fontWeight:700, letterSpacing:1, lineHeight:1, color:t.amber, transformOrigin:'center', textShadow:'0 1px 2px rgba(0,0,0,0.30)', animation:'carfm-ta-pulse 1.1s ease-in-out infinite' } }
+        : { label:x.label, style: { fontSize: tall ? 14 : 11, fontWeight:700, letterSpacing:1, lineHeight:1, color:t.text, opacity: x.on ? 1 : 0.32, textShadow: x.on ? '0 1px 2px rgba(0,0,0,0.30)' : (dark ? '0 1px 0 rgba(255,255,255,0.10)' : '0 1px 0 rgba(255,255,255,0.9)'), transform: x.on ? 'translateY(-0.5px)' : 'none', transition:'opacity .2s, color .2s, text-shadow .2s, transform .2s' } }),
+      scanDownIcon: ICONS[seekStyle].down, scanUpIcon: ICONS[seekStyle].up,
+      dbText: db + ' dB',
+      capText: oob ? '⚠  OUTSIDE 87.5 – 108.0 MHz BAND' : '',
+      rtText: rtRaw || 'Waiting for RadioText…',
+      segArr, signalIcon, starIcon, nearbyIcon, chips, hasChips: chips.length > 0, noChips: chips.length === 0,
+
+      containerStyle: { width:'100%', height:'100%', backgroundColor:t.bg, color:t.text, fontFamily:font, display:'flex', flexDirection:'column', padding: tall ? '14px 16px' : '18px 24px', gap: tall ? 10 : 12, boxSizing:'border-box', overflow:'hidden' },
+
+      topbarStyle: { display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12, flexShrink:0 },
+      leftClusterStyle: { display:'flex', flexDirection:'row', flexWrap: tall ? 'wrap' : 'nowrap', alignItems:'flex-start', gap: tall ? 10 : 14, minHeight: tall ? 0 : 69 },
+      stereoColStyle: { display:'flex', flexDirection:'column', alignItems:'center', gap:5 },
+      topRowStyle: { display:'flex', alignItems:'flex-start', gap:14 },
+      signalWrapStyle: { display:'flex', alignItems:'center', gap: tall ? 12 : 9, height: tall ? 46 : 36 },
+      signalBarsStyle: { display:'flex', alignItems:'flex-end', gap:3, height:20 },
+      signalDbStyle: { fontSize: tall ? 19 : 15, fontWeight:700, color:t.dim, fontVariantNumeric:'tabular-nums' },
+      fmStyle: pill({ height:36, padding:'0 12px', border:'1px solid ' + t.amber, color:t.amber, letterSpacing:2 }),
+      ptyStyle: { display:'flex', alignItems:'center', flexBasis: tall ? '100%' : 'auto', height:36, color:t.dim, fontSize: tall ? 19 : 15, fontWeight:700, letterSpacing:0.5, maxWidth: tall ? 'none' : 200, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', textShadow: dark ? '0 1px 0 rgba(0,0,0,0.5), 0 -1px 0 rgba(255,255,255,0.06)' : '0 1px 0 rgba(255,255,255,0.95), 0 -1px 1px rgba(0,0,0,0.12)', boxSizing:'border-box' },
+      tellStripStyle: { display:'inline-flex', alignItems:'center', justifyContent:'center', gap: tall ? 14 : 10, height: tall ? 34 : 28, boxSizing:'border-box' },
+      stereoStyle: pill({ gap:9, justifyContent:'center', minWidth: tall ? 196 : 158, border:'1.5px solid ' + (stereo ? t.blue : t.border), backgroundColor: stereo ? t.blueFill : 'transparent', color: stereo ? t.blue : t.dim }),
+      stereoGlyphStyle: { fontSize:19, lineHeight:1 },
+      oobStyle: pill({ border:'1.5px solid ' + t.amber, color:t.amber }),
+      oobGlyphStyle: { fontSize:16, lineHeight:1 },
+      advStyle: { display:'flex', alignItems:'center', justifyContent:'center', width:44, height:44, padding:0, borderRadius:12, border:'1px solid ' + t.border, color:t.dim, cursor:'pointer', boxSizing:'border-box', flexShrink:0 },
+      topRightColStyle: { display:'flex', flexDirection:'column', alignItems:'center', gap: tall ? 14 : 0, flexShrink:0 },
+      nearbyTopStyle: { cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
+      advIconColor: t.dim,
+
+      heroBandStyle: { flex: tall ? '0 0 auto' : 1, marginTop: tall ? 26 : 0, display:'flex', flexDirection:'column', gap: tall ? 12 : (twoRows ? 8 : 16), minHeight:0 },
+      heroRowStyle: { flex:1, position:'relative', display:'flex', flexDirection:'row', alignItems:'center', justifyContent:'center', gap:0, minHeight:0 },
+      sideColStyle: tall
+        ? { flex:'1 1 40%', minWidth:120, display:'flex', flexDirection:'column', gap:12, minHeight:82 }
+        : { width:86, flexShrink:0, display:'flex', flexDirection:'column', justifyContent: twoRows ? 'center' : 'flex-start', gap:12, minHeight:0 },
+      sideBtnStyle: { width:'100%', flex:'2.8 1 0', minHeight:0, flexShrink:0, backgroundColor:t.raised, border:'1px solid ' + t.border, borderRadius:18, cursor:'pointer', display:'flex', flexDirection:'column', gap:8, alignItems:'center', justifyContent:'center', boxSizing:'border-box' },
+      prevStepStyle: { position:'relative', width:'100%', flex: twoRows ? '0 0 auto' : '1 1 0', height: twoRows ? 150 : undefined, minHeight: tall ? 78 : 0, flexShrink:0, cursor:'pointer', boxSizing:'border-box' },
+      nextStepStyle: { position:'relative', width:'100%', flex: twoRows ? '0 0 auto' : '1 1 0', height: twoRows ? 150 : undefined, minHeight: tall ? 78 : 0, flexShrink:0, cursor:'pointer', boxSizing:'border-box' },
+      chevSvgStyle: { position:'absolute', inset:0, width:'100%', height:'100%', display:'block' },
+      chevFill: t.raised, chevStroke: t.border,
+      chevLabelWrapStyle: { position:'absolute', inset:0, display:'flex', flexDirection:'column', gap:1, alignItems:'center', justifyContent:'center', pointerEvents:'none' },
+      prevLabelWrapStyle: { position:'absolute', inset:0, display:'flex', flexDirection:'column', gap:1, alignItems:'center', justifyContent:'center', paddingRight:16, pointerEvents:'none' },
+      nextLabelWrapStyle: { position:'absolute', inset:0, display:'flex', flexDirection:'column', gap:1, alignItems:'center', justifyContent:'center', paddingLeft:16, pointerEvents:'none' },
+      chevLabelStyle: { fontSize:11, fontWeight:700, letterSpacing:0.3, color:t.dim, lineHeight:1.15 },
+      presetStepIconStyle: { fontSize:44, fontWeight:700, color:t.text, lineHeight:1 },
+      sideIconStyle: { fontSize:38, fontWeight:700, color:t.text, lineHeight:1 },
+      sideLabelStyle: { fontSize:15, fontWeight:700, letterSpacing:1, color:t.text },
+      sideSubStyle: { fontSize:12, fontWeight:700, letterSpacing:1.5, color:t.dim },
+      heroStyle: { flex:1, display:'flex', flexDirection:'column', alignItems:'stretch', justifyContent:'flex-start', gap:0, minHeight:0 },
+      heroMainStyle: tall
+        ? { position:'relative', zIndex:3, flex:'0 0 auto', width:'78%', maxWidth:520, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:14, padding:'26px 22px', boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:28, boxShadow: dark ? '0 20px 44px rgba(0,0,0,0.5)' : '0 20px 44px rgba(20,30,45,0.16)' }
+        : { position:'relative', zIndex:3, flex:'0 0 auto', width:'clamp(470px, 62%, 720px)', height:'98%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:14, padding:'24px 30px', boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:28, boxShadow: dark ? '0 20px 44px rgba(0,0,0,0.5)' : '0 20px 44px rgba(20,30,45,0.16)' },
+      freqRowStyle: { display:'flex', alignItems:'baseline', gap:9, cursor:'pointer' },
+      freqStyle: { fontSize: tall ? 52 : (landscape ? 48 : 60), lineHeight:0.95, fontWeight:700, color:t.amber, letterSpacing:-1, fontVariantNumeric:'tabular-nums' },
+      scanArrowStyle: { fontSize:34, fontWeight:700, color:t.blue, lineHeight:1 },
+      mhzStyle: { fontSize: tall ? 20 : (landscape ? 18 : 22), fontWeight:700, color:t.amber, opacity:0.9 },
+      capStyle: { fontSize:13, fontWeight:700, letterSpacing:1.5, color: oob ? t.amber : t.dim },
+      stationStyle: { fontSize: tall ? 48 : (landscape ? 50 : 66), fontWeight:700, color: ps ? t.text : t.dim, fontStyle: ps ? 'normal' : 'italic', lineHeight:1.02, letterSpacing:-1, textAlign:'center', maxWidth:'100%', overflowWrap:'break-word' },
+      stationRowStyle: { display:'flex', alignItems:'center', justifyContent:'center', gap: tall ? 14 : 22, maxWidth:'100%' },
+      starBtnStyle: { width: tall ? 54 : (landscape ? 48 : 56), height: tall ? 54 : (landscape ? 48 : 56), borderRadius:16, flexShrink:0, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', backgroundColor: saved ? t.blueFill : 'transparent', border: '1px solid ' + (saved ? 'transparent' : t.border) },
+      logoTileStyle: logoBg
+        ? { width: tall ? 72 : (landscape ? 70 : 92), height: tall ? 72 : (landscape ? 70 : 92), borderRadius: circle ? (tall ? 36 : 46) : 20, flexShrink:0, backgroundColor:logoBg, display:'flex', alignItems:'center', justifyContent:'center', fontSize: tall ? 28 : (landscape ? 26 : 34), fontWeight:700, letterSpacing:0.5, color: logoFg || '#FFFFFF' }
+        : { width: tall ? 72 : (landscape ? 70 : 92), height: tall ? 72 : (landscape ? 70 : 92), borderRadius:20, flexShrink:0, backgroundColor:t.raised, border:'1px solid ' + t.border, display:'flex', alignItems:'center', justifyContent:'center', fontSize: tall ? 28 : (landscape ? 26 : 32), fontWeight:700, letterSpacing:0.5, color: logo ? t.blue : t.dim },
+      rtZoneStyle: { flexShrink:0, height: tall ? 60 : (landscape ? 50 : (twoRows ? 56 : 76)), display:'flex', alignItems:'center', justifyContent:'center' },
+      rtStripStyle: { alignSelf:'center', width:'100%', maxWidth:880, height:64, padding:'0 28px', boxSizing:'border-box', display:'flex', alignItems:'center', justifyContent: scroll ? 'flex-start' : 'center', overflow:'hidden', borderRadius:16, backgroundColor:t.raised, border:'1px solid ' + t.border },
+      rtMarqueeStyle: { display:'flex', gap:100, whiteSpace:'nowrap', animation:'carfm-ticker 16s linear infinite' },
+      rtItemStyle: { fontSize: landscape ? 26 : 30, fontWeight:400, whiteSpace:'nowrap', color: rtRaw ? t.text : t.dim, fontStyle: rtRaw ? 'normal' : 'italic' },
+
+      signalRowStyle: { height:42, display:'flex', alignItems:'center', gap:16, flexShrink:0 },
+      signalLabelStyle: { fontSize:15, fontWeight:700, letterSpacing:1.5, color:t.dim, width:78 },
+      meterStyle: { flex:1, display:'flex', alignItems:'center', gap:6, height:24 },
+      dbStyle: { fontSize:24, fontWeight:700, color:t.text, fontVariantNumeric:'tabular-nums', minWidth:100, textAlign:'right' },
+
+      transportStyle: { height:78, display:'flex', gap:12, flexShrink:0 },
+      btnStyle: { flex:1, height:78, backgroundColor:t.raised, border:'1px solid ' + t.border, borderRadius:18, cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:3, boxSizing:'border-box' },
+      btnIconStyle: { fontSize:30, fontWeight:700, color:t.text, lineHeight:1 },
+      btnSubStyle: { fontSize:14, fontWeight:700, letterSpacing:1, color:t.dim },
+
+      presetsHeaderStyle: { height:52, display:'flex', alignItems:'center', justifyContent:'flex-end', flexShrink:0 },
+      presetsLabelStyle: { fontSize:15, fontWeight:700, letterSpacing:1.5, color:t.dim },
+      headerActionsStyle: { display:'flex', alignItems:'center', gap:12 },
+      nearbyStyle: { position:'relative', height:'100%', flexShrink:0, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' },
+      nearbyDiscStyle: { width: tall ? 74 : 92, height: tall ? 74 : 92, borderRadius:'50%', backgroundColor:nearbyFill, border: nearbyBorder ? ('2.5px solid '+nearbyBorderColor) : 'none', boxSizing:'border-box', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
+      nearbyLabelStyle: { fontSize:15, fontWeight:700, letterSpacing:1.5, color:t.blue },
+      nearbyGlyphStyle: { fontSize:30, lineHeight:1 },
+      presetsBandStyle: { display:'flex', alignItems:'stretch', gap:12, flex: tall ? '1 1 auto' : '0 0 auto', height: tall ? 'auto' : (twoRows ? 250 : (landscape ? 104 : 140)), minHeight:0, flexShrink:0 },
+      prevNavStyle: { width:56, flexShrink:0, backgroundColor:t.raised, border:'1px solid ' + t.border, borderRadius:14, cursor: this.state.canPrev ? 'pointer' : 'default', opacity: this.state.canPrev ? 1 : 0.35, display:'flex', alignItems:'center', justifyContent:'center', boxSizing:'border-box' },
+      nextNavStyle: { width:56, flexShrink:0, backgroundColor:t.raised, border:'1px solid ' + t.border, borderRadius:14, cursor: this.state.canNext ? 'pointer' : 'default', opacity: this.state.canNext ? 1 : 0.35, display:'flex', alignItems:'center', justifyContent:'center', boxSizing:'border-box' },
+      doneStyle: { height:'100%', flexShrink:0, padding:'0 26px', borderRadius:16, cursor:'pointer', border:'none', backgroundColor:t.blue, color:'#FFFFFF', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:10, fontSize:15, fontWeight:700, letterSpacing:1.5 },
+      doneGlyphStyle: { fontSize:30, lineHeight:1 },
+      presetNavIconStyle: { fontSize:30, fontWeight:700, color:t.text, lineHeight:1 },
+      presetGridWrapStyle: { flex:1, minWidth:0, overflow:'hidden', display:'flex', flexDirection:'column' },
+      presetGridStyle: tall
+        ? { display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:12, alignContent:'end', gridAutoRows:'min-content', overflowX:'hidden', overflowY:'auto', flex:1, height:'100%', padding:'3px 4px', boxSizing:'border-box', scrollbarWidth:'none' }
+        : twoRows
+        ? { display:'grid', gridTemplateRows:'repeat(2, 1fr)', gridAutoFlow:'column', gridAutoColumns:'150px', gap:10, overflowX:'auto', overflowY:'hidden', flex:1, height:'100%', padding:'3px 4px', boxSizing:'border-box', scrollbarWidth:'none' }
+        : { display:'flex', flexDirection:'row', gap:8, alignItems:'stretch', overflowX:'auto', flex:1, height:'100%', padding:'3px 4px', boxSizing:'border-box', scrollbarWidth:'none' },
+      scrollBarTrackStyle: { height:6, borderRadius:999, backgroundColor:t.meterEmpty, position:'relative', margin:'8px 4px 0', flexShrink:0, cursor:'pointer', display: this.state.showBar ? 'block' : 'none' },
+      scrollBarThumbStyle: { position:'absolute', top:0, height:6, borderRadius:999, backgroundColor:'rgba(128,134,144,0.6)', width:(this.state.thumbW*100)+'%', left:(this.state.thumbL*(1-this.state.thumbW)*100)+'%' },
+      saveStyle: { display:'flex', alignItems:'center', gap:8, height:48, padding:'0 20px', borderRadius:12, cursor:'pointer', border:'1px solid ' + t.border, color:t.text, fontSize:16, fontWeight:700, letterSpacing:1.5, boxSizing:'border-box' },
+      saveGlyphStyle: { fontSize:18, lineHeight:1, color:t.amber },
+
+      chipsRowStyle: { height:76, display:'flex', gap:12, overflow:'hidden', flexShrink:0 },
+      emptyStyle: { flex:1, height:'100%', borderRadius:16, border:'1.5px dashed ' + t.border, display:'flex', alignItems:'center', justifyContent:'center', color:t.dim, fontSize:17, fontWeight:400, boxSizing:'border-box' }
+    };
+  }
+}
+</script>
+</body>
+</html>

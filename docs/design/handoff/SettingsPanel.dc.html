@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+[data-settings-body]::-webkit-scrollbar { width: 0; }
+</style>
+</helmet>
+<div style="{{ containerStyle }}">
+
+  <div style="{{ headerStyle }}">
+    <div style="{{ titleStyle }}">Settings</div>
+    <div style="{{ closeStyle }}" onClick="{{ onClose }}">✕</div>
+  </div>
+
+  <div style="{{ bodyStyle }}" data-settings-body="1">
+
+    <div style="{{ sectionLabelStyle }}">TUNER</div>
+    <div style="{{ groupStyle }}">
+      <div style="{{ statusRowStyle }}">
+        <div style="{{ statusIconWrapStyle }}">{{ statusIcon }}</div>
+        <div style="{{ statusTextWrapStyle }}">
+          <div style="{{ statusTitleStyle }}">{{ statusTitle }}</div>
+          <div style="{{ statusSubStyle }}">{{ statusSub }}</div>
+        </div>
+        <sc-if value="{{ showRetry }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ retryBtnStyle }}" onClick="{{ onRetryTuner }}">RETRY</div>
+        </sc-if>
+        <sc-if value="{{ showDiag }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ diagBtnStyle }}" onClick="{{ toggleDiag }}">{{ diagBtnLabel }}</div>
+        </sc-if>
+      </div>
+
+      <sc-if value="{{ diagOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="{{ diagPanelStyle }}">
+          <div style="{{ diagLineStyle }}"><span style="{{ diagKeyStyle }}">Device</span><span style="{{ diagValStyle }}">{{ diagDevice }}</span></div>
+          <div style="{{ diagLineStyle }}"><span style="{{ diagKeyStyle }}">USB ID</span><span style="{{ diagValStyle }}">{{ diagVidPid }}</span></div>
+          <div style="{{ diagLineStyle }}"><span style="{{ diagKeyStyle }}">Sample rate</span><span style="{{ diagValStyle }}">{{ diagRate }}</span></div>
+        </div>
+      </sc-if>
+
+      <div style="{{ dividerStyle }}"></div>
+      <div style="{{ subLabelStyle }}">Tuner source</div>
+      <sc-for list="{{ backends }}" as="b" hint-placeholder-count="4">
+        <div style="{{ b.rowStyle }}" onClick="{{ b.onClick }}">
+          <div style="{{ b.radioStyle }}"><div style="{{ b.dotStyle }}"></div></div>
+          <div style="{{ b.textWrapStyle }}">
+            <div style="{{ b.nameStyle }}">{{ b.name }}</div>
+            <div style="{{ b.kindStyle }}">{{ b.kind }}</div>
+          </div>
+          <div style="{{ b.badgeStyle }}">{{ b.badge }}</div>
+        </div>
+      </sc-for>
+
+      <div style="{{ dividerStyle }}"></div>
+      <div style="{{ switchRowStyle }}" onClick="{{ toggleAutostart }}">
+        <div style="{{ switchTextWrapStyle }}">
+          <div style="{{ rowTitleStyle }}">Start radio on boot</div>
+          <div style="{{ rowSubStyle }}">Resume FM automatically when the head unit powers up</div>
+        </div>
+        <div style="{{ autoTrackStyle }}"><div style="{{ autoKnobStyle }}"></div></div>
+      </div>
+    </div>
+
+    <div style="{{ sectionLabelStyle }}">APPEARANCE</div>
+    <div style="{{ groupStyle }}">
+      <div style="{{ themeRowStyle }}">
+        <div style="{{ switchTextWrapStyle }}">
+          <div style="{{ rowTitleStyle }}">Theme</div>
+          <div style="{{ rowSubStyle }}">Overrides the system colour scheme on the radio</div>
+        </div>
+        <div style="{{ segWrapStyle }}">
+          <sc-for list="{{ themeChips }}" as="c" hint-placeholder-count="3">
+            <div style="{{ c.style }}" onClick="{{ c.onClick }}">{{ c.label }}</div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <div style="{{ sectionLabelStyle }}">SYSTEM</div>
+    <div style="{{ groupStyle }}">
+      <div style="{{ switchRowStyle }}">
+        <div style="{{ statusIconWrapStyle }}">{{ batteryIcon }}</div>
+        <div style="{{ switchTextWrapStyle }}">
+          <div style="{{ rowTitleStyle }}">Battery optimization</div>
+          <div style="{{ rowSubStyle }}">{{ batterySub }}</div>
+        </div>
+        <sc-if value="{{ showBatteryFix }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ fixBtnStyle }}" onClick="{{ fixBattery }}">FIX</div>
+        </sc-if>
+        <sc-if value="{{ batteryExempt }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ okBadgeStyle }}">EXEMPT</div>
+        </sc-if>
+      </div>
+      <div style="{{ dividerStyle }}"></div>
+      <div style="{{ switchRowStyle }}" onClick="{{ toggleLogos }}">
+        <div style="{{ switchTextWrapStyle }}">
+          <div style="{{ rowTitleStyle }}">Station logos</div>
+          <div style="{{ rowSubStyle }}">{{ logosSub }}</div>
+        </div>
+        <div style="{{ logosTrackStyle }}"><div style="{{ logosKnobStyle }}"></div></div>
+      </div>
+      <sc-if value="{{ logosOn }}" hint-placeholder-val="{{ false }}">
+        <div style="{{ clearRowStyle }}" onClick="{{ clearLogos }}">
+          <span style="{{ clearTextStyle }}">Clear downloaded logos</span>
+          <span style="{{ chevStyle }}">›</span>
+        </div>
+      </sc-if>
+    </div>
+
+    <div style="{{ sectionLabelStyle }}">ADVANCED</div>
+    <div style="{{ groupStyle }}">
+      <div style="{{ advRowStyle }}" onClick="{{ onAdvanced }}">
+        <div style="{{ switchTextWrapStyle }}">
+          <div style="{{ advTitleStyle }}">Advanced SDR view</div>
+          <div style="{{ rowSubStyle }}">Opens the stock SDR interface (waterfall, gain, raw controls)</div>
+        </div>
+        <span style="{{ chevStyle }}">›</span>
+      </div>
+    </div>
+
+    <div style="{{ aboutStyle }}">{{ aboutText }}</div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:700,&quot;height&quot;:576},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light'|'dark'&quot;},&quot;tunerError&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;themeChoice&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;system&quot;,&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;system&quot;,&quot;tsType&quot;:&quot;'system'|'light'|'dark'&quot;},&quot;autostart&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;onSetAutostart&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(on:boolean)=&gt;void&quot;},&quot;onSetTheme&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(t:string)=&gt;void&quot;},&quot;onRetryTuner&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;()=&gt;void&quot;},&quot;onAdvanced&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;()=&gt;void&quot;},&quot;onClose&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;()=&gt;void&quot;}}">
+class Component extends DCLogic {
+  state = { diagOpen: false, backend: 'auto', autostart: null, batteryExempt: false, logosOn: false };
+
+  toggleDiag = () => this.setState(s => ({ diagOpen: !s.diagOpen }));
+  pickBackend = (id, available) => { if (!available) return; this.setState({ backend: id }); };
+  toggleAutostart = () => {
+    const cur = this.autoOn();
+    this.setState({ autostart: !cur });
+    if (this.props.onSetAutostart) this.props.onSetAutostart(!cur);
+  };
+  autoOn() { return this.state.autostart === null ? !!this.props.autostart : this.state.autostart; }
+  setTheme = (v) => { if (this.props.onSetTheme) this.props.onSetTheme(v); };
+  fixBattery = () => this.setState({ batteryExempt: true });
+  toggleLogos = () => this.setState(s => ({ logosOn: !s.logosOn }));
+  clearLogos = () => {};
+
+  renderVals() {
+    const p = this.props;
+    const theme = p.theme === 'light' ? 'light' : 'dark';
+    const T = {
+      light: { bg:'#EEF1F5', panel:'#FFFFFF', raised:'#F5F7FA', amber:'#C9760A', amberFill:'rgba(201,118,10,0.12)', text:'#1B222C', dim:'#67717F', blue:'#2E86FF', border:'rgba(20,30,45,0.13)', blueFill:'rgba(46,134,255,0.12)', track:'rgba(20,30,45,0.16)' },
+      dark:  { bg:'#161E29', panel:'#212B38', raised:'#2A3644', amber:'#FFB833', amberFill:'rgba(255,184,51,0.15)', text:'#E9EEF4', dim:'#8B97A7', blue:'#4A9EFF', border:'rgba(255,255,255,0.13)', blueFill:'rgba(74,158,255,0.18)', track:'rgba(255,255,255,0.18)' }
+    };
+    const t = T[theme];
+    const font = '"Atkinson Hyperlegible", system-ui, sans-serif';
+    const err = !!p.tunerError;
+
+    const wave = (color) => {
+      const arc = (d) => React.createElement('path', { key:d, d, fill:'none', stroke:color, strokeWidth:2.4, strokeLinecap:'round' });
+      return React.createElement('svg', { width:34, height:24, viewBox:'0 0 34 24' }, [
+        React.createElement('circle', { key:'dot', cx:15, cy:13, r:2.7, fill:color }),
+        arc('M11 9 A 5 5 0 0 0 11 17'), arc('M19 9 A 5 5 0 0 1 19 17'),
+        arc('M7.5 6 A 8.7 8.7 0 0 0 7.5 20'), arc('M22.5 6 A 8.7 8.7 0 0 1 22.5 20'),
+        arc('M4 3 A 12.5 12.5 0 0 0 4 23'), arc('M26 3 A 12.5 12.5 0 0 1 26 23')
+      ]);
+    };
+    const warn = React.createElement('svg', { width:32, height:32, viewBox:'0 0 24 24' }, [
+      React.createElement('path', { key:'tri', d:'M12 3 L22 20 L2 20 Z', fill:'none', stroke:t.amber, strokeWidth:2, strokeLinejoin:'round' }),
+      React.createElement('line', { key:'stem', x1:12, y1:9, x2:12, y2:15, stroke:t.amber, strokeWidth:2, strokeLinecap:'round' }),
+      React.createElement('circle', { key:'pt', cx:12, cy:17.6, r:1.2, fill:t.amber })
+    ]);
+    const battGlyph = (color) => React.createElement('svg', { width:32, height:32, viewBox:'0 0 24 24', fill:'none', stroke:color, strokeWidth:2, strokeLinecap:'round', strokeLinejoin:'round' }, [
+      React.createElement('rect', { key:'b', x:3, y:8, width:15, height:9, rx:2 }),
+      React.createElement('line', { key:'tip', x1:20.5, y1:11, x2:20.5, y2:14 }),
+      React.createElement('path', { key:'bolt', d:'M10.5 9.5 L8.5 12.5 L11 12.5 L9.5 15.5', stroke:color, strokeWidth:1.6 })
+    ]);
+
+    const backendDefs = [
+      { id:'auto',   name:'Auto (recommended)', kind:'Probe all sources at startup', available:true,  detected:null },
+      { id:'rtl',    name:'RTL-SDR',            kind:'USB software-defined radio',   available:true,  detected:!err },
+      { id:'si470x', name:'Si470x FM dongle',   kind:'USB hardware tuner',           available:false, detected:false },
+      { id:'rtltcp', name:'rtl_tcp',            kind:'Network stream (dev)',          available:true,  detected:false }
+    ];
+    const sel = this.state.backend;
+    const backends = backendDefs.map(b => {
+      const active = b.id === sel;
+      const badge = b.detected === null ? '' : (b.detected ? 'Detected' : (b.available ? 'Not detected' : 'Unavailable'));
+      return {
+        name:b.name, kind:b.kind, badge,
+        onClick: () => this.pickBackend(b.id, b.available),
+        rowStyle: { display:'flex', alignItems:'center', gap:16, minHeight:60, padding:'8px 16px', borderRadius:14, cursor: b.available ? 'pointer':'default', backgroundColor: active ? t.blueFill : 'transparent', border:'1px solid ' + (active ? t.blue : 'transparent'), opacity: b.available ? 1 : 0.5, boxSizing:'border-box' },
+        radioStyle: { width:24, height:24, borderRadius:12, flexShrink:0, border:'2px solid ' + (active ? t.blue : t.dim), display:'flex', alignItems:'center', justifyContent:'center', boxSizing:'border-box' },
+        dotStyle: { width:12, height:12, borderRadius:6, backgroundColor: active ? t.blue : 'transparent' },
+        textWrapStyle: { flex:1, minWidth:0, display:'flex', flexDirection:'column', gap:2 },
+        nameStyle: { fontSize:18, fontWeight:700, color:t.text },
+        kindStyle: { fontSize:14, fontWeight:400, color:t.dim },
+        badgeStyle: { flexShrink:0, fontSize:13, fontWeight:700, letterSpacing:0.4, color: b.detected ? t.blue : t.dim }
+      };
+    });
+
+    const themeVal = ['system','light','dark'].indexOf(p.themeChoice) >= 0 ? p.themeChoice : 'system';
+    const chipBase = { flex:1, height:44, borderRadius:10, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:700, letterSpacing:1, cursor:'pointer', boxSizing:'border-box' };
+    const themeChips = [['system','SYSTEM'],['light','LIGHT'],['dark','DARK']].map(([v,l]) => ({
+      label:l, onClick:() => this.setTheme(v),
+      style: v === themeVal
+        ? Object.assign({}, chipBase, { border:'1.5px solid ' + t.blue, backgroundColor:t.blueFill, color:t.blue })
+        : Object.assign({}, chipBase, { border:'1px solid ' + t.border, backgroundColor:'transparent', color:t.dim })
+    }));
+
+    const autoOn = this.autoOn();
+    const logosOn = this.state.logosOn;
+    const battExempt = this.state.batteryExempt;
+
+    const trackStyle = (on) => ({ width:60, height:34, borderRadius:17, flexShrink:0, backgroundColor: on ? t.blue : t.track, position:'relative', transition:'background-color .18s', cursor:'pointer' });
+    const knobStyle = (on) => ({ position:'absolute', top:3, left: on ? 29 : 3, width:28, height:28, borderRadius:14, backgroundColor:'#FFFFFF', transition:'left .18s', boxShadow:'0 1px 3px rgba(0,0,0,0.3)' });
+
+    return {
+      onClose: p.onClose, onAdvanced: p.onAdvanced, onRetryTuner: p.onRetryTuner,
+      toggleDiag: this.toggleDiag, toggleAutostart: this.toggleAutostart, fixBattery: this.fixBattery, toggleLogos: this.toggleLogos, clearLogos: this.clearLogos,
+
+      statusIcon: err ? warn : wave(t.amber),
+      statusTitle: err ? 'Not connected' : 'Connected',
+      statusSub: err ? 'No USB tuner found' : 'Local hardware · RTL-SDR (RTL2832U)',
+      showRetry: err && !!p.onRetryTuner,
+      showDiag: !err,
+      diagBtnLabel: this.state.diagOpen ? 'Hide details' : 'Details',
+      diagOpen: this.state.diagOpen && !err,
+      diagDevice: 'Realtek RTL2832U + R820T2',
+      diagVidPid: '0bda:2838',
+      diagRate: '2.048 MS/s',
+
+      backends,
+      themeChips,
+
+      batteryIcon: battGlyph(battExempt ? t.blue : t.amber),
+      batterySub: battExempt ? 'Exempt — the radio can run in the background' : 'Not exempt — Doze may stop the boot-started radio',
+      showBatteryFix: !battExempt, batteryExempt: battExempt,
+
+      logosSub: logosOn ? 'Auto-download station artwork over Wi-Fi' : 'Off — assign logos manually from a station (auto-download in redesign)',
+      logosOn,
+
+      aboutText: 'CarFM  ·  v0.9.2  ·  FCC station data as of 2026-06-14',
+
+      containerStyle: { width:700, height:576, backgroundColor:t.bg, color:t.text, fontFamily:font, display:'flex', flexDirection:'column', boxSizing:'border-box', overflow:'hidden' },
+      headerStyle: { height:76, padding:'0 26px', display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:'1px solid ' + t.border, flexShrink:0 },
+      titleStyle: { fontSize:26, fontWeight:700 },
+      closeStyle: { width:52, height:52, borderRadius:12, cursor:'pointer', border:'1px solid ' + t.border, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, color:t.dim, boxSizing:'border-box' },
+
+      bodyStyle: { flex:1, overflowY:'auto', padding:'18px 26px 26px', display:'flex', flexDirection:'column', minHeight:0, scrollbarWidth:'none' },
+      sectionLabelStyle: { fontSize:12, fontWeight:700, letterSpacing:2, color:t.dim, margin:'14px 4px 8px' },
+      groupStyle: { backgroundColor:t.panel, border:'1px solid ' + t.border, borderRadius:18, padding:10, display:'flex', flexDirection:'column' },
+      dividerStyle: { height:1, backgroundColor:t.border, margin:'6px 6px' },
+      subLabelStyle: { fontSize:12, fontWeight:700, letterSpacing:1, color:t.dim, margin:'4px 12px 4px' },
+
+      statusRowStyle: { display:'flex', alignItems:'center', gap:16, minHeight:62, padding:'6px 12px', boxSizing:'border-box' },
+      statusIconWrapStyle: { width:36, height:36, flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center' },
+      statusTextWrapStyle: { flex:1, minWidth:0, display:'flex', flexDirection:'column', gap:2 },
+      statusTitleStyle: { fontSize:19, fontWeight:700, color:t.text },
+      statusSubStyle: { fontSize:14, fontWeight:400, color:t.dim },
+      retryBtnStyle: { flexShrink:0, height:44, padding:'0 22px', borderRadius:12, border:'1.5px solid ' + t.blue, backgroundColor:t.blueFill, color:t.blue, fontSize:15, fontWeight:700, letterSpacing:1, display:'flex', alignItems:'center', cursor:'pointer', boxSizing:'border-box' },
+      diagBtnStyle: { flexShrink:0, height:44, padding:'0 18px', borderRadius:12, border:'1px solid ' + t.border, color:t.dim, fontSize:14, fontWeight:700, letterSpacing:0.5, display:'flex', alignItems:'center', cursor:'pointer', boxSizing:'border-box' },
+
+      diagPanelStyle: { margin:'2px 12px 8px', padding:'12px 16px', borderRadius:12, backgroundColor:t.raised, border:'1px solid ' + t.border, display:'flex', flexDirection:'column', gap:8 },
+      diagLineStyle: { display:'flex', alignItems:'center', justifyContent:'space-between', gap:16 },
+      diagKeyStyle: { fontSize:14, fontWeight:400, color:t.dim },
+      diagValStyle: { fontSize:15, fontWeight:700, color:t.text, fontVariantNumeric:'tabular-nums' },
+
+      switchRowStyle: { display:'flex', alignItems:'center', gap:16, minHeight:62, padding:'6px 12px', cursor:'pointer', boxSizing:'border-box' },
+      switchTextWrapStyle: { flex:1, minWidth:0, display:'flex', flexDirection:'column', gap:2 },
+      rowTitleStyle: { fontSize:18, fontWeight:700, color:t.text },
+      rowSubStyle: { fontSize:14, fontWeight:400, color:t.dim, textWrap:'pretty' },
+      autoTrackStyle: trackStyle(autoOn), autoKnobStyle: knobStyle(autoOn),
+      logosTrackStyle: trackStyle(logosOn), logosKnobStyle: knobStyle(logosOn),
+
+      themeRowStyle: { display:'flex', alignItems:'center', gap:20, minHeight:62, padding:'6px 12px', boxSizing:'border-box' },
+      segWrapStyle: { display:'flex', gap:8, width:300, flexShrink:0 },
+
+      fixBtnStyle: { flexShrink:0, height:44, padding:'0 22px', borderRadius:12, border:'1.5px solid ' + t.amber, backgroundColor:t.amberFill, color:t.amber, fontSize:15, fontWeight:700, letterSpacing:1, display:'flex', alignItems:'center', cursor:'pointer', boxSizing:'border-box' },
+      okBadgeStyle: { flexShrink:0, height:44, padding:'0 18px', borderRadius:12, backgroundColor:t.blueFill, color:t.blue, fontSize:14, fontWeight:700, letterSpacing:1, display:'flex', alignItems:'center', boxSizing:'border-box' },
+
+      clearRowStyle: { display:'flex', alignItems:'center', justifyContent:'space-between', minHeight:50, padding:'6px 12px', cursor:'pointer', boxSizing:'border-box' },
+      clearTextStyle: { fontSize:16, fontWeight:700, color:t.blue },
+
+      advRowStyle: { display:'flex', alignItems:'center', gap:16, minHeight:60, padding:'6px 12px', cursor:'pointer', boxSizing:'border-box' },
+      advTitleStyle: { fontSize:17, fontWeight:700, color:t.dim },
+      chevStyle: { fontSize:26, fontWeight:700, color:t.dim, flexShrink:0 },
+
+      aboutStyle: { textAlign:'center', fontSize:13, fontWeight:400, color:t.dim, padding:'20px 0 4px', letterSpacing:0.3 }
+    };
+  }
+}
+</script>
+</body>
+</html>
