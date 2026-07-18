@@ -3077,8 +3077,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
 
   const onTuneHz = useCallback((hz: number) => {
-    const c = client.current; if (!c) return;
     markInteract();
+    const c = client.current;
+    // Tunerless CarFM session: no backend exists (the connect effect skips it),
+    // but the face must still track the chosen frequency so a Nearby pick /
+    // numpad entry / preset / seek updates the readout and the ★ save target —
+    // and reads back as the user's choice — even with no dongle connected.
+    if (!c) {
+      setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(hz) }));
+      return;
+    }
     const [loHz, hiHz] = c.caps.freqRange;
     const clamped = Math.max(loHz, Math.min(hiHz, hz));
     // Discrete jump (freq modal, bookmark/VTS, Siri, search) → always land
