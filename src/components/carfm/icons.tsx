@@ -137,9 +137,9 @@ export function StereoDot({ size = 16, color }: { size?: number; color: string }
 
 /** Trio of curved sound waves flanking the STEREO label (design v2). `flip`
  *  mirrors it for the left side. */
-export function StereoWave({ color, flip }: { color: string; flip?: boolean }) {
+export function StereoWave({ color, flip, w = 20, h = 28 }: { color: string; flip?: boolean; w?: number; h?: number }) {
   return (
-    <Svg width={20} height={28} viewBox="0 0 24 30" style={flip ? { transform: [{ scaleX: -1 }] } : undefined}>
+    <Svg width={w} height={h} viewBox="0 0 24 30" style={flip ? { transform: [{ scaleX: -1 }] } : undefined}>
       <Path d="M4 9 Q9 15 4 21" stroke={color} strokeWidth="2" strokeLinecap="round" fill="none" />
       <Path d="M9 6 Q15 15 9 24" stroke={color} strokeWidth="2" strokeLinecap="round" fill="none" />
       <Path d="M14 3 Q21 15 14 27" stroke={color} strokeWidth="2" strokeLinecap="round" fill="none" />
