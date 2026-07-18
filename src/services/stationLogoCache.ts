@@ -60,6 +60,15 @@ async function refresh(key: string, name: string, iso?: string): Promise<void> {
   if (path) { (await loadIndex())[key] = { path, url, ts: Date.now() }; await saveIndex(); }
 }
 
+/** Wipe every downloaded logo: delete the on-disk files and the index. Used by
+ *  the settings "Clear downloaded logos" action (wrong auto-logos may already be
+ *  cached on installed devices; see logoResolver.AUTO_LOGO_RESOLUTION). */
+export async function clearLogoCache(): Promise<void> {
+  try { await FileSystem.deleteAsync(DIR, { idempotent: true }); } catch {}
+  try { await AsyncStorage.removeItem(INDEX_KEY); } catch {}
+  index = {};
+}
+
 /**
  * Resolve a station logo, cache-first (offline-capable):
  *  1. Cached (by country+PI) → return the local file URI; refresh in the

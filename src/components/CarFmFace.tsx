@@ -28,6 +28,7 @@ import LogoTile from './carfm/LogoTile';
 import NearbyPicker from './carfm/NearbyPicker';
 import Numpad from './carfm/Numpad';
 import PresetsBand, { type PresetItem } from './carfm/PresetsBand';
+import SidePresetCard from './carfm/SidePresetCard';
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
 import { DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, LIGHT } from './carfm/tokens';
 
@@ -87,7 +88,7 @@ function waveStrength(db: number | null): number {
 }
 
 // ── RadioText strip: static when short, 16s marquee when > 46 chars ──────────
-function RadioTextStrip({ text, colors, height = 52 }: { text: string; colors: { raised: string; border: string; dim: string }; height?: number }) {
+function RadioTextStrip({ text, colors, height = 52, fontSize = 30 }: { text: string; colors: { raised: string; border: string; dim: string }; height?: number; fontSize?: number }) {
   const [w, setW] = useState(0);
   const [tw, setTw] = useState(0);
   const x = useRef(new Animated.Value(0)).current;
@@ -111,13 +112,13 @@ function RadioTextStrip({ text, colors, height = 52 }: { text: string; colors: {
       {marquee ? (
         <Animated.Text
           numberOfLines={1}
-          style={[styles.rtText, { color: colors.dim, transform: [{ translateX: x }] }]}
+          style={[styles.rtText, { fontSize, color: colors.dim, transform: [{ translateX: x }] }]}
           onLayout={(e: LayoutChangeEvent) => setTw(e.nativeEvent.layout.width)}
         >
           {text}
         </Animated.Text>
       ) : (
-        <Text numberOfLines={1} style={[styles.rtText, { color: colors.dim, textAlign: 'center' }]}>
+        <Text numberOfLines={1} style={[styles.rtText, { fontSize, color: colors.dim, textAlign: 'center' }]}>
           {text}
         </Text>
       )}
@@ -128,7 +129,7 @@ function RadioTextStrip({ text, colors, height = 52 }: { text: string; colors: {
 // The header's little status letters ("tells"): lit when true, ghosted when
 // not. HD is never lit — an RTL-SDR pipeline doesn't decode IBOC — but the
 // slot stays so the strip reads the same as a factory head unit's.
-function Tell({ label, on, pulse, pal }: { label: string; on: boolean; pulse?: boolean; pal: { text: string; amber: string } }) {
+function Tell({ label, on, pulse, pal, fontSize = 11 }: { label: string; on: boolean; pulse?: boolean; pal: { text: string; amber: string }; fontSize?: number }) {
   const op = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     if (!pulse) { op.setValue(1); return; }
@@ -140,7 +141,7 @@ function Tell({ label, on, pulse, pal }: { label: string; on: boolean; pulse?: b
     return () => loop.stop();
   }, [pulse, op]);
   return (
-    <Animated.Text style={[styles.tell, { color: pulse ? pal.amber : pal.text, opacity: pulse ? op : (on ? 1 : 0.32) }]}>
+    <Animated.Text style={[styles.tell, { fontSize, color: pulse ? pal.amber : pal.text, opacity: pulse ? op : (on ? 1 : 0.32) }]}>
       {label}
     </Animated.Text>
   );
@@ -168,8 +169,6 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const [reordering, setReordering] = useState(false);
   const [scan, setScan] = useState<{ dir: 1 | -1; display: number } | null>(null);
   const scanTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Measured side-column size -> chevron polygon in true pixels (no distortion).
-  const [chev, setChev] = useState({ w: 86, h: 180 });
   // Measured tall-mode nav button -> its (shorter, wider) chevron polygon.
   const [tallBtn, setTallBtn] = useState({ w: 160, h: 78 });
 
@@ -190,13 +189,24 @@ export default function CarFmFace(props: CarFmFaceProps) {
     gap: tall ? 10 : 12,
     freq: tall ? 52 : landscape ? 48 : 60,
     mhz: tall ? 20 : landscape ? 18 : 22,
-    call: tall ? 46 : landscape ? 50 : 66,
+    call: tall ? 48 : landscape ? 50 : 66,
     logo: tall ? 72 : landscape ? 70 : 92,
     star: tall ? 54 : landscape ? 48 : 56,
     rtMarginTop: tall ? 12 : landscape ? 10 : 18,
-    rtHeight: tall ? 48 : landscape ? 44 : 52,
-    bandHeight: twoRows ? 210 : landscape ? 104 : 140,
-  }), [tall, landscape, twoRows]);
+    rtHeight: tall ? 56 : landscape ? 50 : 60,
+    rtFont: landscape ? 26 : 30,
+    // Header element scaling (design renderVals `tall ?` branches).
+    signalIcon: tall ? 46 : 33,
+    signalDb: tall ? 19 : 15,
+    stereoFont: tall ? 18 : 14,
+    stereoWave: tall ? { w: 28, h: 40 } : { w: 20, h: 28 },
+    tellFont: tall ? 14 : 11,
+    // ⅔ slice gets the taller two-row band; landscape a short one.
+    bandHeight: twoRows ? 250 : landscape ? 104 : 140,
+    // Wide/two-row/landscape hero is a panel card of clamped width (design
+    // heroMainStyle: clamp(470, 62%, 720)). Tall uses a wider fraction.
+    heroCardW: dim.w > 0 ? Math.max(470, Math.min(720, Math.round(dim.w * 0.62))) : 620,
+  }), [tall, landscape, twoRows, dim.w]);
 
   const mhz = mhzOf(freqHz);
   const inBand = mhz >= FM_MIN_MHZ - 0.05 && mhz <= FM_MAX_MHZ + 0.05;
@@ -218,6 +228,28 @@ export default function CarFmFace(props: CarFmFaceProps) {
     () => new Set(items.map((p) => Math.round(p.frequencyMhz * 10))),
     [items],
   );
+
+  // Adjacent presets for the flanking side cards (design wideHero): with no
+  // active preset, prev = last / next = first, matching the design.
+  const [prevP, nextP] = useMemo<[PresetItem | null, PresetItem | null]>(() => {
+    if (items.length === 0) return [null, null];
+    if (activeIndex < 0) return [items[items.length - 1], items[0]];
+    return [items[(activeIndex - 1 + items.length) % items.length], items[(activeIndex + 1) % items.length]];
+  }, [items, activeIndex]);
+  const sideCardW = Math.min(206, Math.max(120, Math.round((dim.w > 0 ? dim.w : 1024) * 0.18)));
+
+  // Tall track (PHONEPORTRAITFIXES §2): hero band grows + centers; the preset
+  // band sizes to its 3-column grid content but is CAPPED at 46% of the screen
+  // (design: height auto + maxHeight 46%). A definite computed height keeps the
+  // vertical grid's ScrollView scrollable while still letting the hero reclaim
+  // the freed space when there are few presets, killing the dead void.
+  const tallBand = useMemo(() => {
+    if (!tall) return L.bandHeight;
+    const rows = Math.ceil(items.length / 3);
+    const contentH = rows > 0 ? rows * 128 + (rows - 1) * 12 + 8 : 0;   // tiles(128) + 12 gaps + 8 pad
+    const cap = Math.round((dim.h > 0 ? dim.h : 800) * 0.46);
+    return Math.min(cap, Math.max(96, contentH));                        // ≥96 so an empty band still reads
+  }, [tall, items.length, dim.h, L.bandHeight]);
 
   // ── Seek: scan to the next/previous station in the local FCC DB ────────────
   // The frequency list loads lazily (offline-first facade; enrich off since only
@@ -311,28 +343,28 @@ export default function CarFmFace(props: CarFmFaceProps) {
         ) : (
         <View style={[styles.headerLeft, tall && { flexWrap: 'wrap', flexShrink: 1 }]}>
           <View style={styles.signalPill}>
-            <SignalWaves size={26} strength={waveStrength(signalDb)} on={pal.amber} off={pal.meterEmpty} />
-            <Text style={[styles.signalText, { color: pal.text }]}>
+            <SignalWaves size={L.signalIcon} strength={waveStrength(signalDb)} on={pal.amber} off={pal.meterEmpty} />
+            <Text style={[styles.signalText, { fontSize: L.signalDb, color: pal.text }]}>
               {signalDb == null ? '—' : `${Math.round(signalDb)} dB`}
             </Text>
           </View>
           <View style={styles.stereoCol}>
             <View style={styles.stereoRow}>
-              {stereo ? <StereoWave color={pal.blue} flip /> : <View style={styles.waveSpacer} />}
-              <Text style={[styles.stereoText, { color: stereo ? pal.blue : pal.dim }]}>
+              {stereo ? <StereoWave color={pal.blue} flip w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
+              <Text style={[styles.stereoText, { fontSize: L.stereoFont, color: stereo ? pal.blue : pal.dim }]}>
                 {stereo ? 'STEREO' : 'MONO'}
               </Text>
-              {stereo ? <StereoWave color={pal.blue} /> : <View style={styles.waveSpacer} />}
+              {stereo ? <StereoWave color={pal.blue} w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
             </View>
             <View style={styles.tellStrip}>
-              <Tell label="RDS" on={!!rdsOk} pal={pal} />
-              <Tell label="HD" on={false} pal={pal} />
-              {ta ? <Tell label="TA" on pulse pal={pal} /> : <Tell label="TP" on={!!tp} pal={pal} />}
-              <Tell label="AF" on={!!af} pal={pal} />
+              <Tell label="RDS" on={!!rdsOk} pal={pal} fontSize={L.tellFont} />
+              <Tell label="HD" on={false} pal={pal} fontSize={L.tellFont} />
+              {ta ? <Tell label="TA" on pulse pal={pal} fontSize={L.tellFont} /> : <Tell label="TP" on={!!tp} pal={pal} fontSize={L.tellFont} />}
+              <Tell label="AF" on={!!af} pal={pal} fontSize={L.tellFont} />
             </View>
           </View>
           {ptyText ? (
-            <View style={[styles.ptyPill, { borderColor: pal.border, backgroundColor: pal.raised }]}>
+            <View style={[styles.ptyPill, tall && { flexBasis: '100%' }, { borderColor: pal.border, backgroundColor: pal.raised }]}>
               <Text style={[styles.ptyText, { color: pal.dim }]}>{ptyText}</Text>
             </View>
           ) : null}
@@ -370,7 +402,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 style={({ pressed }) => [styles.headerNearby, { backgroundColor: pal.panel, borderWidth: 1, borderColor: pal.border }, pressed && { opacity: 0.7 }]}
                 accessibilityRole="button" accessibilityLabel="Nearby stations"
               >
-                <MagnifierTower size={52} line={pal.text} glass={pal.raised} />
+                <MagnifierTower size={59} line={pal.text} glass={pal.raised} />
               </Pressable>
             )
           ) : null}
@@ -442,6 +474,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
               <RadioTextStrip
                 text={rt || ' '}
                 height={L.rtHeight}
+                fontSize={L.rtFont}
                 colors={{ raised: pal.raised, border: pal.border, dim: pal.dim }}
               />
             </View>
@@ -484,36 +517,20 @@ export default function CarFmFace(props: CarFmFaceProps) {
           </View>
         ) : (
           <View style={styles.hero}>
-            {/* left column: full-height PREV PRESET chevron (steering-wheel mappable) */}
-            <Pressable
-              onPress={() => stepPreset(-1)}
-              onLayout={(e: LayoutChangeEvent) => setChev({
-                w: Math.round(e.nativeEvent.layout.width), h: Math.round(e.nativeEvent.layout.height),
-              })}
-              style={({ pressed }) => [styles.sideCol, pressed && { opacity: 0.55 }]}
-              accessibilityRole="button" accessibilityLabel="Previous preset"
-            >
-              <ChevronShape w={chev.w} h={chev.h} dir={-1} fill={pal.raised} stroke={pal.border} />
-              <View style={[styles.chevLabelWrap, { transform: [{ translateX: -8 }] }]}>
-                <Text style={[styles.chevLabel, { color: pal.dim }]}>PREV</Text>
-                <Text style={[styles.chevLabel, { color: pal.dim }]}>PRESET</Text>
-              </View>
-            </Pressable>
+            {/* PREV preset as a faded side card tucked behind the hero (design
+                wideHero — replaces the chevron PREV button) */}
+            {prevP ? (
+              <SidePresetCard name={prevP.name} pal={pal} side="left" width={sideCardW} overlap={-72} onPress={() => stepPreset(-1)} />
+            ) : null}
 
-            <View style={styles.center}>{heroCenter}</View>
+            <View style={[styles.heroCardWide, styles.heroCardZ, { width: L.heroCardW, backgroundColor: pal.panel, borderColor: pal.border }]}>
+              {heroCenter}
+            </View>
 
-            {/* right column: full-height NEXT PRESET chevron (mirror of left) */}
-            <Pressable
-              onPress={() => stepPreset(1)}
-              style={({ pressed }) => [styles.sideCol, pressed && { opacity: 0.55 }]}
-              accessibilityRole="button" accessibilityLabel="Next preset"
-            >
-              <ChevronShape w={chev.w} h={chev.h} dir={1} fill={pal.raised} stroke={pal.border} />
-              <View style={[styles.chevLabelWrap, { transform: [{ translateX: 8 }] }]}>
-                <Text style={[styles.chevLabel, { color: pal.dim }]}>NEXT</Text>
-                <Text style={[styles.chevLabel, { color: pal.dim }]}>PRESET</Text>
-              </View>
-            </Pressable>
+            {/* NEXT preset side card (mirror) */}
+            {nextP ? (
+              <SidePresetCard name={nextP.name} pal={pal} side="right" width={sideCardW} overlap={-72} onPress={() => stepPreset(1)} />
+            ) : null}
           </View>
         );
       })()}
@@ -525,10 +542,13 @@ export default function CarFmFace(props: CarFmFaceProps) {
         presets={items}
         activeIndex={activeIndex}
         reordering={reordering}
-        grow={tall}
-        bandHeight={L.bandHeight}
+        grow={false}
+        bandHeight={tallBand}
         showNav={!tall}
         showNearby={!tall}
+        tall={tall}
+        twoRows={twoRows}
+        landscape={landscape}
         onSelect={(p) => onTuneHz(Math.round(p.frequencyMhz * 1e6))}
         onEnterReorder={() => setReordering(true)}
         onExitReorder={() => setReordering(false)}
@@ -543,6 +563,8 @@ export default function CarFmFace(props: CarFmFaceProps) {
         pal={pal}
         currentMHz={fmt(scan ? scan.display : mhz)}
         scanning={!!scan}
+        compact={dim.h > 0 && dim.h < 560}
+        maxHeight={dim.h > 0 ? dim.h - 24 : undefined}
         onSeek={runSeek}
         onTune={(f) => { setNumpadOpen(false); onTuneHz(Math.round(f * 1e6)); }}
         onClose={() => setNumpadOpen(false)}
@@ -580,7 +602,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 14, flexShrink: 1 },
   headerRight: { alignItems: 'center', gap: 12, flexShrink: 0 },
-  headerNearby: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center' },
+  headerNearby: { width: 74, height: 74, borderRadius: 37, alignItems: 'center', justifyContent: 'center' },
   headerDoneCheck: { color: '#FFF', fontSize: 22, fontWeight: '700' },
   headerDoneText: { color: '#FFF', fontFamily: FONT, fontSize: 11, fontWeight: '700', letterSpacing: 1.5 },
   signalPill: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -602,17 +624,24 @@ const styles = StyleSheet.create({
   },
   tunerErrText: { fontFamily: FONT, fontSize: 17, fontWeight: '700', letterSpacing: 0.3 },
 
-  hero: { flex: 1, flexDirection: 'row', gap: 20 },
-  // Tall/portrait track: hero stacks into a card, PREV/NEXT wrap below.
-  heroTall: { flexShrink: 0, gap: 12 },
+  hero: { flex: 1, flexDirection: 'row', gap: 0, alignItems: 'center', justifyContent: 'center' },
+  // Non-tall hero: a panel card of clamped width (design heroMainStyle). It sits
+  // ABOVE the flanking side preset cards (heroCardZ) so they tuck behind it.
+  heroCardWide: {
+    borderWidth: 1, borderRadius: 28, paddingVertical: 24, paddingHorizontal: 30,
+    alignItems: 'center', justifyContent: 'center', maxWidth: '100%',
+    elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 },
+  },
+  heroCardZ: { zIndex: 3 },
+  // Tall/portrait track: hero band grows + centers (PHONEPORTRAITFIXES §2), hero
+  // stacks into a card, PREV/NEXT wrap below.
+  heroTall: { flex: 1, justifyContent: 'center', gap: 12 },
   heroCard: { borderWidth: 1, borderRadius: 28, paddingVertical: 22, paddingHorizontal: 20, alignItems: 'center', justifyContent: 'center' },
   tallNavRow: { flexDirection: 'row', gap: 12, height: 78 },
   tallNavBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  sideCol: { width: 86, alignItems: 'center', justifyContent: 'center' },
   chevLabelWrap: { alignItems: 'center' },
   chevLabel: { fontFamily: FONT, fontSize: 11, fontWeight: '700', letterSpacing: 1, lineHeight: 14 },
 
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   stationRow: { flexDirection: 'row', alignItems: 'center', gap: 18 },
   call: { fontFamily: FONT, fontSize: 66, fontWeight: '700', letterSpacing: -1, flexShrink: 1 },
   starBtn: { width: 56, height: 56, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
