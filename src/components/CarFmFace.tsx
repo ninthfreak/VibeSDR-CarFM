@@ -207,10 +207,6 @@ export default function CarFmFace(props: CarFmFaceProps) {
     // heroMainStyle: clamp(470, 62%, 720)). Tall uses a wider fraction.
     heroCardW: dim.w > 0 ? Math.max(470, Math.min(720, Math.round(dim.w * 0.62))) : 620,
   }), [tall, landscape, twoRows, dim.w]);
-  // Tall track (PHONEPORTRAITFIXES §2): the hero band grows + centers and the
-  // preset band is a fixed bottom block capped at ~46% of the screen height, so
-  // the extra portrait height no longer collapses into a dead void.
-  const tallBand = tall ? Math.round((dim.h > 0 ? dim.h : 800) * 0.46) : L.bandHeight;
 
   const mhz = mhzOf(freqHz);
   const inBand = mhz >= FM_MIN_MHZ - 0.05 && mhz <= FM_MAX_MHZ + 0.05;
@@ -241,6 +237,19 @@ export default function CarFmFace(props: CarFmFaceProps) {
     return [items[(activeIndex - 1 + items.length) % items.length], items[(activeIndex + 1) % items.length]];
   }, [items, activeIndex]);
   const sideCardW = Math.min(206, Math.max(120, Math.round((dim.w > 0 ? dim.w : 1024) * 0.18)));
+
+  // Tall track (PHONEPORTRAITFIXES §2): hero band grows + centers; the preset
+  // band sizes to its 3-column grid content but is CAPPED at 46% of the screen
+  // (design: height auto + maxHeight 46%). A definite computed height keeps the
+  // vertical grid's ScrollView scrollable while still letting the hero reclaim
+  // the freed space when there are few presets, killing the dead void.
+  const tallBand = useMemo(() => {
+    if (!tall) return L.bandHeight;
+    const rows = Math.ceil(items.length / 3);
+    const contentH = rows > 0 ? rows * 128 + (rows - 1) * 12 + 8 : 0;   // tiles(128) + 12 gaps + 8 pad
+    const cap = Math.round((dim.h > 0 ? dim.h : 800) * 0.46);
+    return Math.min(cap, Math.max(96, contentH));                        // ≥96 so an empty band still reads
+  }, [tall, items.length, dim.h, L.bandHeight]);
 
   // ── Seek: scan to the next/previous station in the local FCC DB ────────────
   // The frequency list loads lazily (offline-first facade; enrich off since only

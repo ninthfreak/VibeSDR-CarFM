@@ -125,7 +125,8 @@ export default function PresetsBand({
   onOpenNearby: () => void;
   /** Tall track: fill remaining height instead of a fixed band height. */
   grow?: boolean;
-  /** Fixed band height when not growing (per aspect track). */
+  /** Fixed band height when not growing (per aspect track). In the tall track the
+   *  caller passes a content-sized height capped at 46% (design §2). */
   bandHeight?: number;
   /** Show the ‹ › page buttons (hidden in the tall track). */
   showNav?: boolean;
