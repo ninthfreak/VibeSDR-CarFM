@@ -243,9 +243,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
       // CarFM: NO dongle at launch — go straight into the FM face anyway, as a
       // TUNERLESS session. The face shows its tuner-error pill (the designed
-      // no-tuner state) and the SDR screen polls, hot-swapping in a real local
-      // session when the dongle appears. The stock picker is never the landing
-      // surface; it stays reachable via the face's Advanced menu for dev use.
+      // no-tuner state); there is no background polling — a dongle plugged in
+      // later is connected on demand via the settings panel's RETRY action. The
+      // stock picker is never the landing surface; it stays reachable via the
+      // face's Advanced menu for dev use.
       if (!cancelled && Platform.OS === 'android'
           && !isDeepLinkActive() && !watchTargetPending.claimed
           && !route.params?.noAutoConnect) {
@@ -369,7 +370,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // launch paths (tryUsbLaunch/tryCarAutostart) hand the launch back to the
   // tunerless fallback on failure instead of stranding the stock picker.
   // `quiet` suppresses the failure Alert on those paths: the FM face's
-  // tuner-error pill + dongle polling are the designed failure surface there.
+  // tuner-error pill (RETRY reconnects on demand) is the designed failure
+  // surface there.
   const connectLocal = useCallback(async (modeOverride?: typeof viewMode, quiet?: boolean): Promise<boolean> => {
     const Local = (NativeModules as any).VibeLocalSDR;
     if (!Local?.startSpectrum) { if (!quiet) Alert.alert('Local Hardware', 'Not available on this build.'); return false; }
@@ -484,7 +486,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // to be fire-and-forget here: a USB-permission denial or shim failure showed
     // an Alert, no navigation happened, and the "claimed" return stranded the
     // user on the stock picker. Returning false hands the launch to the
-    // tunerless FM face, whose tuner-error pill + dongle polling own retries.
+    // tunerless FM face, whose tuner-error pill owns retries (settings RETRY).
     return await connectLocal(modeArg, true);
   }, [connectLocal]);
   tryCarAutostartRef.current = tryCarAutostart;

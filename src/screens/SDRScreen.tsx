@@ -2014,9 +2014,10 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   useEffect(() => {
     // CarFM tunerless session: no tuner, so no backend at all — the face shows
-    // the tuner-error pill and the poll effect below hot-swaps in a real
-    // session when a dongle appears. Creating a client against the placeholder
-    // URL would just spin a reconnect loop against a dead socket.
+    // the tuner-error pill. There is NO background polling: a dongle plugged in
+    // later is connected on demand via the settings panel's RETRY action.
+    // Creating a client against the placeholder URL would just spin a reconnect
+    // loop against a dead socket.
     if (route.params.tunerless) return;
     destroyed.current = false;
     const c = createBackend(route.params.serverType ?? 'ubersdr', baseUrl, sessionUuid, {
@@ -4064,7 +4065,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     return [...base].sort((a, b) =>
       (pos.get(fmKeyOf(a.frequency)) ?? 1e6 + a.frequency / 1e5)
       - (pos.get(fmKeyOf(b.frequency)) ?? 1e6 + b.frequency / 1e5));
-  }, [visibleBookmarks, fmOrder]);
+  }, [carFm, userBookmarks, visibleBookmarks, fmOrder]);
 
   // Star: save the tuned station (named from RDS PS), or un-save if it already
   // is a preset. Removal also drops any duplicate bookmarks on that channel.
