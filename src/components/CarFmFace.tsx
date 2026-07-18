@@ -88,11 +88,16 @@ function waveStrength(db: number | null): number {
 }
 
 // ── RadioText strip: static when short, 16s marquee when > 46 chars ──────────
-function RadioTextStrip({ text, colors, height = 52, fontSize = 30 }: { text: string; colors: { raised: string; border: string; dim: string }; height?: number; fontSize?: number }) {
+// Real RadioText renders in the full text colour; when empty, a dim-italic
+// "Waiting for RadioText…" placeholder shows instead (design rtItemStyle).
+function RadioTextStrip({ text, colors, height = 52, fontSize = 30 }: { text: string; colors: { raised: string; border: string; dim: string; text: string }; height?: number; fontSize?: number }) {
   const [w, setW] = useState(0);
   const [tw, setTw] = useState(0);
   const x = useRef(new Animated.Value(0)).current;
-  const marquee = text.length > RT_MARQUEE_CHARS;
+  const hasText = text.trim().length > 0;
+  const shown = hasText ? text : 'Waiting for RadioText…';
+  const textColor = hasText ? colors.text : colors.dim;
+  const marquee = shown.length > RT_MARQUEE_CHARS;   // placeholder is short → static
 
   useEffect(() => {
     if (!marquee || !w || !tw) { x.setValue(0); return; }
@@ -112,14 +117,14 @@ function RadioTextStrip({ text, colors, height = 52, fontSize = 30 }: { text: st
       {marquee ? (
         <Animated.Text
           numberOfLines={1}
-          style={[styles.rtText, { fontSize, color: colors.dim, transform: [{ translateX: x }] }]}
+          style={[styles.rtText, { fontSize, color: textColor, transform: [{ translateX: x }] }]}
           onLayout={(e: LayoutChangeEvent) => setTw(e.nativeEvent.layout.width)}
         >
-          {text}
+          {shown}
         </Animated.Text>
       ) : (
-        <Text numberOfLines={1} style={[styles.rtText, { fontSize, color: colors.dim, textAlign: 'center' }]}>
-          {text}
+        <Text numberOfLines={1} style={[styles.rtText, { fontSize, color: textColor, fontStyle: hasText ? 'normal' : 'italic', textAlign: 'center' }]}>
+          {shown}
         </Text>
       )}
     </View>
@@ -198,8 +203,14 @@ export default function CarFmFace(props: CarFmFaceProps) {
     // Header element scaling (design renderVals `tall ?` branches).
     signalIcon: tall ? 46 : 33,
     signalDb: tall ? 19 : 15,
-    stereoFont: tall ? 18 : 14,
+    stereoFont: tall ? 18 : 15,
     stereoWave: tall ? { w: 28, h: 40 } : { w: 20, h: 28 },
+    // STEREO/MONO pill chrome (design stereoStyle = pill + minWidth).
+    stereoH: tall ? 46 : 36,
+    stereoPadH: tall ? 18 : 14,
+    stereoRadius: tall ? 12 : 10,
+    stereoMinW: tall ? 196 : 158,
+    ptyFont: tall ? 19 : 15,
     tellFont: tall ? 14 : 11,
     // ⅔ slice gets the taller two-row band; landscape a short one.
     bandHeight: twoRows ? 250 : landscape ? 104 : 140,
@@ -237,10 +248,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
     return [items[(activeIndex - 1 + items.length) % items.length], items[(activeIndex + 1) % items.length]];
   }, [items, activeIndex]);
   const sideCardW = Math.min(206, Math.max(120, Math.round((dim.w > 0 ? dim.w : 1024) * 0.18)));
-  // Tall/portrait track sizing: a narrower hero card (78%) with smaller flanking
-  // side cards (design tall heroMain 78% / side 20%, overlap -46).
+  // Tall/portrait track sizing: a narrower hero card (78%) that stands alone —
+  // no flanking peek cards on this track (design §4.2/§5).
   const tallHeroW = Math.min(520, Math.round((dim.w > 0 ? dim.w : 470) * 0.78));
-  const tallSideW = Math.min(150, Math.max(88, Math.round((dim.w > 0 ? dim.w : 470) * 0.2)));
 
   // Tall track (PHONEPORTRAITFIXES §2): hero band grows + centers; the preset
   // band sizes to its 3-column grid content but is CAPPED at 46% of the screen
@@ -348,12 +358,17 @@ export default function CarFmFace(props: CarFmFaceProps) {
         <View style={[styles.headerLeft, tall && { flexWrap: 'wrap', flexShrink: 1 }]}>
           <View style={styles.signalPill}>
             <SignalWaves size={L.signalIcon} strength={waveStrength(signalDb)} on={pal.amber} off={pal.meterEmpty} />
-            <Text style={[styles.signalText, { fontSize: L.signalDb, color: pal.text }]}>
+            <Text style={[styles.signalText, { fontSize: L.signalDb, color: pal.dim }]}>
               {signalDb == null ? '—' : `${Math.round(signalDb)} dB`}
             </Text>
           </View>
           <View style={styles.stereoCol}>
-            <View style={styles.stereoRow}>
+            <View style={[styles.stereoRow, {
+              height: L.stereoH, paddingHorizontal: L.stereoPadH, borderRadius: L.stereoRadius,
+              minWidth: L.stereoMinW, borderWidth: 1.5,
+              borderColor: stereo ? pal.blue : pal.border,
+              backgroundColor: stereo ? pal.blueFill : 'transparent',
+            }]}>
               {stereo ? <StereoWave color={pal.blue} flip w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
               <Text style={[styles.stereoText, { fontSize: L.stereoFont, color: stereo ? pal.blue : pal.dim }]}>
                 {stereo ? 'STEREO' : 'MONO'}
@@ -368,8 +383,8 @@ export default function CarFmFace(props: CarFmFaceProps) {
             </View>
           </View>
           {ptyText ? (
-            <View style={[styles.ptyPill, tall && { flexBasis: '100%' }, { borderColor: pal.border, backgroundColor: pal.raised }]}>
-              <Text style={[styles.ptyText, { color: pal.dim }]}>{ptyText}</Text>
+            <View style={[styles.ptyWrap, tall ? { flexBasis: '100%' } : { maxWidth: 200 }]}>
+              <Text numberOfLines={1} style={[styles.ptyText, { fontSize: L.ptyFont, color: pal.dim }]}>{ptyText}</Text>
             </View>
           ) : null}
           {!inBand ? (
@@ -476,30 +491,29 @@ export default function CarFmFace(props: CarFmFaceProps) {
             </Pressable>
             <View style={[styles.rtArea, { marginTop: L.rtMarginTop }]}>
               <RadioTextStrip
-                text={rt || ' '}
+                text={rt}
                 height={L.rtHeight}
                 fontSize={L.rtFont}
-                colors={{ raised: pal.raised, border: pal.border, dim: pal.dim }}
+                colors={{ raised: pal.raised, border: pal.border, dim: pal.dim, text: pal.text }}
               />
             </View>
           </>
         );
 
-        // PREV/NEXT preset side cards flank the hero in EVERY track (design:
-        // chevrons removed everywhere). Only the sizing differs by track: the
-        // tall/portrait hero band grows + centers its row and tucks the cards
-        // with a smaller (-46) overlap; wide/landscape use the clamped card and
-        // a -72 overlap.
+        // PREV/NEXT preset peek cards flank the hero on the WIDE track only
+        // (design §4.2/§5: hidden on the tall track — the hero card stands
+        // alone). Chevrons are never used. Wide/landscape use the clamped hero
+        // card and a -72 overlap tuck.
         const heroRow = (
           <View style={tall ? styles.heroRowTall : styles.hero}>
-            {prevP ? (
-              <SidePresetCard name={prevP.name} pal={pal} side="left" width={tall ? tallSideW : sideCardW} overlap={tall ? -46 : -72} onPress={() => stepPreset(-1)} />
+            {!tall && prevP ? (
+              <SidePresetCard name={prevP.name} pal={pal} side="left" width={sideCardW} overlap={-72} onPress={() => stepPreset(-1)} />
             ) : null}
             <View style={[tall ? styles.heroCard : styles.heroCardWide, styles.heroCardZ, { width: tall ? tallHeroW : L.heroCardW, backgroundColor: pal.panel, borderColor: pal.border }]}>
               {heroCenter}
             </View>
-            {nextP ? (
-              <SidePresetCard name={nextP.name} pal={pal} side="right" width={tall ? tallSideW : sideCardW} overlap={tall ? -46 : -72} onPress={() => stepPreset(1)} />
+            {!tall && nextP ? (
+              <SidePresetCard name={nextP.name} pal={pal} side="right" width={sideCardW} overlap={-72} onPress={() => stepPreset(1)} />
             ) : null}
           </View>
         );
@@ -578,17 +592,20 @@ const styles = StyleSheet.create({
   headerDoneText: { color: '#FFF', fontFamily: FONT, fontSize: 11, fontWeight: '700', letterSpacing: 1.5 },
   signalPill: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   signalText: { fontFamily: FONT, fontSize: 17, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  stereoCol: { alignItems: 'center', gap: 2 },
-  stereoRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  stereoCol: { alignItems: 'center', gap: 5 },
+  // STEREO/MONO pill: waves flank the label inside a bordered pill (design
+  // stereoStyle). Border/fill colour + min-width set inline from the palette.
+  stereoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
   waveSpacer: { width: 20, height: 28 },
-  stereoText: { fontFamily: FONT, fontSize: 14, fontWeight: '700', letterSpacing: 1.5 },
+  stereoText: { fontFamily: FONT, fontSize: 15, fontWeight: '700', letterSpacing: 1 },
   tellStrip: { flexDirection: 'row', gap: 10 },
   tell: { fontFamily: FONT, fontSize: 11, fontWeight: '700', letterSpacing: 1, lineHeight: 12 },
-  ptyPill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 4 },
-  ptyText: { fontFamily: FONT, fontSize: 13, fontWeight: '700' },
+  // PTY: plain dim ellipsized text — no border/fill (design ptyStyle).
+  ptyWrap: { height: 36, justifyContent: 'center' },
+  ptyText: { fontFamily: FONT, fontSize: 15, fontWeight: '700', letterSpacing: 0.5 },
   oobPill: { borderWidth: 1.5, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 4 },
   oobText: { fontFamily: FONT, fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
-  gearBtn: { width: 52, height: 52, borderRadius: 14, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  gearBtn: { width: 44, height: 44, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   tunerErrPill: {
     height: 44, paddingHorizontal: 16, borderRadius: 10, borderWidth: 1.5,
     flexDirection: 'row', alignItems: 'center', gap: 11, alignSelf: 'flex-start',
