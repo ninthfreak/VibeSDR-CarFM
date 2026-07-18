@@ -33,12 +33,12 @@
     <sc-if value="{{ pickerOpen }}" hint-placeholder-val="{{ false }}">
       <div style="{{ scrimStyle }}" onClick="{{ closeAll }}"></div>
       <div style="{{ overlayCenterStyle }}">
-        <div style="{{ cardWrapStyle }}">
+        <div style="{{ pickerWrapStyle }}">
           <dc-import name="NearbyPicker"
             theme="{{ theme }}" state="list" snapshot-date="2026-06-14" stations="{{ nearby }}"
             on-select="{{ pickAndTune }}" on-save-station="{{ savePresetFreq }}"
             on-close="{{ closeAll }}" on-city="{{ noop }}"
-            style="width:900px;height:600px;" hint-size="900px,600px"></dc-import>
+            style="width:100%;height:100%;" hint-size="100%,100%"></dc-import>
         </div>
       </div>
     </sc-if>
@@ -46,12 +46,12 @@
     <sc-if value="{{ settingsOpen }}" hint-placeholder-val="{{ false }}">
       <div style="{{ scrimStyle }}" onClick="{{ closeAll }}"></div>
       <div style="{{ overlayCenterStyle }}">
-        <div style="{{ cardWrapStyle }}">
+        <div style="{{ settingsWrapStyle }}">
           <dc-import name="SettingsPanel"
             theme="{{ theme }}" tuner-error="{{ tunerError }}" theme-choice="{{ themeChoice }}" autostart="{{ autostart }}"
             on-set-theme="{{ setThemeChoice }}" on-set-autostart="{{ setAutostart }}"
             on-retry-tuner="{{ retryTuner }}" on-advanced="{{ openAdvanced }}" on-close="{{ closeAll }}"
-            style="width:700px;height:576px;" hint-size="700px,576px"></dc-import>
+            style="width:100%;height:100%;" hint-size="100%,100%"></dc-import>
         </div>
       </div>
     </sc-if>
@@ -153,8 +153,8 @@ class Component extends DCLogic {
       'Dudu7 full':          { w: 1024, h: 614 },
       'Dudu7 ⅔ slice':       { w: 900,  h: 810 },
       'Dudu7 ⅓ slice':       { w: 470,  h: 845 },
-      'Galaxy S landscape':  { w: 1100, h: 508 },
-      'Galaxy S portrait':   { w: 470,  h: 1018 }
+      'Galaxy S landscape':  { w: 1080, h: 486 },
+      'Galaxy S portrait':   { w: 486,  h: 1080 }
     };
     return M[this.props.aspect] || M['Dudu7 full'];
   }
@@ -350,6 +350,8 @@ class Component extends DCLogic {
       scrimStyle: { position: 'absolute', inset: 0, zIndex: 100, backgroundColor: t.scrim },
       overlayCenterStyle: { position: 'absolute', inset: 0, zIndex: 101, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' },
       cardWrapStyle: { borderRadius: 22, overflow: 'hidden', border: '1px solid ' + t.border, pointerEvents: 'auto', boxShadow: '0 20px 50px rgba(0,0,0,0.35)' },
+      pickerWrapStyle: { width: Math.min(900, dims.w - 32), height: Math.min(600, dims.h - 32), borderRadius: 22, overflow: 'hidden', border: '1px solid ' + t.border, pointerEvents: 'auto', boxShadow: '0 20px 50px rgba(0,0,0,0.35)', boxSizing: 'border-box' },
+      settingsWrapStyle: { width: Math.min(700, dims.w - 32), height: Math.min(576, dims.h - 32), borderRadius: 22, overflow: 'hidden', border: '1px solid ' + t.border, pointerEvents: 'auto', boxShadow: '0 20px 50px rgba(0,0,0,0.35)', boxSizing: 'border-box' },
 
       numpadCardStyle: { width: npW, padding: npCompact ? '16px 18px' : 24, borderRadius: npCompact ? 20 : 24, backgroundColor: t.panel, border: '1px solid ' + t.border, display: 'flex', flexDirection: 'column', gap: npCompact ? 9 : 14, pointerEvents: 'auto', fontFamily: font, boxShadow: '0 20px 50px rgba(0,0,0,0.35)', maxHeight: (dims.h - 24) + 'px', boxSizing: 'border-box' },
       npTitleStyle: { fontSize: 14, fontWeight: 700, letterSpacing: 2, color: t.dim, textAlign: 'center', display: npCompact ? 'none' : 'block' },

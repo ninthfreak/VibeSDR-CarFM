@@ -11,6 +11,12 @@ This is an **Alpha** design: the look, layout, and interaction model are settled
 work remains (real SDR/RDS/GPS backends, error/edge states, additional settings). Treat it as
 the visual + behavioral spec to build against, not a finished feature set.
 
+> **Authoritative build spec: `ANDROID-IMPLEMENTATION.md`.** That document is the source of
+> truth for **surfaces, layout tracks, responsive behavior, and per-screen structure** written in
+> Android terms. This README is a **component-level reference** (exact values, token tables, icon
+> anatomy, assets). Where the two differ, follow `ANDROID-IMPLEMENTATION.md` — it reflects the
+> current design; older phrasing in this README has been corrected inline below.
+
 ## About the Design Files
 The files in this bundle are **design references authored in HTML** (a component framework we
 use for high‑fidelity prototypes). They are **not production code to copy**. Your task is to
@@ -27,10 +33,16 @@ and reimplement natively.
 ## Fidelity
 **High‑fidelity (hifi).** Colors, typography, spacing, sizing, and interactions are final and
 should be reproduced closely. Exact values are listed under **Design Tokens** and per‑component
-below. The **target device is a 2000×1200 (5:3) head unit**; the design canvas is authored at
-**1024×614 (5:3)** logical coordinates and scales *uniformly* to fill any resolution — it renders
-crisply on the 2000×1200 target and downscales automatically to lower-res units (e.g. the current
-unit in interim use). In-app, build responsively rather than hard-scaling.
+below.
+
+**The face is responsive across five surfaces, not one fixed canvas.** DUDU OS can split the
+head-unit screen into vertical thirds, and the app also runs on a phone (Galaxy S21) in portrait
+and landscape. There are **two layout tracks** — **wide** (Dudu7 full / ⅔ slice, S21 landscape)
+and **tall** (Dudu7 ⅓ slice, S21 portrait) — selected from the available window size. All five
+surfaces are first-class; none may be dropped or treated as a scaled version of another. Build
+responsively (Compose `WindowSizeClass` / `BoxWithConstraints`); do **not** author a single
+aspect and scale it uniformly. See `ANDROID-IMPLEMENTATION.md` §2 for the surface table and
+track-selection rules, and §4 for how each region reflows between tracks.
 
 ## Screens / Views
 
@@ -38,22 +50,25 @@ unit in interim use). In-app, build responsively rather than hard-scaling.
 **Purpose:** Show the currently tuned station and let the driver tune, seek, recall/reorder
 presets, and open Nearby search.
 
-**Layout** (vertical stack, 1024×614 logical / 5:3, 18px/24px padding, 12px gaps):
-1. **Header row** — left: signal pill (three‑wave RDS icon + dB) , FM badge, STEREO/MONO pill;
-   right: gear/settings icon button (placeholder for an Advanced panel). Height ~ auto.
-2. **Hero band** (`flex:1`) — three columns with 20px gap:
-   - **Left column** (86px wide): a single **PREV PRESET** button that fills the column height —
-     a left‑pointing **chevron/arrow shape** (see below).
-   - **Center hero:** station logo tile (92×92) + station call letters (66px) + star save button,
-     then frequency (60px amber) + "MHz". Below, vertically centered in the remaining space, the
-     **RadioText strip** (marquee when text > 46 chars).
-   - **Right column** (86px): **NEXT PRESET** button — a right‑pointing chevron (mirror of left).
-
-   *(SEEK is no longer in the side columns — it now lives inside the tap‑to‑tune / numpad window;
-   PREV/NEXT remain here so they can be mapped to steering‑wheel controls.)*
-3. **Presets band** (height 140): **‹** nav button (56px) · horizontally scrolling preset grid ·
-   **›** nav button · **NEARBY** button (round icon). In reorder mode the NEARBY button is
-   replaced by a **DONE** button.
+**Layout** (vertical stack; reflows between the **wide** and **tall** tracks — see
+`ANDROID-IMPLEMENTATION.md` §4):
+1. **Status bar** — left: signal icon (concentric broadcast waves) + dB, STEREO/MONO pill, and a
+   tell strip (RDS / HD / TP·TA / AF flags); right: settings gear button. Nearby-search sits here
+   on the **tall** track (in the preset band on the wide track). No FM badge. Wraps to a second
+   line on the tall track.
+2. **Hero band** — the tuned station, centered:
+   - **Center hero card:** station logo tile + call letters + star save button, then frequency
+     (amber) + "MHz". The **RadioText strip** sits below the hero (marquee when text > 46 chars).
+   - **Prev/Next peek cards** flank the hero on the **wide track only**: the previous and next
+     presets rendered as smaller, ~0.88-scale, ~60%-opacity cards that peek in from the sides and
+     sit slightly behind the hero; tapping one steps to that preset. Hidden on the tall track,
+     where the hero card stands alone and is vertically centered in the leftover height.
+   - *(A chevron/arrow PREV/NEXT-button variant exists in the prototype code but is **disabled**;
+     the peek cards are the shipping design. Do not build the chevron buttons unless asked.)*
+3. **Presets band** — **wide:** **‹** nav button · horizontally scrolling preset rail · **›** nav
+   button · **NEARBY** round button (→ **DONE** in reorder mode). **twoRows** (Dudu7 ⅔): a 2-row
+   horizontal grid. **tall:** a 3-column vertical grid pinned as a bottom shelf, capped at ~45% of
+   screen height, scrolling vertically.
 
 **Key components**
 - **Station logo tile:** 92×92, `border-radius:20` (or 46 if circle), station brand bg/fg, 34px 700.
@@ -67,15 +82,14 @@ presets, and open Nearby search.
   tile shows a 26×3 amber bar at bottom. Long‑press enters reorder mode.
 - **SEEK controls:** now inside the tap‑to‑tune / numpad window (in `CarFmLive.dc.html`), not on
   the main face. Scan icon = a vertical bar + chevron (down/up variants).
-- **PREV/NEXT PRESET buttons:** each fills its 86px side column as a **chevron/arrow silhouette**
-  (PREV points left, NEXT points right). Drawn as an inline **SVG polygon** with `fill:raised`
-  and a `2.5px` `stroke:border` (subtle gray, `vector-effect:non-scaling-stroke`,
-  `stroke-linejoin:round`). The polygon is computed in **true pixel coordinates** from the
-  measured button size (via a `ResizeObserver`), so the chevron angle never distorts regardless
-  of the button's height — do **not** use a fixed `viewBox` + `preserveAspectRatio="none"` (that
-  stretches the angles). Two‑line label "PREV / PRESET" (resp. "NEXT / PRESET"), 11px 700 `dim`,
-  centered on an **unclipped overlay** layer (so text is never clipped by the chevron) and nudged
-  ~16px toward the point.
+- **Prev/Next peek cards (wide track):** stepping to the previous/next preset is driven by the
+  **peek cards** flanking the hero — smaller (~0.88 scale, ~60% opacity) cards showing the prev
+  and next presets, edge-softened with a fade gradient, peeking in from the sides and sitting
+  slightly behind the hero; tap to step. Hidden on the tall track. Build as real sibling
+  composables clipped by the screen edges. *(A chevron/arrow-silhouette PREV/NEXT-button variant
+  is still present in the prototype source — inline SVG polygon computed in true pixel coordinates
+  via a `ResizeObserver` — but it is **disabled** and is not the shipping design. Do not build it
+  unless asked.)*
 - **Custom scrollbar** (under the preset grid): 6px track (`bg:meterEmpty`, `radius:999`), thumb
   `rgba(128,134,144,0.6)`, width = viewport/scrollWidth, left = scroll fraction. **No arrows.**
   Track/thumb are draggable (pointer maps x → scrollLeft). Native scrollbar is hidden.
@@ -86,10 +100,21 @@ presets, and open Nearby search.
 **Purpose:** List FM stations near the current GPS location (FCC dataset). Tap a row to tune;
 **hold (550ms)** to save it as a preset.
 
-**Layout:** 900×600 card. Header (78px) with title "Nearby stations", subtitle
-("Tap to tune · hold to save a preset · best signal first"), and ✕ close (52×52). Scrollable list
-(rows, 10px gap, 16/22px padding). Footer (48px): "FCC data as of &lt;date&gt;". Also has
-`nogps` and `empty` states.
+**Layout:** design size 900×600, but **responsive** — the card caps to the surface
+(`min(design, screen − 32dp)`) and its body scrolls, so it fits the narrow/short surfaces
+instead of clipping (never hard-code the pixel size). Header (78px) with title "Nearby stations",
+subtitle ("Tap to tune · hold to save a preset · best signal first"), and ✕ close (52×52).
+Scrollable list (rows, 10px gap, 16/22px padding). Footer (48px): "FCC data as of &lt;date&gt;".
+Also has `nogps` and `empty` states.
+
+**Two-level filter:**
+- **Bucket row** — `All · Music · Talk` (Music/Talk only appear when the list contains such
+  stations). While **All** is active, all three chips show. Selecting **Music** or **Talk**
+  collapses the bucket row to just the **All** chip (the other two hide); tapping **All** restores
+  all three and clears the genre filter.
+- **Genre row** (inside Music/Talk, when >1 genre exists) — genre chips laid out in **exactly two
+  rows**, flowing column-by-column and scrolling horizontally on overflow. Select to filter; tap
+  again to clear.
 
 **Row anatomy** (min‑height 92, `bg:raised`, `1px solid border`, `radius:16`, 18px gap):
 - Brand logo (60×60).
@@ -104,10 +129,22 @@ presets, and open Nearby search.
 - Chevron "›" (26px `dim`).
 
 ### 3. Direct‑entry Numpad (modal) — in `CarFmLive.dc.html`
-**Purpose:** Type a frequency directly. 440px card, `bg:panel`. Display row (78px, amber 46px
-value + "MHz"), 3×4 keypad (1–9, ".", 0, ⌫ — keys `calc((100% - 24px)/3)` × 64,
-`bg:raised`), and CANCEL / TUNE actions. Input capped at 4 digits, one decimal; commit parses and
-rounds to 0.1.
+**Purpose:** Type a frequency directly. ~440px card (responsive: caps to the surface and uses a
+**compact variant** — smaller keys/gaps, title hidden — on short surfaces < ~560dp tall),
+`bg:panel`. Display row (78px, amber 46px value + "MHz"), a SEEK ‹‹ / SEEK ›› row, 3×4 keypad
+(1–9, ".", 0, ⌫ — keys `calc((100% - 24px)/3)` × 64, `bg:raised`), and CANCEL / TUNE actions.
+Input capped at 4 digits, one decimal; commit parses and rounds to 0.1, validating the
+87.5–108.0 band.
+
+### 4. Settings (modal) — `SettingsPanel.dc.html`
+**Purpose:** Tuner source + connection status, appearance (theme), and system options. Design
+size ~700×576, **responsive** (caps to the surface, body scrolls). Grouped sections: **TUNER**
+(connection status with RETRY when errored + expandable diagnostics; a **Tuner source** radio list
+— Auto / RTL-SDR / Si470x FM dongle / rtl_tcp, each with a detected/not-detected/unavailable
+badge; **Start radio on boot** toggle), **APPEARANCE** (SYSTEM / LIGHT / DARK segmented control),
+**SYSTEM** (battery-optimization status with FIX/EXEMPT; station-logos toggle), **ADVANCED**
+(Advanced SDR view row). See `ANDROID-IMPLEMENTATION.md` §6.3 and `uploads/settingspanelhandoff.md`
+for the tuner-backend detail.
 
 ## Interactions & Behavior
 - **Tune up/down:** ±0.1 MHz, wraps at the 87.5–108.0 band edges.
@@ -211,6 +248,7 @@ per‑theme color controls; build them as themeable style props:
 - `RadioFace.dc.html` — the main radio face UI (hero, presets, seek/prev/next, custom scrollbar,
   reorder + FLIP animation, nearby icon).
 - `NearbyPicker.dc.html` — the Nearby stations modal (list/nogps/empty states).
+- `SettingsPanel.dc.html` — the Settings modal (tuner source/status, theme, system, advanced).
 - `support.js` — prototype runtime only; **do not port** (reference for reading the files if
   needed).
 

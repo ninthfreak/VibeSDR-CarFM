@@ -4,7 +4,7 @@
  * network (logos fill in on later opens). Tap a row to tune; hold 550ms to
  * save as a preset. Rows come pre-ranked best-signal-first (score order).
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { getNearbyStations, type NearbyResult } from '../../services/stationFinder';
@@ -13,6 +13,35 @@ import { SignalWaves, StarIcon } from './icons';
 import { FONT, brandColor, monogram, type CarFmPalette } from './tokens';
 
 const HOLD_MS = 550;
+
+// Music vs Talk classification (design NearbyPicker isMusic): a station is Talk
+// when its genre reads as spoken-word; anything else (incl. unknown genre) is
+// Music. Offline rows have no genre → all Music → the filter bar stays hidden.
+const TALK_RE = /(news|talk|sports|public|community|college|student|weather|information|personality|religious talk)/;
+function isMusic(s: NearbyStation): boolean {
+  const g = (s.genre ?? '').toLowerCase();
+  if (!g) return true;
+  return !TALK_RE.test(g);
+}
+
+/** Filter chip (bucket + genre rows). */
+function Chip({ label, active, pal, onPress }: { label: string; active: boolean; pal: CarFmPalette; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.chip,
+        active
+          ? { borderColor: pal.blue, borderWidth: 1.5, backgroundColor: pal.blueFill }
+          : { borderColor: pal.border, borderWidth: 1, backgroundColor: 'transparent' },
+        pressed && { opacity: 0.6 },
+      ]}
+      accessibilityRole="button" accessibilityState={{ selected: active }} accessibilityLabel={`Filter ${label}`}
+    >
+      <Text style={[styles.chipText, { color: active ? pal.blue : pal.dim }]}>{label}</Text>
+    </Pressable>
+  );
+}
 
 function strengthOf(st: NearbyStation, list: NearbyStation[]): number {
   // score is a relative rank (higher = better); bucket it into 1–4 waves by
@@ -85,11 +114,15 @@ export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePr
 }) {
   const [res, setRes] = useState<NearbyResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // Two-level filter (design §6.2): All / Music / Talk bucket, then genre.
+  const [bucket, setBucket] = useState<'All' | 'Music' | 'Talk'>('All');
+  const [genre, setGenre] = useState<string | null>(null);
 
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
     setLoading(true);
+    setBucket('All'); setGenre(null);
     getNearbyStations()
       .then((r) => { if (!cancelled) setRes(r); })
       .catch(() => { if (!cancelled) setRes(null); })
@@ -100,6 +133,30 @@ export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePr
   const stations = res?.stations ?? [];
   const noGps = !!res && res.location === null;
   const empty = !!res && res.location !== null && stations.length === 0;
+
+  // Bucket availability + the current bucket's stations / genre list.
+  const { hasMusic, hasTalk } = useMemo(() => ({
+    hasMusic: stations.some(isMusic),
+    hasTalk: stations.some((s) => !isMusic(s)),
+  }), [stations]);
+  const showBuckets = stations.length > 0 && hasMusic && hasTalk;
+  const bucketStations = useMemo(() => (
+    bucket === 'All' ? stations : bucket === 'Music' ? stations.filter(isMusic) : stations.filter((s) => !isMusic(s))
+  ), [stations, bucket]);
+  const genres = useMemo(() => {
+    if (bucket === 'All') return [] as string[];
+    const seen: string[] = [];
+    for (const s of bucketStations) { const g = (s.genre ?? '').trim(); if (g && !seen.includes(g)) seen.push(g); }
+    return seen;
+  }, [bucket, bucketStations]);
+  const activeGenre = genre && genres.includes(genre) ? genre : null;
+  const shown = activeGenre ? bucketStations.filter((s) => (s.genre ?? '').trim() === activeGenre) : bucketStations;
+  // While a bucket other than All is active, the bucket row collapses to just
+  // "All" (tapping it clears the filter); All shows all three (design §6.2).
+  const bucketChips: Array<'All' | 'Music' | 'Talk'> = bucket === 'All'
+    ? ['All' as const, ...(hasMusic ? ['Music' as const] : []), ...(hasTalk ? ['Talk' as const] : [])]
+    : ['All'];
+  const pickBucket = (b: 'All' | 'Music' | 'Talk') => { setBucket(b); setGenre(null); };
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -127,33 +184,62 @@ export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePr
             <View style={styles.stateWrap}><ActivityIndicator color={pal.dim} size="large" /></View>
           ) : noGps ? (
             <View style={styles.stateWrap}>
+              <Text style={[styles.stateGlyph, { color: pal.dim }]}>⌖</Text>
               <Text style={[styles.stateTitle, { color: pal.text }]}>Waiting for GPS…</Text>
               <Text style={[styles.stateBody, { color: pal.dim }]}>
-                A location fix is needed to rank nearby stations.
+                No position fix yet. Nearby stations will appear once a location is available.
               </Text>
             </View>
           ) : empty ? (
             <View style={styles.stateWrap}>
-              <Text style={[styles.stateTitle, { color: pal.text }]}>No stations found</Text>
+              <Text style={[styles.stateGlyph, { color: pal.dim }]}>▤</Text>
+              <Text style={[styles.stateTitle, { color: pal.text }]}>
+                {res?.snapshotDate ? 'No stations in range' : 'Station database not installed yet'}
+              </Text>
               <Text style={[styles.stateBody, { color: pal.dim }]}>
-                {res?.snapshotDate ? 'No FM stations within range of this location.'
-                  : 'Station database not installed yet.'}
+                {res?.snapshotDate
+                  ? 'No FM stations within range of this location.'
+                  : 'Install the FCC dataset via tools/build_station_db to list nearby stations here.'}
               </Text>
             </View>
           ) : (
-            <ScrollView contentContainerStyle={styles.list}>
-              {stations.map((st) => (
-                <Row
-                  key={st.facilityId}
-                  st={st}
-                  pal={pal}
-                  saved={presetMHz.has(Math.round(st.frequencyMhz * 10))}
-                  strength={strengthOf(st, stations)}
-                  onTune={() => { onTune(st); onClose(); }}
-                  onSave={() => onSavePreset(st)}
-                />
-              ))}
-            </ScrollView>
+            <>
+              {/* bucket filter — All / Music / Talk */}
+              {showBuckets ? (
+                <ScrollView
+                  horizontal showsHorizontalScrollIndicator={false}
+                  style={styles.filterBar} contentContainerStyle={styles.filterBarContent}
+                >
+                  {bucketChips.map((b) => (
+                    <Chip key={b} label={b} active={b === bucket} pal={pal} onPress={() => pickBucket(b)} />
+                  ))}
+                </ScrollView>
+              ) : null}
+              {/* genre sub-filter — two rows, flows by column, scrolls horizontally */}
+              {bucket !== 'All' && genres.length > 1 ? (
+                <ScrollView
+                  horizontal showsHorizontalScrollIndicator={false}
+                  style={styles.subBar} contentContainerStyle={styles.subBarContent}
+                >
+                  {genres.map((g) => (
+                    <Chip key={g} label={g} active={g === activeGenre} pal={pal} onPress={() => setGenre((cur) => (cur === g ? null : g))} />
+                  ))}
+                </ScrollView>
+              ) : null}
+              <ScrollView contentContainerStyle={styles.list}>
+                {shown.map((st) => (
+                  <Row
+                    key={st.facilityId}
+                    st={st}
+                    pal={pal}
+                    saved={presetMHz.has(Math.round(st.frequencyMhz * 10))}
+                    strength={strengthOf(st, shown)}
+                    onTune={() => { onTune(st); onClose(); }}
+                    onSave={() => onSavePreset(st)}
+                  />
+                ))}
+              </ScrollView>
+            </>
           )}
 
           {/* footer */}
@@ -184,6 +270,15 @@ const styles = StyleSheet.create({
   close: { width: 52, height: 52, borderRadius: 14, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   closeText: { fontSize: 22, fontWeight: '700' },
 
+  // Filter bars (design filterBarStyle / subBarStyle).
+  filterBar: { flexGrow: 0, flexShrink: 0 },
+  filterBarContent: { flexDirection: 'row', gap: 10, paddingHorizontal: 22, paddingTop: 14 },
+  subBar: { flexGrow: 0, flexShrink: 0 },
+  // Two rows, chips flow column-by-column, scrolls horizontally.
+  subBarContent: { flexDirection: 'column', flexWrap: 'wrap', height: 72, alignContent: 'flex-start', gap: 8, paddingHorizontal: 22, paddingTop: 10 },
+  chip: { height: 32, paddingHorizontal: 13, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  chipText: { fontFamily: FONT, fontSize: 13, fontWeight: '700', letterSpacing: 0.3 },
+
   list: { padding: 16, paddingHorizontal: 22, gap: 10 },
   row: {
     minHeight: 92, borderRadius: 16, borderWidth: 1,
@@ -205,9 +300,10 @@ const styles = StyleSheet.create({
   dist: { fontFamily: FONT, fontSize: 15, fontWeight: '700' },
   chevron: { fontSize: 26, marginLeft: 4 },
 
-  stateWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, padding: 30 },
-  stateTitle: { fontFamily: FONT, fontSize: 24, fontWeight: '700' },
-  stateBody: { fontFamily: FONT, fontSize: 16, textAlign: 'center' },
+  stateWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14, paddingHorizontal: 80 },
+  stateGlyph: { fontSize: 52, lineHeight: 56 },
+  stateTitle: { fontFamily: FONT, fontSize: 24, fontWeight: '700', textAlign: 'center' },
+  stateBody: { fontFamily: FONT, fontSize: 16, textAlign: 'center', lineHeight: 24, maxWidth: 520 },
 
   footer: { height: 48, justifyContent: 'center', paddingHorizontal: 22, borderTopWidth: 1 },
   footerText: { fontFamily: FONT, fontSize: 14 },
