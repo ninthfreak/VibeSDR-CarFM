@@ -1,9 +1,0 @@
-{
-  "id" : "d7dbc275-2455-4ce9-9af2-34099c6256a0",
-  "targets" : [
-    {
-      "id" : "ee69ef0d-75fd-48e4-bdef-c798d15ee59a",
-      "name" : "VibeSDR"
-    }
-  ]
-}

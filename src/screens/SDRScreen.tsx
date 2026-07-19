@@ -100,7 +100,6 @@ import DecoderPanel,
 import SpecRatioOverlay  from '../components/SpecRatioOverlay';
 import MapOverlay, { type MapKind } from '../components/MapOverlay';
 import CityPickerModal from '../components/CityPickerModal';
-import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
@@ -4959,17 +4958,6 @@ export default function SDRScreen({ route, navigation }: Props) {
           setRecvLoc({ lat: c.lat, lon: c.lon });
           setCityPickerOpen(false);
         }}
-      />
-
-      {/* Admin pages — in-app browser with ← SDR bar */}
-      <BrowserOverlay
-        url={adminPage?.url ?? null}
-        title={adminPage?.title}
-        allowSave={!!adminPage?.url?.includes('/files')}
-        injectCSS={adminPage?.url?.endsWith('/map')
-          ? '.webrx-top-container{display:none!important}'   // OWRX map: hide header → full-screen map
-          : undefined}
-        onClose={() => setAdminPage(null)}
       />
 
       {/* Frequency modal */}

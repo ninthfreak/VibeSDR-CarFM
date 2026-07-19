@@ -10,27 +10,6 @@
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.ninthfreak.carfm",
-      "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "CarFM uses your approximate location to sort the SDR instance list by distance and to align the map for local SDR decodes. Your location is coarsened and only used on-device for sorting.",
-        "NSLocalNetworkUsageDescription": "CarFM uses local network access to scan for and connect to SDR servers on your network, such as RTL-TCP servers and local KiwiSDR, UberSDR or OpenWebRX receivers.",
-        "UIBackgroundModes": [
-          "audio"
-        ],
-        "NSBonjourServices": [
-          "_http._tcp",
-          "_https._tcp",
-          "_rtl_tcp._tcp",
-          "_vibesdr._tcp"
-        ],
-        "NSAppTransportSecurity": {
-          "NSAllowsArbitraryLoads": true
-        },
-        "ITSAppUsesNonExemptEncryption": false
-      }
-    },
     "android": {
       "package": "com.ninthfreak.carfm",
       "adaptiveIcon": {
