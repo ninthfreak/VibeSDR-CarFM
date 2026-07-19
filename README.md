@@ -17,7 +17,7 @@ I'm not a licensed amateur and I don't transmit. I'm a listener, fascinated by r
 
 It started as a mobile skin for my own UberSDR instance, which went through **500+ tests** before I was happy with it. Every feature in this app has been designed and personally tested by me, on real hardware, across five devices — from an iPhone 17 Pro Max down to a **Moto G35 and an iPhone SE**, because if the GPU waterfall and the NEON DSP hold up on those, they hold up anywhere. I don't ship things I wouldn't use myself. I once spent hours chasing a clock that jumped a few pixels on cold start, once per session, that nobody would ever have consciously noticed. I'd have known.
 
-**The code was written with AI assistance (Claude) — hence the name.** I designed it, I broke it, I tested it, I filed the bugs and I signed off every release. Full source is public under GPL-3.0, mistakes and dead ends included. Nothing about how this app was made is hidden, because the honest thing to do is say it on the tin and then let people check. → [On AI, honestly](#on-ai-honestly)
+**The code was written with AI assistance (Claude), and that's said up front.** I designed it, I broke it, I tested it, I filed the bugs and I signed off every release. Full source is public under GPL-3.0, mistakes and dead ends included. Nothing about how this app was made is hidden, because the honest thing to do is say it on the tin and then let people check. → [On AI, honestly](#on-ai-honestly)
 
 ---
 
@@ -74,19 +74,19 @@ Most SDR clients are a socket and a picture: they ask the server for a waterfall
 - **It turns your phone into a server.** VibeServer shares your radio to anyone with a browser, ~25× lighter than raw rtl_tcp.
 - **The waterfall runs on your watch.** Not media buttons — the live spectrum, tuned with the Digital Crown, phone locked in your pocket.
 - **The tuning is a flywheel with mass, detents and speed-adaptive haptics**, not a slider.
-- **It's GPLv3 and the source is right here.** Build it yourself, free, forever. The £2.99 App Store price is Apple's fee, not a paywall.
+- **It's GPLv3 and the source is right here.** Build it yourself, free, forever.
 
 Judge it on the feel — that's the part a screenshot can't show, and it's the part we care most about getting right.
 
 ### On AI, honestly
 
-**It's in the name.** CarFM is vibe-coded — written by one curious listener working with Claude — and it's called that on purpose, so that nobody has to discover it, suspect it, or be told it by someone else in a comments section. If you'd rather not run AI-assisted software, the name told you before you clicked, and that's exactly what it's for.
+**Said up front.** CarFM is vibe-coded — written by one curious listener working with Claude — and there's no attempt to hide that. You're reading it here, plainly, rather than having to discover it, suspect it, or be told it by someone else in a comments section. If you'd rather not run AI-assisted software, consider this your heads-up.
 
 The scepticism is earned, though, and worth being precise about. There's a pattern doing the rounds: a closed-source app, an AI-generated feature list longer than any one person could have tested, decoders that "work" with no antenna plugged in, someone else's GPL code quietly folded in without credit, and a price tag on the end of it. **That's not a tooling problem — it's an honesty problem.** Every one of those failures is a choice the developer made, and the AI didn't make any of them.
 
 So the fix isn't to hide the tooling. It's to be checkable:
 
-- **The source is open.** GPLv3, all of it, right here. Not a demo, not a crippled build — the App Store binary is this tree. Read it, fork it, tell me where it's wrong.
+- **The source is open.** GPLv3, all of it, right here. Not a demo, not a crippled build — what you build from this tree is the whole app. Read it, fork it, tell me where it's wrong.
 - **Everyone who contributed is credited**, and the licences are honoured — see [Credits](#credits). Where the app leans on someone else's protocol or work, it says so by name.
 - **Nothing is claimed that isn't there.** Every feature in this README exists, on a device, and has been used on the air. If you find one that doesn't work, that's a bug and I want the report — [open an issue](https://github.com/Stuey3D/VibeSDR/issues).
 - **It leaves features on the table on purpose.** No native DAB+, DRM, HD Radio or DMR — those codecs are patent-encumbered, and shipping them would be a licensing violation dressed up as a feature list. No WebSDR — its author doesn't sanction third-party clients, so CarFM doesn't have one. Both decisions cost real features, and both are [written down](#why-doesnt-vibesdr-natively-decode-dab-drm-hd-radio-dmr-and-similar-digital-modes) with the reasoning. Saying no is the expensive option. It's also the one nobody bothers to fake.
@@ -120,20 +120,7 @@ And if it turns out a vibe-coded app can give you a waterfall on your wrist and 
 
 ## Get CarFM
 
-| | | |
-|---|---|---|
-| **iPhone / iPad** | **[App Store](https://apps.apple.com/gb/app/vibesdr/id6786344049)** — £2.99 | Currently **v6.1**. Newer versions are working their way through review — **v9 is heading to TestFlight**. |
-| **iPhone / iPad** | **[`.ipa` from the latest release](https://github.com/Stuey3D/VibeSDR/releases/latest)** — free | Always the newest version, but you must **re-sign it yourself** — see [Installing on iPhone](#installing-on-iphone-signing-the-ipa-with-xcode). |
-| **Android** | **[`.apk` from the latest release](https://github.com/Stuey3D/VibeSDR/releases/latest)** — free | Always the newest version. Just install it. |
-| **Anyone** | **Build it from this repository** — free, forever | See [Building](#building). |
-
-**Why does the App Store version cost £2.99 when the source is free?** It goes towards Apple's fees — the Developer Programme costs $99 a year, and Apple takes its cut of every sale on top. The £2.99 covers the cost of *being on the App Store at all*; it isn't what CarFM is worth, because CarFM is GPLv3 free software and always will be.
-
-The App Store build is the same source you see here. If you'd rather not pay, **build it yourself from this repository, free, forever** — same app, no crippled features, no nag screens, no catch. Paying is just the convenient route (and it keeps the certificate alive for everyone who takes it).
-
-> **📱 On iOS, the App Store is behind the releases here.** Apple review has been slow, so the store is still serving **v6.1** — which predates **VibeServer** (v8) and the **Apple Watch app** (v9). To run v9 on an iPhone today, sideload the `.ipa` from the [latest release](https://github.com/Stuey3D/VibeSDR/releases/latest); a **TestFlight build of v9 is on its way**, which will let you install it without re-signing anything.
-
-**Latest release: [v9.0.1 — SSB was throwing away half the voice](https://github.com/Stuey3D/VibeSDR/releases/latest)** — set 2.7 kHz, get 2.7 kHz. The channel filter had been closing at half its stated width, quietly muffling every SSB signal. Also: the radio now uses **2–8× less CPU**, so FM stereo works on phones that could never manage it before. (v9.0.0 put the live waterfall on your wrist — see the [Apple Watch](#on-the-wrist-apple-watch--new-in-v9) section.)
+CarFM is an independent fork and does not have its own App Store listing or pre-built release downloads. The way to run it is to **build it from this repository** — see [Building](#building). It's GPL-3.0, free, forever, with no crippled features and no nag screens.
 
 ---
 
@@ -212,7 +199,7 @@ The App Store build is the same source you see here. If you'd rather not pay, **
 
 CarFM is sideloaded (not on the Play Store), and Android Auto only trusts Play Store apps by default — so you must turn on **Unknown sources** for it to appear in the car:
 
-1. Install the **`.apk`** from the [latest release](https://github.com/Stuey3D/VibeSDR/releases/latest) on the phone.
+1. Build and install the **`.apk`** on the phone (see [Building](#building)).
 2. Open **Android Auto settings** (phone Settings → *Connected devices → Android Auto*; on some phones it's a standalone "Android Auto" app).
 3. Scroll to the bottom and tap **"Version"** about **10 times** until developer mode unlocks.
 4. Tap the **⋮ menu → Developer settings**, and turn on **"Unknown sources"** (sometimes "Add new cars to Android Auto" / "Add unknown apps").
@@ -224,11 +211,11 @@ If it doesn't show up, it's almost always step 3–4 (Unknown sources). If it ap
 
 ## Installing on iPhone (signing the `.ipa` with Xcode)
 
-CarFM isn't on the App Store, so the `.ipa` from the [latest release](https://github.com/Stuey3D/VibeSDR/releases/latest) has to be **re-signed with your own Apple ID** before an iPhone will run it. A free Apple ID works — no paid Developer Programme membership is required, but a free signing certificate **expires after 7 days**, so you'll need to re-sign roughly weekly (a paid account lasts a year).
+CarFM isn't on the App Store, so you build the `.ipa` yourself (see [Building](#building)) and sign it with your own Apple ID before an iPhone will run it. Building in Xcode signs it with your team directly; the steps below are for signing an already-built `.ipa` (e.g. one you built on another Mac). A free Apple ID works — no paid Developer Programme membership is required, but a free signing certificate **expires after 7 days**, so you'll need to re-sign roughly weekly (a paid account lasts a year).
 
 You'll need a **Mac with Xcode** installed.
 
-1. Download the **`.ipa`** from the [latest release](https://github.com/Stuey3D/VibeSDR/releases/latest) to your Mac.
+1. Build the **`.ipa`** (see [Building](#building)) and copy it to your Mac.
 2. Open **Xcode → Settings → Accounts**, click **+**, and sign in with your Apple ID (this is your free signing account).
 3. Rename the file from `CarFM.ipa` to `CarFM.zip` and unzip it — you'll get a **`Payload`** folder containing **`CarFM.app`**.
 4. Open **Xcode → Window → Devices and Simulators**, plug in your iPhone via USB, and **Trust** the computer when prompted.
