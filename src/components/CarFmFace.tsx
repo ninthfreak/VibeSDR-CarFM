@@ -28,7 +28,7 @@ import LogoTile from './carfm/LogoTile';
 import NearbyPicker from './carfm/NearbyPicker';
 import Numpad from './carfm/Numpad';
 import PresetsBand, { type PresetItem } from './carfm/PresetsBand';
-import SidePresetCard from './carfm/SidePresetCard';
+import SidePresetCard, { PEEK_OPACITY, PEEK_SCALE } from './carfm/SidePresetCard';
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
 import { DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, LIGHT } from './carfm/tokens';
 
@@ -77,6 +77,20 @@ export interface CarFmFaceProps {
 const CHANNEL_HZ = 100_000;             // 0.1 MHz — the design's tune/seek step
 const SCAN_TICK_MS = 34;                // fast text sweep, per the handoff
 const RT_MARQUEE_CHARS = 46;
+
+type Rect = { x: number; y: number; w: number; h: number };
+/** Live hero-swap FLIP (LOSSY #9); null when the hero is at rest. */
+interface FlipDescriptor {
+  dir: 1 | -1;
+  nearSide: 'left' | 'right';   // source peek + entering new far card
+  farSide: 'left' | 'right';    // landing slot + leaving fade clone
+  centerTransform: any[];
+  landTransform: any[];
+  enterOpacity: Animated.Value; // new far peek 0 → 0.6
+  cloneOpacity: Animated.Value; // leaving far peek 0.6 → 0
+  cloneRect: Rect;
+  cloneName: string;
+}
 
 const mhzOf = (hz: number) => Math.round(hz / CHANNEL_HZ) / 10;
 const fmt = (mhz: number) => mhz.toFixed(1);
@@ -331,13 +345,91 @@ export default function CarFmFace(props: CarFmFaceProps) {
     }, SCAN_TICK_MS);
   }, [freqHz, onTuneHz, stopScan]);
 
-  // PREV/NEXT step through presets in their DISPLAYED order (wrapping).
+  // ── Hero carousel prev/next SWAP FLIP (LOSSY-ELEMENTS #9) ──────────────────
+  // Tuning to an adjacent preset shifts the whole strip one slot with a real
+  // position+size morph, not a hard cut. Before the tune we capture the three
+  // resting slot rects (they don't move when content swaps); after the data
+  // updates each card is driven from its "first" (pre-swap) geometry back to its
+  // resting "last" geometry over 520ms — translation on an ease-out cubic, scale
+  // on an ease-out quint (size settles slightly ahead of position). The leaving
+  // far card fades 0.6→0 in place; the new far card fades 0→0.6, delayed 120ms.
+  const slotRects = useRef<{ left: Rect | null; center: Rect | null; right: Rect | null }>({
+    left: null, center: null, right: null,
+  }).current;
+  const [flip, setFlip] = useState<FlipDescriptor | null>(null);
+  const flipProg = useRef(new Animated.Value(0)).current;
+
+  const startFlip = useCallback((dir: 1 | -1): boolean => {
+    const { left, center, right } = slotRects;
+    if (!left || !center || !right || !prevP || !nextP) return false;
+    const source = dir > 0 ? right : left;        // new center emerges from here
+    const landing = dir > 0 ? left : right;       // old hero shrinks into here
+    const farSide: 'left' | 'right' = dir > 0 ? 'left' : 'right';   // clone + landing side
+    const nearSide: 'left' | 'right' = dir > 0 ? 'right' : 'left';  // source + entering side
+    const cloneName = (dir > 0 ? prevP.name : nextP.name) || 'FM';
+
+    const cx = (r: Rect) => r.x + r.w / 2;
+    const cy = (r: Rect) => r.y + r.h / 2;
+    // Two easings, sampled into 13-point interpolations (mirrors the design's
+    // 12-frame keyframe track): translate on cubic, scale on quint.
+    const easeMove = (p: number) => 1 - Math.pow(1 - p, 3);
+    const easeScale = (p: number) => 1 - Math.pow(1 - p, 5);
+    const STEPS = 12;
+    const track = (from: number, to: number, ease: (p: number) => number) => {
+      const input: number[] = [], output: number[] = [];
+      for (let i = 0; i <= STEPS; i++) { const p = i / STEPS; input.push(p); output.push(from + (to - from) * ease(p)); }
+      return flipProg.interpolate({ inputRange: input, outputRange: output });
+    };
+    // New center card (base scale 1): from the source peek slot → center slot.
+    const centerTransform = [
+      { translateX: track(cx(source) - cx(center), 0, easeMove) },
+      { translateY: track(cy(source) - cy(center), 0, easeMove) },
+      { scaleX: track((PEEK_SCALE * source.w) / center.w, 1, easeScale) },
+      { scaleY: track((PEEK_SCALE * source.h) / center.h, 1, easeScale) },
+    ];
+    // Old hero, now the landing peek (base scale 0.88): from center → landing slot.
+    const landTransform = [
+      { translateX: track(cx(center) - cx(landing), 0, easeMove) },
+      { translateY: track(cy(center) - cy(landing), 0, easeMove) },
+      { scaleX: track(center.w / landing.w, PEEK_SCALE, easeScale) },
+      { scaleY: track(center.h / landing.h, PEEK_SCALE, easeScale) },
+    ];
+    flipProg.setValue(0);
+    setFlip({
+      dir, nearSide, farSide, centerTransform, landTransform,
+      enterOpacity: new Animated.Value(0),
+      cloneOpacity: new Animated.Value(PEEK_OPACITY),
+      cloneRect: landing, cloneName,
+    });
+    return true;
+  }, [slotRects, prevP, nextP, flipProg]);
+
+  // Run the four animations once the descriptor is in place (data has updated).
+  useEffect(() => {
+    if (!flip) return;
+    const anim = Animated.parallel([
+      Animated.timing(flipProg, { toValue: 1, duration: 520, easing: Easing.linear, useNativeDriver: true }),
+      Animated.timing(flip.cloneOpacity, { toValue: 0, duration: 520, easing: Easing.bezier(0.25, 0.1, 0.25, 1), useNativeDriver: true }),
+      Animated.timing(flip.enterOpacity, { toValue: PEEK_OPACITY, duration: 520, delay: 120, easing: Easing.bezier(0.25, 0.1, 0.25, 1), useNativeDriver: true }),
+    ]);
+    anim.start(({ finished }) => { if (finished) setFlip(null); });
+    return () => anim.stop();
+  }, [flip, flipProg]);
+
+  const measureSlot = useCallback((slot: 'left' | 'center' | 'right') => (e: LayoutChangeEvent) => {
+    const { x, y, width, height } = e.nativeEvent.layout;
+    slotRects[slot] = { x, y, w: width, h: height };
+  }, [slotRects]);
+
+  // PREV/NEXT step through presets in their DISPLAYED order (wrapping). Fire the
+  // hero-swap FLIP first (it captures resting geometry), then tune.
   const stepPreset = useCallback((dir: 1 | -1) => {
     if (items.length === 0) return;
+    startFlip(dir);
     const i = activeIndex >= 0 ? activeIndex : (dir > 0 ? -1 : 0);
     const n = ((i + dir) % items.length + items.length) % items.length;
     onTuneHz(Math.round(items[n].frequencyMhz * 1e6));
-  }, [items, activeIndex, onTuneHz]);
+  }, [items, activeIndex, onTuneHz, startFlip]);
 
   const onNearbyTune = useCallback((st: NearbyStation) => {
     onTuneHz(Math.round(st.frequencyMhz * 1e6));
@@ -511,16 +603,52 @@ export default function CarFmFace(props: CarFmFaceProps) {
         // just wide. Chevrons are never used. Only the sizing differs: tall tucks
         // smaller cards with a -46 overlap; wide/landscape use the clamped hero
         // card and a -72 overlap.
+        const peekW = tall ? tallSideW : sideCardW;
+        const overlap = tall ? -46 : -72;
+        const renderPeek = (side: 'left' | 'right', preset: PresetItem, onPress: () => void) => {
+          const isLanding = !!flip && flip.farSide === side;    // old hero shrinking into this slot
+          const isEntering = !!flip && flip.nearSide === side;  // brand-new far card fading in
+          return (
+            <Animated.View
+              onLayout={measureSlot(side)}
+              style={[
+                { marginRight: side === 'left' ? overlap : 0, marginLeft: side === 'right' ? overlap : 0 },
+                { transform: isLanding ? flip!.landTransform : [{ scale: PEEK_SCALE }] },
+                { opacity: isEntering ? flip!.enterOpacity : PEEK_OPACITY },
+              ]}
+            >
+              <SidePresetCard name={preset.name} pal={pal} side={side} width={peekW} onPress={onPress} />
+            </Animated.View>
+          );
+        };
         const heroRow = (
           <View style={tall ? styles.heroRowTall : styles.hero}>
-            {prevP ? (
-              <SidePresetCard name={prevP.name} pal={pal} side="left" width={tall ? tallSideW : sideCardW} overlap={tall ? -46 : -72} onPress={() => stepPreset(-1)} />
-            ) : null}
-            <View style={[tall ? styles.heroCard : styles.heroCardWide, styles.heroCardZ, { width: tall ? tallHeroW : L.heroCardW, backgroundColor: pal.panel, borderColor: pal.border }]}>
+            {prevP ? renderPeek('left', prevP, () => stepPreset(-1)) : null}
+            <Animated.View
+              onLayout={measureSlot('center')}
+              style={[
+                tall ? styles.heroCard : styles.heroCardWide, styles.heroCardZ,
+                { width: tall ? tallHeroW : L.heroCardW, backgroundColor: pal.panel, borderColor: pal.border },
+                flip ? { transform: flip.centerTransform } : null,
+              ]}
+            >
               {heroCenter}
-            </View>
-            {nextP ? (
-              <SidePresetCard name={nextP.name} pal={pal} side="right" width={tall ? tallSideW : sideCardW} overlap={tall ? -46 : -72} onPress={() => stepPreset(1)} />
+            </Animated.View>
+            {nextP ? renderPeek('right', nextP, () => stepPreset(1)) : null}
+            {flip ? (
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.cloneOverlay,
+                  {
+                    left: flip.cloneRect.x, top: flip.cloneRect.y,
+                    width: flip.cloneRect.w, height: flip.cloneRect.h,
+                    opacity: flip.cloneOpacity, transform: [{ scale: PEEK_SCALE }],
+                  },
+                ]}
+              >
+                <SidePresetCard name={flip.cloneName} pal={pal} side={flip.farSide} width={peekW} />
+              </Animated.View>
             ) : null}
           </View>
         );
@@ -651,6 +779,9 @@ const styles = StyleSheet.create({
     elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 },
   },
   heroCardZ: { zIndex: 3 },
+  // Snapshot of the far peek leaving the strip during a hero swap; fades in place
+  // over its old slot while the landing peek slides in (design fadeClone).
+  cloneOverlay: { position: 'absolute', zIndex: 4, alignItems: 'center', justifyContent: 'center' },
   // Tall/portrait track: hero band grows + centers (PHONEPORTRAITFIXES §2); the
   // hero card is flanked by the same side preset cards as every other track.
   // Hero band = column of [hero row, RadioText zone] (design heroBand).

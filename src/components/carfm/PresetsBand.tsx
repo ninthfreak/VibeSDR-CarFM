@@ -10,8 +10,8 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Animated, Easing, LayoutAnimation, PanResponder, Platform, Pressable,
-  ScrollView, StyleSheet, Text, UIManager, View,
+  Animated, Easing, PanResponder, Pressable,
+  ScrollView, StyleSheet, Text, View,
   type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent,
 } from 'react-native';
 
@@ -19,24 +19,19 @@ import { MagnifierTower } from './icons';
 import LogoTile from './LogoTile';
 import { FONT, type CarFmPalette } from './tokens';
 
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
-
 export interface PresetItem { name: string; frequencyMhz: number; }
 
 const TILE_W = 148;
 const GAP = 10;
 const HOLD_MS = 550;
-const MOVE_ANIM = { duration: 300, create: { type: 'easeInEaseOut', property: 'opacity' },
-  update: { type: 'easeInEaseOut' }, delete: { type: 'easeInEaseOut', property: 'opacity' } } as const;
 
 interface TileSize { w: number | 'auto'; h: number | string; logo: number; logoRadius: number; nameFont: number; }
 
 /** One preset tile; wiggles (±1.1°, 0.42s loop) while reordering. */
-function Tile({ p, pal, active, reordering, first, last, size, onPress, onLongPress, onMove, onRemove }: {
+function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX, onPress, onLongPress, onMove, onRemove }: {
   p: PresetItem; pal: CarFmPalette; active: boolean; reordering: boolean;
   first: boolean; last: boolean; size: TileSize;
+  flipX: Animated.Value; onMeasureX: (x: number) => void;
   onPress: () => void; onLongPress: () => void;
   onMove: (dir: 1 | -1) => void; onRemove: () => void;
 }) {
@@ -53,7 +48,10 @@ function Tile({ p, pal, active, reordering, first, last, size, onPress, onLongPr
   const rotate = rot.interpolate({ inputRange: [-1, 1], outputRange: ['-1.1deg', '1.1deg'] });
 
   return (
-    <Animated.View style={{ transform: [{ rotate }] }}>
+    <Animated.View
+      style={{ transform: [{ translateX: flipX }, { rotate }] }}
+      onLayout={(e: LayoutChangeEvent) => onMeasureX(e.nativeEvent.layout.x)}
+    >
       <Pressable
         onPress={onPress}
         onLongPress={onLongPress}
@@ -179,14 +177,43 @@ export default function PresetsBand({
     scroll.current?.scrollTo({ x: Math.max(0, Math.min(maxScroll, target)), animated: true });
   }, [strip, activeIndex, showBar, viewW, maxScroll]);
 
+  // Preset-reflow FLIP (design runFlip): on a reorder/remove the list re-lays
+  // out instantly, then each tile that shifted animates translateX from its old
+  // position to its new one over 300ms cubic-bezier(.2,.8,.2,1). RN has no CSS
+  // FLIP → capture each tile's x before the change, diff against the post-change
+  // x reported by onLayout, and drive a per-tile translateX back to 0.
+  const tileX = useRef<Map<string, number>>(new Map()).current;        // last measured x
+  const flipVals = useRef<Map<string, Animated.Value>>(new Map()).current;
+  const pending = useRef<Map<string, number>>(new Map()).current;      // pre-change x snapshot
+  const flipVal = useCallback((key: string) => {
+    let v = flipVals.get(key);
+    if (!v) { v = new Animated.Value(0); flipVals.set(key, v); }
+    return v;
+  }, [flipVals]);
+  const snapshot = useCallback(() => {
+    pending.clear();
+    tileX.forEach((x, k) => pending.set(k, x));
+  }, [pending, tileX]);
+  const onMeasureX = useCallback((key: string, x: number) => {
+    const old = pending.get(key);
+    tileX.set(key, x);
+    if (old == null) return;
+    pending.delete(key);
+    const dx = old - x;
+    if (Math.abs(dx) < 1) return;
+    const v = flipVal(key);
+    v.setValue(dx);
+    Animated.timing(v, { toValue: 0, duration: 300, easing: Easing.bezier(0.2, 0.8, 0.2, 1), useNativeDriver: true }).start();
+  }, [pending, tileX, flipVal]);
+
   const move = useCallback((index: number, dir: 1 | -1) => {
-    LayoutAnimation.configureNext(MOVE_ANIM);
+    snapshot();
     onMove(index, dir);
-  }, [onMove]);
+  }, [onMove, snapshot]);
   const remove = useCallback((index: number) => {
-    LayoutAnimation.configureNext(MOVE_ANIM);
+    snapshot();
     onRemove(index);
-  }, [onRemove]);
+  }, [onRemove, snapshot]);
 
   // Per-track tile sizing (design renderVals). The active tile grows only in the
   // strip tracks; grid/two-row tiles are uniform.
@@ -211,22 +238,27 @@ export default function PresetsBand({
     };
   };
 
-  const tiles = presets.map((p, i) => (
-    <Tile
-      key={`${p.name}|${p.frequencyMhz}`}
-      p={p}
-      pal={pal}
-      active={i === activeIndex}
-      reordering={reordering}
-      first={i === 0}
-      last={i === presets.length - 1}
-      size={tileSizeFor(i === activeIndex)}
-      onPress={() => (reordering ? undefined : onSelect(p))}
-      onLongPress={onEnterReorder}
-      onMove={(dir) => move(i, dir)}
-      onRemove={() => remove(i)}
-    />
-  ));
+  const tiles = presets.map((p, i) => {
+    const key = `${p.name}|${p.frequencyMhz}`;
+    return (
+      <Tile
+        key={key}
+        p={p}
+        pal={pal}
+        active={i === activeIndex}
+        reordering={reordering}
+        first={i === 0}
+        last={i === presets.length - 1}
+        size={tileSizeFor(i === activeIndex)}
+        flipX={flipVal(key)}
+        onMeasureX={(x) => onMeasureX(key, x)}
+        onPress={() => (reordering ? undefined : onSelect(p))}
+        onLongPress={onEnterReorder}
+        onMove={(dir) => move(i, dir)}
+        onRemove={() => remove(i)}
+      />
+    );
+  });
 
   const empty = (
     <View style={styles.emptyWrap}>
