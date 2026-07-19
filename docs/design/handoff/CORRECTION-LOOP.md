@@ -66,12 +66,15 @@ reference at that surface.
 
 1. **Track correctness** — did the right track render? Tall must stack the hero
    with the preset grid as a bottom shelf below (peek cards stay tucked tight on
-   each side of the hero); wide keeps the hero row horizontal. A
-   wrong track is a structural miss, fix it before anything cosmetic.
+   each side of the hero); wide keeps the hero row horizontal. On the **tall**
+   status bar the STEREO pill is centered with the tell strip and genre centered
+   beneath it, and the signal dB is stacked below the signal icon — wide keeps all
+   of these inline in the left cluster. A wrong track is a structural miss, fix it
+   before anything cosmetic.
 2. **Overall composition** — is each zone (status row, hero, RadioText strip,
    preset carousel) in the right place and proportion?
-3. **The hero** — station logo tile, callsign, big amber frequency + "MHz",
-   save star. Amber (`#C9760A` light / `#FFB833` dark) is fixed and never themed.
+3. **The hero** — station logo tile, callsign, big amber frequency (no "MHz"
+   label), save star. Amber (`#C9760A` light / `#FFB833` dark) is fixed and never themed.
 4. **Preset carousel** — active card highlight, peek cards on both sides with
    their fade (see `LOSSY-ELEMENTS.md`).
 5. **Overlays** — nearby picker (collapsed bucket row + two-row genres), numpad,

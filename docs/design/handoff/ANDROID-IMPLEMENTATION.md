@@ -1,6 +1,6 @@
 # DUDU OS FM Radio — Android implementation spec
 
-*Bundle v1.4.0 — 2026-07-19 (see `VERSION`).*
+*Bundle v1.5.0 — 2026-07-19 (see `VERSION`).*
 
 A complete build spec for the DUDU OS FM radio front-end on Android (Jetpack
 Compose primary; View/XML notes where helpful). It describes **intent, structure,
@@ -54,7 +54,7 @@ renders and raises callbacks.
 - **Interactive blue** is the system accent — selection, active preset, primary
   actions. DUDU blue fallback given in §3.
 - **Frequency amber is a fixed safety color — never themed, never restyled.** The
-  tuned frequency and its MHz unit are always amber in both themes so the driver
+  tuned frequency is always amber in both themes so the driver
   finds the readout instantly. Amber is not part of the accent/theming system.
 
 ---
@@ -144,20 +144,34 @@ general gaps 8–12dp. Shadow: soft and large — hero ≈ `0 20dp 44dp`, modal/
 A vertical stack of three regions. Region behavior differs by track.
 
 ### 4.1 Status bar (top, fixed height, does not scroll)
-Left cluster + right cluster, spaced apart.
+Three zones — **left** (signal), **center** (stereo + tells + genre), **right**
+(controls) — but the arrangement is **track-specific** (see "Track layout" below).
 
-- **Left cluster** (wraps to a second line on the tall track — use `FlowRow`):
-  - **Signal icon** — concentric broadcast arcs + center dot, lit 0–4 by signal
-    strength. Amber when lit, meter-empty when not. Beside it, signal in **dB**
-    (dim, tabular figures).
-  - **STEREO / MONO pill** — blue outline + blue-fill when stereo, else dim
-    outline. Small speaker-wave glyphs flank the label when stereo.
-  - **Tell strip** — four flags: `RDS`, `HD`(+level, e.g. `HD2`), `TP`/`TA`,
-    `AF`. On = full weight + subtle raised shadow; off = ~32% opacity. **TA**
-    replaces TP while a traffic announcement is active and **pulses** (amber,
-    ~1.1s scale pulse).
-  - **PTY** — program-type text (e.g. "Classic Rock"), dim, ellipsized.
-  - **OUT OF FM BAND** warning pill (amber) when tuned outside 87.5–108.0.
+- **Signal** — concentric broadcast-arc icon + center dot, lit 0–4 by signal
+  strength (amber when lit, meter-empty when not) with the signal **dB** value
+  (dim, tabular figures). **Wide:** dB sits **beside** the icon (row). **Tall:**
+  dB sits **below** the icon (column, centered).
+- **STEREO / MONO pill** — blue outline + blue-fill when stereo, else dim
+  outline. Small speaker-wave glyphs flank the label when stereo.
+- **Tell strip** — four flags: `RDS`, `HD`(+level, e.g. `HD2`), `TP`/`TA`,
+  `AF`. On = full weight + subtle raised shadow; off = ~32% opacity. **TA**
+  replaces TP while a traffic announcement is active and **pulses** (amber,
+  ~1.1s scale pulse). The tell strip sits directly **below** the STEREO pill.
+- **PTY** — program-type / genre text (e.g. "Classic Rock"), dim, ellipsized;
+  sits **below** the tell strip.
+- **OUT OF FM BAND** warning pill (amber) when tuned outside 87.5–108.0 (pill text
+  carries no "MHz" label).
+
+**Track layout:**
+- **Wide / landscape:** the signal cluster, the STEREO pill (with its tell strip
+  and PTY beneath), and any OUT-OF-BAND pill all sit together in a **left cluster**;
+  the controls are the right cluster. This is the default inline arrangement.
+- **Tall (portrait / ⅓ slice):** the STEREO pill is **horizontally centered** in the
+  status bar, with the **tell strip centered directly beneath it** and the **PTY /
+  genre centered directly below the tells**. The signal icon + stacked dB stay in the
+  **left** zone; settings + nearby stay in the **right** zone. Build as three flex
+  zones (left `weight(1f)` · center wrap-content · right `weight(1f)`) so the center
+  column is truly centered regardless of the side widths.
   - **Tuner-error pill** — when no compatible tuner is connected, one pill
     **replaces the entire OK cluster** (signal / stereo / tells / PTY / out-of-band);
     the two never show together. Amber warning triangle (≈26dp, 2dp stroke, no
@@ -176,8 +190,9 @@ Left cluster + right cluster, spaced apart.
 
 ### 4.2 Hero (middle) — the primary readout
 A centered column: **station row** (logo tile · station name · save ★ button),
-**frequency row** (large amber number + "MHz"), and a **RadioText strip** beneath
-the hero card.
+**frequency row** (large amber number, **no "MHz" unit label**), and a **RadioText
+strip** beneath the hero card. FM is always MHz, so the unit label is omitted on the
+face — it appears **only in the tune numpad** (§6.1).
 
 - **Frequency** — largest element, amber, tabular figures (~52–60sp). Tap opens
   the **tune numpad** (§6.1).
@@ -268,11 +283,15 @@ Header (title "Nearby stations" + subtitle "Tap to tune · hold to save a preset
 best signal first") with a close ✕, a filter area, a scrolling **station list**,
 and a footer ("FCC data as of <snapshot date>").
 
-- **Station row:** brand logo tile · frequency (large, tabular) + "MHz" · call
-  sign · optional service badge (when not "FM"); a second line of `city · genre`;
-  a trailing signal icon + distance ("<km> km"); a saved ★ when already a preset;
-  a `›` chevron. **Tap** tunes; **long-press** (~550ms) saves it as a preset.
-  Rows are sorted best-signal-first.
+- **Station row:** brand logo tile · frequency (large, tabular, **no "MHz"
+  label**) · call sign · optional service badge (when not "FM"); a second line of
+  `city · genre`; a trailing signal icon + distance ("<km> km"); a saved ★ when
+  already a preset; a `›` chevron. **Tap** tunes; **long-press** (~550ms) saves it
+  as a preset. Rows are sorted best-signal-first. On a **narrow** picker (phone
+  portrait / ⅓ vertical slice, i.e. when the picker is clamped below ~620dp wide)
+  the row uses **compact metrics** — smaller logo, freq, callsign, gaps and padding,
+  with the info column taking the row's slack — so the callsign never wraps and the
+  columns don't cram. Wide surfaces keep the full-size metrics.
 - **Filter — two levels:**
   - **Bucket row:** `All` · `Music` · `Talk` (Music/Talk shown only when the list
     actually contains such stations), shown **only while All is active**. Selecting
@@ -372,7 +391,8 @@ signal). Persist `freq` + `presets` (DataStore/prefs).
 ---
 
 ## 10. Safety constraints (must hold)
-- Frequency readout + MHz **always amber**, both themes, never re-themed.
+- Frequency readout **always amber**, both themes, never re-themed. (No "MHz" unit
+  label on the face — FM is always MHz; the label appears only in the tune numpad.)
 - **TA** must be visually loud (pulse) — traffic announcements override.
 - **No scale-to-fit.** Real responsive dp/sp layout that reflows per surface
   (§0) — never a fixed canvas uniformly scaled to the screen.

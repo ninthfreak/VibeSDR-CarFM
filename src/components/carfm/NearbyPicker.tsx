@@ -5,7 +5,7 @@
  * save as a preset. Rows come pre-ranked best-signal-first (score order).
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { getNearbyStations, type NearbyResult } from '../../services/stationFinder';
 import type { NearbyStation } from '../../services/stationTypes';
@@ -52,8 +52,14 @@ function strengthOf(st: NearbyStation, list: NearbyStation[]): number {
   return 1 + Math.round(f * 3);
 }
 
-function Row({ st, pal, saved, strength, onTune, onSave }: {
-  st: NearbyStation; pal: CarFmPalette; saved: boolean; strength: number;
+// Row metrics reflow for a NARROW picker (phone-portrait / ⅓ slice, card clamped
+// below ~620dp) so the callsign never wraps and the columns don't cram (§6.2).
+interface RowMetrics {
+  narrow: boolean; logo: number; logoRadius: number; logoFont: number;
+  rowGap: number; rowMinH: number; rowPadH: number; freq: number; call: number; meta: number;
+}
+function Row({ st, pal, saved, strength, m, onTune, onSave }: {
+  st: NearbyStation; pal: CarFmPalette; saved: boolean; strength: number; m: RowMetrics;
   onTune: () => void; onSave: () => void;
 }) {
   return (
@@ -63,38 +69,37 @@ function Row({ st, pal, saved, strength, onTune, onSave }: {
       delayLongPress={HOLD_MS}
       style={({ pressed }) => [
         styles.row,
-        { backgroundColor: pal.raised, borderColor: pal.border },
+        { minHeight: m.rowMinH, gap: m.rowGap, paddingHorizontal: m.rowPadH, backgroundColor: pal.raised, borderColor: pal.border },
         pressed && { opacity: 0.6 },
       ]}
       accessibilityRole="button"
       accessibilityLabel={`${st.frequencyMhz.toFixed(1)} megahertz ${st.callsign}. Tap to tune, hold to save preset.`}
     >
       {st.logoUri ? (
-        <Image source={{ uri: st.logoUri }} style={styles.logo} resizeMode="cover" />
+        <Image source={{ uri: st.logoUri }} style={[styles.logo, { width: m.logo, height: m.logo, borderRadius: m.logoRadius }]} resizeMode="cover" />
       ) : (
-        <View style={[styles.logo, { backgroundColor: brandColor(st.callsignBase), alignItems: 'center', justifyContent: 'center' }]}>
-          <Text allowFontScaling={false} style={styles.logoText}>{monogram(st.callsign)}</Text>
+        <View style={[styles.logo, { width: m.logo, height: m.logo, borderRadius: m.logoRadius, backgroundColor: brandColor(st.callsignBase), alignItems: 'center', justifyContent: 'center' }]}>
+          <Text allowFontScaling={false} style={[styles.logoText, { fontSize: m.logoFont }]}>{monogram(st.callsign)}</Text>
         </View>
       )}
-      <View style={styles.info}>
-        <View style={styles.line1}>
-          <Text style={[styles.freq, { color: pal.text }]}>
+      <View style={[styles.info, m.narrow && { flex: 1 }]}>
+        <View style={[styles.line1, m.narrow && { gap: 6 }]}>
+          <Text style={[styles.freq, { fontSize: m.freq, color: pal.text }]}>
             {st.frequencyMhz.toFixed(1)}
           </Text>
-          <Text style={[styles.mhz, { color: pal.dim }]}>MHz</Text>
-          <Text style={[styles.call, { color: pal.text }]}>{st.callsign}</Text>
+          <Text numberOfLines={1} style={[styles.call, { fontSize: m.call, marginLeft: m.narrow ? 3 : 6, color: pal.text }]}>{st.callsign}</Text>
           {st.service !== 'FM' ? (
             <View style={[styles.badge, { borderColor: pal.border }]}>
               <Text style={[styles.badgeText, { color: pal.dim }]}>{st.service}</Text>
             </View>
           ) : null}
         </View>
-        <Text style={[styles.meta, { color: pal.dim }]} numberOfLines={1}>
+        <Text style={[styles.meta, { fontSize: m.meta, color: pal.dim }]} numberOfLines={1}>
           {[st.city, st.genre].filter(Boolean).join(' · ') || ' '}
         </Text>
       </View>
       {saved ? <StarIcon size={26} filled color={pal.amber} outline={pal.amber} /> : null}
-      <View style={styles.spacer} />
+      <View style={m.narrow ? styles.spacerNarrow : styles.spacer} />
       <View style={styles.trailing}>
         <SignalWaves size={30} strength={strength} on={pal.amber} off={pal.meterEmpty} />
         <Text style={[styles.dist, { color: pal.dim }]}>{Math.round(st.distanceKm)} km</Text>
@@ -117,6 +122,15 @@ export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePr
   // Two-level filter (design §6.2): All / Music / Talk bucket, then genre.
   const [bucket, setBucket] = useState<'All' | 'Music' | 'Talk'>('All');
   const [genre, setGenre] = useState<string | null>(null);
+
+  // Narrow mode (§6.2): the card is min(900, 94% of the screen); below ~620dp it
+  // uses compact row/header metrics so the callsign doesn't wrap on a phone.
+  const { width } = useWindowDimensions();
+  const narrow = Math.min(900, width * 0.94) < 620;
+  const M: RowMetrics = narrow
+    ? { narrow: true, logo: 46, logoRadius: 11, logoFont: 18, rowGap: 11, rowMinH: 74, rowPadH: 13, freq: 23, call: 15, meta: 13 }
+    : { narrow: false, logo: 60, logoRadius: 14, logoFont: 18, rowGap: 18, rowMinH: 92, rowPadH: 18, freq: 32, call: 20, meta: 15 };
+  const sidePad = narrow ? 13 : 22;
 
   useEffect(() => {
     if (!visible) return;
@@ -163,9 +177,9 @@ export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePr
       <View style={styles.scrim}>
         <View style={[styles.card, { backgroundColor: pal.bg }]}>
           {/* header */}
-          <View style={[styles.header, { borderBottomColor: pal.border }]}>
+          <View style={[styles.header, { height: narrow ? 62 : 78, paddingHorizontal: narrow ? 18 : 28, borderBottomColor: pal.border }]}>
             <View style={{ flex: 1 }}>
-              <Text style={[styles.title, { color: pal.text }]}>Nearby stations</Text>
+              <Text style={[styles.title, { fontSize: narrow ? 21 : 26, color: pal.text }]}>Nearby stations</Text>
               <Text style={[styles.subtitle, { color: pal.dim }]}>
                 Tap to tune · hold to save a preset · best signal first
               </Text>
@@ -208,7 +222,7 @@ export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePr
               {showBuckets ? (
                 <ScrollView
                   horizontal showsHorizontalScrollIndicator={false}
-                  style={styles.filterBar} contentContainerStyle={styles.filterBarContent}
+                  style={styles.filterBar} contentContainerStyle={[styles.filterBarContent, { paddingHorizontal: sidePad }]}
                 >
                   {bucketChips.map((b) => (
                     <Chip key={b} label={b} active={b === bucket} pal={pal} onPress={() => pickBucket(b)} />
@@ -219,14 +233,14 @@ export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePr
               {bucket !== 'All' && genres.length > 1 ? (
                 <ScrollView
                   horizontal showsHorizontalScrollIndicator={false}
-                  style={styles.subBar} contentContainerStyle={styles.subBarContent}
+                  style={styles.subBar} contentContainerStyle={[styles.subBarContent, { paddingHorizontal: sidePad }]}
                 >
                   {genres.map((g) => (
                     <Chip key={g} label={g} active={g === activeGenre} pal={pal} onPress={() => setGenre((cur) => (cur === g ? null : g))} />
                   ))}
                 </ScrollView>
               ) : null}
-              <ScrollView contentContainerStyle={styles.list}>
+              <ScrollView contentContainerStyle={[styles.list, { paddingHorizontal: sidePad, paddingVertical: narrow ? 12 : 16, gap: narrow ? 8 : 10 }]}>
                 {shown.map((st) => (
                   <Row
                     key={st.facilityId}
@@ -234,6 +248,7 @@ export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePr
                     pal={pal}
                     saved={presetMHz.has(Math.round(st.frequencyMhz * 10))}
                     strength={strengthOf(st, shown)}
+                    m={M}
                     onTune={() => { onTune(st); onClose(); }}
                     onSave={() => onSavePreset(st)}
                   />
@@ -281,21 +296,21 @@ const styles = StyleSheet.create({
 
   list: { padding: 16, paddingHorizontal: 22, gap: 10 },
   row: {
-    minHeight: 92, borderRadius: 16, borderWidth: 1,
-    flexDirection: 'row', alignItems: 'center', gap: 18,
-    paddingVertical: 14, paddingHorizontal: 18,
+    borderRadius: 16, borderWidth: 1,
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 14,
   },
   logo: { width: 60, height: 60, borderRadius: 14 },
   logoText: { color: '#FFF', fontFamily: FONT_BOLD, fontSize: 18 },
-  info: { flexShrink: 1 },
-  line1: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
-  freq: { fontFamily: FONT_BOLD, fontSize: 32, fontVariant: ['tabular-nums'] },
-  mhz: { fontFamily: FONT, fontSize: 15 },
-  call: { fontFamily: FONT_BOLD, fontSize: 20,  },
-  badge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1 },
+  info: { flexShrink: 1, minWidth: 0 },
+  line1: { flexDirection: 'row', alignItems: 'baseline', gap: 8, minWidth: 0 },
+  freq: { fontFamily: FONT_BOLD, fontSize: 32, fontVariant: ['tabular-nums'], flexShrink: 0 },
+  call: { fontFamily: FONT_BOLD, fontSize: 20, flexShrink: 1 },
+  badge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1, flexShrink: 0 },
   badgeText: { fontFamily: FONT_BOLD, fontSize: 12,  },
   meta: { fontFamily: FONT, fontSize: 15, marginTop: 2 },
   spacer: { flex: 1 },
+  spacerNarrow: { width: 8, flexShrink: 0 },
   trailing: { alignItems: 'center', gap: 2 },
   dist: { fontFamily: FONT_BOLD, fontSize: 15,  },
   chevron: { fontSize: 26, marginLeft: 4 },

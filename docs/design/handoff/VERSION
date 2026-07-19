@@ -1,9 +1,23 @@
-1.4.0 — 2026-07-19
+1.5.0 — 2026-07-19
 
 Android Car FM Radio Face — design handoff bundle.
 
 Changelog
 ---------
+1.5.0 (2026-07-19)
+  - Design changes (live source + bundle copies re-synced, all 8 reference
+    screenshots regenerated at 2×):
+    - Removed the "MHz" unit label from the hero readout, preset peek cards,
+      out-of-band pill, and nearby-picker rows. FM is always MHz; the label now
+      appears ONLY in the tune numpad. Spec §1/§4.2/§6.2/§10 updated.
+    - Nearby picker: added a NARROW mode (compact row metrics) for phone-portrait
+      and ⅓-slice widths (picker clamped below ~620dp) so the callsign no longer
+      wraps and columns don't cram. §6.2 + README row anatomy updated.
+    - Portrait/tall status bar restructured: STEREO pill horizontally CENTERED with
+      the RDS/HD/TP/AF tell strip centered beneath it and the PTY/genre centered
+      below that; signal dB now STACKS below the signal icon. Wide/landscape keep
+      the original inline left-cluster layout. §4.1 + CORRECTION-LOOP + README updated.
+
 1.4.0 (2026-07-19)
   - ANDROID §0 (new, top): explicitly BANS scale-to-fit (one fixed canvas
     uniformly scaled). Requires a real responsive dp/sp Compose layout that

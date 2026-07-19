@@ -36,21 +36,23 @@
         {{ signalIcon }}
         <span style="{{ signalDbStyle }}">{{ dbText }}</span>
       </div>
-      <div style="{{ topRowStyle }}">
-        <div style="{{ stereoColStyle }}">
-          <div style="{{ stereoStyle }}">
-            {{ stereoWaveL }}
-            <span>{{ stereoText }}</span>
-            {{ stereoWaveR }}
-          </div>
-          <div style="{{ tellStripStyle }}">
-            <sc-for list="{{ tells }}" as="tt" hint-placeholder-count="4">
-              <span style="{{ tt.style }}">{{ tt.label }}</span>
-            </sc-for>
+      <sc-if value="{{ stereoInline }}" hint-placeholder-val="{{ true }}">
+        <div style="{{ topRowStyle }}">
+          <div style="{{ stereoColStyle }}">
+            <div style="{{ stereoStyle }}">
+              {{ stereoWaveL }}
+              <span>{{ stereoText }}</span>
+              {{ stereoWaveR }}
+            </div>
+            <div style="{{ tellStripStyle }}">
+              <sc-for list="{{ tells }}" as="tt" hint-placeholder-count="4">
+                <span style="{{ tt.style }}">{{ tt.label }}</span>
+              </sc-for>
+            </div>
           </div>
         </div>
-      </div>
-      <sc-if value="{{ hasPty }}" hint-placeholder-val="{{ false }}">
+      </sc-if>
+      <sc-if value="{{ ptyInline }}" hint-placeholder-val="{{ false }}">
         <div style="{{ ptyStyle }}">{{ ptyText }}</div>
       </sc-if>
       <sc-if value="{{ oob }}" hint-placeholder-val="{{ false }}">
@@ -62,6 +64,23 @@
         </div>
       </sc-if>
     </div>
+    <sc-if value="{{ stereoCentered }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ stereoColStyle }}">
+        <div style="{{ stereoStyle }}">
+          {{ stereoWaveL }}
+          <span>{{ stereoText }}</span>
+          {{ stereoWaveR }}
+        </div>
+        <div style="{{ tellStripStyle }}">
+          <sc-for list="{{ tells }}" as="tt" hint-placeholder-count="4">
+            <span style="{{ tt.style }}">{{ tt.label }}</span>
+          </sc-for>
+        </div>
+        <sc-if value="{{ ptyCentered }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ ptyCenteredStyle }}">{{ ptyText }}</div>
+        </sc-if>
+      </div>
+    </sc-if>
     <div style="{{ topRightColStyle }}">
       <div style="{{ advStyle }}" onClick="{{ onSettings }}">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="{{ advIconColor }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -97,7 +116,6 @@
         </div>
         <div style="{{ freqRowStyle }}" onClick="{{ onFreqTap }}">
           <span style="{{ freqStyle }}">{{ freq }}</span>
-          <span style="{{ mhzStyle }}">MHz</span>
         </div>
         <sc-if value="{{ oob }}" hint-placeholder-val="{{ false }}">
           <div style="{{ capStyle }}">{{ capText }}</div>
@@ -492,7 +510,7 @@ class Component extends DCLogic {
         active, reordering, dataFreq: pr.freq,
         logoText: plogo || 'FM',
         callText: call || ('FM ' + pr.freq),
-        freqText: pr.freq + ' MHz',
+        freqText: pr.freq,
         canLeft: idx > 0, canRight: idx < presets.length - 1,
         tileStyle: { position:'relative', width: (tall || twoRows) ? 'auto' : w, height: tall ? 128 : ((twoRows || big) ? '100%' : '80%'), alignSelf: (tall || twoRows || big) ? 'stretch' : 'center', borderRadius:16, cursor: reordering ? 'default' : 'pointer', flexShrink:0, boxSizing:'border-box', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap: big ? 8 : 6, padding: big ? '12px 8px 16px' : '8px 6px 12px', backgroundColor: t.panel, border: active && !reordering ? ('2px solid ' + t.blue) : ('1px solid ' + t.border), animation: reordering ? 'carfm-wiggle 0.42s ease-in-out infinite' : 'none', transition:'width .25s ease, height .25s ease' },
         logoStyle: { width:lg, height:lg, borderRadius:lr, flexShrink:0, backgroundColor: plogo ? (pbg || t.raised) : t.raised, border: plogo ? 'none' : ('1px solid ' + t.border), display:'flex', alignItems:'center', justifyContent:'center', fontSize: big ? 20 : 16, fontWeight:700, letterSpacing:0.5, color: plogo ? (pfg || '#FFFFFF') : t.dim, transition:'width .25s ease, height .25s ease' },
@@ -545,6 +563,7 @@ class Component extends DCLogic {
       stereoWaveL: stereo ? (() => { const P = ['M4 9 Q9 15 4 21','M9 6 Q15 15 9 24','M14 3 Q21 15 14 27']; return React.createElement('svg', { width: tall?28:20, height: tall?40:28, viewBox:'0 0 24 30', fill:'none', stroke:t.blue, strokeWidth:2, strokeLinecap:'round', style:{ transform:'scaleX(-1)', flexShrink:0 } }, P.map((d,i)=>React.createElement('path',{key:i,d}))); })() : React.createElement('span', { style:{ width: tall?28:20, height: tall?40:28, flexShrink:0, display:'inline-block' } }),
       stereoWaveR: stereo ? (() => { const P = ['M4 9 Q9 15 4 21','M9 6 Q15 15 9 24','M14 3 Q21 15 14 27']; return React.createElement('svg', { width: tall?28:20, height: tall?40:28, viewBox:'0 0 24 30', fill:'none', stroke:t.blue, strokeWidth:2, strokeLinecap:'round', style:{ flexShrink:0 } }, P.map((d,i)=>React.createElement('path',{key:i,d}))); })() : React.createElement('span', { style:{ width: tall?28:20, height: tall?40:28, flexShrink:0, display:'inline-block' } }),
       tunerError, tunerOk: !tunerError,
+      stereoCentered: !tunerError && tall, stereoInline: !tunerError && !tall,
       tunerErrIcon: React.createElement('svg', { width:26, height:26, viewBox:'0 0 24 24', fill:'none', stroke:t.amber, strokeWidth:2, strokeLinecap:'round', strokeLinejoin:'round', style:{ flexShrink:0 } }, [
         React.createElement('path', { key:'t', d:'M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z' }),
         React.createElement('line', { key:'l', x1:12, y1:9, x2:12, y2:13 }),
@@ -554,7 +573,8 @@ class Component extends DCLogic {
       okClusterStyle: tall
         ? { display:'flex', flexDirection:'row', flexWrap:'wrap', alignItems:'center', columnGap:18, rowGap:10 }
         : { display:'flex', flexDirection:'row', alignItems:'flex-start', gap:14 },
-      hasPty: !!pty, ptyText: pty,
+      hasPty: !!pty, ptyText: pty, ptyInline: !!pty && !tall, ptyCentered: !!pty && tall,
+      ptyCenteredStyle: { display:'flex', justifyContent:'center', textAlign:'center', color:t.dim, fontSize:19, fontWeight:700, letterSpacing:0.5, maxWidth:'100%' },
       tells: [
         { label:'RDS', on:rds }, { label: hd > 1 ? ('HD'+hd) : 'HD', on: hd > 0 },
         (ta ? { label:'TA', pulse:true } : { label:'TP', on:tp }), { label:'AF', on:af }
@@ -563,17 +583,17 @@ class Component extends DCLogic {
         : { label:x.label, style: { fontSize: tall ? 14 : 11, fontWeight:700, letterSpacing:1, lineHeight:1, color:t.text, opacity: x.on ? 1 : 0.32, textShadow: x.on ? '0 1px 2px rgba(0,0,0,0.30)' : (dark ? '0 1px 0 rgba(255,255,255,0.10)' : '0 1px 0 rgba(255,255,255,0.9)'), transform: x.on ? 'translateY(-0.5px)' : 'none', transition:'opacity .2s, color .2s, text-shadow .2s, transform .2s' } }),
       scanDownIcon: ICONS[seekStyle].down, scanUpIcon: ICONS[seekStyle].up,
       dbText: db + ' dB',
-      capText: oob ? '⚠  OUTSIDE 87.5 – 108.0 MHz BAND' : '',
+      capText: oob ? '⚠  OUTSIDE 87.5 – 108.0 BAND' : '',
       rtText: rtRaw || 'Waiting for RadioText…',
       segArr, signalIcon, starIcon, nearbyIcon, chips, hasChips: chips.length > 0, noChips: chips.length === 0,
 
       containerStyle: { width:'100%', height:'100%', backgroundColor:t.bg, color:t.text, fontFamily:font, display:'flex', flexDirection:'column', padding: tall ? '14px 16px' : '18px 24px', gap: tall ? 10 : 12, boxSizing:'border-box', overflow:'hidden' },
 
       topbarStyle: { display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12, flexShrink:0 },
-      leftClusterStyle: { display:'flex', flexDirection:'row', flexWrap: tall ? 'wrap' : 'nowrap', alignItems:'flex-start', gap: tall ? 10 : 14, minHeight: tall ? 0 : 69 },
-      stereoColStyle: { display:'flex', flexDirection:'column', alignItems:'center', gap:5 },
+      leftClusterStyle: { flex: tall ? '1 1 0' : '0 1 auto', minWidth:0, display:'flex', flexDirection:'row', flexWrap: tall ? 'wrap' : 'nowrap', alignItems:'flex-start', gap: tall ? 10 : 14, minHeight: tall ? 0 : 69 },
+      stereoColStyle: { flexShrink:0, display:'flex', flexDirection:'column', alignItems:'center', gap:5 },
       topRowStyle: { display:'flex', alignItems:'flex-start', gap:14 },
-      signalWrapStyle: { display:'flex', alignItems:'center', gap: tall ? 12 : 9, height: tall ? 46 : 36 },
+      signalWrapStyle: { display:'flex', flexDirection: tall ? 'column' : 'row', alignItems:'center', justifyContent:'center', gap: tall ? 2 : 9, height: tall ? 'auto' : 36 },
       signalBarsStyle: { display:'flex', alignItems:'flex-end', gap:3, height:20 },
       signalDbStyle: { fontSize: tall ? 19 : 15, fontWeight:700, color:t.dim, fontVariantNumeric:'tabular-nums' },
       fmStyle: pill({ height:36, padding:'0 12px', border:'1px solid ' + t.amber, color:t.amber, letterSpacing:2 }),
@@ -584,7 +604,7 @@ class Component extends DCLogic {
       oobStyle: pill({ border:'1.5px solid ' + t.amber, color:t.amber }),
       oobGlyphStyle: { fontSize:16, lineHeight:1 },
       advStyle: { display:'flex', alignItems:'center', justifyContent:'center', width:44, height:44, padding:0, borderRadius:12, border:'1px solid ' + t.border, color:t.dim, cursor:'pointer', boxSizing:'border-box', flexShrink:0 },
-      topRightColStyle: { display:'flex', flexDirection:'column', alignItems:'center', gap: tall ? 14 : 0, flexShrink:0 },
+      topRightColStyle: { flex: tall ? '1 1 0' : '0 0 auto', display:'flex', flexDirection:'column', alignItems: tall ? 'flex-end' : 'center', gap: tall ? 14 : 0, flexShrink:0 },
       nearbyTopStyle: { cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
       advIconColor: t.dim,
 
@@ -602,7 +622,6 @@ class Component extends DCLogic {
       freqRowStyle: { display:'flex', alignItems:'baseline', gap:9, cursor:'pointer' },
       freqStyle: { fontSize: tall ? 58 : (landscape ? 48 : 60), lineHeight:0.95, fontWeight:700, color:t.amber, letterSpacing:-1, fontVariantNumeric:'tabular-nums' },
       scanArrowStyle: { fontSize:34, fontWeight:700, color:t.blue, lineHeight:1 },
-      mhzStyle: { fontSize: tall ? 22 : (landscape ? 18 : 22), fontWeight:700, color:t.amber, opacity:0.9 },
       capStyle: { fontSize:13, fontWeight:700, letterSpacing:1.5, color: oob ? t.amber : t.dim },
       stationStyle: { fontSize: tall ? 52 : (landscape ? 50 : 66), fontWeight:700, color: ps ? t.text : t.dim, fontStyle: ps ? 'normal' : 'italic', lineHeight:1.02, letterSpacing:-1, textAlign:'center', maxWidth:'100%', overflowWrap:'break-word' },
       stationRowStyle: { display:'flex', alignItems:'center', justifyContent:'center', gap: tall ? 14 : 22, maxWidth:'100%' },

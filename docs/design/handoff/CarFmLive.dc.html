@@ -35,7 +35,7 @@
       <div style="{{ overlayCenterStyle }}">
         <div style="{{ pickerWrapStyle }}">
           <dc-import name="NearbyPicker"
-            theme="{{ theme }}" state="list" snapshot-date="2026-06-14" stations="{{ nearby }}"
+            theme="{{ theme }}" state="list" snapshot-date="2026-06-14" stations="{{ nearby }}" narrow="{{ pickerNarrow }}"
             on-select="{{ pickAndTune }}" on-save-station="{{ savePresetFreq }}"
             on-close="{{ closeAll }}"
             style="width:100%;height:100%;" hint-size="100%,100%"></dc-import>
@@ -279,6 +279,7 @@ class Component extends DCLogic {
     const tall = dims.w / dims.h < 1;
     const twoRows = this.props.aspect === 'Dudu7 ⅔ slice';
     const landscape = this.props.aspect === 'Galaxy S landscape';
+    const pickerNarrow = Math.min(900, dims.w - 32) < 620;
     const scale = (typeof window !== 'undefined' && window.innerWidth)
       ? Math.min((window.innerWidth - 80) / dims.w, (window.innerHeight - 80) / dims.h)
       : 1;
@@ -344,7 +345,7 @@ class Component extends DCLogic {
       commitNumpad: this.commitNumpad, scanUp: this.scanUp, scanDown: this.scanDown,
 
       pageStyle: { minHeight: '100vh', backgroundColor: theme === 'dark' ? '#0C1218' : '#DCE0E6', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, boxSizing: 'border-box', fontFamily: font },
-      tall, twoRows, landscape,
+      tall, twoRows, landscape, pickerNarrow,
       stageStyle: { position: 'relative', width: dims.w, height: dims.h, flexShrink: 0, transform: 'scale(' + scale + ')', transformOrigin: 'center center', borderRadius: 24, overflow: 'hidden', border: '1px solid ' + t.border, boxShadow: '0 24px 70px rgba(0,0,0,0.4)' },
 
       scrimStyle: { position: 'absolute', inset: 0, zIndex: 100, backgroundColor: t.scrim },
