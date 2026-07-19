@@ -330,6 +330,9 @@ export default function App() {
   const [fontsLoaded] = useFonts({
     'Nixie One':              require('./assets/fonts/NixieOne-Regular.ttf'),
     'Atkinson Hyperlegible':  require('./assets/fonts/AtkinsonHyperlegible-Regular.ttf'),
+    // Real bold cut as its own family: Android fake-bolds a single family,
+    // which reads lighter than the design's true 700 (design handoff §3).
+    'AtkinsonHyperlegible-Bold': require('./assets/fonts/AtkinsonHyperlegible-Bold.ttf'),
   });
 
   const [splashDone, setSplashDone]   = useState(false);

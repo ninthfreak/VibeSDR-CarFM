@@ -17,7 +17,7 @@ import {
 
 import { MagnifierTower } from './icons';
 import LogoTile from './LogoTile';
-import { FONT, type CarFmPalette } from './tokens';
+import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 
 export interface PresetItem { name: string; frequencyMhz: number; }
 
@@ -25,7 +25,12 @@ const TILE_W = 148;
 const GAP = 10;
 const HOLD_MS = 550;
 
-interface TileSize { w: number | 'auto'; h: number | string; logo: number; logoRadius: number; nameFont: number; }
+interface TileSize {
+  w: number | 'auto'; h: number | string; logo: number; logoRadius: number; nameFont: number;
+  /** Design tileStyle padding '8 6 12' (big '12 8 16') — the deeper bottom pad
+   *  keeps the callsign clear of the active underline. */
+  padTop: number; padBottom: number;
+}
 
 /** One preset tile; wiggles (±1.1°, 0.42s loop) while reordering. */
 function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX, onPress, onLongPress, onMove, onRemove }: {
@@ -60,6 +65,7 @@ function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX
           styles.tile,
           {
             width: size.w, height: size.h as any,
+            paddingTop: size.padTop, paddingBottom: size.padBottom,
             backgroundColor: pal.panel,
             borderColor: active ? pal.blue : pal.border,
             borderWidth: active ? 2 : 1,
@@ -102,7 +108,7 @@ function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX
         <Text style={[styles.tileName, { fontSize: size.nameFont, color: pal.text }]} numberOfLines={2}>
           {p.name}
         </Text>
-        {active ? <View style={[styles.activeBar, { backgroundColor: pal.amber }]} /> : null}
+        {active ? <View style={[styles.activeBar, { backgroundColor: pal.blue }]} /> : null}
       </Pressable>
     </Animated.View>
   );
@@ -151,8 +157,9 @@ export default function PresetsBand({
 
   const strip = !tall && !twoRows;
 
-  // Custom draggable scrollbar only applies to the horizontal strip track.
-  const showBar = strip && contentW > viewW && viewW > 0;
+  // Custom draggable scrollbar under both horizontal layouts (strip AND the
+  // ⅔-slice two-row grid — the design shows it whenever the rail overflows).
+  const showBar = !tall && contentW > viewW && viewW > 0;
   const thumbW = showBar ? Math.max(24, (viewW / contentW) * trackW) : 0;
   const maxScroll = Math.max(1, contentW - viewW);
   const thumbL = showBar ? (scrollX / maxScroll) * (trackW - thumbW) : 0;
@@ -228,13 +235,14 @@ export default function PresetsBand({
     if (tall) {
       const g = S(12);
       const w = viewW > 0 ? (viewW - 2 * g - 8) / 3 : S(118);   // 3 cols, gaps, h-pad
-      return { w, h: S(128), logo: S(50), logoRadius: 13, nameFont: nf(15) };
+      return { w, h: S(128), logo: S(50), logoRadius: 13, nameFont: nf(15), padTop: S(8), padBottom: S(12) };
     }
     if (twoRows) {
       // Fixed row height from the band height (no measure dependency) so the two
-      // rows are stable from the first frame.
-      const rowH = Math.max(S(96), Math.round((bandHeight - GAP) / 2));
-      return { w: S(150), h: rowH, logo: S(46), logoRadius: 12, nameFont: nf(15) };
+      // rows are stable from the first frame; 16 reserves the scrollbar track
+      // beneath the grid (design: rows are 1fr of the remaining band).
+      const rowH = Math.max(S(90), Math.round((bandHeight - GAP - 16) / 2));
+      return { w: S(150), h: rowH, logo: S(46), logoRadius: 12, nameFont: nf(15), padTop: S(8), padBottom: S(12) };
     }
     const big = active && !reordering;
     return {
@@ -243,6 +251,8 @@ export default function PresetsBand({
       logo: S(big ? (landscape ? 50 : 58) : (landscape ? 38 : 44)),
       logoRadius: big ? 15 : 12,
       nameFont: nf(big ? (landscape ? 16 : 18) : (landscape ? 13 : 15)),
+      padTop: S(big ? 12 : 8),
+      padBottom: S(big ? 16 : 12),
     };
   };
 
@@ -300,11 +310,30 @@ export default function PresetsBand({
     const cols: React.ReactNode[][] = [];
     for (let i = 0; i < tiles.length; i += 2) cols.push(tiles.slice(i, i + 2));
     gridArea = (
-      <ScrollView ref={scroll} horizontal showsHorizontalScrollIndicator={false}>
-        <View style={styles.gridTwoRow}>
-          {cols.map((col, ci) => <View key={ci} style={styles.twoRowCol}>{col}</View>)}
-        </View>
-      </ScrollView>
+      <>
+        <ScrollView
+          ref={scroll}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          onLayout={(e: LayoutChangeEvent) => setViewW(e.nativeEvent.layout.width)}
+          onContentSizeChange={(w: number) => setContentW(w)}
+          onScroll={onScroll}
+          scrollEventThrottle={16}
+        >
+          <View style={styles.gridTwoRow}>
+            {cols.map((col, ci) => <View key={ci} style={styles.twoRowCol}>{col}</View>)}
+          </View>
+        </ScrollView>
+        {showBar ? (
+          <View
+            style={[styles.track, { backgroundColor: pal.meterEmpty }]}
+            onLayout={(e: LayoutChangeEvent) => setTrackW(e.nativeEvent.layout.width)}
+            {...pan.panHandlers}
+          >
+            <View style={[styles.thumb, { backgroundColor: pal.scrollThumb, width: thumbW, left: thumbL }]} />
+          </View>
+        ) : null}
+      </>
     );
   } else {
     // Horizontal strip with custom scrollbar.
@@ -375,10 +404,10 @@ export default function PresetsBand({
       ) : (
         <Pressable
           onPress={onOpenNearby}
-          style={({ pressed }) => [styles.nearby, { width: S(92), height: S(92), borderRadius: S(46) }, { backgroundColor: pal.panel, borderWidth: 1, borderColor: pal.border }, pressed && { opacity: 0.7 }]}
+          style={({ pressed }) => [styles.nearby, { width: S(92), height: S(92), borderRadius: S(46) }, { backgroundColor: pal.nearbyDisc, borderWidth: 1, borderColor: pal.border }, pressed && { opacity: 0.7 }]}
           accessibilityRole="button" accessibilityLabel="Nearby stations"
         >
-          <MagnifierTower size={S(64)} line={pal.text} glass={pal.raised} />
+          <MagnifierTower size={S(64)} line={pal.nearbyLine} glass={pal.nearbyGlass} />
         </Pressable>
       )}
     </View>
@@ -387,7 +416,7 @@ export default function PresetsBand({
 
 const styles = StyleSheet.create({
   band: { flexDirection: 'row', alignItems: 'stretch', gap: 10 },
-  nav: { width: 56, borderRadius: 16, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  nav: { width: 56, borderRadius: 14, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   navText: { fontSize: 30, fontWeight: '700', fontFamily: FONT },
   gridWrap: { flex: 1 },
   grid: { gap: GAP, alignItems: 'stretch', paddingVertical: 2 },
@@ -403,7 +432,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 8,
   },
-  tileName: { fontFamily: FONT, fontWeight: '700', textAlign: 'center' },
+  tileName: { fontFamily: FONT_BOLD, textAlign: 'center' },
   activeBar: { position: 'absolute', bottom: 6, width: 26, height: 3, borderRadius: 2 },
   removeBadge: {
     position: 'absolute', top: -6, right: -6, zIndex: 2,
@@ -424,5 +453,5 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   doneCheck: { color: '#FFF', fontSize: 26, fontWeight: '700' },
-  doneText: { color: '#FFF', fontFamily: FONT, fontSize: 13, fontWeight: '700', letterSpacing: 1.5 },
+  doneText: { color: '#FFF', fontFamily: FONT_BOLD, fontSize: 13, letterSpacing: 1.5 },
 });

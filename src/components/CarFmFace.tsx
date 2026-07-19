@@ -30,7 +30,7 @@ import Numpad from './carfm/Numpad';
 import PresetsBand, { type PresetItem } from './carfm/PresetsBand';
 import SidePresetCard, { PEEK_OPACITY, PEEK_SCALE } from './carfm/SidePresetCard';
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
-import { DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, LIGHT } from './carfm/tokens';
+import { DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT } from './carfm/tokens';
 
 export interface CarFmPreset {
   name: string;
@@ -95,10 +95,14 @@ interface FlipDescriptor {
 const mhzOf = (hz: number) => Math.round(hz / CHANNEL_HZ) / 10;
 const fmt = (mhz: number) => mhz.toFixed(1);
 
-/** dB → 0–4 waves (count/position encode strength, never colour alone). */
+/** dB → 0–4 waves (count/position encode strength, never colour alone).
+ *  Design mapping (CarFmLive): rating 0–5 ↔ db = −95 + rating·8, 12 meter
+ *  segments = rating/5·12, waves = segments/3. Inverted here so real dBFS
+ *  (−110…−55) lights the same waves as the design demo. */
 function waveStrength(db: number | null): number {
   if (db == null) return 0;
-  return Math.max(0, Math.min(4, Math.round((db / 40) * 4)));
+  const segs = Math.max(0, Math.min(12, Math.round((db + 95) * 0.3)));
+  return Math.max(0, Math.min(4, Math.round(segs / 3)));
 }
 
 // ── RadioText strip: static when short, 16s marquee when > 46 chars ──────────
@@ -138,7 +142,9 @@ function RadioTextStrip({ text, colors, height = 52, fontSize = 30, maxWidth = 8
           <Text numberOfLines={1} style={[styles.rtText, { fontSize, color: textColor }]}>{shown}</Text>
         </Animated.View>
       ) : (
-        <Text numberOfLines={1} style={[styles.rtText, { fontSize, color: textColor, fontStyle: hasText ? 'normal' : 'italic', textAlign: 'center' }]}>
+        // Static text clips at the strip edges like the design's overflow:hidden
+        // — never an ellipsis (the refs show edge-clipped text, not "…").
+        <Text numberOfLines={1} ellipsizeMode="clip" style={[styles.rtText, { fontSize, color: textColor, fontStyle: hasText ? 'normal' : 'italic', textAlign: 'center' }]}>
           {shown}
         </Text>
       )}
@@ -258,12 +264,15 @@ export default function CarFmFace(props: CarFmFaceProps) {
       padTop: s(tall ? 14 : 18),
       gap: s(tall ? 10 : 12),
       freq: s(tall ? 58 : landscape ? 48 : 60),
-      mhz: s(tall ? 22 : landscape ? 18 : 22),
+      mhz: s(tall ? 20 : landscape ? 18 : 22),
       call: s(tall ? 52 : landscape ? 50 : 66),
       logo: s(tall ? 80 : landscape ? 70 : 92),
       star: s(tall ? 58 : landscape ? 48 : 56),
       rtMarginTop: s(tall ? 12 : landscape ? 10 : 18),
-      rtHeight: s(tall ? 56 : landscape ? 50 : 60),
+      // Design rtStripStyle: the strip is 64 tall on every track; the ZONE
+      // around it is what varies (rtZoneStyle 60/50/56/76).
+      rtHeight: s(64),
+      rtZoneH: s(tall ? 60 : landscape ? 50 : twoRows ? 56 : 76),
       rtFont: s(landscape ? 26 : 30),
       // Header element scaling (design renderVals `tall ?` branches). Small
       // status type floors at legibility, not proportion (§10).
@@ -571,10 +580,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
             ) : (
               <Pressable
                 onPress={() => setPickerOpen(true)}
-                style={({ pressed }) => [styles.headerNearby, { width: L.s(74), height: L.s(74), borderRadius: L.s(37), backgroundColor: pal.panel, borderWidth: 1, borderColor: pal.border }, pressed && { opacity: 0.7 }]}
+                style={({ pressed }) => [styles.headerNearby, { width: L.s(74), height: L.s(74), borderRadius: L.s(37), backgroundColor: pal.nearbyDisc, borderWidth: 1, borderColor: pal.border }, pressed && { opacity: 0.7 }]}
                 accessibilityRole="button" accessibilityLabel="Nearby stations"
               >
-                <MagnifierTower size={L.s(59)} line={pal.text} glass={pal.raised} />
+                <MagnifierTower size={L.s(59)} line={pal.nearbyLine} glass={pal.nearbyGlass} />
               </Pressable>
             )
           ) : null}
@@ -599,13 +608,13 @@ export default function CarFmFace(props: CarFmFaceProps) {
             <View style={styles.freqRow}>
               <Text style={[styles.scanArrow, { color: pal.dim }]}>{scan.dir > 0 ? '▲' : '▼'}</Text>
               <SlidingFreq value={fmt(scan.display)} dir={scan.dir} fontSize={L.freq} color={pal.amber} />
-              <Text style={[styles.mhz, { fontSize: L.mhz, color: pal.dim }]}>MHz</Text>
+              <Text style={[styles.mhz, { fontSize: L.mhz, color: pal.amber, opacity: 0.9 }]}>MHz</Text>
             </View>
           </View>
         ) : (
           <>
             <View style={[styles.stationRow, tall && { gap: L.s(14) }]}>
-              <LogoTile name={callsign || undefined} size={L.logo} radius={20} />
+              <LogoTile name={callsign || undefined} size={L.logo} radius={L.s(20)} />
               <Text
                 numberOfLines={1}
                 style={[
@@ -621,7 +630,11 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 hitSlop={starSlop}
                 style={({ pressed }) => [
                   styles.starBtn,
-                  { width: L.star, height: L.star, backgroundColor: saved ? pal.blueFill : pal.raised },
+                  {
+                    width: L.star, height: L.star, borderRadius: L.s(16),
+                    backgroundColor: saved ? pal.blueFill : 'transparent',
+                    borderWidth: 1, borderColor: saved ? 'transparent' : pal.border,
+                  },
                   pressed && { opacity: 0.55 },
                 ]}
                 accessibilityRole="button"
@@ -638,7 +651,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             >
               <View style={styles.freqRow}>
                 <SlidingFreq value={fmt(mhz)} dir={seekLandDir.current} fontSize={L.freq} color={pal.amber} />
-                <Text style={[styles.mhz, { fontSize: L.mhz, color: pal.dim }]}>MHz</Text>
+                <Text style={[styles.mhz, { fontSize: L.mhz, color: pal.amber, opacity: 0.9 }]}>MHz</Text>
               </View>
             </Pressable>
           </>
@@ -663,7 +676,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 { opacity: isEntering ? flip!.enterOpacity : PEEK_OPACITY },
               ]}
             >
-              <SidePresetCard name={preset.name} pal={pal} side={side} width={peekW} onPress={onPress} />
+              <SidePresetCard name={preset.name} pal={pal} side={side} width={peekW} k={k} onPress={onPress} />
             </Animated.View>
           );
         };
@@ -696,7 +709,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
                   },
                 ]}
               >
-                <SidePresetCard name={flip.cloneName} pal={pal} side={flip.farSide} width={peekW} />
+                <SidePresetCard name={flip.cloneName} pal={pal} side={flip.farSide} width={peekW} k={k} />
               </Animated.View>
             ) : null}
           </View>
@@ -705,7 +718,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         // column of [heroRow, rtZone]) — NOT inside the hero card. Keeping it out
         // of the card matches the compact hero + full-width RT bar in the refs.
         const rtBand = (
-          <View style={[styles.rtZone, tall && { marginTop: 'auto', marginBottom: 'auto' }]}>
+          <View style={[styles.rtZone, { height: L.rtZoneH }, tall && { marginTop: 'auto', marginBottom: 'auto' }]}>
             <RadioTextStrip
               text={rt}
               height={L.rtHeight}
@@ -796,35 +809,36 @@ const styles = StyleSheet.create({
   headerRight: { alignItems: 'center', gap: 12, flexShrink: 0 },
   headerNearby: { width: 74, height: 74, borderRadius: 37, alignItems: 'center', justifyContent: 'center' },
   headerDoneCheck: { color: '#FFF', fontSize: 22, fontWeight: '700' },
-  headerDoneText: { color: '#FFF', fontFamily: FONT, fontSize: 11, fontWeight: '700', letterSpacing: 1.5 },
+  headerDoneText: { color: '#FFF', fontFamily: FONT_BOLD, fontSize: 11, letterSpacing: 1.5 },
   signalPill: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  signalText: { fontFamily: FONT, fontSize: 17, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  signalText: { fontFamily: FONT_BOLD, fontSize: 17, fontVariant: ['tabular-nums'] },
   stereoCol: { alignItems: 'center', gap: 5 },
   // STEREO/MONO pill: waves flank the label inside a bordered pill (design
   // stereoStyle). Border/fill colour + min-width set inline from the palette.
   stereoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
   waveSpacer: { width: 20, height: 28 },
-  stereoText: { fontFamily: FONT, fontSize: 15, fontWeight: '700', letterSpacing: 1 },
+  stereoText: { fontFamily: FONT_BOLD, fontSize: 15, letterSpacing: 1 },
   tellStrip: { flexDirection: 'row', gap: 10 },
-  tell: { fontFamily: FONT, fontSize: 11, fontWeight: '700', letterSpacing: 1, lineHeight: 12 },
+  tell: { fontFamily: FONT_BOLD, fontSize: 11, letterSpacing: 1, lineHeight: 12 },
   // PTY: plain dim ellipsized text — no border/fill (design ptyStyle).
   ptyWrap: { height: 36, justifyContent: 'center' },
-  ptyText: { fontFamily: FONT, fontSize: 15, fontWeight: '700', letterSpacing: 0.5 },
+  ptyText: { fontFamily: FONT_BOLD, fontSize: 15, letterSpacing: 0.5 },
   oobPill: { borderWidth: 1.5, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 4 },
-  oobText: { fontFamily: FONT, fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
+  oobText: { fontFamily: FONT_BOLD, fontSize: 12, letterSpacing: 0.5 },
   gearBtn: { width: 44, height: 44, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   tunerErrPill: {
     height: 44, paddingHorizontal: 16, borderRadius: 10, borderWidth: 1.5,
     flexDirection: 'row', alignItems: 'center', gap: 11, alignSelf: 'flex-start',
   },
-  tunerErrText: { fontFamily: FONT, fontSize: 17, fontWeight: '700', letterSpacing: 0.3 },
+  tunerErrText: { fontFamily: FONT_BOLD, fontSize: 17, letterSpacing: 0.3 },
 
   hero: { flex: 1, flexDirection: 'row', gap: 0, alignItems: 'center', justifyContent: 'center' },
-  // Non-tall hero: a panel card of clamped width (design heroMainStyle). It sits
-  // ABOVE the flanking side preset cards (heroCardZ) so they tuck behind it.
+  // Non-tall hero: a panel card of clamped width (design heroMainStyle,
+  // height 98% of the hero row). It sits ABOVE the flanking side preset cards
+  // (heroCardZ) so they tuck behind it.
   heroCardWide: {
     borderWidth: 1, borderRadius: 28, paddingVertical: 24, paddingHorizontal: 30,
-    alignItems: 'center', justifyContent: 'center', maxWidth: '100%',
+    height: '98%', alignItems: 'center', justifyContent: 'center', maxWidth: '100%',
     elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 },
   },
   heroCardZ: { zIndex: 3 },
@@ -846,11 +860,11 @@ const styles = StyleSheet.create({
   // card: the callsign (flexShrink) gives way so the fixed logo tile and star
   // never spill past the card's rounded bounds (design stationRowStyle).
   stationRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 22, maxWidth: '100%' },
-  call: { fontFamily: FONT, fontSize: 66, fontWeight: '700', letterSpacing: -1, flexShrink: 1 },
+  call: { fontFamily: FONT_BOLD, fontSize: 66, letterSpacing: -1, flexShrink: 1 },
   starBtn: { width: 56, height: 56, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   freqRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 6 },
-  freq: { fontFamily: FONT, fontSize: 60, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  mhz: { fontFamily: FONT, fontSize: 20, fontWeight: '700' },
+  freq: { fontFamily: FONT_BOLD, fontSize: 60, fontVariant: ['tabular-nums'] },
+  mhz: { fontFamily: FONT_BOLD, fontSize: 20,  },
   rtZone: { flexShrink: 0, alignItems: 'stretch', justifyContent: 'center' },
   // minHeight (not height) so ×1.5 font-scale grows the strip instead of clipping.
   rtStrip: {

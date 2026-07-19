@@ -18,20 +18,23 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 
 import LogoTile from './LogoTile';
-import { FONT, type CarFmPalette } from './tokens';
+import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 
 export const PEEK_SCALE = 0.88;
 export const PEEK_OPACITY = 0.6;
 
 export default function SidePresetCard({
-  name, pal, side, width, onPress,
+  name, pal, side, width, k = 1, onPress,
 }: {
   name: string;
   pal: CarFmPalette;
   side: 'left' | 'right';        // 'left' = PREV (tucks under the hero's left), 'right' = NEXT
   width: number;
+  /** Type/element ramp factor from the face (§0 responsive tokens). */
+  k?: number;
   onPress?: () => void;
 }) {
+  const s = (v: number) => Math.round(v * k);
   const gid = `sidefade-${side}`;
   // PREV (left card) fades on its RIGHT (inner) edge; NEXT fades on its LEFT.
   const x1 = side === 'left' ? '0' : '1';
@@ -40,12 +43,16 @@ export default function SidePresetCard({
   return (
     <Root
       onPress={onPress}
-      style={[styles.card, { width, backgroundColor: pal.panel, borderColor: pal.border }]}
+      style={[styles.card, {
+        width, backgroundColor: pal.panel, borderColor: pal.border,
+        borderRadius: s(24), padding: s(16), gap: s(12),
+      }]}
       accessibilityRole={onPress ? 'button' : undefined}
       accessibilityLabel={side === 'left' ? `Previous preset ${name}` : `Next preset ${name}`}
     >
-      <LogoTile name={name || undefined} size={Math.round(width * 0.5)} radius={16} />
-      <Text style={[styles.call, { color: pal.text }]} numberOfLines={1}>{name || 'FM'}</Text>
+      {/* Design sideLogoStyle: 58% of card width, capped 92, radius 16. */}
+      <LogoTile name={name || undefined} size={Math.min(Math.round(width * 0.58), s(92))} radius={s(16)} />
+      <Text style={[styles.call, { fontSize: Math.max(12, s(15)), color: pal.text }]} numberOfLines={1}>{name || 'FM'}</Text>
       {/* inner-edge fade */}
       <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
         <Defs>
@@ -66,6 +73,6 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', gap: 12, flexShrink: 0,
   },
   call: {
-    fontFamily: FONT, fontSize: 15, fontWeight: '700', textAlign: 'center', maxWidth: '100%',
+    fontFamily: FONT_BOLD, fontSize: 15, textAlign: 'center', maxWidth: '100%',
   },
 });

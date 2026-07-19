@@ -10,7 +10,7 @@ import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Tex
 import { getNearbyStations, type NearbyResult } from '../../services/stationFinder';
 import type { NearbyStation } from '../../services/stationTypes';
 import { SignalWaves, StarIcon } from './icons';
-import { FONT, brandColor, monogram, type CarFmPalette } from './tokens';
+import { FONT, FONT_BOLD, brandColor, monogram, type CarFmPalette } from './tokens';
 
 const HOLD_MS = 550;
 
@@ -265,7 +265,7 @@ const styles = StyleSheet.create({
     height: 78, flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 22, borderBottomWidth: 1, gap: 12,
   },
-  title: { fontFamily: FONT, fontSize: 26, fontWeight: '700' },
+  title: { fontFamily: FONT_BOLD, fontSize: 26,  },
   subtitle: { fontFamily: FONT, fontSize: 14, marginTop: 1 },
   close: { width: 52, height: 52, borderRadius: 14, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   closeText: { fontSize: 22, fontWeight: '700' },
@@ -277,7 +277,7 @@ const styles = StyleSheet.create({
   // Two rows, chips flow column-by-column, scrolls horizontally.
   subBarContent: { flexDirection: 'column', flexWrap: 'wrap', height: 72, alignContent: 'flex-start', gap: 8, paddingHorizontal: 22, paddingTop: 10 },
   chip: { height: 32, paddingHorizontal: 13, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  chipText: { fontFamily: FONT, fontSize: 13, fontWeight: '700', letterSpacing: 0.3 },
+  chipText: { fontFamily: FONT_BOLD, fontSize: 13, letterSpacing: 0.3 },
 
   list: { padding: 16, paddingHorizontal: 22, gap: 10 },
   row: {
@@ -286,23 +286,23 @@ const styles = StyleSheet.create({
     paddingVertical: 14, paddingHorizontal: 18,
   },
   logo: { width: 60, height: 60, borderRadius: 14 },
-  logoText: { color: '#FFF', fontFamily: FONT, fontWeight: '700', fontSize: 18 },
+  logoText: { color: '#FFF', fontFamily: FONT_BOLD, fontSize: 18 },
   info: { flexShrink: 1 },
   line1: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
-  freq: { fontFamily: FONT, fontSize: 32, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  freq: { fontFamily: FONT_BOLD, fontSize: 32, fontVariant: ['tabular-nums'] },
   mhz: { fontFamily: FONT, fontSize: 15 },
-  call: { fontFamily: FONT, fontSize: 20, fontWeight: '700' },
+  call: { fontFamily: FONT_BOLD, fontSize: 20,  },
   badge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1 },
-  badgeText: { fontFamily: FONT, fontSize: 12, fontWeight: '700' },
+  badgeText: { fontFamily: FONT_BOLD, fontSize: 12,  },
   meta: { fontFamily: FONT, fontSize: 15, marginTop: 2 },
   spacer: { flex: 1 },
   trailing: { alignItems: 'center', gap: 2 },
-  dist: { fontFamily: FONT, fontSize: 15, fontWeight: '700' },
+  dist: { fontFamily: FONT_BOLD, fontSize: 15,  },
   chevron: { fontSize: 26, marginLeft: 4 },
 
   stateWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14, paddingHorizontal: 80 },
   stateGlyph: { fontSize: 52, lineHeight: 56 },
-  stateTitle: { fontFamily: FONT, fontSize: 24, fontWeight: '700', textAlign: 'center' },
+  stateTitle: { fontFamily: FONT_BOLD, fontSize: 24, textAlign: 'center' },
   stateBody: { fontFamily: FONT, fontSize: 16, textAlign: 'center', lineHeight: 24, maxWidth: 520 },
 
   footer: { height: 48, justifyContent: 'center', paddingHorizontal: 22, borderTopWidth: 1 },
