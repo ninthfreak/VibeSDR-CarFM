@@ -182,12 +182,26 @@ export default function CarFmFace(props: CarFmFaceProps) {
   //   landscape : very wide & short phone — smaller type
   const [dim, setDim] = useState({ w: 0, h: 0 });
   const aspect = dim.h > 0 ? dim.w / dim.h : 1.667;
-  // Spec (CarFmLive): tall = w/h < 1. twoRows/landscape are keyed to named device
-  // presets in the prototype (⅔ slice 900×810 ≈ 1.11; Galaxy landscape 1080×486
-  // ≈ 2.22), mapped here to ratio bands. Dudu7 full 1024×614 ≈ 1.67 stays wide.
-  const tall = aspect < 1;
-  const landscape = aspect > 1.95;
-  const twoRows = !tall && !landscape && aspect < 1.4;
+  // Each defined surface (handoff §2) has a fixed-dp design canvas. Match the
+  // device to the nearest canvas by aspect, lay the face out at that canvas size,
+  // then scale the whole face to fit the real screen — like the prototype's stage
+  // scale. Without this the canvas-sized dp render ~26% too big on a 360×800 phone
+  // and too small on a full 2000×1200 head unit.
+  const SURFACES = [
+    { w: 486, h: 1080, track: 'tall' },      // Galaxy S21 portrait
+    { w: 470, h: 845, track: 'tall' },       // Dudu7 ⅓ slice
+    { w: 900, h: 810, track: 'twoRows' },    // Dudu7 ⅔ slice
+    { w: 1024, h: 614, track: 'wide' },      // Dudu7 full
+    { w: 1080, h: 486, track: 'landscape' }, // Galaxy S21 landscape
+  ] as const;
+  const CANVAS = SURFACES.reduce((best, s) =>
+    Math.abs(s.w / s.h - aspect) < Math.abs(best.w / best.h - aspect) ? s : best);
+  const tall = CANVAS.track === 'tall';
+  const landscape = CANVAS.track === 'landscape';
+  const twoRows = CANVAS.track === 'twoRows';
+  const faceScale = dim.w > 0 && dim.h > 0
+    ? Math.min(dim.w / CANVAS.w, Math.max(1, dim.h - insets.top - insets.bottom) / CANVAS.h)
+    : 1;
   const L = useMemo(() => ({
     padH: tall ? 16 : 24,
     padTop: tall ? 14 : 18,
@@ -216,8 +230,8 @@ export default function CarFmFace(props: CarFmFaceProps) {
     bandHeight: twoRows ? 250 : landscape ? 104 : 140,
     // Wide/two-row/landscape hero is a panel card of clamped width (design
     // heroMainStyle: clamp(470, 62%, 720)). Tall uses a wider fraction.
-    heroCardW: dim.w > 0 ? Math.max(470, Math.min(720, Math.round(dim.w * 0.62))) : 620,
-  }), [tall, landscape, twoRows, dim.w]);
+    heroCardW: Math.max(470, Math.min(720, Math.round(CANVAS.w * 0.62))),
+  }), [tall, landscape, twoRows, CANVAS.w]);
 
   const mhz = mhzOf(freqHz);
   const inBand = mhz >= FM_MIN_MHZ - 0.05 && mhz <= FM_MAX_MHZ + 0.05;
@@ -247,13 +261,13 @@ export default function CarFmFace(props: CarFmFaceProps) {
     if (activeIndex < 0) return [items[items.length - 1], items[0]];
     return [items[(activeIndex - 1 + items.length) % items.length], items[(activeIndex + 1) % items.length]];
   }, [items, activeIndex]);
-  const sideCardW = Math.min(206, Math.max(120, Math.round((dim.w > 0 ? dim.w : 1024) * 0.18)));
+  const sideCardW = Math.min(206, Math.max(120, Math.round(CANVAS.w * 0.18)));
   // Tall/portrait track sizing: a narrower hero card (78%) flanked by smaller
   // peek cards tucked tight. The design's reference screenshots (surface-portrait
   // / surface-slice-one-third) show the peek cards present on the tall track too,
   // not just wide — so they render in every track, only the sizing differs.
-  const tallHeroW = Math.min(560, Math.round((dim.w > 0 ? dim.w : 470) * 0.82));
-  const tallSideW = Math.min(150, Math.max(88, Math.round((dim.w > 0 ? dim.w : 470) * 0.2)));
+  const tallHeroW = Math.min(560, Math.round(CANVAS.w * 0.82));
+  const tallSideW = Math.min(150, Math.max(88, Math.round(CANVAS.w * 0.2)));
 
   // Tall track (PHONEPORTRAITFIXES §2): hero band grows + centers; the preset
   // band sizes to its 3-column grid content but is CAPPED at 46% of the screen
@@ -264,9 +278,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
     if (!tall) return L.bandHeight;
     const rows = Math.ceil(items.length / 3);
     const contentH = rows > 0 ? rows * 128 + (rows - 1) * 12 + 8 : 0;   // tiles(128) + 12 gaps + 8 pad
-    const cap = Math.round((dim.h > 0 ? dim.h : 800) * 0.42);   // ~45% shelf (§4.3), trimmed so the shorter ⅓ slice still fits the hero + RadioText above it
+    const cap = Math.round(CANVAS.h * 0.42);   // ~45% shelf (§4.3), trimmed so the shorter ⅓ slice still fits the hero + RadioText above it
     return Math.min(cap, Math.max(96, contentH));                        // ≥96 so an empty band still reads
-  }, [tall, items.length, dim.h, L.bandHeight]);
+  }, [tall, items.length, CANVAS.h, L.bandHeight]);
 
   // ── Seek: scan to the next/previous station in the local FCC DB ────────────
   // The frequency list loads lazily (offline-first facade; enrich off since only
@@ -334,17 +348,13 @@ export default function CarFmFace(props: CarFmFaceProps) {
   return (
     <View
       onLayout={(e: LayoutChangeEvent) => setDim({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
-      style={[
-        styles.root,
-        {
-          backgroundColor: pal.bg,
-          paddingHorizontal: L.padH,
-          gap: L.gap,
-          paddingTop: insets.top + L.padTop,
-          paddingBottom: insets.bottom + L.padTop,
-        },
-      ]}
+      style={[styles.stage, { backgroundColor: pal.bg, paddingTop: insets.top, paddingBottom: insets.bottom }]}
     >
+      {/* The face is laid out at its design-canvas size (fixed dp) and uniformly
+          scaled to fit the real screen, so every device shows the design's
+          proportions instead of oversized/undersized raw dp. */}
+      <View style={{ width: CANVAS.w, height: CANVAS.h, transform: [{ scale: faceScale }] }}>
+      <View style={[styles.face, { backgroundColor: pal.bg, paddingHorizontal: L.padH, gap: L.gap, paddingVertical: L.padTop }]}>
       {/* ── Header row (design v2: signal · stereo+tells · PTY · gear) ──
           Tuner error is a hard either/or with the status cluster: with no tuner
           session there is no signal/RDS/stereo/genre to read, so the whole
@@ -555,8 +565,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
         onRemove={onRemovePreset}
         onOpenNearby={() => setPickerOpen(true)}
       />
+      </View>
+      </View>
 
-      {/* ── Modals ── */}
+      {/* ── Modals ── (device-level, outside the scaled face) */}
       <Numpad
         visible={numpadOpen}
         pal={pal}
@@ -593,10 +605,13 @@ export default function CarFmFace(props: CarFmFaceProps) {
 }
 
 const styles = StyleSheet.create({
-  root: {
+  // Full-screen stage that centres the fixed-size, scaled face (letterbox bars,
+  // if any, take the face background). The face itself lays out at its canvas size.
+  stage: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    zIndex: 60, paddingHorizontal: 24, gap: 12,
+    zIndex: 60, alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
   },
+  face: { width: '100%', height: '100%', flexDirection: 'column' },
 
   header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 14, flexShrink: 1 },
