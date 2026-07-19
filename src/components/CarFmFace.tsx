@@ -192,11 +192,11 @@ export default function CarFmFace(props: CarFmFaceProps) {
     padH: tall ? 16 : 24,
     padTop: tall ? 14 : 18,
     gap: tall ? 10 : 12,
-    freq: tall ? 52 : landscape ? 48 : 60,
-    mhz: tall ? 20 : landscape ? 18 : 22,
-    call: tall ? 48 : landscape ? 50 : 66,
-    logo: tall ? 72 : landscape ? 70 : 92,
-    star: tall ? 54 : landscape ? 48 : 56,
+    freq: tall ? 58 : landscape ? 48 : 60,
+    mhz: tall ? 22 : landscape ? 18 : 22,
+    call: tall ? 52 : landscape ? 50 : 66,
+    logo: tall ? 80 : landscape ? 70 : 92,
+    star: tall ? 58 : landscape ? 48 : 56,
     rtMarginTop: tall ? 12 : landscape ? 10 : 18,
     rtHeight: tall ? 56 : landscape ? 50 : 60,
     rtFont: landscape ? 26 : 30,
@@ -248,9 +248,12 @@ export default function CarFmFace(props: CarFmFaceProps) {
     return [items[(activeIndex - 1 + items.length) % items.length], items[(activeIndex + 1) % items.length]];
   }, [items, activeIndex]);
   const sideCardW = Math.min(206, Math.max(120, Math.round((dim.w > 0 ? dim.w : 1024) * 0.18)));
-  // Tall/portrait track sizing: a narrower hero card (78%) that stands alone —
-  // no flanking peek cards on this track (design §4.2/§5).
-  const tallHeroW = Math.min(520, Math.round((dim.w > 0 ? dim.w : 470) * 0.78));
+  // Tall/portrait track sizing: a narrower hero card (78%) flanked by smaller
+  // peek cards tucked tight. The design's reference screenshots (surface-portrait
+  // / surface-slice-one-third) show the peek cards present on the tall track too,
+  // not just wide — so they render in every track, only the sizing differs.
+  const tallHeroW = Math.min(560, Math.round((dim.w > 0 ? dim.w : 470) * 0.82));
+  const tallSideW = Math.min(150, Math.max(88, Math.round((dim.w > 0 ? dim.w : 470) * 0.2)));
 
   // Tall track (PHONEPORTRAITFIXES §2): hero band grows + centers; the preset
   // band sizes to its 3-column grid content but is CAPPED at 46% of the screen
@@ -261,7 +264,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
     if (!tall) return L.bandHeight;
     const rows = Math.ceil(items.length / 3);
     const contentH = rows > 0 ? rows * 128 + (rows - 1) * 12 + 8 : 0;   // tiles(128) + 12 gaps + 8 pad
-    const cap = Math.round((dim.h > 0 ? dim.h : 800) * 0.46);
+    const cap = Math.round((dim.h > 0 ? dim.h : 800) * 0.42);   // ~45% shelf (§4.3), trimmed so the shorter ⅓ slice still fits the hero + RadioText above it
     return Math.min(cap, Math.max(96, contentH));                        // ≥96 so an empty band still reads
   }, [tall, items.length, dim.h, L.bandHeight]);
 
@@ -489,35 +492,46 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 <Text style={[styles.mhz, { fontSize: L.mhz, color: pal.dim }]}>MHz</Text>
               </View>
             </Pressable>
-            <View style={[styles.rtArea, { marginTop: L.rtMarginTop }]}>
-              <RadioTextStrip
-                text={rt}
-                height={L.rtHeight}
-                fontSize={L.rtFont}
-                colors={{ raised: pal.raised, border: pal.border, dim: pal.dim, text: pal.text }}
-              />
-            </View>
           </>
         );
 
-        // PREV/NEXT preset peek cards flank the hero on the WIDE track only
-        // (design §4.2/§5: hidden on the tall track — the hero card stands
-        // alone). Chevrons are never used. Wide/landscape use the clamped hero
-        // card and a -72 overlap tuck.
+        // PREV/NEXT preset peek cards flank the hero in EVERY track — the design
+        // reference screenshots show them tucked on both sides in tall too, not
+        // just wide. Chevrons are never used. Only the sizing differs: tall tucks
+        // smaller cards with a -46 overlap; wide/landscape use the clamped hero
+        // card and a -72 overlap.
         const heroRow = (
           <View style={tall ? styles.heroRowTall : styles.hero}>
-            {!tall && prevP ? (
-              <SidePresetCard name={prevP.name} pal={pal} side="left" width={sideCardW} overlap={-72} onPress={() => stepPreset(-1)} />
+            {prevP ? (
+              <SidePresetCard name={prevP.name} pal={pal} side="left" width={tall ? tallSideW : sideCardW} overlap={tall ? -46 : -72} onPress={() => stepPreset(-1)} />
             ) : null}
             <View style={[tall ? styles.heroCard : styles.heroCardWide, styles.heroCardZ, { width: tall ? tallHeroW : L.heroCardW, backgroundColor: pal.panel, borderColor: pal.border }]}>
               {heroCenter}
             </View>
-            {!tall && nextP ? (
-              <SidePresetCard name={nextP.name} pal={pal} side="right" width={sideCardW} overlap={-72} onPress={() => stepPreset(1)} />
+            {nextP ? (
+              <SidePresetCard name={nextP.name} pal={pal} side="right" width={tall ? tallSideW : sideCardW} overlap={tall ? -46 : -72} onPress={() => stepPreset(1)} />
             ) : null}
           </View>
         );
-        return tall ? <View style={styles.heroTall}>{heroRow}</View> : heroRow;
+        // The RadioText strip is a SIBLING BELOW the hero row (design heroBand =
+        // column of [heroRow, rtZone]) — NOT inside the hero card. Keeping it out
+        // of the card matches the compact hero + full-width RT bar in the refs.
+        const rtBand = (
+          <View style={[styles.rtZone, tall && { marginTop: 'auto', marginBottom: 'auto' }]}>
+            <RadioTextStrip
+              text={rt}
+              height={L.rtHeight}
+              fontSize={L.rtFont}
+              colors={{ raised: pal.raised, border: pal.border, dim: pal.dim, text: pal.text }}
+            />
+          </View>
+        );
+        return (
+          <View style={tall ? styles.heroBandTall : styles.heroBand}>
+            {heroRow}
+            {rtBand}
+          </View>
+        );
       })()}
 
       {/* ── Presets band ── (grows to fill in the tall track; NEARBY + nav move to
@@ -623,20 +637,28 @@ const styles = StyleSheet.create({
   heroCardZ: { zIndex: 3 },
   // Tall/portrait track: hero band grows + centers (PHONEPORTRAITFIXES §2); the
   // hero card is flanked by the same side preset cards as every other track.
-  heroTall: { flex: 1, justifyContent: 'center' },
-  heroRowTall: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 0 },
-  heroCard: { borderWidth: 1, borderRadius: 28, paddingVertical: 22, paddingHorizontal: 20, alignItems: 'center', justifyContent: 'center', maxWidth: '100%', elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 } },
+  // Hero band = column of [hero row, RadioText zone] (design heroBand).
+  heroBand: { flex: 1, gap: 16, minHeight: 0 },
+  // Tall: leftover height is DISTRIBUTED, not pooled (design §4.2). The hero row
+  // (marginTop:auto) and the RadioText zone (marginTop+Bottom:auto) create three
+  // equal flexible gaps: above hero, hero→RadioText, RadioText→presets.
+  heroBandTall: { flex: 1, justifyContent: 'flex-start', gap: 0, marginTop: 14, minHeight: 0 },
+  heroRowTall: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 0, marginTop: 'auto' },
+  heroCard: { borderWidth: 1, borderRadius: 28, paddingVertical: 30, paddingHorizontal: 26, gap: 16, alignItems: 'center', justifyContent: 'center', maxWidth: '100%', elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 } },
 
-  stationRow: { flexDirection: 'row', alignItems: 'center', gap: 18 },
+  // maxWidth + justify-center keep the logo/callsign/star group INSIDE the hero
+  // card: the callsign (flexShrink) gives way so the fixed logo tile and star
+  // never spill past the card's rounded bounds (design stationRowStyle).
+  stationRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 22, maxWidth: '100%' },
   call: { fontFamily: FONT, fontSize: 66, fontWeight: '700', letterSpacing: -1, flexShrink: 1 },
   starBtn: { width: 56, height: 56, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   freqRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 6 },
   freq: { fontFamily: FONT, fontSize: 60, fontWeight: '700', fontVariant: ['tabular-nums'] },
   mhz: { fontFamily: FONT, fontSize: 20, fontWeight: '700' },
-  rtArea: { alignSelf: 'stretch', flexGrow: 0, marginTop: 18, justifyContent: 'center' },
+  rtZone: { flexShrink: 0, alignItems: 'stretch', justifyContent: 'center' },
   rtStrip: {
-    borderWidth: 1, borderRadius: 14, height: 52,
-    justifyContent: 'center', overflow: 'hidden', paddingHorizontal: 16,
+    borderWidth: 1, borderRadius: 16, height: 52, width: '100%', maxWidth: 880, alignSelf: 'center',
+    justifyContent: 'center', overflow: 'hidden', paddingHorizontal: 28,
   },
   rtText: { fontFamily: FONT, fontSize: 22 },
 

@@ -1,4 +1,7 @@
-# Handoff: Android Car Head‑Unit — FM Radio Face (Alpha)
+# Handoff: Android Car Head‑Unit — FM Radio Face
+
+**Bundle v1.2.3 — 2026-07-18.** Version is tracked in `VERSION`; check it matches
+your copy before building (stale downloads were the source of earlier drift).
 
 ## Overview
 The permanent **FM radio "face"** for an Android car head‑unit app. It tunes broadcast FM
@@ -7,15 +10,22 @@ the driver sees, so it must be readable **at a glance, in a moving car, in sunli
 package also includes the **Nearby stations** picker (GPS/FCC‑data driven) and a **direct‑entry
 numpad**.
 
-This is an **Alpha** design: the look, layout, and interaction model are settled, but more
-work remains (real SDR/RDS/GPS backends, error/edge states, additional settings). Treat it as
-the visual + behavioral spec to build against, not a finished feature set.
+The look, layout, and interaction model are settled. What remains for production is real data
+wiring (SDR/RDS tuning, GPS + FCC station data) behind the finished UI — see §9. Treat this as
+the visual + behavioral spec to build against.
 
 > **Authoritative build spec: `ANDROID-IMPLEMENTATION.md`.** That document is the source of
 > truth for **surfaces, layout tracks, responsive behavior, and per-screen structure** written in
 > Android terms. This README is a **component-level reference** (exact values, token tables, icon
-> anatomy, assets). Where the two differ, follow `ANDROID-IMPLEMENTATION.md` — it reflects the
-> current design; older phrasing in this README has been corrected inline below.
+> anatomy, assets). Where the two differ, follow `ANDROID-IMPLEMENTATION.md`.
+
+> **Build by closing a visual loop, not by copying CSS values.** Read
+> **`CORRECTION-LOOP.md`** first: it defines the render → screenshot → diff-against-reference →
+> fix-to-the-picture process, and lists every target surface with its reference image in
+> `screenshots/`. Then read **`LOSSY-ELEMENTS.md`** — the specific elements (mask fades, CSS
+> grid, marquee, SVG icons) that will *not* port by re-typing values, each with the RN/Compose
+> strategy that reproduces them. Every surface is "done" only when the built screen matches its
+> reference PNG — "compiles" and "values copied" are not done.
 
 ## About the Design Files
 The files in this bundle are **design references authored in HTML** (a component framework we
@@ -59,12 +69,11 @@ presets, and open Nearby search.
 2. **Hero band** — the tuned station, centered:
    - **Center hero card:** station logo tile + call letters + star save button, then frequency
      (amber) + "MHz". The **RadioText strip** sits below the hero (marquee when text > 46 chars).
-   - **Prev/Next peek cards** flank the hero on the **wide track only**: the previous and next
-     presets rendered as smaller, ~0.88-scale, ~60%-opacity cards that peek in from the sides and
-     sit slightly behind the hero; tapping one steps to that preset. Hidden on the tall track,
-     where the hero card stands alone and is vertically centered in the leftover height.
-   - *(A chevron/arrow PREV/NEXT-button variant exists in the prototype code but is **disabled**;
-     the peek cards are the shipping design. Do not build the chevron buttons unless asked.)*
+   - **Prev/Next peek cards** flank the hero: the previous and next presets rendered as smaller,
+     ~0.88-scale, ~60%-opacity cards that peek in from the sides and sit slightly behind the hero;
+     tapping one steps to that preset. Shown on **both** tracks whenever a prev/next preset exists,
+     tucked in tighter on the tall track. On the tall track the hero is also vertically centered in
+     the leftover height.
 3. **Presets band** — **wide:** **‹** nav button · horizontally scrolling preset rail · **›** nav
    button · **NEARBY** round button (→ **DONE** in reorder mode). **twoRows** (Dudu7 ⅔): a 2-row
    horizontal grid. **tall:** a 3-column vertical grid pinned as a bottom shelf, capped at ~45% of
@@ -82,14 +91,11 @@ presets, and open Nearby search.
   tile shows a 26×3 amber bar at bottom. Long‑press enters reorder mode.
 - **SEEK controls:** now inside the tap‑to‑tune / numpad window (in `CarFmLive.dc.html`), not on
   the main face. Scan icon = a vertical bar + chevron (down/up variants).
-- **Prev/Next peek cards (wide track):** stepping to the previous/next preset is driven by the
-  **peek cards** flanking the hero — smaller (~0.88 scale, ~60% opacity) cards showing the prev
-  and next presets, edge-softened with a fade gradient, peeking in from the sides and sitting
-  slightly behind the hero; tap to step. Hidden on the tall track. Build as real sibling
-  composables clipped by the screen edges. *(A chevron/arrow-silhouette PREV/NEXT-button variant
-  is still present in the prototype source — inline SVG polygon computed in true pixel coordinates
-  via a `ResizeObserver` — but it is **disabled** and is not the shipping design. Do not build it
-  unless asked.)*
+- **Prev/Next peek cards:** stepping to the previous/next preset is driven by the **peek cards**
+  flanking the hero — smaller (~0.88 scale, ~60% opacity) cards showing the prev and next presets,
+  edge-softened with a fade gradient, peeking in from the sides and sitting slightly behind the
+  hero; tap to step. Shown on both tracks (tucked tighter on tall). Build as real sibling
+  composables clipped by the screen edges.
 - **Custom scrollbar** (under the preset grid): 6px track (`bg:meterEmpty`, `radius:999`), thumb
   `rgba(128,134,144,0.6)`, width = viewport/scrollWidth, left = scroll fraction. **No arrows.**
   Track/thumb are draggable (pointer maps x → scrollLeft). Native scrollbar is hidden.
@@ -105,16 +111,17 @@ presets, and open Nearby search.
 instead of clipping (never hard-code the pixel size). Header (78px) with title "Nearby stations",
 subtitle ("Tap to tune · hold to save a preset · best signal first"), and ✕ close (52×52).
 Scrollable list (rows, 10px gap, 16/22px padding). Footer (48px): "FCC data as of &lt;date&gt;".
-Also has `nogps` and `empty` states.
+Also has `nogps` ("Waiting for GPS…") and `empty` states — placeholder scaffolding, not built-out flows.
 
 **Two-level filter:**
 - **Bucket row** — `All · Music · Talk` (Music/Talk only appear when the list contains such
-  stations). While **All** is active, all three chips show. Selecting **Music** or **Talk**
-  collapses the bucket row to just the **All** chip (the other two hide); tapping **All** restores
-  all three and clears the genre filter.
-- **Genre row** (inside Music/Talk, when >1 genre exists) — genre chips laid out in **exactly two
-  rows**, flowing column-by-column and scrolling horizontally on overflow. Select to filter; tap
-  again to clear.
+  stations), shown **only while All is active**. Selecting **Music** or **Talk** replaces this row
+  with the genre row below (no standalone bucket row remains).
+- **Genre row** (inside Music/Talk) — genre chips laid out in **exactly two rows**, flowing
+  column-by-column and scrolling horizontally on overflow. In this drilled-in state there is **no
+  separate bucket row**: an **icon-only back-arrow reset** chip (raised fill, spanning both rows)
+  plus a thin vertical **divider** leads the row and returns to All/Music/Talk. Select a genre to
+  filter; tap again to clear.
 
 **Row anatomy** (min‑height 92, `bg:raised`, `1px solid border`, `radius:16`, 18px gap):
 - Brand logo (60×60).
@@ -143,8 +150,8 @@ size ~700×576, **responsive** (caps to the surface, body scrolls). Grouped sect
 — Auto / RTL-SDR / Si470x FM dongle / rtl_tcp, each with a detected/not-detected/unavailable
 badge; **Start radio on boot** toggle), **APPEARANCE** (SYSTEM / LIGHT / DARK segmented control),
 **SYSTEM** (battery-optimization status with FIX/EXEMPT; station-logos toggle), **ADVANCED**
-(Advanced SDR view row). See `ANDROID-IMPLEMENTATION.md` §6.3 and `uploads/settingspanelhandoff.md`
-for the tuner-backend detail.
+(Advanced SDR view row). `SettingsPanel.dc.html` is the exact reference; see also
+`ANDROID-IMPLEMENTATION.md` §6.3.
 
 ## Interactions & Behavior
 - **Tune up/down:** ±0.1 MHz, wraps at the 87.5–108.0 band edges.
@@ -187,52 +194,14 @@ stereo, signal dBm) replacing the mock `DB`; GPS + FCC station dataset replacing
 
 ## Design Tokens
 
-**Typography:** Atkinson Hyperlegible (400/700, + 400 italic), fallback `system-ui, sans-serif`.
-Numeric fields use `font-variant-numeric: tabular-nums`.
+**Typography:** Atkinson Hyperlegible (400/700 + italic), fallback `system-ui, sans-serif`;
+tabular figures for numbers. Palettes: light "Simple" / dark "Enthusiast"; **frequency amber is
+fixed and never themed.**
 
-**Colors — Light**
-| token | value |
-|---|---|
-| bg | `#EEF1F5` |
-| panel | `#FFFFFF` |
-| raised | `#F5F7FA` |
-| text | `#1B222C` |
-| dim | `#67717F` |
-| amber (accent/freq) | `#C9760A` (radio face) / `#2E86FF` interactive blue |
-| blue (interactive) | `#2E86FF` |
-| border | `rgba(20,30,45,0.13)` |
-| blueFill | `rgba(46,134,255,0.12)` |
-| page backdrop | `#DCE0E6` |
-
-**Colors — Dark**
-| token | value |
-|---|---|
-| bg | `#161E29` |
-| panel | `#212B38` |
-| raised | `#2A3644` |
-| text | `#E9EEF4` |
-| dim | `#8B97A7` |
-| amber | `#FFB833` |
-| blue | `#4A9EFF` |
-| border | `rgba(255,255,255,0.13)` |
-| blueFill | `rgba(74,158,255,0.18)` |
-| page backdrop | `#0C1218` |
-
-**Radii:** tiles 16, logo 15/20 (46 = circle), buttons 14–18, pills 999, disc 50%.
-**Spacing:** page padding 18/24; hero gap 20; general gaps 8–12.
-**Shadows:** stage `0 24px 70px rgba(0,0,0,0.4)`; modals `0 20px 50px rgba(0,0,0,0.35)`.
-**Signal icon:** three concentric broadcast waves; amber wave count encodes strength (0–4).
-
-### Nearby icon (magnifier + radio tower) — tweakable
-The NEARBY disc icon is a thin‑line magnifying glass (large lens, ~5 o'clock stubby butt‑capped
-handle) containing a radio tower (A‑frame legs + a single X‑brace low in the body + antenna mast
-with radiating waves). A subtle barrel warp bows the tower slightly (lens refraction). It exposes
-per‑theme color controls; build them as themeable style props:
-- **Line color** (strokes, lens ring, handle) — light default `#111111`, dark `#E9EEF4`.
-- **Icon fill** (disc / negative space) — light default = interactive blue; dark `#212B38`.
-- **Glass fill** (lens interior tint) — light `rgba(255,255,255,0.16)`; dark `#2A3644`.
-- **Border** on/off + **border color** (independent) — light default `#111111`
-  (incl. a light‑gray `#D5DAE1` option); dark `#3A4655`.
+All exact values — the light/dark color tokens, radii, spacing, and shadows — are defined once in
+`ANDROID-IMPLEMENTATION.md` **§3 (Design tokens)**, and the nearby-icon colors + anatomy in **§7**.
+This README deliberately does not restate them, so the two documents can't drift; read §3/§7 for
+the numbers.
 
 ## Assets
 - **Font:** Atkinson Hyperlegible via Google Fonts. Bundle it in‑app.
@@ -245,19 +214,23 @@ per‑theme color controls; build them as themeable style props:
 ## Files (design references in this bundle)
 - `CarFmLive.dc.html` — the interactive prototype: owns state, mock SDR/RDS/GPS data, numpad,
   persistence, and mounts the other two. **Best single source for behavior.**
-- `RadioFace.dc.html` — the main radio face UI (hero, presets, seek/prev/next, custom scrollbar,
-  reorder + FLIP animation, nearby icon).
+- `RadioFace.dc.html` — the main radio face UI (hero, presets, prev/next peek cards, custom
+  scrollbar, reorder + FLIP animation, nearby icon).
 - `NearbyPicker.dc.html` — the Nearby stations modal (list/nogps/empty states).
 - `SettingsPanel.dc.html` — the Settings modal (tuner source/status, theme, system, advanced).
 - `support.js` — prototype runtime only; **do not port** (reference for reading the files if
   needed).
 
-To view the prototype, open `CarFmLive.dc.html` in a browser. Tweak controls (theme, seek style,
-nearby‑icon colors) are exposed as component props.
+To view the prototype, open `CarFmLive.dc.html` in a browser. The exposed tweak controls are
+**aspect** (which surface to preview), **theme** (light/dark), and **tuner-error**. Nearby‑icon
+colors and seek style are fixed style parameters in the prototype, not user‑facing controls.
 
 ## Screenshots
-See `screenshots/` for reference captures of the built prototype (light theme, 1024×614 / 5:3):
-- `01-radio-face-light.png` — main radio face (tuned station, presets, seek/prev/next, custom scrollbar, NEARBY icon).
-- `02-nearby-picker.png` — Nearby stations modal (saved‑preset stars, signal + distance, right‑aligned).
-- `03-numpad.png` — direct frequency entry.
-- `04-reorder-mode.png` — preset reorder mode (move ‹ ›, remove ✕, DONE button).
+`screenshots/` holds the per-surface reference captures to diff the built app against. **`CORRECTION-LOOP.md`
+maps every target surface (head unit, portrait, slices, landscape, light/dark, tuner-error) to its
+reference image** — use that as the checklist; the clean full head-unit face is `surface-head-unit-light.png`.
+
+**Overlay states (numpad, nearby picker, settings, reorder) are not shipped as static screenshots** —
+render them live by opening `CarFmLive.dc.html` (tap the frequency for the numpad, the NEARBY disc for
+the picker, the gear for settings, long-press a preset for reorder) and check against `ANDROID-IMPLEMENTATION.md`
+§6. `NearbyPicker.dc.html` and `SettingsPanel.dc.html` also open standalone.
