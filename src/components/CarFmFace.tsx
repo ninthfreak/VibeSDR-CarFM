@@ -104,7 +104,7 @@ function waveStrength(db: number | null): number {
 // ── RadioText strip: static when short, 16s marquee when > 46 chars ──────────
 // Real RadioText renders in the full text colour; when empty, a dim-italic
 // "Waiting for RadioText…" placeholder shows instead (design rtItemStyle).
-function RadioTextStrip({ text, colors, height = 52, fontSize = 30 }: { text: string; colors: { raised: string; border: string; dim: string; text: string }; height?: number; fontSize?: number }) {
+function RadioTextStrip({ text, colors, height = 52, fontSize = 30, maxWidth = 880 }: { text: string; colors: { raised: string; border: string; dim: string; text: string }; height?: number; fontSize?: number; maxWidth?: number }) {
   const [trackW, setTrackW] = useState(0);
   const x = useRef(new Animated.Value(0)).current;
   const hasText = text.trim().length > 0;
@@ -127,7 +127,7 @@ function RadioTextStrip({ text, colors, height = 52, fontSize = 30 }: { text: st
 
   return (
     <View
-      style={[styles.rtStrip, { height, backgroundColor: colors.raised, borderColor: colors.border, justifyContent: marquee ? 'flex-start' : 'center' }]}
+      style={[styles.rtStrip, { minHeight: height, maxWidth, backgroundColor: colors.raised, borderColor: colors.border, justifyContent: marquee ? 'flex-start' : 'center' }]}
     >
       {marquee ? (
         <Animated.View
@@ -143,6 +143,36 @@ function RadioTextStrip({ text, colors, height = 52, fontSize = 30 }: { text: st
         </Text>
       )}
     </View>
+  );
+}
+
+// ── Seek digit slide (LOSSY #6 — required) ───────────────────────────────────
+// On each frequency change while seeking, the digits enter offset ±14dp with
+// opacity 0.25 and settle to 0 / 1 over ~200ms — one two-endpoint transition
+// per change (the design's carfm-scan-up/down keyframes expressed as a single
+// timing), never a hard swap. dir 0 = ordinary retune, no slide.
+function SlidingFreq({ value, dir, fontSize, color }: {
+  value: string; dir: 1 | -1 | 0; fontSize: number; color: string;
+}) {
+  const y = useRef(new Animated.Value(0)).current;
+  const op = useRef(new Animated.Value(1)).current;
+  const last = useRef(value);
+  useEffect(() => {
+    if (value === last.current) return;
+    last.current = value;
+    if (!dir) { y.setValue(0); op.setValue(1); return; }
+    // Seek-up rises from below (+14 → 0); seek-down falls from above (−14 → 0).
+    y.setValue(dir > 0 ? 14 : -14);
+    op.setValue(0.25);
+    Animated.parallel([
+      Animated.timing(y, { toValue: 0, duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1), useNativeDriver: true }),
+      Animated.timing(op, { toValue: 1, duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1), useNativeDriver: true }),
+    ]).start();
+  }, [value, dir, y, op]);
+  return (
+    <Animated.Text style={[styles.freq, { fontSize, color, opacity: op, transform: [{ translateY: y }] }]}>
+      {value}
+    </Animated.Text>
   );
 }
 
@@ -196,57 +226,66 @@ export default function CarFmFace(props: CarFmFaceProps) {
   //   twoRows   : near-square ⅔ slice — taller preset band
   //   landscape : very wide & short phone — smaller type
   const [dim, setDim] = useState({ w: 0, h: 0 });
-  const aspect = dim.h > 0 ? dim.w / dim.h : 1.667;
-  // Each defined surface (handoff §2) has a fixed-dp design canvas. Match the
-  // device to the nearest canvas by aspect, lay the face out at that canvas size,
-  // then scale the whole face to fit the real screen — like the prototype's stage
-  // scale. Without this the canvas-sized dp render ~26% too big on a 360×800 phone
-  // and too small on a full 2000×1200 head unit.
-  const SURFACES = [
-    { w: 486, h: 1080, track: 'tall' },      // Galaxy S21 portrait
-    { w: 470, h: 845, track: 'tall' },       // Dudu7 ⅓ slice
-    { w: 900, h: 810, track: 'twoRows' },    // Dudu7 ⅔ slice
-    { w: 1024, h: 614, track: 'wide' },      // Dudu7 full
-    { w: 1080, h: 486, track: 'landscape' }, // Galaxy S21 landscape
-  ] as const;
-  const CANVAS = SURFACES.reduce((best, s) =>
-    Math.abs(s.w / s.h - aspect) < Math.abs(best.w / best.h - aspect) ? s : best);
-  const tall = CANVAS.track === 'tall';
-  const landscape = CANVAS.track === 'landscape';
-  const twoRows = CANVAS.track === 'twoRows';
-  const faceScale = dim.w > 0 && dim.h > 0
-    ? Math.min(dim.w / CANVAS.w, Math.max(1, dim.h - insets.top - insets.bottom) / CANVAS.h)
-    : 1;
-  const L = useMemo(() => ({
-    padH: tall ? 16 : 24,
-    padTop: tall ? 14 : 18,
-    gap: tall ? 10 : 12,
-    freq: tall ? 58 : landscape ? 48 : 60,
-    mhz: tall ? 22 : landscape ? 18 : 22,
-    call: tall ? 52 : landscape ? 50 : 66,
-    logo: tall ? 80 : landscape ? 70 : 92,
-    star: tall ? 58 : landscape ? 48 : 56,
-    rtMarginTop: tall ? 12 : landscape ? 10 : 18,
-    rtHeight: tall ? 56 : landscape ? 50 : 60,
-    rtFont: landscape ? 26 : 30,
-    // Header element scaling (design renderVals `tall ?` branches).
-    signalIcon: tall ? 46 : 33,
-    signalDb: tall ? 19 : 15,
-    stereoFont: tall ? 18 : 15,
-    stereoWave: tall ? { w: 28, h: 40 } : { w: 20, h: 28 },
-    // STEREO/MONO pill chrome (design stereoStyle = pill + minWidth).
-    stereoH: tall ? 46 : 36,
-    stereoPadH: tall ? 18 : 14,
-    stereoRadius: tall ? 12 : 10,
-    stereoMinW: tall ? 196 : 158,
-    ptyFont: tall ? 19 : 15,
-    tellFont: tall ? 14 : 11,
-    // ⅔ slice gets the taller two-row band; landscape a short one.
-    bandHeight: twoRows ? 250 : landscape ? 104 : 140,
-    // Wide/two-row/landscape hero is a panel card of clamped width (design
-    // heroMainStyle: clamp(470, 62%, 720)). Tall uses a wider fraction.
-    heroCardW: Math.max(470, Math.min(720, Math.round(CANVAS.w * 0.62))),
-  }), [tall, landscape, twoRows, CANVAS.w]);
+  // Real available dp (measured, so the face composes correctly inside a DuduOS
+  // vertical third as well as full-screen). Until the first layout, assume the
+  // head-unit shape — one frame at most.
+  const w = dim.w > 0 ? dim.w : 1024;
+  const h = dim.h > 0 ? dim.h : 614;
+  // Track selection (ANDROID §2): compact width → tall; otherwise wide, with two
+  // density sub-modes — near-square (⅔ slice) gets the 2-row preset band, short
+  // (phone landscape) gets smaller type/tiles. Width-class breakpoint 600dp per
+  // WindowSizeClass Compact.
+  const tall = w < 600;
+  const landscape = !tall && h < 480;
+  const twoRows = !tall && !landscape && w / h < 1.4;
+  // Type/element ramp factor. The spec's dp values are authored at each track's
+  // representative surface (§2 table); k re-derives them for the dp actually
+  // available, bounded so type never collapses or balloons. This sizes TOKENS
+  // only — the layout itself is flex that reflows per track, text is sp (system
+  // font-scale multiplies on top), and touch targets keep a 48dp floor via
+  // hitSlop. That is what separates this from the banned scale-to-fit (§0):
+  // nothing here is a frozen canvas under a uniform transform.
+  const k = tall
+    ? Math.min(1, Math.max(0.68, w / 486))
+    : Math.min(1, Math.max(0.68, landscape
+        ? Math.min(w / 1080, h / 486)
+        : twoRows ? Math.min(w / 900, h / 810) : Math.min(w / 1024, h / 614)));
+  const L = useMemo(() => {
+    const s = (v: number) => Math.round(v * k);
+    return {
+      s,
+      padH: s(tall ? 16 : 24),
+      padTop: s(tall ? 14 : 18),
+      gap: s(tall ? 10 : 12),
+      freq: s(tall ? 58 : landscape ? 48 : 60),
+      mhz: s(tall ? 22 : landscape ? 18 : 22),
+      call: s(tall ? 52 : landscape ? 50 : 66),
+      logo: s(tall ? 80 : landscape ? 70 : 92),
+      star: s(tall ? 58 : landscape ? 48 : 56),
+      rtMarginTop: s(tall ? 12 : landscape ? 10 : 18),
+      rtHeight: s(tall ? 56 : landscape ? 50 : 60),
+      rtFont: s(landscape ? 26 : 30),
+      // Header element scaling (design renderVals `tall ?` branches). Small
+      // status type floors at legibility, not proportion (§10).
+      signalIcon: s(tall ? 46 : 33),
+      signalDb: Math.max(12, s(tall ? 19 : 15)),
+      stereoFont: Math.max(12, s(tall ? 18 : 15)),
+      stereoWave: tall ? { w: s(28), h: s(40) } : { w: s(20), h: s(28) },
+      // STEREO/MONO pill chrome (design stereoStyle = pill + minWidth). Heights
+      // are minimums so ×1.5 font-scale grows the pill instead of clipping.
+      stereoH: s(tall ? 46 : 36),
+      stereoPadH: s(tall ? 18 : 14),
+      stereoRadius: tall ? 12 : 10,
+      stereoMinW: s(tall ? 196 : 158),
+      ptyFont: Math.max(12, s(tall ? 19 : 15)),
+      tellFont: Math.max(10, s(tall ? 14 : 11)),
+      // ⅔ slice gets the taller two-row band; landscape a short one (§4.3 dp).
+      bandHeight: s(twoRows ? 250 : landscape ? 104 : 140),
+      // Wide/two-row/landscape hero is a panel card of clamped width (design
+      // heroMainStyle: clamp(470, 62%, 720)). Tall uses a wider fraction.
+      heroCardW: Math.max(s(470), Math.min(s(720), Math.round(w * 0.62))),
+    };
+  }, [tall, landscape, twoRows, w, k]);
 
   const mhz = mhzOf(freqHz);
   const inBand = mhz >= FM_MIN_MHZ - 0.05 && mhz <= FM_MAX_MHZ + 0.05;
@@ -276,13 +315,14 @@ export default function CarFmFace(props: CarFmFaceProps) {
     if (activeIndex < 0) return [items[items.length - 1], items[0]];
     return [items[(activeIndex - 1 + items.length) % items.length], items[(activeIndex + 1) % items.length]];
   }, [items, activeIndex]);
-  const sideCardW = Math.min(206, Math.max(120, Math.round(CANVAS.w * 0.18)));
-  // Tall/portrait track sizing: a narrower hero card (78%) flanked by smaller
+  const sideCardW = Math.min(L.s(206), Math.max(L.s(120), Math.round(w * 0.18)));
+  // Tall/portrait track sizing: a narrower hero card (82%) flanked by smaller
   // peek cards tucked tight. The design's reference screenshots (surface-portrait
   // / surface-slice-one-third) show the peek cards present on the tall track too,
   // not just wide — so they render in every track, only the sizing differs.
-  const tallHeroW = Math.min(560, Math.round(CANVAS.w * 0.82));
-  const tallSideW = Math.min(150, Math.max(88, Math.round(CANVAS.w * 0.2)));
+  const tallHeroW = Math.min(L.s(560), Math.round(w * 0.82));
+  const tallSideW = Math.min(L.s(150), Math.max(L.s(88), Math.round(w * 0.2)));
+  const peekOverlap = L.s(tall ? -46 : -72);
 
   // Tall track (PHONEPORTRAITFIXES §2): hero band grows + centers; the preset
   // band sizes to its 3-column grid content but is CAPPED at 46% of the screen
@@ -291,11 +331,12 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // the freed space when there are few presets, killing the dead void.
   const tallBand = useMemo(() => {
     if (!tall) return L.bandHeight;
+    const tileH = L.s(128), gap = L.s(12);
     const rows = Math.ceil(items.length / 3);
-    const contentH = rows > 0 ? rows * 128 + (rows - 1) * 12 + 8 : 0;   // tiles(128) + 12 gaps + 8 pad
-    const cap = Math.round(CANVAS.h * 0.42);   // ~45% shelf (§4.3), trimmed so the shorter ⅓ slice still fits the hero + RadioText above it
-    return Math.min(cap, Math.max(96, contentH));                        // ≥96 so an empty band still reads
-  }, [tall, items.length, CANVAS.h, L.bandHeight]);
+    const contentH = rows > 0 ? rows * tileH + (rows - 1) * gap + 8 : 0;
+    const cap = Math.round(h * 0.42);   // ~45% shelf (§4.3), trimmed so the shorter ⅓ slice still fits the hero + RadioText above it
+    return Math.min(cap, Math.max(L.s(96), contentH));                   // ≥96 so an empty band still reads
+  }, [tall, items.length, h, L]);
 
   // ── Seek: scan to the next/previous station in the local FCC DB ────────────
   // The frequency list loads lazily (offline-first facade; enrich off since only
@@ -315,6 +356,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
   }, []);
   useEffect(() => stopScan, [stopScan]);
 
+  const seekLandDir = useRef<1 | -1 | 0>(0);
   const runSeek = useCallback((dir: 1 | -1) => {
     if (scanTimer.current) return;                     // one sweep at a time
     const cur = mhzOf(freqHz);
@@ -338,6 +380,11 @@ export default function CarFmFace(props: CarFmFaceProps) {
       if (Math.abs(v - target) < 0.05) {
         stopScan();
         setScan(null);
+        // The landing frequency gets the same entry slide as the ticks; the
+        // direction is consumed by SlidingFreq on the retune render and then
+        // cleared so ordinary tunes stay slide-free.
+        seekLandDir.current = dir;
+        setTimeout(() => { seekLandDir.current = 0; }, 400);
         onTuneHz(Math.round(target * 1e6));
       } else {
         setScan({ dir, display: v });
@@ -443,10 +490,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
       onLayout={(e: LayoutChangeEvent) => setDim({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
       style={[styles.stage, { backgroundColor: pal.bg, paddingTop: insets.top, paddingBottom: insets.bottom }]}
     >
-      {/* The face is laid out at its design-canvas size (fixed dp) and uniformly
-          scaled to fit the real screen, so every device shows the design's
-          proportions instead of oversized/undersized raw dp. */}
-      <View style={{ width: CANVAS.w, height: CANVAS.h, transform: [{ scale: faceScale }] }}>
+      {/* Responsive face (ANDROID §0): laid out directly at the real available
+          dp — no design canvas, no uniform scale. Tracks reflow per surface and
+          the token ramp (L) re-derives the spec's dp for this surface. */}
       <View style={[styles.face, { backgroundColor: pal.bg, paddingHorizontal: L.padH, gap: L.gap, paddingVertical: L.padTop }]}>
       {/* ── Header row (design v2: signal · stereo+tells · PTY · gear) ──
           Tuner error is a hard either/or with the status cluster: with no tuner
@@ -470,7 +516,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
           </View>
           <View style={styles.stereoCol}>
             <View style={[styles.stereoRow, {
-              height: L.stereoH, paddingHorizontal: L.stereoPadH, borderRadius: L.stereoRadius,
+              minHeight: L.stereoH, paddingHorizontal: L.stereoPadH, borderRadius: L.stereoRadius,
               minWidth: L.stereoMinW, borderWidth: 1.5,
               borderColor: stereo ? pal.blue : pal.border,
               backgroundColor: stereo ? pal.blueFill : 'transparent',
@@ -506,6 +552,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         <View style={styles.headerRight}>
           <Pressable
             onPress={() => setSettingsOpen(true)}
+            hitSlop={2}
             style={({ pressed }) => [styles.gearBtn, { borderColor: pal.border, backgroundColor: pal.raised }, pressed && { opacity: 0.55 }]}
             accessibilityRole="button" accessibilityLabel="Settings"
           >
@@ -515,7 +562,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             reordering ? (
               <Pressable
                 onPress={() => setReordering(false)}
-                style={({ pressed }) => [styles.headerNearby, { backgroundColor: pal.blue }, pressed && { opacity: 0.7 }]}
+                style={({ pressed }) => [styles.headerNearby, { width: L.s(74), height: L.s(74), borderRadius: L.s(37), backgroundColor: pal.blue }, pressed && { opacity: 0.7 }]}
                 accessibilityRole="button" accessibilityLabel="Done reordering"
               >
                 <Text style={styles.headerDoneCheck}>✓</Text>
@@ -524,10 +571,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
             ) : (
               <Pressable
                 onPress={() => setPickerOpen(true)}
-                style={({ pressed }) => [styles.headerNearby, { backgroundColor: pal.panel, borderWidth: 1, borderColor: pal.border }, pressed && { opacity: 0.7 }]}
+                style={({ pressed }) => [styles.headerNearby, { width: L.s(74), height: L.s(74), borderRadius: L.s(37), backgroundColor: pal.panel, borderWidth: 1, borderColor: pal.border }, pressed && { opacity: 0.7 }]}
                 accessibilityRole="button" accessibilityLabel="Nearby stations"
               >
-                <MagnifierTower size={59} line={pal.text} glass={pal.raised} />
+                <MagnifierTower size={L.s(59)} line={pal.text} glass={pal.raised} />
               </Pressable>
             )
           ) : null}
@@ -541,25 +588,25 @@ export default function CarFmFace(props: CarFmFaceProps) {
           tall/portrait track stacks the hero into a card with a PREV/NEXT nav
           row below it. */}
       {(() => {
+        // ≥48dp touch floor (§10): when the ramp sizes a control below 48dp,
+        // hitSlop extends the touchable area without changing the visual.
+        const starSlop = Math.max(0, Math.ceil((48 - L.star) / 2));
         const heroCenter = scan ? (
           <View style={styles.scanWrap}>
-            <Text allowFontScaling={false} style={[styles.call, { fontSize: L.call, color: pal.dim, fontStyle: 'italic' }]}>
+            <Text style={[styles.call, { fontSize: L.call, color: pal.dim, fontStyle: 'italic' }]}>
               Scanning…
             </Text>
             <View style={styles.freqRow}>
               <Text style={[styles.scanArrow, { color: pal.dim }]}>{scan.dir > 0 ? '▲' : '▼'}</Text>
-              <Text allowFontScaling={false} style={[styles.freq, { fontSize: L.freq, color: pal.amber }]}>
-                {fmt(scan.display)}
-              </Text>
+              <SlidingFreq value={fmt(scan.display)} dir={scan.dir} fontSize={L.freq} color={pal.amber} />
               <Text style={[styles.mhz, { fontSize: L.mhz, color: pal.dim }]}>MHz</Text>
             </View>
           </View>
         ) : (
           <>
-            <View style={[styles.stationRow, tall && { gap: 14 }]}>
+            <View style={[styles.stationRow, tall && { gap: L.s(14) }]}>
               <LogoTile name={callsign || undefined} size={L.logo} radius={20} />
               <Text
-                allowFontScaling={false}
                 numberOfLines={1}
                 style={[
                   styles.call,
@@ -571,6 +618,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
               </Text>
               <Pressable
                 onPress={onToggleSave}
+                hitSlop={starSlop}
                 style={({ pressed }) => [
                   styles.starBtn,
                   { width: L.star, height: L.star, backgroundColor: saved ? pal.blueFill : pal.raised },
@@ -580,7 +628,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 accessibilityState={{ selected: saved }}
                 accessibilityLabel={saved ? 'Remove this frequency from presets' : 'Save this frequency as a preset'}
               >
-                <StarIcon size={30} filled={saved} color={pal.amber} outline={pal.dim} />
+                <StarIcon size={L.s(30)} filled={saved} color={pal.amber} outline={pal.dim} />
               </Pressable>
             </View>
             <Pressable
@@ -589,9 +637,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
               accessibilityLabel={`Frequency ${fmt(mhz)} megahertz. Tap to enter a frequency.`}
             >
               <View style={styles.freqRow}>
-                <Text allowFontScaling={false} style={[styles.freq, { fontSize: L.freq, color: pal.amber }]}>
-                  {fmt(mhz)}
-                </Text>
+                <SlidingFreq value={fmt(mhz)} dir={seekLandDir.current} fontSize={L.freq} color={pal.amber} />
                 <Text style={[styles.mhz, { fontSize: L.mhz, color: pal.dim }]}>MHz</Text>
               </View>
             </Pressable>
@@ -604,7 +650,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         // smaller cards with a -46 overlap; wide/landscape use the clamped hero
         // card and a -72 overlap.
         const peekW = tall ? tallSideW : sideCardW;
-        const overlap = tall ? -46 : -72;
+        const overlap = peekOverlap;
         const renderPeek = (side: 'left' | 'right', preset: PresetItem, onPress: () => void) => {
           const isLanding = !!flip && flip.farSide === side;    // old hero shrinking into this slot
           const isEntering = !!flip && flip.nearSide === side;  // brand-new far card fading in
@@ -628,7 +674,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
               onLayout={measureSlot('center')}
               style={[
                 tall ? styles.heroCard : styles.heroCardWide, styles.heroCardZ,
-                { width: tall ? tallHeroW : L.heroCardW, backgroundColor: pal.panel, borderColor: pal.border },
+                {
+                  width: tall ? tallHeroW : L.heroCardW, backgroundColor: pal.panel, borderColor: pal.border,
+                  paddingVertical: L.s(tall ? 30 : 24), paddingHorizontal: L.s(tall ? 26 : 30), gap: L.s(14),
+                },
                 flip ? { transform: flip.centerTransform } : null,
               ]}
             >
@@ -661,6 +710,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
               text={rt}
               height={L.rtHeight}
               fontSize={L.rtFont}
+              maxWidth={L.s(880)}
               colors={{ raised: pal.raised, border: pal.border, dim: pal.dim, text: pal.text }}
             />
           </View>
@@ -687,6 +737,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         tall={tall}
         twoRows={twoRows}
         landscape={landscape}
+        k={k}
         onSelect={(p) => onTuneHz(Math.round(p.frequencyMhz * 1e6))}
         onEnterReorder={() => setReordering(true)}
         onExitReorder={() => setReordering(false)}
@@ -695,9 +746,8 @@ export default function CarFmFace(props: CarFmFaceProps) {
         onOpenNearby={() => setPickerOpen(true)}
       />
       </View>
-      </View>
 
-      {/* ── Modals ── (device-level, outside the scaled face) */}
+      {/* ── Modals ── (device-level, capped to the surface per §6) */}
       <Numpad
         visible={numpadOpen}
         pal={pal}
@@ -734,11 +784,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
 }
 
 const styles = StyleSheet.create({
-  // Full-screen stage that centres the fixed-size, scaled face (letterbox bars,
-  // if any, take the face background). The face itself lays out at its canvas size.
+  // Full-screen stage; the face fills it and lays out responsively (§0).
   stage: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    zIndex: 60, alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+    zIndex: 60, overflow: 'hidden',
   },
   face: { width: '100%', height: '100%', flexDirection: 'column' },
 
@@ -803,8 +852,9 @@ const styles = StyleSheet.create({
   freq: { fontFamily: FONT, fontSize: 60, fontWeight: '700', fontVariant: ['tabular-nums'] },
   mhz: { fontFamily: FONT, fontSize: 20, fontWeight: '700' },
   rtZone: { flexShrink: 0, alignItems: 'stretch', justifyContent: 'center' },
+  // minHeight (not height) so ×1.5 font-scale grows the strip instead of clipping.
   rtStrip: {
-    borderWidth: 1, borderRadius: 16, height: 52, width: '100%', maxWidth: 880, alignSelf: 'center',
+    borderWidth: 1, borderRadius: 16, minHeight: 52, width: '100%', maxWidth: 880, alignSelf: 'center',
     justifyContent: 'center', overflow: 'hidden', paddingHorizontal: 28,
   },
   rtTrack: { flexDirection: 'row', alignSelf: 'flex-start', columnGap: 100 },

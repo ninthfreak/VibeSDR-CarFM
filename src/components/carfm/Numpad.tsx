@@ -65,7 +65,7 @@ export default function Numpad({ visible, pal, currentMHz, scanning, onSeek, onT
         <Pressable style={[styles.card, { backgroundColor: pal.panel, paddingVertical: S.cardPadV, paddingHorizontal: S.cardPadH, borderRadius: S.cardRadius }, maxHeight ? { maxHeight } : null]} onPress={() => {}}>
           {compact ? null : <Text style={[styles.title, { color: pal.dim }]}>TUNE</Text>}
           <View style={[styles.display, { height: S.dispH, borderRadius: S.dispRadius, backgroundColor: pal.raised, borderColor: error ? pal.amber : pal.border }]}>
-            <Text allowFontScaling={false} style={[styles.value, { fontSize: S.value, color: pal.amber, opacity: buf || scanning ? 1 : 0.45 }]}>
+            <Text style={[styles.value, { fontSize: S.value, color: pal.amber, opacity: buf || scanning ? 1 : 0.45 }]}>
               {buf || currentMHz}
             </Text>
             <Text style={[styles.unit, { color: pal.dim }]}>MHz</Text>
@@ -108,7 +108,7 @@ export default function Numpad({ visible, pal, currentMHz, scanning, onSeek, onT
               >
                 {k === '⌫'
                   ? <BackspaceIcon size={30} color={pal.text} />
-                  : <Text allowFontScaling={false} style={[styles.keyText, { fontSize: S.keyFont, color: pal.text }]}>{k}</Text>}
+                  : <Text style={[styles.keyText, { fontSize: S.keyFont, color: pal.text }]}>{k}</Text>}
               </Pressable>
             ))}
           </View>

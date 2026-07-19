@@ -78,7 +78,7 @@ function Row({ st, pal, saved, strength, onTune, onSave }: {
       )}
       <View style={styles.info}>
         <View style={styles.line1}>
-          <Text allowFontScaling={false} style={[styles.freq, { color: pal.text }]}>
+          <Text style={[styles.freq, { color: pal.text }]}>
             {st.frequencyMhz.toFixed(1)}
           </Text>
           <Text style={[styles.mhz, { color: pal.dim }]}>MHz</Text>

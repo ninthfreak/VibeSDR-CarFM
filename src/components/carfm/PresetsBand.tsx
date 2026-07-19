@@ -74,6 +74,7 @@ function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX
           <>
             <Pressable
               onPress={onRemove}
+              hitSlop={9}
               style={[styles.removeBadge, { backgroundColor: pal.amber }]}
               accessibilityRole="button" accessibilityLabel={`Remove preset ${p.name}`}
             >
@@ -81,6 +82,7 @@ function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX
             </Pressable>
             <Pressable
               onPress={() => onMove(-1)} disabled={first}
+              hitSlop={7}
               style={[styles.moveBtn, styles.moveLeft, { backgroundColor: pal.raised, opacity: first ? 0.3 : 1 }]}
               accessibilityRole="button" accessibilityLabel="Move left"
             >
@@ -88,6 +90,7 @@ function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX
             </Pressable>
             <Pressable
               onPress={() => onMove(1)} disabled={last}
+              hitSlop={7}
               style={[styles.moveBtn, styles.moveRight, { backgroundColor: pal.raised, opacity: last ? 0.3 : 1 }]}
               accessibilityRole="button" accessibilityLabel="Move right"
             >
@@ -109,7 +112,7 @@ export default function PresetsBand({
   pal, presets, activeIndex, reordering,
   onSelect, onEnterReorder, onExitReorder, onMove, onRemove, onOpenNearby,
   grow = false, bandHeight = 140, showNav = true, showNearby = true,
-  tall = false, twoRows = false, landscape = false,
+  tall = false, twoRows = false, landscape = false, k = 1,
 }: {
   pal: CarFmPalette;
   presets: PresetItem[];
@@ -135,7 +138,10 @@ export default function PresetsBand({
   tall?: boolean;
   twoRows?: boolean;
   landscape?: boolean;
+  /** Type/element ramp factor from the face (ANDROID §0 responsive tokens). */
+  k?: number;
 }) {
+  const S = (v: number) => Math.round(v * (k ?? 1));
   const scroll = useRef<ScrollView>(null);
   const [viewW, setViewW] = useState(0);
   const [viewH, setViewH] = useState(0);
@@ -218,23 +224,25 @@ export default function PresetsBand({
   // Per-track tile sizing (design renderVals). The active tile grows only in the
   // strip tracks; grid/two-row tiles are uniform.
   const tileSizeFor = (active: boolean): TileSize => {
+    const nf = (v: number) => Math.max(12, S(v));   // tile-name legibility floor
     if (tall) {
-      const w = viewW > 0 ? (viewW - 2 * 12 - 8) / 3 : 118;   // 3 cols, 12px gaps, 4px h-pad
-      return { w, h: 128, logo: 50, logoRadius: 13, nameFont: 15 };
+      const g = S(12);
+      const w = viewW > 0 ? (viewW - 2 * g - 8) / 3 : S(118);   // 3 cols, gaps, h-pad
+      return { w, h: S(128), logo: S(50), logoRadius: 13, nameFont: nf(15) };
     }
     if (twoRows) {
       // Fixed row height from the band height (no measure dependency) so the two
       // rows are stable from the first frame.
-      const rowH = Math.max(96, Math.round((bandHeight - GAP) / 2));
-      return { w: 150, h: rowH, logo: 46, logoRadius: 12, nameFont: 15 };
+      const rowH = Math.max(S(96), Math.round((bandHeight - GAP) / 2));
+      return { w: S(150), h: rowH, logo: S(46), logoRadius: 12, nameFont: nf(15) };
     }
     const big = active && !reordering;
     return {
-      w: big ? (landscape ? 134 : 150) : (landscape ? 106 : 118),
+      w: S(big ? (landscape ? 134 : 150) : (landscape ? 106 : 118)),
       h: big ? '100%' : '80%',
-      logo: big ? (landscape ? 50 : 58) : (landscape ? 38 : 44),
+      logo: S(big ? (landscape ? 50 : 58) : (landscape ? 38 : 44)),
       logoRadius: big ? 15 : 12,
-      nameFont: big ? (landscape ? 16 : 18) : (landscape ? 13 : 15),
+      nameFont: nf(big ? (landscape ? 16 : 18) : (landscape ? 13 : 15)),
     };
   };
 
@@ -260,10 +268,11 @@ export default function PresetsBand({
     );
   });
 
+  // Design emptyStyle: a dashed full-band placeholder with the exact copy.
   const empty = (
-    <View style={styles.emptyWrap}>
+    <View style={[styles.emptyWrap, { borderColor: pal.border }]}>
       <Text style={[styles.empty, { color: pal.dim }]}>
-        No presets yet — tap ★ to save the tuned station, or find one with NEARBY.
+        No presets yet — tune a station and tap the ★
       </Text>
     </View>
   );
@@ -277,9 +286,9 @@ export default function PresetsBand({
         ref={scroll}
         showsVerticalScrollIndicator={false}
         onLayout={(e: LayoutChangeEvent) => setViewW(e.nativeEvent.layout.width)}
-        contentContainerStyle={styles.gridWrapTall}
+        contentContainerStyle={[styles.gridWrapTall, { gap: S(12) }]}
       >
-        {presets.length === 0 ? empty : tiles}
+        {tiles}
       </ScrollView>
     );
   } else if (twoRows) {
@@ -292,11 +301,9 @@ export default function PresetsBand({
     for (let i = 0; i < tiles.length; i += 2) cols.push(tiles.slice(i, i + 2));
     gridArea = (
       <ScrollView ref={scroll} horizontal showsHorizontalScrollIndicator={false}>
-        {presets.length === 0 ? empty : (
-          <View style={styles.gridTwoRow}>
-            {cols.map((col, ci) => <View key={ci} style={styles.twoRowCol}>{col}</View>)}
-          </View>
-        )}
+        <View style={styles.gridTwoRow}>
+          {cols.map((col, ci) => <View key={ci} style={styles.twoRowCol}>{col}</View>)}
+        </View>
       </ScrollView>
     );
   } else {
@@ -313,7 +320,7 @@ export default function PresetsBand({
           scrollEventThrottle={16}
           contentContainerStyle={styles.grid}
         >
-          {presets.length === 0 ? empty : tiles}
+          {tiles}
         </ScrollView>
         {showBar ? (
           <View
@@ -334,23 +341,23 @@ export default function PresetsBand({
       {showNav ? (
       <Pressable
         onPress={() => scroll.current?.scrollTo({ x: Math.max(0, scrollX - viewW * 0.8), animated: true })}
-        style={({ pressed }) => [styles.nav, { backgroundColor: pal.raised, borderColor: pal.border }, pressed && { opacity: 0.55 }]}
+        style={({ pressed }) => [styles.nav, { width: Math.max(48, S(56)) }, { backgroundColor: pal.raised, borderColor: pal.border }, pressed && { opacity: 0.55 }]}
         accessibilityRole="button" accessibilityLabel="Scroll presets left"
       >
-        <Text style={[styles.navText, { color: pal.text }]}>‹</Text>
+        <Text style={[styles.navText, { fontSize: S(30), color: pal.text }]}>‹</Text>
       </Pressable>
       ) : null}
 
-      <View style={styles.gridWrap}>{gridArea}</View>
+      <View style={styles.gridWrap}>{presets.length === 0 ? empty : gridArea}</View>
 
       {/* › page-right (strip/two-row only) */}
       {showNav ? (
       <Pressable
         onPress={() => scroll.current?.scrollTo({ x: Math.min(maxScroll, scrollX + viewW * 0.8), animated: true })}
-        style={({ pressed }) => [styles.nav, { backgroundColor: pal.raised, borderColor: pal.border }, pressed && { opacity: 0.55 }]}
+        style={({ pressed }) => [styles.nav, { width: Math.max(48, S(56)) }, { backgroundColor: pal.raised, borderColor: pal.border }, pressed && { opacity: 0.55 }]}
         accessibilityRole="button" accessibilityLabel="Scroll presets right"
       >
-        <Text style={[styles.navText, { color: pal.text }]}>›</Text>
+        <Text style={[styles.navText, { fontSize: S(30), color: pal.text }]}>›</Text>
       </Pressable>
       ) : null}
 
@@ -359,7 +366,7 @@ export default function PresetsBand({
       {!showNearby ? null : reordering ? (
         <Pressable
           onPress={onExitReorder}
-          style={({ pressed }) => [styles.nearby, { backgroundColor: pal.blue }, pressed && { opacity: 0.7 }]}
+          style={({ pressed }) => [styles.nearby, { width: S(92), height: S(92), borderRadius: S(46) }, { backgroundColor: pal.blue }, pressed && { opacity: 0.7 }]}
           accessibilityRole="button" accessibilityLabel="Done reordering"
         >
           <Text style={styles.doneCheck}>✓</Text>
@@ -368,10 +375,10 @@ export default function PresetsBand({
       ) : (
         <Pressable
           onPress={onOpenNearby}
-          style={({ pressed }) => [styles.nearby, { backgroundColor: pal.panel, borderWidth: 1, borderColor: pal.border }, pressed && { opacity: 0.7 }]}
+          style={({ pressed }) => [styles.nearby, { width: S(92), height: S(92), borderRadius: S(46) }, { backgroundColor: pal.panel, borderWidth: 1, borderColor: pal.border }, pressed && { opacity: 0.7 }]}
           accessibilityRole="button" accessibilityLabel="Nearby stations"
         >
-          <MagnifierTower size={64} line={pal.text} glass={pal.raised} />
+          <MagnifierTower size={S(64)} line={pal.text} glass={pal.raised} />
         </Pressable>
       )}
     </View>
@@ -387,8 +394,11 @@ const styles = StyleSheet.create({
   gridWrapTall: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignContent: 'flex-start', paddingHorizontal: 4, paddingVertical: 3 },
   gridTwoRow: { flexDirection: 'row', gap: GAP, alignItems: 'flex-start', paddingVertical: 2 },
   twoRowCol: { gap: GAP },
-  emptyWrap: { justifyContent: 'center', paddingHorizontal: 14, maxWidth: 340 },
-  empty: { fontFamily: FONT, fontSize: 15 },
+  emptyWrap: {
+    flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderStyle: 'dashed', borderRadius: 16, paddingHorizontal: 14,
+  },
+  empty: { fontFamily: FONT, fontSize: 17, textAlign: 'center' },
   tile: {
     borderRadius: 16,
     alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 8,
