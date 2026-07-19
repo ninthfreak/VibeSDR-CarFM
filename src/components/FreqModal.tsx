@@ -126,8 +126,7 @@ export default function FreqModal({
       <KeyboardAvoidingView
         // Android uses windowSoftInputMode=adjustResize (the window already
         // shrinks above the keyboard) so no behavior here — adding one double-
-        // adjusts and makes the box bounce. iOS needs padding.
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        // adjusts and makes the box bounce.
         style={[st.center, { paddingBottom: 16 + kbHeight }]} pointerEvents="box-none"
       >
         <View style={[st.modal, { borderColor: t.barBorder }]}>
@@ -199,10 +198,7 @@ export default function FreqModal({
             {onShare && (
               <TouchableOpacity
                 style={[st.cancelBtn, { borderColor: bdrDim, paddingVertical: btnPadY }]}
-                onPress={() => {
-                  if (Platform.OS === 'ios') { pendingShare.current = true; onClose(); }
-                  else { onShare(); onClose(); }
-                }}
+                onPress={() => { onShare(); onClose(); }}
               >
                 <Text style={{ fontFamily: t.font, fontSize: isWhite ? 13 : 12, color: dimText }}>
                   SHARE

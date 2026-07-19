@@ -82,7 +82,6 @@ import {
 } from '../services/defaultInstance';
 import { isDeepLinkActive, whenInitialLinkChecked } from '../linking/deepLinkState';
 import { parseSdrUrl } from '../linking/SdrLinkHandler';
-import { watchTargetPending } from '../services/watchBoot';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
          repairVibeserverFavourites,
          TcpFav, getTcpFavs, saveTcpFavs } from '../services/favourites';
@@ -131,8 +130,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const [connecting,  setConnecting]    = useState(false);
   const [filter,      setFilter]        = useState('');
   const [defaultInst, setDefaultInst]   = useState<DefaultInstance | null>(null);
-  // Tell native the default-instance name (or '' = none) so the Siri "open and
-  // tune" intent can auto-connect, or prompt the user to set a default.
+  // Tell native the default-instance name (or '' = none) so it can auto-connect,
+  // or prompt the user to set a default.
   useEffect(() => { VibePowerModule?.setDefaultInstance?.(defaultInst?.name ?? ''); }, [defaultInst]);
   const [viewMode,    setViewModeState] = useState<ViewMode>('default');
   const [modeReady,   setModeReady]     = useState(false);
@@ -235,8 +234,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // CarFM: a permanent install boots with the dongle already attached, so no
       // USB_DEVICE_ATTACHED fires. If a dongle is present and autostart is on,
       // connect it and drop into the FM face — the SDR screen restores the last
-      // station. Guarded like the default-instance connect below (link/watch).
-      if (!cancelled && !isDeepLinkActive() && !watchTargetPending.claimed
+      // station. Guarded like the default-instance connect below (link).
+      if (!cancelled && !isDeepLinkActive()
           && !route.params?.noAutoConnect
           && await tryCarAutostartRef.current?.(mode)) return;
       if (!cancelled) splashBridge.dismiss();
@@ -248,7 +247,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // stock picker is never the landing surface; it stays reachable via the
       // face's Advanced menu for dev use.
       if (!cancelled && Platform.OS === 'android'
-          && !isDeepLinkActive() && !watchTargetPending.claimed
+          && !isDeepLinkActive()
           && !route.params?.noAutoConnect) {
         navigation.navigate('SDR', {
           baseUrl: 'ws://127.0.0.1:1', instanceName: 'Local Hardware',
@@ -267,11 +266,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // picker could win, auto-connect to the default, and the link would arrive
       // too late (it opened the default instance instead of the scanned one).
       await whenInitialLinkChecked();
-      // The WATCH is driving this boot — it has already chosen (or is choosing) a
-    // server, so auto-connecting to the default would drag the user straight back to
-    // it. Stand down. (`noAutoConnect` is the durable form: we sit BENEATH the
-    // watch's target so BACK works, but we must not take over.)
-    if (watchTargetPending.claimed || route.params?.noAutoConnect) return;
+      // `noAutoConnect` is the durable "stand down" form: we sit BENEATH another
+      // driver's target so BACK works, but we must not take over and auto-connect
+      // to the default.
+      if (route.params?.noAutoConnect) return;
     if (!cancelled && dEarly && !isDeepLinkActive()) {
         navigation.navigate('SDR', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: null });
       }
@@ -432,21 +430,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const key = `vs_pin:${host}:${port}`;
     let saved = '';
     try { saved = (await AsyncStorage.getItem(key)) ?? ''; } catch {}
-    if (Platform.OS === 'ios' && (Alert as any).prompt) {
-      (Alert as any).prompt(
-        'VibeServer PIN', `Enter the PIN for ${name}`,
-        [{ text: 'Cancel', style: 'cancel' },
-         { text: 'Connect', onPress: (pin?: string) => connectVibeServer(host, port, name, pin || saved) },
-         { text: 'Save & Connect', onPress: (pin?: string) => {
-             const p = pin || saved;
-             AsyncStorage.setItem(key, p).catch(() => {});
-             connectVibeServer(host, port, name, p);
-           } }],
-        'plain-text', saved, 'number-pad');
-    } else {
-      // Android has no Alert.prompt — use the saved PIN if we have one.
-      connectVibeServer(host, port, name, saved);
-    }
+    // Android has no Alert.prompt — use the saved PIN if we have one.
+    connectVibeServer(host, port, name, saved);
   }, [connectVibeServer]);
 
   // Route straight into Local Hardware when the app was launched/resumed by
@@ -664,12 +649,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     { name, host, port, proto: 'spyserver' as const }];
       setTcpFavs(next); saveTcpFavs(next).catch(() => {});
     };
-    if (Platform.OS === 'ios' && (Alert as any).prompt) {
-      (Alert as any).prompt('Name this SpyServer', fallback,
-        [{ text: 'Cancel', style: 'cancel' },
-         { text: 'Save', onPress: (t?: string) => add((t && t.trim()) || fallback) }],
-        'plain-text', fallback);
-    } else add(fallback);
+    add(fallback);
   }, [tcpFavs]);
 
   // Pin a discovered (mDNS) server into the RTL-TCP favourites so it survives
@@ -1033,7 +1013,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           </View>
         </View>
       </Modal>
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={styles.flex}>
 
         {/* Header */}
         <View style={[styles.header, { borderBottomColor: C.border }]}>
@@ -1112,21 +1092,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   const fallback = url.replace(/^https?:\/\//, '');
                   // Already a favourite → just un-favourite. Otherwise ask for a name.
                   if (isFav(url)) { handleToggleFav({ name: fallback, url }); return; }
-                  if (Platform.OS === 'ios' && (Alert as any).prompt) {
-                    (Alert as any).prompt(
-                      'Name this favourite',
-                      url,
-                      [
-                        { text: 'Cancel', style: 'cancel' },
-                        { text: 'Save', onPress: (text?: string) =>
-                            handleToggleFav({ name: (text && text.trim()) || fallback, url }) },
-                      ],
-                      'plain-text',
-                      fallback,
-                    );
-                  } else {
-                    handleToggleFav({ name: fallback, url });
-                  }
+                  handleToggleFav({ name: fallback, url });
                 }}
               >
                 <Text style={{ fontSize: fs(18), color: isFav(normalisedCustomUrl) ? C.red : C.textDim }}>

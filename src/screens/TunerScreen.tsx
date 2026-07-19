@@ -16,7 +16,6 @@ import { isoToFlag, ituToIso, validIso } from '../services/rdsCountry';
 import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
 import ControlsBar, { createMeterBus } from '../components/ControlsBar';
 import { VibePowerModule } from '../components/AudioPlayer';
-import { watchProvider } from '../services/watchProvider';
 import ChatDrawer, { type ChatMessage } from '../components/ChatDrawer';
 import FreqModal from '../components/FreqModal';
 import FmdxDial, { type DialStation } from '../components/FmdxDial';
@@ -256,11 +255,6 @@ export default function TunerScreen({ route, navigation }: Props) {
         const sn = Math.min(1, Math.max(0, s.sig / 70));
         lastSigNorm.current = sn;
         meterBus.emit({ level: sn, peak: sn, snr: 0, dbfs: s.sig, active: true, link: 3 });
-        // The wrist gets the same frame. Throttled inside the provider (4/sec) —
-        // RDS RadioText changes constantly and WCSession queues rather than drops.
-        // `dBf` is FM-DX's own unit; the watch prints whatever string we send, so
-        // it can never disagree with us about the signal.
-        watchProvider.sendFmdx(watchFmdxPayload(s, sn, rxNameRef.current));
         if (s.rds && s.ps) learnStation(s.freqHz, s.ps);  // pin RDS name to the dial
         // Lock-screen card: "STATION · 89.2" (freq beside the RDS name), or just
         // the frequency until RDS locks. Deduped so we don't spam the card.
@@ -346,15 +340,14 @@ export default function TunerScreen({ route, navigation }: Props) {
         b?.resumeFromPower?.();
       }
     });
-    // The iPhone's SYSTEM volume — mirrored to the wrist so its meter shows the truth
+    // The device's SYSTEM volume — tracked so the controls reflect the truth
     // rather than a knob of its own. See VibePowerModule's volume section.
     const subVol = emitter.addListener('VibeVolume', (e: { volume: number }) => {
       sysVolRef.current = e.volume;
-      watchProvider.setVolume(e.volume);
     });
     (NativeModules.VibePowerModule as { getSystemVolume?: () => Promise<number> })
       ?.getSystemVolume?.()
-      .then((v) => { sysVolRef.current = v; watchProvider.setVolume(v); })
+      .then((v) => { sysVolRef.current = v; })
       .catch(() => {});
     return () => { sub.remove(); subVol.remove(); };
   }, [meterBus]);
@@ -376,19 +369,6 @@ export default function TunerScreen({ route, navigation }: Props) {
 
   // Inlay the resolved station logo on the lock-screen artwork.
   useEffect(() => { (VibePowerModule as any)?.setStationLogo?.(logo ?? ''); }, [logo]);
-
-  // …and send the SAME image to the watch, as bytes. The phone has already resolved
-  // it to a local file, so the wrist shows exactly what the phone shows rather than
-  // fetching a URL it has no network path to. Empty = no logo, and the watch then
-  // falls back to the app icon (glass over nothing reads as a broken grey box).
-  useEffect(() => {
-    let cancelled = false;
-    if (!logo) { watchProvider.sendLogo(''); return; }
-    FileSystem.readAsStringAsync(logo, { encoding: FileSystem.EncodingType.Base64 })
-      .then((b64) => { if (!cancelled) watchProvider.sendLogo(b64); })
-      .catch(() => { if (!cancelled) watchProvider.sendLogo(''); });
-    return () => { cancelled = true; };
-  }, [logo]);
 
   // ── Favourite this instance ────────────────────────────────────────────────
   //    The SDR screen offers this from its menu sheet; FM-DX has no menu, so the
@@ -412,76 +392,6 @@ export default function TunerScreen({ route, navigation }: Props) {
       .then((next) => setIsFavourite(next.some((f) => f.url === baseUrl)))
       .catch(() => {});
   }, [baseUrl, instanceName]);
-
-  // The wrist draws the SAME dial, from the same memory.
-  useEffect(() => { watchProvider.sendStations(dialStations); }, [dialStations]);
-
-  // ── Apple Watch: FM-DX is its own screen on the wrist (no spectrum to show). ──
-  //    The crown is DISARMED there by default — this server has ONE receiver and
-  //    retuning it moves the frequency for EVERY listener, so tuning must be a
-  //    deliberate act, not a wrist twitch. The watch owns that latch; by the time a
-  //    tune command reaches us the user has already armed it.
-  useEffect(() => {
-    const token = watchProvider.claim('fmdx');
-    // A mounted tuner screen is a live session — see the same note in SDRScreen. Without
-    // this, a stale 'pick'/'setup' from a watch-driven boot never gets retracted when the
-    // user connects on the phone, and the wrist reports "choose a server" over a radio
-    // that is plainly playing.
-    watchProvider.setPhoneStatus('ready');
-    watchProvider.attach({
-      onTuneDelta: (delta: number, armed: boolean) => {
-        // A SHARED tuner: retuning moves the frequency for EVERY listener on this
-        // server. The watch disarms its crown by default for exactly that reason —
-        // but that gate must not live in the watch's UI alone, or any other watch
-        // screen (or a stale one, after a navigation bug) can tune the receiver out
-        // from under everyone. The phone REQUIRES the assertion.
-        if (!armed) return;
-        if (!delta) return;
-        const cur = latestStRef.current?.freqHz ?? 0;
-        const st0 = stepRef.current;
-        if (!(cur > 0) || !(st0 > 0)) return;
-        // Snap to the step grid first, like the phone's own drum: a detent should
-        // land on a channel, not offset the current fraction.
-        const base = delta > 0 ? Math.floor(cur / st0) : Math.ceil(cur / st0);
-        const f = (base + delta) * st0;
-        armTarget(f);
-        backendRef.current?.tune(f);
-      },
-      onTuneHz: (hz: number) => {
-        if (hz > 0) { armTarget(hz); backendRef.current?.tune(hz); }
-      },
-      onMode: () => {},          // FM-DX is WFM only — no demod choice to make
-      onStep: (hz: number) => { if (hz > 0) setStep(hz); },
-      onZoomDelta: () => {},     // no spectrum, nothing to zoom
-      // Volume is the SYSTEM's, not the backend's — FM-DX audio comes out of the same
-      // speaker as everything else, so the wrist controls it here exactly as it does on
-      // the SDR screen. (Unlike tuning, this disturbs nobody: a shared tuner is shared,
-      // but the loudness in YOUR ear is yours.)
-      onVolumeDelta: (delta: number) => {
-        if (!delta) return;
-        const next = Math.max(0, Math.min(1, sysVolRef.current + delta / 16));
-        sysVolRef.current = next;
-        (NativeModules.VibePowerModule as { setSystemVolume?: (v: number) => void })
-          ?.setSystemVolume?.(next);
-      },
-      onMute: (muted: boolean) => {
-        (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })
-          ?.setMuted?.(muted);
-        watchProvider.setMuted(muted);
-      },
-      onReachableChange: () => {},
-      onHello: () => {
-        const s0 = latestStRef.current;
-        if (s0) {
-          watchProvider.sendFmdx(
-            watchFmdxPayload(s0, Math.min(1, Math.max(0, s0.sig / 70)),
-                             rxNameRef.current),
-          );
-        }
-      },
-    });
-    return () => { watchProvider.release(token); watchProvider.detach(); };
-  }, [armTarget]);
 
   // ── Drum tuning: velocity-adaptive accumulator, snapped to the step grid,
   //    committed once on settle (shared tuner — don't spam retunes). ───────────

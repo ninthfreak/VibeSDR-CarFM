@@ -19,10 +19,7 @@ export type DiscoveredServer = {
   pin: boolean;         // VibeServer only: whether it requires a PIN
 };
 
-const nativeModule: any =
-  Platform.OS === 'ios'
-    ? (NativeModules as any).VibePowerModule
-    : (NativeModules as any).VibeMDNS;
+const nativeModule: any = (NativeModules as any).VibeMDNS;
 
 const key = (host: string, port: number) => `${host}:${port}`;
 

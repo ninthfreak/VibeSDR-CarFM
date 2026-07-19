@@ -183,7 +183,7 @@ export default function ChatDrawer({
 
       {/* Drawer */}
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior="height"
         style={cd.kavWrap}
         pointerEvents="box-none"
       >

@@ -48,7 +48,6 @@ import { localSessionGen, newLocalSession } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
          getLearnedBookmarksNow } from '../services/vibeServer';
 import { setReceiverIso } from '../services/rdsCountry';
-import { watchProvider } from '../services/watchProvider';
 
 /** FFT rate divisor while the phone is backgrounded but the watch is watching.
  *
@@ -180,141 +179,6 @@ function nowUTCStr() {
 let _msgId = 0;
 function mkMsg(type: ChatMessage['type'], text: string, user?: string): ChatMessage {
   return { id: String(++_msgId), type, text, user, ts: nowUTCStr() };
-}
-
-// ── Voice (Siri) query resolution ───────────────────────────────────────────
-// Parse a spoken frequency: "7150", "7.15 MHz", "648 khz", "7150 usb". Bare
-// numbers ≥ 30 are kHz (7150 → 7150 kHz), < 30 are MHz (7.15 / 14 → MHz).
-function parseVoiceFreq(q: string): { hz: number; mode?: string } | null {
-  const lower = q.toLowerCase();
-  const modeM = lower.match(/\b(usb|lsb|sam|am|nfm|fm|cwu|cwl|cw)\b/);
-  const mode  = modeM ? (modeM[1] === 'cw' ? 'cwu' : modeM[1]) : undefined;
-  // NB: only spell out units (mhz/khz/hz). A bare "m"/"k" is NOT treated as a
-  // unit — "20m"/"40m" are ham *bands* (metres), not 20 MHz; band routing below.
-  const numM  = lower.match(/(\d+(?:[.,]\d+)?)\s*(mhz|khz|hz)?/);
-  if (!numM) return null;
-  const n = parseFloat(numM[1].replace(',', '.'));
-  if (Number.isNaN(n)) return null;
-  const unit = numM[2];
-  let hz: number;
-  if (unit === 'mhz')      hz = n * 1e6;
-  else if (unit === 'khz') hz = n * 1e3;
-  else if (unit === 'hz')                  hz = n;
-  else                                     hz = n < 30 ? n * 1e6 : n * 1e3;
-  hz = Math.round(hz);
-  if (hz < MIN_HZ || hz > MAX_HZ) return null;
-  return { hz, mode };
-}
-
-/** Resolve a spoken query to a tune. Frequency first, else the bookmark/band
- *  search (reusing searchStations). Band synonyms (amateur/voice → ham) are
- *  normalised so "40m ham", "40m amateur", "40m voice" all hit the 40m band. */
-function resolveVoiceQuery(
-  q: string, bms: ServerBookmark[], bands: ServerBand[],
-): { hz: number; mode: string | null; isBand: boolean } | null {
-  const lower = q.toLowerCase();
-  // "N metre" amateur band — match the band by its wavelength label directly,
-  // ahead of the fuzzy search. This is robust to Siri mishearing "ham" as "hand"
-  // (we key off the number) and stops a "20 MHz" bookmark like WWV from winning
-  // over the 20m band (bookmarks otherwise always rank before bands). Excludes a
-  // bare "20 MHz"/"20 mhz" (the m must be metres, not a MHz unit prefix).
-  // A spoken mode anywhere in the phrase ("7150 lower sideband", "40m upper
-  // side band") — parseVoiceMode knows every synonym; it overrides band defaults.
-  const spokenMode = parseVoiceMode(q);
-  // CB / "citizens band" — the server's band label is usually just "11m", so the
-  // word "CB" alone finds nothing. Map it onto the 11m band (by label or the
-  // 26.9–27.4 MHz range) so "CB band" and "11m band" both work.
-  if (/\b(c\.?\s?b\.?|citizens?\s*band)\b/i.test(q)) {
-    const band = bands.find((b) => {
-      const l = (b.label || '').toLowerCase();
-      return l.includes('cb') || l.includes('11m') ||
-             ((b.start || 0) <= 27000000 && (b.end || 0) >= 26960000);
-    });
-    if (band) return { hz: band.start, mode: spokenMode ?? band.mode ?? null, isBand: true };
-  }
-  // "N metre" amateur band — match the band by its wavelength label directly,
-  // ahead of the fuzzy search. This is robust to Siri mishearing "ham" as "hand"
-  // (we key off the number) and stops a "20 MHz" bookmark like WWV from winning
-  // over the 20m band (bookmarks otherwise always rank before bands). Excludes a
-  // bare "20 MHz"/"20 mhz" (the m must be metres, not a MHz unit prefix).
-  const meterM = lower.match(/\b(\d{1,4})\s*m(?:et(?:er|re)s?)?\b/);
-  if (meterM && !/\b\d+\s*mhz\b/.test(lower)) {
-    const n = meterM[1];
-    const band = bands.find((b) => {
-      const l = (b.label || '').toLowerCase().replace(/\s+/g, '');
-      return l === `${n}m` || l.startsWith(`${n}m`);
-    });
-    if (band) return { hz: band.start, mode: spokenMode ?? band.mode ?? null, isBand: true };
-  }
-  const norm = q.replace(/\b(amateur|voice|ssb|phone)\b/gi, 'ham');
-  const bandSearch = () => {
-    const res = searchStations(bms, bands, norm, 1);
-    if (!res.length) return null;
-    const r = res[0];
-    if (r.isBand && r.band) return { hz: r.band.start, mode: spokenMode ?? r.band.mode ?? null, isBand: true };
-    if (r.bm)               return { hz: r.bm.frequency, mode: spokenMode ?? r.bm.mode ?? null, isBand: false };
-    return null;
-  };
-  // Only treat the phrase as a numeric tune when it's *purely* a frequency:
-  // a number + optional unit + optional mode words, nothing else. Strip the freq
-  // units AND every spoken-mode phrase — crucially WITHOUT word boundaries and
-  // with \s* between words, so Siri's mashed forms ("lowersideband", "side band")
-  // are all removed; otherwise "7150 lowersideband" keeps letters, gets routed to
-  // the band search, and 7150 (inside 40m) snaps to the band start 7000. If any
-  // letters survive it's a name ("BBC Radio 5", "20m ham band") → search first.
-  const residue = lower
-    // Remove numbers AND any trailing unit first — even glued ("909000hz",
-    // "7150khz"), which a \b-anchored unit strip would miss.
-    .replace(/\d+(?:[.,]\d+)?\s*(?:mhz|khz|hz)?/g, ' ')
-    .replace(/(?:upper|lower)\s*side\s*band|side\s*band|synchron\w*(?:\s*(?:a\.?m|amplitude))?|amplitude\s*modulation|frequency\s*modulation|narrow\s*f\.?m|continuous\s*wave|\b(?:usb|lsb|sam|am|nfm|fm|cwu|cwl|cw|morse)\b/g, ' ')
-    .replace(/[^a-z]/g, '');
-  if (residue.length === 0) {
-    const f = parseVoiceFreq(q);
-    if (f) return { hz: f.hz, mode: spokenMode ?? f.mode ?? null, isBand: false };
-    return bandSearch();
-  }
-  const b = bandSearch();
-  if (b) return b;
-  const f = parseVoiceFreq(q);
-  return f ? { hz: f.hz, mode: spokenMode ?? f.mode ?? null, isBand: false } : null;
-}
-
-/** Spoken demodulator with synonyms → SDRMode. "synchronous AM"/"SAM"→sam,
- *  "lower side band"/"LSB"→lsb, "amplitude modulation"/"AM"→am, etc. Ordered so
- *  the specific phrases win (sam before am, nfm before fm, sideband before am). */
-function parseVoiceMode(q: string): SDRMode | null {
-  const s = q.toLowerCase();
-  const map: [RegExp, SDRMode][] = [
-    [/synchron\w*\s*(a\.?m|amplitude)|\bsync\s*am\b|\bsam\b/, 'sam'],
-    [/upper\s*side\s*?band|\busb\b/, 'usb'],
-    [/lower\s*side\s*?band|\blsb\b/, 'lsb'],
-    [/narrow\w*\s*(f\.?m|frequency)|\bnfm\b/, 'nfm'],
-    [/frequency\s*modulation|\bf\.?m\b/, 'fm'],
-    [/amplitude\s*modulation|\ba\.?m\b/, 'am'],
-    [/\bcwl\b|cw\s*lower/, 'cwl'],
-    [/\bcwu\b|cw\s*upper|\bcw\b|morse|continuous\s*wave/, 'cwu'],
-  ];
-  for (const [re, m] of map) if (re.test(s) && m in MODE_BANDWIDTHS) return m as SDRMode;
-  return null;
-}
-
-/** Spoken step → nearest supported step (Hz). "100Hz"→100, "1kHz"/"1000"→1000. */
-function parseVoiceStep(q: string): number | null {
-  const f = parseVoiceFreq(q.toLowerCase().replace(/\bstep\b/g, ''));
-  // parseVoiceFreq clamps to the tuning range; a bare "100"/"500" wouldn't pass,
-  // so parse a plain Hz/kHz value here too.
-  let hz: number | null = null;
-  const m = q.toLowerCase().match(/(\d+(?:[.,]\d+)?)\s*(khz|hz|k)?/);
-  if (m) {
-    const n = parseFloat(m[1].replace(',', '.'));
-    if (!Number.isNaN(n)) hz = (m[2] === 'khz' || m[2] === 'k') ? n * 1000 : n;
-  }
-  if (hz == null && f) hz = f.hz;
-  if (hz == null) return null;
-  // snap to the nearest supported step
-  let best = STEPS[0], bestD = Infinity;
-  for (const s of STEPS) { const d = Math.abs(s - hz); if (d < bestD) { bestD = d; best = s; } }
-  return best;
 }
 
 /** RFC3339 server timestamp → "HHMMz" (falls back to now) */
@@ -1397,22 +1261,6 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  alive, so the foreground path knows not to re-open a live socket. */
   const specPausedByBgRef = useRef(false);
 
-  /** Re-open the spectrum for a watch that is demonstrably there.
-   *
-   *  Called on every watch message (it heartbeats every 4s), so a spectrum that was
-   *  paused while the watch was actually watching heals itself rather than staying
-   *  dead until some flag happens to change. */
-  const wakeSpectrumForWatch = useCallback(() => {
-    if (appActiveRef.current) return;         // phone's own screen governs
-    const c = client.current; if (!c) return;
-    if (specPausedByBgRef.current) {
-      specPausedByBgRef.current = false;
-      c.resumeSpectrum();
-      c.setRate(WATCH_BG_DIVISOR);
-      watchProvider.setSpecPaused(false);
-    }
-  }, []);
-
   /** Late-bound: zoomBy is declared further down. */
   const zoomByRef = useRef<((factor: number) => void) | null>(null);
 
@@ -1487,8 +1335,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     connectedRef.current = connected;
     if (connected) { VibePowerModule?.setReconnectFailed?.(false); setReconnectFailedUi(false); }
-    // Siri: when live, the intent emits the command now; otherwise it stashes it.
-    VibePowerModule?.setVoiceConnected?.(connected);
   }, [connected]);
 
   // (Re)apply the network notch to the audio engine whenever the connection is up
@@ -1900,21 +1746,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     const subCar = emitter.addListener('VibeCarConnected', (e: { connected: boolean }) => {
       carConnected.current = !!e.connected;
     });
-    // Car browse list pick (Android Auto / CarPlay) — tune via the shared
-    // onSearchTune path so band-aware mode/step + region logic stay in one place.
+    // Car browse list pick (Android Auto) — tune via the shared onSearchTune path
+    // so band-aware mode/step + region logic stay in one place.
     const subCarTune = emitter.addListener('VibeCarTune',
       (e: { frequency: number; mode?: string | null; isBand?: boolean }) => {
         onSearchTuneRef.current?.(e.frequency, e.mode ?? null, !!e.isBand);
       });
-    // Siri voice command — native passes the spoken text + kind; JS resolves and
-    // applies (tune: frequency/bookmark/band via searchStations + band mode/step;
-    // mode: synonyms; step: nearest supported rate).
-    const subVoice = emitter.addListener('VibeVoiceQuery', (e: { query: string; kind?: string }) => {
-      if (e.kind === 'step') { const s = parseVoiceStep(e.query); if (s != null) setStep(s); return; }
-      if (e.kind === 'mode') { const m = parseVoiceMode(e.query); if (m) onModeRef.current?.(m); return; }
-      const r = resolveVoiceQuery(e.query, vtsBookmarks.current, searchBandsRef.current);
-      if (r) onSearchTuneRef.current?.(r.hz, r.mode, r.isBand, true);
-    });
     // Data saver dropped the stream — tear down the spectrum too (native already
     // closed the audio WS) and surface the reconnect prompt.
     const subDsOff = emitter.addListener('VibeDataSaverDisconnect', () => {
@@ -1942,21 +1779,17 @@ export default function SDRScreen({ route, navigation }: Props) {
     const subPath = emitter.addListener('VibeNetworkPathChanged', () => {
       client.current?.forceResubscribe?.('network-path-change');
     });
-    // The iPhone's SYSTEM volume changed — by the hardware buttons, Control Centre, a
-    // headset's own rocker, or by the watch itself. Mirror it to the wrist so the two
-    // can never disagree. (iOS quantises to 1/16 steps, so what arrives here after a
-    // watch-initiated set is the SNAPPED value — which is the truth the watch adopts.)
+    // The device's SYSTEM volume changed — by the hardware buttons, a headset's own
+    // rocker, etc. Track it so the app's own volume state stays in sync.
     const subVol = emitter.addListener('VibeVolume', (e: { volume: number }) => {
       sysVolRef.current = e.volume;
-      watchProvider.setVolume(e.volume);
     });
     // Seed it. The observer emits the current volume when it starts, but that can land
-    // before this listener exists — and KVO only fires on CHANGE thereafter, so without
-    // an explicit read the wrist would show a default until the user happened to touch
-    // something. Which is the exact class of bug this whole part exists to kill.
+    // before this listener exists — and it only fires on CHANGE thereafter, so read
+    // the current value explicitly.
     (NativeModules.VibePowerModule as { getSystemVolume?: () => Promise<number> })
       ?.getSystemVolume?.()
-      .then((v) => { sysVolRef.current = v; watchProvider.setVolume(v); })
+      .then((v) => { sysVolRef.current = v; })
       .catch(() => {});
     // Server-NR protocol messages arrive as text on the native audio WS
     const subWs = emitter.addListener('VibeWsText', (e: { text: string }) => {
@@ -1993,7 +1826,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     });
     return () => {
       sub.remove(); subMute.remove(); subSig.remove(); subSkip.remove(); subWs.remove();
-      subCar.remove(); subCarTune.remove(); subVoice.remove(); subDsOff.remove(); subDsOn.remove(); subPath.remove(); subVol.remove();
+      subCar.remove(); subCarTune.remove(); subDsOff.remove(); subDsOn.remove(); subPath.remove(); subVol.remove();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -2043,14 +1876,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onReceiverLon: (lon) => { if (!destroyed.current) setRecvLon(lon); },
       onReceiverLoc: (lat, lon) => { recvLocRef.current = { lat, lon }; if (!destroyed.current) setRecvLoc({ lat, lon }); },
-      onReconnecting: (busy: boolean) => {
-        // Tell the WRIST a recovery is under way. There are two links in series and
-        // they fail independently; from the watch, "the phone is healing its server
-        // link" and "the phone is dead" look identical. Only the phone knows, so
-        // only the phone can say — otherwise the watch throws a black overlay over
-        // a recovery that is working perfectly well.
-        watchProvider.setReconnecting(busy);
-      },
+      onReconnecting: () => {},
       onLink: (q) => {
         if (destroyed.current) return;
         const b = meterBus.current;
@@ -2059,9 +1885,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Clamp it with the real network health — a bad link can only make it worse.
         const eff = Math.min(q, netLinkRef.current) as 0|1|2|3;
         b.emit({ ...b.value, link: eff });
-        // The PHONE↔SERVER hop's health, sent to the wrist so its warning pill can
-        // name which of the two hops is rough rather than shrugging "LINK ROUGH".
-        watchProvider.setLinkQuality(eff);
         // UberSDR auto-reconnects silently — without a cue the app just looks
         // frozen when the link drops (e.g. the instance reboots). But the spectrum
         // is deliberately paused on minimise/resume, which briefly starves the
@@ -2180,17 +2003,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         // Waterfall/spectrum render imperatively — no React state per frame.
         wfFrameSink.current?.(newBins, s);
-        // The watch feeds off the RAW frame, not the waterfall component: the
-        // primary use case is a locked phone in a pocket, and the Skia tree is
-        // unmounted by then. Plain JS + one bridge call, so it's safe to keep
-        // running while backgrounded. No-ops when no watch is watching.
-        watchProvider.onSpectrum(newBins, {
-          centerHz:   s.centerHz,
-          bwHz:       s.bwHz,
-          tuneHz:     s.frequency,
-          filterLow:  s.bandwidthLow,
-          filterHigh: s.bandwidthHigh,
-        });
         // Geometry/status drives the React overlay (band plan, readouts) —
         // only update when something actually changed (settled frames don't).
         // Epsilon gate: radiod's per-frame frequency stamps can jitter ±1Hz —
@@ -2257,20 +2069,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (sm.level >= sm.peak)   { sm.peak = sm.level; sm.hold = 15; }
           else if (sm.hold > 0)      { sm.hold--; }
           else                       { sm.peak = Math.max(0, sm.peak - 0.02); }
-          // Send the meter TEXT THE PHONE DRAWS, not a metric of the watch's choosing.
-          // OWRX/Kiwi have no SNR (snrDb is hardcoded 0 on them), so a wrist that
-          // rendered SNR showed a permanent "—" while its bar moved perfectly well.
-          watchProvider.setSignal(
-            snrDb, sm.level,
-            meterText(signalModeRef.current, {
-              level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
-              active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6, link: 0,
-            }),
-          );
-          // Backgrounded (watch-only) frames must NOT drive the meter bus: it
-          // re-renders a React leaf per frame, and per-frame React commits in the
-          // background are exactly what starved the audio DSP in v6. Nobody can
-          // see the phone's meter anyway — the watch gets its level above.
+          // Backgrounded frames must NOT drive the meter bus: it re-renders a React
+          // leaf per frame, and per-frame React commits in the background are exactly
+          // what starved the audio DSP in v6. Nobody can see the meter anyway.
           if (appActiveRef.current) {
             meterBus.current.emit({
               level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
@@ -2499,21 +2300,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; }
         setReinit(false);
         setSpecFailed(false);
-        // Keep the spectrum alive if the watch is currently showing it — a
-        // locked phone in a pocket IS the primary watch use case, so pausing
-        // here would kill the feature exactly when it matters. Half rate: the
-        // watch only draws ~10fps, so full rate is wasted bytes and wasted
-        // parse on the thread that feeds the audio DSP. The Skia tree is still
-        // unmounted and every animation driver still cancelled — only the plain
-        // JS path stays alive.
-        if (watchProvider.isActive) {
-          specPausedByBgRef.current = false;
-          client.current?.setRate(WATCH_BG_DIVISOR);
-        } else {
-          specPausedByBgRef.current = true;
-          client.current?.pauseSpectrum();
-        }
-        watchProvider.setSpecPaused(specPausedByBgRef.current);
+        specPausedByBgRef.current = true;
+        client.current?.pauseSpectrum();
       } else if (dataSaverOffRef.current) {
         appActiveRef.current = true;
         // Opened the app after a data-saver disconnect (the Play event may not
@@ -2631,9 +2419,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
     idleActiveRef.current = false; // new client (baseUrl) starts at divisor 1
     const t = setInterval(() => {
-      // A watch showing the waterfall is an active viewer even though nobody is
-      // touching the phone — don't idle-slow the feed under it.
-      if (watchProvider.isActive) return;
       if (!idleActiveRef.current &&
           Date.now() - lastInteractRef.current > IDLE_SLOW_MS) {
         idleActiveRef.current = true;
@@ -2692,16 +2477,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   // we ask the native Vibrator (some tablets genuinely have no motor).
   const [hapticsHardware, setHapticsHardware] = useState(true);
   useEffect(() => {
-    if (Platform.OS === 'ios') {
-      setHapticsHardware(!isTablet);   // no iPad has a Taptic Engine
-      return;
-    }
     const mod = NativeModules.VibePowerModule as
       | { hasVibrator?: () => Promise<boolean> } | undefined;
     mod?.hasVibrator?.()
       .then((has) => setHapticsHardware(has !== false))
       .catch(() => setHapticsHardware(true));
-  }, [isTablet]);
+  }, []);
 
   // ── VFO drum ──────────────────────────────────────────────────────────────
   // Skin-parity step tuning (vSendDelta + vDown from Scalable_Mobile_UI v6.3.1):
@@ -3106,212 +2887,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     onSearchTuneRef.current = onSearchTune;
   });
 
-  // ── Apple Watch: crown/menu commands in, tuned state back out ─────────────
-  //    The watch sends DELTAS, never absolute frequencies — the phone stays the
-  //    single source of truth for step size and band limits, and the watch just
-  //    mirrors whatever we echo back.
-  useEffect(() => {
-    // CLAIM the watch. Two screens can be alive at once (the outgoing one unmounts
-    // asynchronously), and a stale screen streaming rows drags the wrist back to a
-    // waterfall it has already left. Only the owner may send.
-    const token = watchProvider.claim('sdr');
-    // A MOUNTED SDR SCREEN IS A LIVE SESSION — say so.
-    //
-    // phoneStatus was only ever set to 'ready' on the WATCH-DRIVEN launch path
-    // (App.tsx goTo). Connect on the PHONE instead, and nothing ever retracted an
-    // earlier 'pick'/'setup' — so the wrist kept telling the user to choose a server
-    // while a waterfall drew and the crown tuned underneath the message. The status has
-    // to be owned by the thing that KNOWS, and that is the screen that is running.
-    watchProvider.setPhoneStatus('ready');
-    // The watch knows when ITS rows dried up. That was only ever drawn on screen;
-    // make it act. Last line of defence behind the client's own watchdog, and
-    // rate-limited there — so a wedged link can't turn this into a reopen storm.
-    watchProvider.setStaleHandler(() => {
-      client.current?.forceResubscribe?.('watch-rows-idle');
-    });
-    watchProvider.attach({
-      // No arming here: Kiwi/OWRX/UberSDR give every user their OWN VFO, so tuning
-      // disturbs nobody. Arming is an FM-DX rule, not a "shared backend" rule.
-      onTuneDelta: (delta: number) => {
-        const c = client.current; if (!c || !delta) return;
-        wakeSpectrumForWatch();   // a turning crown is proof the watch is watching
-        if (isWholeProfileMode(String(c.getStatus().mode))) return;   // locked to its ensemble
-        const s = stepRef.current; if (!(s > 0)) return;
-        const cur = c.getStatus().frequency;
-        // Snap to the step grid first, exactly like the media-control skip: a
-        // crown detent should land on a channel, not offset the current fraction.
-        const base = delta > 0 ? Math.floor(cur / s) : Math.ceil(cur / s);
-        const [loHz, hiHz] = c.caps.freqRange;
-        const newHz = Math.max(loHz, Math.min(hiHz, (base + delta) * s));
-        if (newHz === cur) return;
-        onTuneHzRef.current?.(newHz);
-      },
-      // Numpad entry. onTuneHz already clamps to the receiver's range, so a
-      // fat-fingered 999 MHz lands on the band edge rather than nowhere.
-      onTuneHz: (hz: number) => { if (hz > 0) onTuneHzRef.current?.(hz); },
-      onMode: (m: string) => { if (m) onModeRef.current?.(m as SDRMode); },
-      onStep: (hz: number) => { if (hz > 0) setStep(hz); },
-
-      // Crown in ZOOM mode. Drives the SAME client.zoom() the phone's zoom drum
-      // drives — so it moves the real waterfall, and the watch gets genuinely
-      // finer bins rather than a magnified crop of coarse ones.
-      // DAB: pick a service. NOT a tune — setAudioServiceId re-sends the demod
-      // without touching the frequency, so the ensemble lock is never disturbed.
-      onDabSelect: (id: number) => {
-        const c = client.current; if (!c || !id) return;
-        c.setAudioServiceId?.(id);
-        setActiveDabId(id);
-      },
-
-      onZoomDelta: (delta: number) => {
-        if (!delta) return;
-        zoomByRef.current?.(Math.pow(2, -delta / 6));
-      },
-
-      // The crown, in volume mode. ONE detent = ONE 1/16 step, because 1/16 IS the
-      // iPhone's volume quantisation — a finer step would round to the same value and
-      // the crown would feel dead for a click or two at a time.
-      //
-      // Applied against the phone's own current volume (sysVolRef, kept true by the KVO
-      // event), never against a value the watch sent us: the phone owns the knob. The
-      // set then SNAPS to 1/16 and the KVO observer echoes the snapped truth back to the
-      // wrist, which adopts it when the crown settles.
-      onVolumeDelta: (delta: number) => {
-        if (!delta) return;
-        const next = Math.max(0, Math.min(1, sysVolRef.current + delta / 16));
-        sysVolRef.current = next;
-        (NativeModules.VibePowerModule as { setSystemVolume?: (v: number) => void })
-          ?.setSystemVolume?.(next);
-      },
-
-      // A mute is NOT "volume to zero": that would destroy the level you were listening
-      // at, so unmuting could not restore it. Route to the phone's existing mute, which
-      // gates playback and leaves the volume where it was.
-      onMute: (muted: boolean) => {
-        (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })
-          ?.setMuted?.(muted);
-        setIsMuted(muted);
-        watchProvider.setMuted(muted);   // echo the truth back, don't leave the wrist guessing
-      },
-
-      // The watch said hello. Answer with the current state so its menu already
-      // knows the mode and step BEFORE the user opens it. Read from the client,
-      // not from React state, which can lag a frame behind the radio.
-      onHello: () => {
-        const c = client.current; if (!c) return;
-        // ANY message from the watch is PROOF it is there and listening — better
-        // proof than a flag, because recency cannot desync. The watch pings every 4s,
-        // so this self-heals a paused spectrum within one heartbeat.
-        //
-        // It has to, because onReachableChange only fires on a CHANGE: if the flag
-        // was already true when we backgrounded and we paused anyway (or the pause
-        // and the flag ever disagree), NOTHING re-opens the socket. The wrist then
-        // sits there tuning perfectly — uplink alive, downlink dead — showing "No
-        // spectrum from iPhone" forever. Same class as the stale-isReachable bug;
-        // the flag is not the truth, the message is.
-        wakeSpectrumForWatch();
-        const s = c.getStatus();
-        // Answer EVERY ping with state — the watch uses the freshness of this to tell
-        // "the phone is dead" apart from "the phone is fine but rows are being lost",
-        // and those need completely different fixes.
-        watchProvider.sendState(s.frequency, String(s.mode), stepRef.current);
-      },
-
-      // The watch app is usually opened AFTER the phone is already locked in a
-      // pocket — by which point we have already closed the spectrum WS. So the
-      // watch coming into view has to be able to REOPEN it, and its going away
-      // has to close it again, entirely while the phone stays backgrounded.
-      onReachableChange: (reachable: boolean) => {
-        if (appActiveRef.current) return;   // phone's own screen governs
-        const c = client.current; if (!c) return;
-        if (reachable) {
-          if (specPausedByBgRef.current) {
-            specPausedByBgRef.current = false;
-            c.resumeSpectrum();
-          }
-          c.setRate(WATCH_BG_DIVISOR);
-        } else if (!specPausedByBgRef.current) {
-          specPausedByBgRef.current = true;
-          c.pauseSpectrum();
-        }
-        watchProvider.setSpecPaused(specPausedByBgRef.current);
-      },
-    });
-    return () => {
-      watchProvider.setStaleHandler(null);
-      watchProvider.release(token);
-      watchProvider.detach();
-    };
-  }, []);
-
-  // ── DAB on the watch: a LIST, not a band ───────────────────────────────────
-  //    A DAB multiplex is one wide block carrying a dozen services; there is nothing
-  //    to hunt in it and nothing to tune (the phone already refuses to — a nudge
-  //    knocks you off the ensemble and kills the decode). So the wrist gets the
-  //    services, and its crown becomes a SELECTOR.
-  useEffect(() => {
-    watchProvider.sendDab({
-      ensemble: dabEnsemble,
-      active: activeDabId,
-      list: dabProgrammes.map((p) => ({ id: p.id, name: p.name })),
-    });
-  }, [dabProgrammes, activeDabId, dabEnsemble]);
-
-  // The playing service's logo, for the wrist. DAB is the EASY case for the logo
-  // lookup: the label is a decoded station name rather than a truncated 8-character
-  // RDS PS, and the country is simply where the receiver is. The one catch is that
-  // the ensemble sends it UNSPACED ("BBC Radio2"), which matches nothing — hence
-  // tidyStationName.
-  useEffect(() => {
-    const name = dabProgrammes.find((p) => p.id === activeDabId)?.name;
-    if (!name) { watchProvider.sendLogo(''); return; }
-    let cancelled = false;
-    resolveStationLogo({ name: tidyStationName(name) })
-      .then((path) => {
-        if (cancelled) return;
-        if (!path) { watchProvider.sendLogo(''); return; }
-        return FileSystem.readAsStringAsync(path, { encoding: FileSystem.EncodingType.Base64 })
-          .then((b64) => { if (!cancelled) watchProvider.sendLogo(b64); });
-      })
-      .catch(() => { if (!cancelled) watchProvider.sendLogo(''); });
-    return () => { cancelled = true; };
-  }, [dabProgrammes, activeDabId]);
-
-  // ADS-B on the watch: aircraft, not a waterfall. 1090 MHz is a whole-profile mode —
-  // there is nothing to tune, and its spectrum is a slab of noise.
-  useEffect(() => { watchProvider.sendAircraft(aircraft); }, [aircraft]);
-
-  // Mode/step: rare, so send immediately.
-  useEffect(() => {
-    watchProvider.sendState(status.frequency, String(status.mode), step);
-  }, [status.mode, step]);   // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Frequency: the AUTHORITATIVE echo, throttled to 4/sec with the last value
-  // always delivered. The watch no longer reads the frequency off the row stream —
-  // rows are lossy and can back up in WCSession, so a busy link served the wrist a
-  // frequency from seconds ago (it lurched backwards mid-tune, then crawled
-  // forward as the queue drained). Throttled state messages can't build a backlog,
-  // and the trailing edge means the wrist always lands on the truth.
-  useEffect(() => {
-    watchProvider.sendFreq(status.frequency, String(status.mode), step);
-  }, [status.frequency]);    // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Mirror the phone's own render settings into the watch's processor, so the
-  // wrist keeps looking like a shrunk phone waterfall (it runs its own
-  // SignalProcessor precisely so it survives the Skia teardown on lock).
-  useEffect(() => {
-    watchProvider.setColormap(colormap);
-    watchProvider.setNeedle(vfoNeedle, vfoIntensity);
-    watchProvider.setSharpness(wfSharpness);
-    watchProvider.setPeakHold(peakHold);
-    watchProvider.setProcessorSettings({
-      autoContrast, wfBrightness, wfContrast, wfSharpness,
-      spatialSmooth, peakHold,
-      manualRange: wfCoarse === 'manual' ? { minDb: dbMin, maxDb: dbMax } : null,
-    });
-  }, [colormap, autoContrast, wfBrightness, wfContrast, wfSharpness,
-      spatialSmooth, peakHold, wfCoarse, dbMin, dbMax, vfoNeedle, vfoIntensity]);
-
   // ── Share — deep link into this station (web-UI URL params; skin parity:
   //    the skin shared window.location.href which carries the same params) ──
   const onShareStation = useCallback(async () => {
@@ -3334,11 +2909,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       ? null
       : buildShareLink({ baseUrl, serverType: st, freq: status.frequency, mode: status.mode });
     try {
-      // iOS shares a real URL object (tappable everywhere); Android targets
-      // ignore the url field, so embed it in the message text instead
-      await Share.share(Platform.OS === 'ios'
-        ? { url, message: appLink ? `${label}\nOpen in CarFM: ${appLink}` : label }
-        : { message: appLink ? `${label}\n${url}\nOpen in CarFM: ${appLink}` : `${label}\n${url}` });
+      // Android share targets ignore the url field, so embed it in the message text.
+      await Share.share({ message: appLink ? `${label}\n${url}\nOpen in CarFM: ${appLink}` : `${label}\n${url}` });
     } catch {}
   }, [baseUrl, status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh]);
 
@@ -3362,35 +2934,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     () => deriveItuRegion(route.params.serverLongitude ?? recvLon),
     [recvLon],   // eslint-disable-line react-hooks/exhaustive-deps
   );
-  // The WRIST needs it too — its band label reads off the same plan, and without the
-  // region it was quoting the American 40m/41m border (7300) on a British receiver.
-  useEffect(() => { watchProvider.setItuRegion(ituRegion); }, [ituRegion]);
   const vtsBookmarks = useRef<ServerBookmark[]>([]);
   const [searchBookmarks, setSearchBookmarks] = useState<ServerBookmark[]>([]);
   const [searchBands,     setSearchBands]     = useState<ServerBand[]>([]);
   const searchBandsRef = useRef<ServerBand[]>([]);
   useEffect(() => { searchBandsRef.current = searchBands; }, [searchBands]);
-  // Cold-launch Siri ("open CarFM and tune to …"): once connected + bookmarks
-  // loaded, apply the pending spoken query the native intent stashed.
-  const pendingVoiceDone = useRef(false);
-  useEffect(() => {
-    if (!connected || pendingVoiceDone.current) return;
-    pendingVoiceDone.current = true;
-    VibePowerModule?.getPendingVoiceQuery?.().then((json: string | null) => {
-      if (!json) return;
-      let cmd: { kind?: string; query?: string };
-      try { cmd = JSON.parse(json); } catch { return; }
-      const q = cmd.query ?? '';
-      setTimeout(() => {   // bookmarks land shortly after connect
-        if (cmd.kind === 'step') { const s = parseVoiceStep(q); if (s != null) setStep(s); }
-        else if (cmd.kind === 'mode') { const m = parseVoiceMode(q); if (m) onModeRef.current?.(m); }
-        else {
-          const r = resolveVoiceQuery(q, vtsBookmarks.current, searchBandsRef.current);
-          if (r) onSearchTuneRef.current?.(r.hz, r.mode, r.isBand, true);
-        }
-      }, 1500);
-    }).catch(() => {});
-  }, [connected]);
   const [vtsNotif,        setVtsNotif]        = useState<VtsNotifData | null>(null);
   const vtsKey            = useRef(0);
   const vtsLastStation    = useRef('');
