@@ -9,21 +9,26 @@ import Svg, { Circle, Line, Path, Polygon, Rect } from 'react-native-svg';
  * Three concentric broadcast waves around a dot; `strength` 0–4 controls how
  * many waves are amber (position encodes strength — never colour alone).
  */
-export function SignalWaves({ size = 26, strength, on, off }: {
+export function SignalWaves({ size = 33, strength, on, off }: {
   size?: number; strength: number; on: string; off: string;
 }) {
+  // Exact port of RadioFace.dc.html `signalIcon`: viewBox 0 0 34 24, centre dot +
+  // three concentric arc pairs at r 5 / 8.7 / 12.5, lit by level (dot ≥1, pairs
+  // ≥2/≥3/≥4). Width from the caller; height keeps the 34:24 viewBox aspect.
   const s = Math.max(0, Math.min(4, strength));
-  const col = (i: number) => (s > i ? on : off);
+  const col = (n: number) => (s >= n ? on : off);
+  const arc = (d: string, lvl: number) => (
+    <Path d={d} stroke={col(lvl)} strokeWidth={2.2} strokeLinecap="round" fill="none" />
+  );
   return (
-    <Svg width={size} height={size} viewBox="0 0 26 26">
-      <Circle cx="13" cy="13" r="2.4" fill={col(0)} />
-      {/* left + right wave pairs, inner→outer */}
-      <Path d="M8.6 8.6a6.2 6.2 0 0 0 0 8.8" stroke={col(1)} strokeWidth="2" strokeLinecap="round" fill="none" />
-      <Path d="M17.4 8.6a6.2 6.2 0 0 1 0 8.8" stroke={col(1)} strokeWidth="2" strokeLinecap="round" fill="none" />
-      <Path d="M5.4 5.4a10.7 10.7 0 0 0 0 15.2" stroke={col(2)} strokeWidth="2" strokeLinecap="round" fill="none" />
-      <Path d="M20.6 5.4a10.7 10.7 0 0 1 0 15.2" stroke={col(2)} strokeWidth="2" strokeLinecap="round" fill="none" />
-      <Path d="M2.3 2.3a15.1 15.1 0 0 0 0 21.4" stroke={col(3)} strokeWidth="2" strokeLinecap="round" fill="none" />
-      <Path d="M23.7 2.3a15.1 15.1 0 0 1 0 21.4" stroke={col(3)} strokeWidth="2" strokeLinecap="round" fill="none" />
+    <Svg width={size} height={Math.round((size * 24) / 34)} viewBox="0 0 34 24">
+      <Circle cx={15} cy={12} r={2.6} fill={col(1)} />
+      {arc('M11 8 A 5 5 0 0 0 11 16', 2)}
+      {arc('M19 8 A 5 5 0 0 1 19 16', 2)}
+      {arc('M7.5 5 A 8.7 8.7 0 0 0 7.5 19', 3)}
+      {arc('M22.5 5 A 8.7 8.7 0 0 1 22.5 19', 3)}
+      {arc('M4 2 A 12.5 12.5 0 0 0 4 22', 4)}
+      {arc('M26 2 A 12.5 12.5 0 0 1 26 22', 4)}
     </Svg>
   );
 }
@@ -35,10 +40,10 @@ export function StarIcon({ size = 26, filled, color, outline }: {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24">
       <Path
-        d="M12 2.6l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.4l-5.8 3.1 1.1-6.5L2.6 9.4l6.5-.9L12 2.6z"
+        d="M12 17.3 L18.2 21 16.5 13.9 22 9.2 14.8 8.6 12 2 9.2 8.6 2 9.2 7.5 13.9 5.8 21 Z"
         fill={filled ? color : 'none'}
         stroke={filled ? color : outline}
-        strokeWidth="1.8"
+        strokeWidth="1.7"
         strokeLinejoin="round"
       />
     </Svg>
@@ -198,11 +203,11 @@ export function WarningTriangle({ size = 26, color }: { size?: number; color: st
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24">
       <Path
-        d="M10.3 3.9 2.4 17.6a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"
-        stroke={color} strokeWidth="2" strokeLinejoin="round" fill="none"
+        d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+        stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"
       />
-      <Line x1="12" y1="9.5" x2="12" y2="13.5" stroke={color} strokeWidth="2" strokeLinecap="round" />
-      <Circle cx="12" cy="16.8" r="1.15" fill={color} />
+      <Line x1="12" y1="9" x2="12" y2="13" stroke={color} strokeWidth="2" strokeLinecap="round" />
+      <Line x1="12" y1="17" x2="12.01" y2="17" stroke={color} strokeWidth="2" strokeLinecap="round" />
     </Svg>
   );
 }
