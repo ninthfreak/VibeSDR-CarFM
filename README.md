@@ -2,9 +2,9 @@
 
 > **CarFM was originally forked from [VibeSDR](https://github.com/Stuey3D/VibeSDR)** by Stuart (Stuey3D). This is an independent fork under the GPL-3.0 licence; it is not affiliated with or endorsed by the original project.
 
-CarFM is a fork of VibeSDR, a mobile-first software-defined-radio (SDR) receiver for iOS and Android. The codebase connects to remote SDR servers (UberSDR, OpenWebRX/OpenWebRX+, KiwiSDR, FM-DX Webserver) and to local RTL-SDR hardware, with on-device demodulation, a GPU-rendered waterfall, and an Apple Watch companion.
+CarFM is a fork of VibeSDR, a mobile software-defined-radio (SDR) receiver for Android. The codebase connects to remote SDR servers (UberSDR, OpenWebRX/OpenWebRX+, KiwiSDR, FM-DX Webserver) and to local RTL-SDR hardware, with on-device demodulation and a GPU-rendered waterfall.
 
-This fork's changes are recorded in the git history. It has no App Store listing or pre-built release downloads — the way to run it is to **build it from source** (see [Building](#building)).
+This fork's changes are recorded in the git history. It has no Play Store listing or pre-built release downloads — the way to run it is to **build it from source** (see [Building](#building)).
 
 ---
 
@@ -14,21 +14,7 @@ CarFM is an Expo (SDK 56 / React Native 0.85) app with custom native modules, bu
 
 ### Prerequisites
 - Node.js 18+ and `npm install`
-- Xcode 16+ and CocoaPods (iOS)
-- Android SDK / JDK 17 (Android)
-
-### iOS (release archive + device install)
-```bash
-cd ios && pod install && cd ..
-xcodebuild -workspace ios/CarFM.xcworkspace -scheme CarFM \
-  -configuration Release -sdk iphoneos \
-  -archivePath /tmp/CarFM.xcarchive archive \
-  CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=<YOUR_TEAM_ID>
-xcodebuild -exportArchive -archivePath /tmp/CarFM.xcarchive \
-  -exportPath /tmp/CarFM-export -exportOptionsPlist <your-export-options.plist>
-xcrun devicectl device install app --device <DEVICE_UUID> \
-  /tmp/CarFM-export/CarFM.ipa
-```
+- Android SDK / JDK 17
 
 ### Android (release APK / AAB)
 ```bash
@@ -36,12 +22,6 @@ cd android && ./gradlew assembleRelease     # APK; use bundleRelease for a Play 
 adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 The Android native DSP (C++/NDK) is rebuilt automatically by Gradle.
-
-### iOS native DSP
-iOS links the VibeDSP engine as a **prebuilt static library** (`modules/vibe-local-sdr/libs/libvibelocalsdr_ios.a`). If you change any shared C++ under `android/app/src/main/cpp/`, rebuild it before archiving iOS, or the IPA will ship the old engine:
-```bash
-cd modules/vibe-local-sdr && ./build_ios.sh
-```
 
 ---
 
