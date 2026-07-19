@@ -91,37 +91,38 @@ function waveStrength(db: number | null): number {
 // Real RadioText renders in the full text colour; when empty, a dim-italic
 // "Waiting for RadioText…" placeholder shows instead (design rtItemStyle).
 function RadioTextStrip({ text, colors, height = 52, fontSize = 30 }: { text: string; colors: { raised: string; border: string; dim: string; text: string }; height?: number; fontSize?: number }) {
-  const [w, setW] = useState(0);
-  const [tw, setTw] = useState(0);
+  const [trackW, setTrackW] = useState(0);
   const x = useRef(new Animated.Value(0)).current;
   const hasText = text.trim().length > 0;
   const shown = hasText ? text : 'Waiting for RadioText…';
   const textColor = hasText ? colors.text : colors.dim;
   const marquee = shown.length > RT_MARQUEE_CHARS;   // placeholder is short → static
 
+  // Design carfm-ticker: two copies with a fixed gap translate 0 → −50% of the
+  // track over 16s linear, looping seamlessly (the second copy lands where the
+  // first began). RN has no CSS keyframes → Animated.loop reproduces it.
   useEffect(() => {
-    if (!marquee || !w || !tw) { x.setValue(0); return; }
-    x.setValue(w);
+    if (!marquee || !trackW) { x.setValue(0); return; }
+    x.setValue(0);
     const anim = Animated.loop(Animated.timing(x, {
-      toValue: -tw, duration: 16_000, easing: Easing.linear, useNativeDriver: true,
+      toValue: -trackW / 2, duration: 16_000, easing: Easing.linear, useNativeDriver: true,
     }));
     anim.start();
     return () => anim.stop();
-  }, [marquee, w, tw, text, x]);
+  }, [marquee, trackW, text, x]);
 
   return (
     <View
-      style={[styles.rtStrip, { height, backgroundColor: colors.raised, borderColor: colors.border }]}
-      onLayout={(e: LayoutChangeEvent) => setW(e.nativeEvent.layout.width)}
+      style={[styles.rtStrip, { height, backgroundColor: colors.raised, borderColor: colors.border, justifyContent: marquee ? 'flex-start' : 'center' }]}
     >
       {marquee ? (
-        <Animated.Text
-          numberOfLines={1}
-          style={[styles.rtText, { fontSize, color: textColor, transform: [{ translateX: x }] }]}
-          onLayout={(e: LayoutChangeEvent) => setTw(e.nativeEvent.layout.width)}
+        <Animated.View
+          style={[styles.rtTrack, { transform: [{ translateX: x }] }]}
+          onLayout={(e: LayoutChangeEvent) => setTrackW(e.nativeEvent.layout.width)}
         >
-          {shown}
-        </Animated.Text>
+          <Text numberOfLines={1} style={[styles.rtText, { fontSize, color: textColor }]}>{shown}</Text>
+          <Text numberOfLines={1} style={[styles.rtText, { fontSize, color: textColor }]}>{shown}</Text>
+        </Animated.View>
       ) : (
         <Text numberOfLines={1} style={[styles.rtText, { fontSize, color: textColor, fontStyle: hasText ? 'normal' : 'italic', textAlign: 'center' }]}>
           {shown}
@@ -675,6 +676,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderRadius: 16, height: 52, width: '100%', maxWidth: 880, alignSelf: 'center',
     justifyContent: 'center', overflow: 'hidden', paddingHorizontal: 28,
   },
+  rtTrack: { flexDirection: 'row', alignSelf: 'flex-start', columnGap: 100 },
   rtText: { fontFamily: FONT, fontSize: 22 },
 
   scanWrap: { alignItems: 'center', gap: 6 },
