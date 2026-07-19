@@ -79,6 +79,15 @@ content duplicated for a seamless loop).
 **RN strategy:** `Animated`/Reanimated equivalents. Low visual priority but the
 TA pulse and reorder wiggle are noticeable — match feel, not exact easing.
 
+**Seek digit slide — build as a TRANSITION, not keyframes (required):** on each
+frequency change, set the digits to the entry state (`translateY: ±14`, `opacity:
+0.25` — +14 for seek-up so it rises from below, −14 for seek-down) and immediately
+`withTiming`/`Animated.timing` back to `translateY:0, opacity:1` over ~180–220ms.
+It is a single two-endpoint interpolation; do NOT author a `@keyframes`-style
+multi-stop track, and do NOT hard-swap the number (an instant swap reads as a blink,
+not a sweep). The web `carfm-scan-up/down` keyframes exist only because CSS needs
+them to fire on change — RN expresses the same two endpoints with one timing.
+
 ## 7. Text shadows on tell-tale chips
 **Where:** `RadioFace` ~L608–609: `textShadow: '0 1px 2px rgba(0,0,0,0.30)'` on
 RDS/TP/TA/AF labels.

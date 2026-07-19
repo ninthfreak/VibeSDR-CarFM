@@ -1,6 +1,6 @@
 # Handoff: Android Car Head‑Unit — FM Radio Face
 
-**Bundle v1.3.0 — 2026-07-18.** Version is tracked in `VERSION`; check it matches
+**Bundle v1.4.0 — 2026-07-19.** Version is tracked in `VERSION`; check it matches
 your copy before building (stale downloads were the source of earlier drift).
 
 ## Overview
