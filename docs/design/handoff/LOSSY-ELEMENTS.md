@@ -91,6 +91,59 @@ and the custom `scrollBarTrackStyle` (~L704).
 **RN strategy:** `showsHorizontalScrollIndicator={false}` etc.; if the design's
 custom thin track is shown, rebuild it as a small `View` indicator. Low priority.
 
+## 9. Hero carousel prev/next swap (THE preset-change animation) ⚠ not yet built
+**Where:** `RadioFace` `snapHero()` + `componentDidUpdate()` (~L200–277) and
+`navPrev`/`navNext` (~L216–217). ANDROID §8 describes the feel; this is the exact
+procedure. **This is the animation currently missing from the Android build** —
+tapping a peek card / next-preset just hard-cuts the hero. It must morph.
+
+**What it is:** three cards are on screen — `prev` peek (left, tucked under hero),
+`hero` (center), `next` peek (right). Tuning to the adjacent preset shifts the whole
+strip one slot with a real position+size morph (FLIP), not a slide or crossfade.
+
+**Why lossy:** it's a hand-rolled FLIP driven by `getBoundingClientRect()` +
+`element.animate()` keyframes captured across a React re-render. No CSS to copy;
+RN needs `onLayout` bounds + `Animated`/Reanimated shared transitions.
+
+**Direction semantics** (`dir = +1` for NEXT, `-1` for PREV; mirror everything):
+NEXT → the whole strip travels LEFT. Current hero shrinks + slides into the **left
+(prev)** slot; the **right (next)** peek grows + slides into center; the far **left**
+card fades out; a brand-new **right** card fades in. PREV is the mirror image.
+
+**Exact procedure — do NOT approximate this:**
+1. **Before** state changes (in the tap handler), capture the resting bounds of all
+   three slots (`prevRect`, `centerRect`, `nextRect`) and the stage scale factor
+   `sf`. Snapshot the far card that will leave as an absolutely-positioned overlay
+   (`fadeClone`) so it can fade in place after the data moves on. THEN fire the tune.
+2. Let the data update: the three slots now hold the new prev/hero/next content in
+   their **natural resting positions** (this is the FLIP "last").
+3. Immediately run four animations, **duration 520ms**:
+   - **New center** (was the source peek): morph FROM the source-slot rect TO the
+     center rect — grows and slides inward. Source slot = `next` for NEXT, `prev` for PREV.
+   - **Old hero** (now in the landing peek slot): morph FROM `centerRect` TO the
+     landing-slot rect — shrinks and slides outward. Landing = `prev` for NEXT, `next` for PREV.
+   - **fadeClone** (card leaving the far edge): opacity 0.6 → 0, then remove.
+   - **New far card** (freshly appeared in the source slot): opacity 0 → 0.6, **delayed 120ms**.
+4. **Two easings, applied per-frame (they are NOT the same curve):**
+   - translation → ease-out cubic `1 - (1-p)^3`
+   - scale → ease-out quint `1 - (1-p)^5` (size settles slightly *ahead* of position,
+     so a card reaches its final size just before it lands).
+5. **Resolve to the resting transform, never identity.** Peek cards sit at **base
+   scale 0.88** at rest; the morph must end at 0.88 (× the FLIP scale ratio), or the
+   card visibly pops to full size on the last frame. Bake the 0.88 base into both the
+   start and end of each keyframe track.
+
+**RN strategy:** measure the three card slots with `onLayout` (keep last-known
+bounds in refs). On tune, run a FLIP: compute delta bounds old→new, drive
+`translateX/translateY` + `scale` with two `Animated.timing`s (or one Reanimated
+`withTiming` per property) using the cubic/quint easings above over 520ms; animate
+the leaving clone's and entering card's `opacity` (0.6↔0, entering delayed 120ms).
+Reanimated shared-element / layout transitions (`entering`/`exiting` + `Layout`) can
+express this if you pin the peek base scale. **Diff the mid-transition** against a
+screen recording of `CarFmLive.dc.html` — a single still won't catch a pop or a
+wrong direction. Both layout tracks (wide and tall) animate; the peek cards flank
+the hero on both, so the swap runs on both.
+
 ---
 
 ## Elements that DO port by copying values (don't over-engineer these)

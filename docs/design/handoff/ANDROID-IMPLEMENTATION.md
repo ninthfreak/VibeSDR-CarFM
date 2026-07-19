@@ -1,6 +1,6 @@
 # DUDU OS FM Radio — Android implementation spec
 
-*Bundle v1.2.3 — 2026-07-18 (see `VERSION`).*
+*Bundle v1.3.0 — 2026-07-18 (see `VERSION`).*
 
 A complete build spec for the DUDU OS FM radio front-end on Android (Jetpack
 Compose primary; View/XML notes where helpful). It describes **intent, structure,
@@ -315,6 +315,9 @@ reference geometry.
   ease-out quint. Each moving card ends at its **resting transform** (peek cards
   keep their 0.88 base scale — never identity), so nothing pops. Express as
   animated bounds/scale/alpha transitions between the two card slots.
+  **This is the one animation most likely to be skipped — build it from the exact
+  FLIP procedure (capture bounds → tune → morph, two easings, resolve to the 0.88
+  peek base) in LOSSY-ELEMENTS.md #9. Verify against a screen recording, not a still.**
 - **Preset reorder move:** FLIP slide (~300ms, decelerate) as tiles swap.
 - **Scanning:** frequency ticks through values (~34ms/step) toward the target
   station; small vertical fade on the readout per step.
