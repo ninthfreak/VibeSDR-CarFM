@@ -37,15 +37,15 @@
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
-      <!-- vibesdr:// deep links (QR / "Open in VibeSDR" from UberSDR overlay) -->
+      <!-- carfm:// deep links (QR / "Open in VibeSDR" from UberSDR overlay) -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW"/>
         <category android:name="android.intent.category.DEFAULT"/>
         <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="vibesdr"/>
+        <data android:scheme="carfm"/>
       </intent-filter>
       <!-- sdr:// SpyServer links (Airspy directory / SDR# convention). Separate
-           filter (not a 2nd <data> on the vibesdr one) so schemes never
+           filter (not a 2nd <data> on the carfm one) so schemes never
            cross-product with future host rules. -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW"/>

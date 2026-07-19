@@ -1,7 +1,7 @@
 /**
  * RecordingsOverlay — in-app browser for saved audio recordings.
  *
- * Recordings are written by the native engine as VibeSDR_<date>_<freq>_<mode>.m4a
+ * Recordings are written by the native engine as CarFM_<date>_<freq>_<mode>.m4a
  * into the app's document directory (iOS: Documents, visible in Files; Android:
  * app filesDir — see VibeStreamService). They used to be unreachable once you
  * dismissed the share sheet — this screen lists them so you can listen / share /
@@ -35,7 +35,7 @@ interface Rec {
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-// VibeSDR_2026-06-23T14-02-11_7.1500MHz_LSB.m4a
+// CarFM_2026-06-23T14-02-11_7.1500MHz_LSB.m4a
 function parseRec(name: string, uri: string, size: number, mtime: number): Rec {
   const base = name.replace(/\.m4a$/i, '');
   const parts = base.split('_');
@@ -85,7 +85,7 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
       const names = await FileSystem.readDirectoryAsync(dir);
       const list: Rec[] = [];
       for (const n of names) {
-        if (!/^VibeSDR_.*\.m4a$/i.test(n)) continue;
+        if (!/^CarFM_.*\.m4a$/i.test(n)) continue;
         const uri = dir + n;
         const info = await FileSystem.getInfoAsync(uri);
         if (!info.exists) continue;

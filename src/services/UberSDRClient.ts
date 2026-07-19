@@ -514,8 +514,8 @@ export class UberSDRClient {
       method: 'POST',
       headers: {
         'Content-Type':   'application/json',
-        'User-Agent':     'VibeSDR/2.0 (iOS; React Native)',
-        'X-Requested-With': 'VibeSDR',
+        'User-Agent':     'CarFM/2.0 (iOS; React Native)',
+        'X-Requested-With': 'CarFM',
       },
       // password = bypass auth: rate-limited/blocked IPs get through with it
       // (server validates it in this body BEFORE any WS can open)

@@ -8,7 +8,7 @@
  * Body: scrollable text output, character-drip style from decoder service.
  * Tap header to minimise/restore. ✕ to close.
  *
- * Matches VibeSDR_Mockup_SAVE.html #lsv-decoder-panel exactly.
+ * Matches CarFM_Mockup_SAVE.html #lsv-decoder-panel exactly.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';

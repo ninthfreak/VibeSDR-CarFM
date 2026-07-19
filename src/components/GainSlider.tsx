@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Slider from '@react-native-community/slider';
 
-// VibeSDR V4 — RTL-SDR tuner gain control. Used in both the RTL-SDR controls
+// CarFM V4 — RTL-SDR tuner gain control. Used in both the RTL-SDR controls
 // submenu and (a second copy) the demodulators popup for quick access. The
 // `gains` list is the device's supported tuner gains in tenths of a dB.
 

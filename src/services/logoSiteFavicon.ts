@@ -6,7 +6,7 @@
  * pickIconUrl is pure and unit-tested; siteFaviconLogo does the fetch.
  */
 
-const UA = 'VibeSDR-CarFM/1.0';
+const UA = 'CarFM-CarFM/1.0';
 
 /** Choose the highest-value icon URL from a page's HTML, resolved absolute. */
 export function pickIconUrl(html: string, baseUrl: string): string | null {

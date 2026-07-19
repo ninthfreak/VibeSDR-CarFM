@@ -901,7 +901,7 @@ function ControlsBar({
   // params — tappable straight into the station); plain text is the fallback
   const handleShare = useCallback(async () => {
     if (onShareProp) { onShareProp(); return; }
-    await Share.share({ message: `VibeSDR — ${freqStr} ${unit} ${mode.toUpperCase()} — ${instanceHost}` });
+    await Share.share({ message: `CarFM — ${freqStr} ${unit} ${mode.toUpperCase()} — ${instanceHost}` });
   }, [onShareProp, freqStr, unit, mode, instanceHost]);
 
   const hh = Math.floor(recSeconds / 3600);

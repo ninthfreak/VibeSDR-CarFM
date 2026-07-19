@@ -168,7 +168,7 @@ export class FmdxAdapter implements SDRBackend {
     const cw = this.chatWs;
     if (!cw || cw.readyState !== 1) return;
     const payload = JSON.stringify({
-      nickname: (name || 'VibeSDR').slice(0, 32),
+      nickname: (name || 'CarFM').slice(0, 32),
       message:  String(text).slice(0, 255),
     });
     try { cw.send(payload); } catch {}

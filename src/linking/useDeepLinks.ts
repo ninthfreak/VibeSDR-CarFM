@@ -1,5 +1,5 @@
 /**
- * useDeepLinks — cold/warm-start wiring for `vibesdr://` links.
+ * useDeepLinks — cold/warm-start wiring for `carfm://` links.
  *
  * Mounted once at the app root. Handles both entry points:
  *   - cold start: Linking.getInitialURL() (app launched by the link)
@@ -77,7 +77,7 @@ export function useDeepLinks(ready: boolean) {
   // Parse → resolve → (confirm if needed) → navigate.
   const process = async (url: string) => {
     // sdr:// SpyServer links — arbitrary third-party host, opens a raw TCP
-    // socket, so ALWAYS confirm (stricter than vibesdr://, which auto-connects).
+    // socket, so ALWAYS confirm (stricter than carfm://, which auto-connects).
     if (/^sdr:\/\//i.test(url)) {
       const t = parseSdrUrl(url);
       if (!t) { toast('Invalid SpyServer link'); clearDeepLinkActive(); return; }

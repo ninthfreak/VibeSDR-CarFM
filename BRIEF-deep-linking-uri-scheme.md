@@ -1,4 +1,4 @@
-# BRIEF: Custom URI Scheme Deep Linking (`vibesdr://`)
+# BRIEF: Custom URI Scheme Deep Linking (`carfm://`)
 
 **Project:** VibeSDR (React Native / Expo)
 **Author:** Stuart Carr (Stuey3D)
@@ -9,11 +9,11 @@
 
 ## 1. Goal
 
-Register a custom URI scheme `vibesdr://` so that tapping a link (or scanning a QR code) opens VibeSDR and connects it to a specific SDR instance — optionally restoring frequency, mode, and zoom.
+Register a custom URI scheme `carfm://` so that tapping a link (or scanning a QR code) opens VibeSDR and connects it to a specific SDR instance — optionally restoring frequency, mode, and zoom.
 
 Primary use case (Nathan's proposal): an UberSDR instance displays a QR code and/or "Open in VibeSDR" button on its on-load overlay. The encoded URI carries the instance UUID; VibeSDR resolves the UUID via the instance collector it already fetches, then connects.
 
-Secondary use case: VibeSDR's own **share button** gains the ability to emit a `vibesdr://` link alongside the existing web URL, so users can share a complete tuning state app-to-app.
+Secondary use case: VibeSDR's own **share button** gains the ability to emit a `carfm://` link alongside the existing web URL, so users can share a complete tuning state app-to-app.
 
 ---
 
@@ -22,7 +22,7 @@ Secondary use case: VibeSDR's own **share button** gains the ability to emit a `
 ### 2.1 Scheme and host
 
 ```
-vibesdr://connect?<params>
+carfm://connect?<params>
 ```
 
 `connect` is the only action in Phase 1. Unknown actions MUST be ignored gracefully (toast + no-op), never crash.
@@ -41,9 +41,9 @@ vibesdr://connect?<params>
 ### 2.3 Examples
 
 ```
-vibesdr://connect?uuid=550e8400-e29b-41d4-a716-446655440000
-vibesdr://connect?uuid=550e8400-e29b-41d4-a716-446655440000&freq=7074000&mode=usb
-vibesdr://connect?url=wss%3A%2F%2Fkiwi.example.com%3A8073&backend=kiwi&freq=14074000&mode=usb
+carfm://connect?uuid=550e8400-e29b-41d4-a716-446655440000
+carfm://connect?uuid=550e8400-e29b-41d4-a716-446655440000&freq=7074000&mode=usb
+carfm://connect?url=wss%3A%2F%2Fkiwi.example.com%3A8073&backend=kiwi&freq=14074000&mode=usb
 ```
 
 ### 2.4 Rules
@@ -145,7 +145,7 @@ Skip the dialog when the app is cold-starting (nothing to interrupt) — connect
 In the existing share flow, add a second option:
 
 - "Copy web link" (existing behaviour, unchanged)
-- "Copy VibeSDR link" → builds `vibesdr://connect?uuid=...&freq=...&mode=...&zoom=...` from current session state. Only offered when the current backend has a collector UUID (UberSDR); for other backends emit the `url`+`backend` form.
+- "Copy VibeSDR link" → builds `carfm://connect?uuid=...&freq=...&mode=...&zoom=...` from current session state. Only offered when the current backend has a collector UUID (UberSDR); for other backends emit the `url`+`backend` form.
 
 ### 4.6 Expected file changes
 
@@ -191,13 +191,13 @@ Incoming URLs are **untrusted input**:
 **iOS (Simulator + iPhone 17 Pro Max / iPhone SE):**
 
 ```bash
-xcrun simctl openurl booted "vibesdr://connect?uuid=550e8400-e29b-41d4-a716-446655440000"
+xcrun simctl openurl booted "carfm://connect?uuid=550e8400-e29b-41d4-a716-446655440000"
 ```
 
 **Android (Moto G35 / Tab A9):**
 
 ```bash
-adb shell am start -a android.intent.action.VIEW -d "vibesdr://connect?uuid=550e8400-e29b-41d4-a716-446655440000"
+adb shell am start -a android.intent.action.VIEW -d "carfm://connect?uuid=550e8400-e29b-41d4-a716-446655440000"
 ```
 
 Cases to cover:
@@ -219,8 +219,8 @@ Cases to cover:
 ## 8. Future Work (separate briefs — do not implement now)
 
 - **Universal Links / App Links:** hosted association files on a VibeSDR domain → links work in more contexts and fall back to store/web page when the app isn't installed.
-- **QR generation in share sheet:** show a QR of the `vibesdr://` link for cross-device sharing.
-- **Additional actions:** e.g. `vibesdr://bookmark?...` for importing bookmarks.
+- **QR generation in share sheet:** show a QR of the `carfm://` link for cross-device sharing.
+- **Additional actions:** e.g. `carfm://bookmark?...` for importing bookmarks.
 
 ---
 

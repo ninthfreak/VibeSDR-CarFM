@@ -1,4 +1,4 @@
-package com.vibesdr.app
+package com.ninthfreak.carfm
 
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice

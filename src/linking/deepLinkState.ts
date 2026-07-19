@@ -2,7 +2,7 @@
  * deepLinkState — a tiny module-scoped flag shared between the deep-link
  * handler and the instance picker.
  *
- * When a `vibesdr://` link owns the launch (cold or warm start), the handler
+ * When a `carfm://` link owns the launch (cold or warm start), the handler
  * resets the nav stack to the linked SDR. That reset remounts InstancePicker,
  * whose own load effect would otherwise auto-connect to the user's DEFAULT
  * instance and stomp the link's target (link flashes, then reverts to default).

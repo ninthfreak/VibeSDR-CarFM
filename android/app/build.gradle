@@ -87,9 +87,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace 'com.vibesdr.app'
+    namespace 'com.ninthfreak.carfm'
     defaultConfig {
-        applicationId 'com.vibesdr.app'
+        applicationId 'com.ninthfreak.carfm'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 50

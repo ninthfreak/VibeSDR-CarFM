@@ -152,7 +152,7 @@ export async function searchLogoImages(query: string, limit = 24): Promise<Image
     const u = 'https://commons.wikimedia.org/w/api.php?action=query&format=json'
       + `&generator=search&gsrsearch=${encodeURIComponent(query)}&gsrnamespace=6&gsrlimit=${limit}`
       + '&prop=imageinfo&iiprop=url|size|mime&iiurlwidth=256&origin=*';
-    const res = await fetch(u, { headers: { 'User-Agent': 'VibeSDR-CarFM/1.0' } });
+    const res = await fetch(u, { headers: { 'User-Agent': 'CarFM-CarFM/1.0' } });
     const pages = ((await res.json()) as { query?: { pages?: Record<string, {
       title?: string; imageinfo?: { url?: string; thumburl?: string; width?: number; height?: number; mime?: string }[];
     }> } })?.query?.pages ?? {};

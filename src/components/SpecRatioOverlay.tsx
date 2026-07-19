@@ -8,7 +8,7 @@
  * The pill appears above the control bar (positioned via `bottomOffset` prop),
  * slides in with a spring, and has a ✓ tick button to dismiss.
  *
- * Matches the VibeSDR mockup spec-ratio-overlay design exactly.
+ * Matches the CarFM mockup spec-ratio-overlay design exactly.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';

@@ -1,4 +1,4 @@
-package com.vibesdr.app
+package com.ninthfreak.carfm
 
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -33,7 +33,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
     private val TAG = "VibeLocalSDR"
-    private val ACTION_USB_PERMISSION = "com.vibesdr.app.USB_PERMISSION"
+    private val ACTION_USB_PERMISSION = "com.ninthfreak.carfm.USB_PERMISSION"
 
     private val usbManager: UsbManager?
         get() = reactContext.getSystemService(Context.USB_SERVICE) as? UsbManager

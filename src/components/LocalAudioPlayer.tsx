@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { NativeModules, Platform } from 'react-native';
 import { decodeVibeAdpcmFrame } from '../services/imaAdpcm';
 
-// VibeSDR V4 — local-hardware / RTL-TCP audio.
+// CarFM V4 — local-hardware / RTL-TCP audio.
 //
 // The on-device local-SDR shim serves demodulated PCM on its /ws/audio endpoint.
 //  - Android: consumed NATIVELY by the foreground service (startLocalAudio) so

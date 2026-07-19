@@ -53,7 +53,7 @@ export async function saveTcpFavs(favs: TcpFav[]): Promise<void> {
  * One-shot repair for the v8.0.0 mis-detection.
  *
  * detectServerType() matched "vibesdr" as well as "vibeserver" — but "vibesdr"
- * is the CLIENT's name: UberSDR instances carry vibesdr:// deep-link banners, so
+ * is the CLIENT's name: UberSDR instances carry carfm:// deep-link banners, so
  * genuine UberSDR pages matched the VibeServer rule. The picker treats detection
  * as authoritative, so it wrote 'vibeserver' back over the saved favourite: the
  * corruption is PERSISTED, and fixing the detector alone would not undo it.

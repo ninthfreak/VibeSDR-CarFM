@@ -2,7 +2,7 @@ import { NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Thin JS wrapper over the Android RTL-TCP SERVER native methods (VibeLocalSDR).
-// The server shares this device's USB RTL-SDR over the LAN so another VibeSDR /
+// The server shares this device's USB RTL-SDR over the LAN so another CarFM /
 // SDR# can use it. Android-only (iOS has no USB host SDR).
 
 const Local: any = (NativeModules as any).VibeLocalSDR;
@@ -63,7 +63,7 @@ export async function saveServerPersist(on: boolean): Promise<void> {
   try { await AsyncStorage.setItem(PERSIST_KEY, on ? '1' : '0'); } catch {}
 }
 
-export async function getServerName(fallback = 'VibeSDR RTL-SDR'): Promise<string> {
+export async function getServerName(fallback = 'CarFM RTL-SDR'): Promise<string> {
   try { return (await AsyncStorage.getItem(NAME_KEY)) || fallback; } catch { return fallback; }
 }
 export async function saveServerName(name: string): Promise<void> {

@@ -24,7 +24,7 @@ import FmdxDial, { type DialStation } from '../components/FmdxDial';
 // FM-DX Webserver tuner screen (v7). Single shared hardware tuner: server-side
 // demod + RDS, native MP3 audio. No waterfall — station/RDS panels fill the top,
 // and the app's real control island (single VFO drum, no bandwidth) sits at the
-// bottom so it reads as native VibeSDR. Chat is first-class (shared tuning).
+// bottom so it reads as native CarFM. Chat is first-class (shared tuning).
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Tuner'>;
 

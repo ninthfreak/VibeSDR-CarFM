@@ -1,5 +1,5 @@
 /**
- * MenuSheet — slide-up panel matching VibeSDR_Mockup_SAVE.html exactly.
+ * MenuSheet — slide-up panel matching CarFM_Mockup_SAVE.html exactly.
  *
  * Sections (in order):
  *   Nearby Station · Spectrum/Waterfall · Audio · Server Maps
@@ -200,7 +200,7 @@ export interface MenuSheetProps {
   onDisplaySettings?: () => void;
   /** UberSDR server software version (/api/description) — footer right side. */
   serverVersion?:   string | null;
-  /** Opens the About VibeSDR overlay (footer left side). */
+  /** Opens the About CarFM overlay (footer left side). */
   onAbout?:         () => void;
   /** Opens the saved-recordings browser. */
   onRecordings?:    () => void;
@@ -1382,7 +1382,7 @@ export default function MenuSheet({
                 KiwiSDR/OpenWebRX later), so it's keyed by server type. ── */}
             <View style={styles.footerRow}>
               <TouchableOpacity onPress={onAbout} hitSlop={8}>
-                <Text style={styles.footerBrand}>VibeSDR v{APP_VERSION}</Text>
+                <Text style={styles.footerBrand}>CarFM v{APP_VERSION}</Text>
                 <Text style={styles.footerAboutHint}>ABOUT</Text>
               </TouchableOpacity>
               <View style={styles.footerServer}>

@@ -6,7 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import GainSlider from './GainSlider';
 
-// VibeSDR V4 — RTL-SDR hardware controls submenu (Android, local hardware only).
+// CarFM V4 — RTL-SDR hardware controls submenu (Android, local hardware only).
 // Gain (also mirrored in the demodulators popup), PPM, sample rate, bias-T,
 // RTL2832 digital AGC, and direct sampling. Direct sampling is not needed on the
 // Blog V4 (it covers HF directly) — kept for V3/other dongles.

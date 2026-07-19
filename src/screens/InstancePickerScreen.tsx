@@ -157,17 +157,17 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   // First-run tour on the instance list — welcome + the custom-server box.
   const pickerTour = useCoachmarkTour([
-    { id: 'welcome', title: 'Welcome to VibeSDR',
+    { id: 'welcome', title: 'Welcome to CarFM',
       body: 'Browse public SDR servers below, or set a favourite as your default to skip straight in next time.' },
     { id: 'custom', title: 'Your own server',
       body: 'Got a private UberSDR, OpenWebRX or KiwiSDR? Enter its address here to connect to it directly.',
       target: tourRef('customUrl') },
   ], { storageKey: 'lsv_tour_picker_v1' });
-  // CarFM: the stock "Welcome to VibeSDR" picker tour is never auto-started. The
+  // CarFM: the stock "Welcome to CarFM" picker tour is never auto-started. The
   // picker is not a destination in this fork (launch goes straight to the FM
   // face; the picker only exists behind the Advanced view), and its coachmark
   // modal renders ABOVE the face, so a 1.1s-after-splash auto-start popped a
-  // "Welcome to VibeSDR" card over the radio on every startup. Left mounted for
+  // "Welcome to CarFM" card over the radio on every startup. Left mounted for
   // dev use, but it no longer auto-shows.
   void pickerTour;
   const userLocRef = useRef<{ lat: number; lon: number } | null>(null);
@@ -259,7 +259,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       }
 
       // A default instance still auto-connects straight through — unless a
-      // vibesdr:// deep link is driving this launch (it owns the session and
+      // carfm:// deep link is driving this launch (it owns the session and
       // resets us to its target; auto-connecting to the default would stomp it).
       //
       // WAIT for the cold-start link probe before deciding. getInitialURL() is
@@ -1040,7 +1040,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           <View style={styles.headerLeft}>
             <Text style={{ fontFamily: F, fontSize: fs(24), fontWeight: 'bold', color: C.amber, letterSpacing: 3,
               textShadowColor: C.amberGlow, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 8 }}>
-              VibeSDR
+              CarFM
             </Text>
             <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim, letterSpacing: 1 }}>v{APP_VERSION}</Text>
           </View>
@@ -1370,9 +1370,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.textDim, lineHeight: fs(15),
                                paddingHorizontal: 6, paddingTop: 10, paddingBottom: 4 }}>
                   ⚠ KiwiSDRs have very few listening slots, so owners choose who connects. Some
-                  allow only their own web page and refuse apps like VibeSDR; some block broadcast
+                  allow only their own web page and refuse apps like CarFM; some block broadcast
                   or commercial bands and disconnect you the moment you tune there. A refusal or
-                  sudden drop is the owner's restriction — not a fault in VibeSDR. For unrestricted
+                  sudden drop is the owner's restriction — not a fault in CarFM. For unrestricted
                   access, use UberSDR or OpenWebRX.
                 </Text>
               </View>

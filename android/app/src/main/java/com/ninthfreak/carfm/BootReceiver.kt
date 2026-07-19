@@ -1,4 +1,4 @@
-package com.vibesdr.app
+package com.ninthfreak.carfm
 
 import android.content.BroadcastReceiver
 import android.content.Context

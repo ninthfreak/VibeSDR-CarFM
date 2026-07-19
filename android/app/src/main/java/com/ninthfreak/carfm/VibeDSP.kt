@@ -1,4 +1,4 @@
-package com.vibesdr.app
+package com.ninthfreak.carfm
 
 import kotlin.math.abs
 import kotlin.math.ceil

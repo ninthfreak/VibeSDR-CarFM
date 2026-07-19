@@ -1,8 +1,8 @@
 /**
- * theme.ts — VibeSDR design tokens
+ * theme.ts — CarFM design tokens
  *
  * Values taken directly from CSS :root and [data-theme="amber"] variables
- * in VibeSDR_Mockup_SAVE.html. This is the amber (Nixie One) theme.
+ * in CarFM_Mockup_SAVE.html. This is the amber (Nixie One) theme.
  * White (Atkinson) theme values are commented for reference.
  */
 

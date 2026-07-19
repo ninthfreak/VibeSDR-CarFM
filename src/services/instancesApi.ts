@@ -1,7 +1,7 @@
 import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
 
 export interface SDRInstance {
-  uuid:          string | null;  // collector `id` (UUIDv4) — used for vibesdr:// deep links
+  uuid:          string | null;  // collector `id` (UUIDv4) — used for carfm:// deep links
   name:          string;
   url:           string;
   location:      string;

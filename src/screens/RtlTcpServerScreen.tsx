@@ -32,7 +32,7 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
   // here (default on for a direct entry / legacy callers).
   const doAdvertise = route.params?.advertise !== false;
   const adv = useCallback((n: string, p: number) => { if (doAdvertise) advertiseRtlTcp(n, p); }, [doAdvertise]);
-  const [name, setName]       = useState(route.params?.name ?? 'VibeSDR RTL-SDR');
+  const [name, setName]       = useState(route.params?.name ?? 'CarFM RTL-SDR');
   const [info, setInfo]       = useState<ServerInfo | null>(null);
   const [status, setStatus]   = useState<ServerStatus | null>(null);
   const [override, setOverride] = useState(0);
@@ -62,7 +62,7 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
       const existing = await getServerStatus();
       if (cancelled) return;
       if (existing?.running && existing.port > 0) {
-        const adoptedName = await getServerName(route.params?.name ?? 'VibeSDR RTL-SDR');
+        const adoptedName = await getServerName(route.params?.name ?? 'CarFM RTL-SDR');
         if (cancelled) return;
         setName(adoptedName);
         setInfo({ ip: existing.ip || '0.0.0.0', port: existing.port, name: adoptedName });
@@ -74,7 +74,7 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
         return;
       }
 
-      const initialName = await getServerName(route.params?.name ?? 'VibeSDR RTL-SDR');
+      const initialName = await getServerName(route.params?.name ?? 'CarFM RTL-SDR');
       if (cancelled) return;
       setName(initialName);
       // Android 13+: the FGS notification is suppressed without POST_NOTIFICATIONS.
@@ -133,7 +133,7 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
   }, []);
 
   const commitName = useCallback(() => {
-    const n = name.trim() || 'VibeSDR RTL-SDR';
+    const n = name.trim() || 'CarFM RTL-SDR';
     setName(n);
     saveServerName(n);
     if (info) adv(n, info.port);
@@ -223,7 +223,7 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
               onChangeText={setName}
               onBlur={commitName}
               onSubmitEditing={commitName}
-              placeholder="VibeSDR RTL-SDR"
+              placeholder="CarFM RTL-SDR"
               placeholderTextColor={C.goldDim}
               style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]}
             />
