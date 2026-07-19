@@ -1,6 +1,6 @@
 # Handoff: Android Car Head‑Unit — FM Radio Face
 
-**Bundle v1.4.0 — 2026-07-19.** Version is tracked in `VERSION`; check it matches
+**Bundle v1.5.0 — 2026-07-19.** Version is tracked in `VERSION`; check it matches
 your copy before building (stale downloads were the source of earlier drift).
 
 ## Overview
@@ -63,12 +63,16 @@ presets, and open Nearby search.
 **Layout** (vertical stack; reflows between the **wide** and **tall** tracks — see
 `ANDROID-IMPLEMENTATION.md` §4):
 1. **Status bar** — left: signal icon (concentric broadcast waves) + dB, STEREO/MONO pill, and a
-   tell strip (RDS / HD / TP·TA / AF flags); right: settings gear button. Nearby-search sits here
-   on the **tall** track (in the preset band on the wide track). No FM badge. Wraps to a second
-   line on the tall track.
+   tell strip (RDS / HD / TP·TA / AF flags), with PTY/genre; right: settings gear button.
+   Nearby-search sits here on the **tall** track (in the preset band on the wide track). No FM
+   badge. **Wide/landscape:** signal + STEREO + tells + genre share the left cluster (inline).
+   **Tall (portrait / ⅓ slice):** the STEREO pill is horizontally **centered**, with the tell
+   strip centered beneath it and the genre centered below that; the signal icon keeps its dB
+   **stacked below the icon** in the left zone.
 2. **Hero band** — the tuned station, centered:
    - **Center hero card:** station logo tile + call letters + star save button, then frequency
-     (amber) + "MHz". The **RadioText strip** sits below the hero (marquee when text > 46 chars).
+     (amber, **no "MHz" label** — FM is always MHz; the unit shows only in the tune numpad). The
+     **RadioText strip** sits below the hero (marquee when text > 46 chars).
    - **Prev/Next peek cards** flank the hero: the previous and next presets rendered as smaller,
      ~0.88-scale, ~60%-opacity cards that peek in from the sides and sit slightly behind the hero;
      tapping one steps to that preset. Shown on **both** tracks whenever a prev/next preset exists,
@@ -123,10 +127,13 @@ Also has `nogps` ("Waiting for GPS…") and `empty` states — placeholder scaff
   plus a thin vertical **divider** leads the row and returns to All/Music/Talk. Select a genre to
   filter; tap again to clear.
 
-**Row anatomy** (min‑height 92, `bg:raised`, `1px solid border`, `radius:16`, 18px gap):
-- Brand logo (60×60).
-- **Main info block** (sizes to content, not stretched): line 1 = frequency (32px 700) + "MHz"
-  (15px `dim`) + callsign (20px 700) + **service badge only when the station has a non‑FM
+**Row anatomy** (min‑height 92, `bg:raised`, `1px solid border`, `radius:16`, 18px gap;
+**compact metrics on a narrow picker** — phone portrait / ⅓ slice, clamped below ~620dp wide —
+smaller logo/freq/callsign/gaps/padding so the callsign never wraps):
+- Brand logo (60×60; ~46 narrow).
+- **Main info block** (sizes to content on wide, takes the row's slack on narrow): line 1 =
+  frequency (32px 700; **no "MHz" label**) + callsign (20px 700) + **service badge only when the
+  station has a non‑FM
   service** (small bordered pill; hidden otherwise). Line 2 = "City · Genre" meta (15px `dim`).
 - **Saved star:** amber filled star (26×26) shown **only if this station is already a preset**,
   placed **directly to the right of the info block**.

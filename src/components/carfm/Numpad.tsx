@@ -90,7 +90,7 @@ export default function Numpad({ visible, pal, currentMHz, scanning, onSeek, onT
           </View>
           {error ? (
             <Text style={[styles.err, { color: pal.amber }]}>
-              ⚠ Outside {FM_MIN_MHZ.toFixed(1)}–{FM_MAX_MHZ.toFixed(1)} MHz band
+              ⚠ Outside {FM_MIN_MHZ.toFixed(1)}–{FM_MAX_MHZ.toFixed(1)} band
             </Text>
           ) : null}
           <View style={[styles.grid, { gap, marginTop: gap + 4 }]}>

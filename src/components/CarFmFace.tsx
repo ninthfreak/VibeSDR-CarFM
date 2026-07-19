@@ -494,6 +494,46 @@ export default function CarFmFace(props: CarFmFaceProps) {
     onSaveStationPreset(st.callsign, st.frequencyMhz);
   }, [onSaveStationPreset]);
 
+  // Status-bar sub-clusters (design §4.1 v1.5.0). Wide keeps everything inline in
+  // a left cluster; tall splits into three zones — signal left, stereo/tells/PTY
+  // centered, controls right — so the signal dB stacks below the icon and the
+  // stereo column is truly centered regardless of the side widths.
+  const signalCluster = (
+    <View style={[styles.signalPill, tall && styles.signalPillTall]}>
+      <SignalWaves size={L.signalIcon} strength={waveStrength(signalDb)} on={pal.amber} off={pal.meterEmpty} />
+      <Text style={[styles.signalText, { fontSize: L.signalDb, color: pal.dim }]}>
+        {signalDb == null ? '—' : `${Math.round(signalDb)} dB`}
+      </Text>
+    </View>
+  );
+  const stereoCluster = (
+    <View style={styles.stereoCol}>
+      <View style={[styles.stereoRow, {
+        minHeight: L.stereoH, paddingHorizontal: L.stereoPadH, borderRadius: L.stereoRadius,
+        minWidth: L.stereoMinW, borderWidth: 1.5,
+        borderColor: stereo ? pal.blue : pal.border,
+        backgroundColor: stereo ? pal.blueFill : 'transparent',
+      }]}>
+        {stereo ? <StereoWave color={pal.blue} flip w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
+        <Text style={[styles.stereoText, { fontSize: L.stereoFont, color: stereo ? pal.blue : pal.dim }]}>
+          {stereo ? 'STEREO' : 'MONO'}
+        </Text>
+        {stereo ? <StereoWave color={pal.blue} w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
+      </View>
+      <View style={styles.tellStrip}>
+        <Tell label="RDS" on={!!rdsOk} pal={pal} fontSize={L.tellFont} />
+        <Tell label="HD" on={false} pal={pal} fontSize={L.tellFont} />
+        {ta ? <Tell label="TA" on pulse pal={pal} fontSize={L.tellFont} /> : <Tell label="TP" on={!!tp} pal={pal} fontSize={L.tellFont} />}
+        <Tell label="AF" on={!!af} pal={pal} fontSize={L.tellFont} />
+      </View>
+    </View>
+  );
+  const oobEl = !inBand ? (
+    <View style={[styles.oobPill, { borderColor: pal.amber }]}>
+      <Text style={[styles.oobText, { color: pal.amber }]}>⚠ OUT OF FM BAND</Text>
+    </View>
+  ) : null;
+
   return (
     <View
       onLayout={(e: LayoutChangeEvent) => setDim({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
@@ -515,50 +555,38 @@ export default function CarFmFace(props: CarFmFaceProps) {
             Failure to connect to tuner.
           </Text>
         </View>
+        ) : tall ? (
+          // Tall (§4.1): three zones — signal (+ OOB) left, stereo/tells/PTY
+          // centered, controls right. The two flexed sides center the middle.
+          <>
+            <View style={styles.zoneSide}>
+              {signalCluster}
+              {oobEl}
+            </View>
+            <View style={styles.zoneCenter}>
+              {stereoCluster}
+              {ptyText ? (
+                <Text numberOfLines={1} style={[styles.ptyCentered, { fontSize: L.ptyFont, color: pal.dim }]}>{ptyText}</Text>
+              ) : null}
+            </View>
+          </>
         ) : (
-        <View style={[styles.headerLeft, tall && { flexWrap: 'wrap', flexShrink: 1 }]}>
-          <View style={styles.signalPill}>
-            <SignalWaves size={L.signalIcon} strength={waveStrength(signalDb)} on={pal.amber} off={pal.meterEmpty} />
-            <Text style={[styles.signalText, { fontSize: L.signalDb, color: pal.dim }]}>
-              {signalDb == null ? '—' : `${Math.round(signalDb)} dB`}
-            </Text>
+          // Wide/landscape: everything inline in the left cluster.
+          <View style={styles.headerLeft}>
+            {signalCluster}
+            {stereoCluster}
+            {ptyText ? (
+              <View style={[styles.ptyWrap, { maxWidth: 200 }]}>
+                <Text numberOfLines={1} style={[styles.ptyText, { fontSize: L.ptyFont, color: pal.dim }]}>{ptyText}</Text>
+              </View>
+            ) : null}
+            {oobEl}
           </View>
-          <View style={styles.stereoCol}>
-            <View style={[styles.stereoRow, {
-              minHeight: L.stereoH, paddingHorizontal: L.stereoPadH, borderRadius: L.stereoRadius,
-              minWidth: L.stereoMinW, borderWidth: 1.5,
-              borderColor: stereo ? pal.blue : pal.border,
-              backgroundColor: stereo ? pal.blueFill : 'transparent',
-            }]}>
-              {stereo ? <StereoWave color={pal.blue} flip w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
-              <Text style={[styles.stereoText, { fontSize: L.stereoFont, color: stereo ? pal.blue : pal.dim }]}>
-                {stereo ? 'STEREO' : 'MONO'}
-              </Text>
-              {stereo ? <StereoWave color={pal.blue} w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
-            </View>
-            <View style={styles.tellStrip}>
-              <Tell label="RDS" on={!!rdsOk} pal={pal} fontSize={L.tellFont} />
-              <Tell label="HD" on={false} pal={pal} fontSize={L.tellFont} />
-              {ta ? <Tell label="TA" on pulse pal={pal} fontSize={L.tellFont} /> : <Tell label="TP" on={!!tp} pal={pal} fontSize={L.tellFont} />}
-              <Tell label="AF" on={!!af} pal={pal} fontSize={L.tellFont} />
-            </View>
-          </View>
-          {ptyText ? (
-            <View style={[styles.ptyWrap, tall ? { flexBasis: '100%' } : { maxWidth: 200 }]}>
-              <Text numberOfLines={1} style={[styles.ptyText, { fontSize: L.ptyFont, color: pal.dim }]}>{ptyText}</Text>
-            </View>
-          ) : null}
-          {!inBand ? (
-            <View style={[styles.oobPill, { borderColor: pal.amber }]}>
-              <Text style={[styles.oobText, { color: pal.amber }]}>⚠ OUT OF FM BAND</Text>
-            </View>
-          ) : null}
-        </View>
         )}
         {/* Right cluster: gear always; in the tall/portrait track the NEARBY disc
             (design: it moves into the top bar) rides beneath it — becoming DONE
             while reordering, since the presets band no longer hosts it here. */}
-        <View style={styles.headerRight}>
+        <View style={[styles.headerRight, tall && styles.zoneRight]}>
           <Pressable
             onPress={() => setSettingsOpen(true)}
             hitSlop={2}
@@ -608,7 +636,6 @@ export default function CarFmFace(props: CarFmFaceProps) {
             <View style={styles.freqRow}>
               <Text style={[styles.scanArrow, { color: pal.dim }]}>{scan.dir > 0 ? '▲' : '▼'}</Text>
               <SlidingFreq value={fmt(scan.display)} dir={scan.dir} fontSize={L.freq} color={pal.amber} />
-              <Text style={[styles.mhz, { fontSize: L.mhz, color: pal.amber, opacity: 0.9 }]}>MHz</Text>
             </View>
           </View>
         ) : (
@@ -651,7 +678,6 @@ export default function CarFmFace(props: CarFmFaceProps) {
             >
               <View style={styles.freqRow}>
                 <SlidingFreq value={fmt(mhz)} dir={seekLandDir.current} fontSize={L.freq} color={pal.amber} />
-                <Text style={[styles.mhz, { fontSize: L.mhz, color: pal.amber, opacity: 0.9 }]}>MHz</Text>
               </View>
             </Pressable>
           </>
@@ -807,12 +833,20 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 14, flexShrink: 1 },
   headerRight: { alignItems: 'center', gap: 12, flexShrink: 0 },
+  // Tall-track status zones (§4.1 v1.5.0): flexed sides center the wrap-content
+  // middle column; the signal side and controls side each take weight 1.
+  zoneSide: { flex: 1, minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 10 },
+  zoneCenter: { flexShrink: 0, alignItems: 'center', gap: 5 },
+  zoneRight: { flex: 1, alignItems: 'flex-end' },
   headerNearby: { width: 74, height: 74, borderRadius: 37, alignItems: 'center', justifyContent: 'center' },
   headerDoneCheck: { color: '#FFF', fontSize: 22, fontWeight: '700' },
   headerDoneText: { color: '#FFF', fontFamily: FONT_BOLD, fontSize: 11, letterSpacing: 1.5 },
   signalPill: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  // Tall: dB stacks below the icon (design signalWrapStyle column, gap 2).
+  signalPillTall: { flexDirection: 'column', gap: 2 },
   signalText: { fontFamily: FONT_BOLD, fontSize: 17, fontVariant: ['tabular-nums'] },
   stereoCol: { alignItems: 'center', gap: 5 },
+  ptyCentered: { fontFamily: FONT_BOLD, fontSize: 19, letterSpacing: 0.5, textAlign: 'center', maxWidth: '100%' },
   // STEREO/MONO pill: waves flank the label inside a bordered pill (design
   // stereoStyle). Border/fill colour + min-width set inline from the palette.
   stereoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
