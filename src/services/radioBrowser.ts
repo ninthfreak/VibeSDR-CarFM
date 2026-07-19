@@ -9,7 +9,7 @@
  * Polite: descriptive User-Agent, rate-limited, deduped.
  */
 
-const USER_AGENT = 'VibeSDR-CarFM/1.0';
+const USER_AGENT = 'CarFM-CarFM/1.0';
 const MIN_REQUEST_INTERVAL_MS = 1000;
 const MAX_LOGO_BYTES = 200 * 1024;
 const FALLBACK_SERVER = 'https://de1.api.radio-browser.info';

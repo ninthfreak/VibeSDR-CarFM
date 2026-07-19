@@ -1,11 +1,11 @@
 /**
- * DeepLinkHandler — parse / validate / resolve `vibesdr://` deep links.
+ * DeepLinkHandler — parse / validate / resolve `carfm://` deep links.
  *
  * URL grammar (contract agreed with UberSDR host-side, see
  * BRIEF-deep-linking-uri-scheme.md §2):
  *
- *   vibesdr://connect?uuid=<collector id>[&freq=&mode=&zoom=]
- *   vibesdr://connect?url=<pct-encoded https/wss>&backend=<id>[&freq=&mode=&zoom=]
+ *   carfm://connect?uuid=<collector id>[&freq=&mode=&zoom=]
+ *   carfm://connect?url=<pct-encoded https/wss>&backend=<id>[&freq=&mode=&zoom=]
  *
  * This module is pure logic: it turns an untrusted URL string into a validated
  * ResolvedTarget (or null). All navigation / UI lives in useDeepLinks.
@@ -54,8 +54,8 @@ const MODE_MAP: Record<string, SDRMode> = {
 
 /** Minimal, dependency-free query parser for `scheme://action?a=b&c=d`. */
 function splitUrl(raw: string): { action: string; params: Record<string, string> } | null {
-  // vibesdr://connect?uuid=...   → strip scheme, then action[?query]
-  const m = /^vibesdr:\/\/([^?#]*)(?:\?([^#]*))?/i.exec(raw);
+  // carfm://connect?uuid=...   → strip scheme, then action[?query]
+  const m = /^carfm:\/\/([^?#]*)(?:\?([^#]*))?/i.exec(raw);
   if (!m) return null;
   const action = (m[1] || '').replace(/\/+$/, '').toLowerCase();
   const params: Record<string, string> = {};
@@ -158,7 +158,7 @@ export async function resolveRequest(req: DeepLinkRequest): Promise<ResolveResul
     };
   }
 
-  return { ok: false, reason: 'Invalid VibeSDR link' };
+  return { ok: false, reason: 'Invalid CarFM link' };
 }
 
 /** Build an outbound url-form link from the current session (share button). */
@@ -176,5 +176,5 @@ export function buildShareLink(opts: {
     const out = opts.mode === 'cwu' ? 'cw' : opts.mode === 'cwl' ? 'cwr' : opts.mode;
     parts.push(`mode=${out}`);
   }
-  return `vibesdr://connect?${parts.join('&')}`;
+  return `carfm://connect?${parts.join('&')}`;
 }

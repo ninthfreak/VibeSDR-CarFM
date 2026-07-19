@@ -46,7 +46,7 @@ export async function lookupStationLogo(
       // 40, not 10: the right station is often outside the top 10 by votes — widening
       // the pool is what turned "Absolute" from a miss into a hit.
       const url = `${HOST}/json/stations/byname/${encodeURIComponent(name)}?limit=40&order=votes&reverse=true&hidebroken=true`;
-      const res = await fetch(url, { headers: { 'User-Agent': 'VibeSDR/7 (FM-DX tuner)' } });
+      const res = await fetch(url, { headers: { 'User-Agent': 'CarFM/7 (FM-DX tuner)' } });
       const rows: any[] = await res.json();
       const list = Array.isArray(rows) ? rows : [];
       // Country-filtered fuzzy match. The COUNTRY filter (from the transmitter's

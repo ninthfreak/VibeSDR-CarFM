@@ -1,5 +1,5 @@
 /**
- * SDRScreen — main receiver screen for VibeSDR v2.
+ * SDRScreen — main receiver screen for CarFM v2.
  *
  * Hierarchy:
  *   SDRScreen
@@ -488,11 +488,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         if ((await AsyncStorage.getItem('lsv_bg_restrict_dismissed_v1')) === '1') return;
         Alert.alert(
           'Allow background audio',
-          "This device restricts VibeSDR when it isn't on screen, which breaks up audio in the background.\n\n" +
+          "This device restricts CarFM when it isn't on screen, which breaks up audio in the background.\n\n" +
           "To fix it:\n" +
           "1. Tap “Open Settings” below.\n" +
           "2. Open “App battery usage” (or “Battery”) and turn ON “Allow background usage” (some phones instead call it “Unrestricted” / “Don't optimise”).\n" +
-          "3. Then fully close VibeSDR (swipe it away from the recent-apps list) and open it again so the change takes effect.",
+          "3. Then fully close CarFM (swipe it away from the recent-apps list) and open it again so the change takes effect.",
           [
             { text: 'Not now', style: 'cancel' },
             { text: "Don't ask again", style: 'destructive',
@@ -1386,7 +1386,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       AsyncStorage.setItem('owrx_pause_warning_seen', '1').catch(() => {});
       Alert.alert(
         'OpenWebRX — note on pausing',
-        'OpenWebRX receivers use server-side profiles. If you pause from the lock screen, VibeSDR disconnects to free the receiver — and reconnecting resets it to the server’s default profile and frequency. (Locking the screen while playing keeps audio going; this only applies to an explicit pause.)',
+        'OpenWebRX receivers use server-side profiles. If you pause from the lock screen, CarFM disconnects to free the receiver — and reconnecting resets it to the server’s default profile and frequency. (Locking the screen while playing keeps audio going; this only applies to an explicit pause.)',
         [{ text: 'Got it' }],
       );
     }).catch(() => {});
@@ -2337,7 +2337,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // there's nothing to guard against, and c.caps.freqRange isn't reliable yet
       // at restore time (the local device's real caps land after connect), which
       // made it wrongly reset an in-range frequency to the default.
-      // A vibesdr:// deep link's freq/mode override the persisted last-tune, but
+      // A carfm:// deep link's freq/mode override the persisted last-tune, but
       // only on the first connect of this screen (consumed via the ref) so a
       // reconnect/rotation later doesn't yank the user back to the link's freq.
       if (!deepLinkTuneApplied.current) {
@@ -3327,8 +3327,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         url += `&zoom_freq=${Math.round(v.centerHz)}&zoom_bw=${v.binBandwidth.toFixed(1)}`;
       }
     }
-    const label = `VibeSDR — ${(status.frequency / 1e3).toFixed(3)} kHz ${status.mode.toUpperCase()}`;
-    // vibesdr:// app link — opens straight into VibeSDR (url-form, so it works
+    const label = `CarFM — ${(status.frequency / 1e3).toFixed(3)} kHz ${status.mode.toUpperCase()}`;
+    // carfm:// app link — opens straight into CarFM (url-form, so it works
     // for any remote backend). Skip for Local Hardware / RTL-TCP (localhost).
     const st = route.params.serverType ?? 'ubersdr';
     const appLink = route.params.isLocal
@@ -3338,8 +3338,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       // iOS shares a real URL object (tappable everywhere); Android targets
       // ignore the url field, so embed it in the message text instead
       await Share.share(Platform.OS === 'ios'
-        ? { url, message: appLink ? `${label}\nOpen in VibeSDR: ${appLink}` : label }
-        : { message: appLink ? `${label}\n${url}\nOpen in VibeSDR: ${appLink}` : `${label}\n${url}` });
+        ? { url, message: appLink ? `${label}\nOpen in CarFM: ${appLink}` : label }
+        : { message: appLink ? `${label}\n${url}\nOpen in CarFM: ${appLink}` : `${label}\n${url}` });
     } catch {}
   }, [baseUrl, status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh]);
 
@@ -3371,7 +3371,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [searchBands,     setSearchBands]     = useState<ServerBand[]>([]);
   const searchBandsRef = useRef<ServerBand[]>([]);
   useEffect(() => { searchBandsRef.current = searchBands; }, [searchBands]);
-  // Cold-launch Siri ("open VibeSDR and tune to …"): once connected + bookmarks
+  // Cold-launch Siri ("open CarFM and tune to …"): once connected + bookmarks
   // loaded, apply the pending spoken query the native intent stashed.
   const pendingVoiceDone = useRef(false);
   useEffect(() => {
@@ -3754,8 +3754,8 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // ── VTS-aware media session ────────────────────────────────────────────────
   // Track  = freq (user's unit) + demod + tune step ("648 kHz AM · 9 kHz step")
-  // Artist = "VibeSDR: Radio Caroline" on a station, else the band
-  //          ("VibeSDR: 40m Ham Band"); art = app icon + server-type logo.
+  // Artist = "CarFM: Radio Caroline" on a station, else the band
+  //          ("CarFM: 40m Ham Band"); art = app icon + server-type logo.
   useEffect(() => {
     const hz = status.frequency;
     if (!hz) return;
@@ -3790,7 +3790,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       let title: string, artist: string;
       if (liveStationRef.current) {
         title = liveStationRef.current;
-        artist = `VibeSDR · ${fqLine}`;
+        artist = `CarFM · ${fqLine}`;
       } else {
         const nearest = findNearest(vtsBookmarks.current, hz);
         let context: string;
@@ -3803,7 +3803,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           context = bands.length ? bands[0].name : 'HF Radio';
         }
         title = `${fqLine} · ${st}`;
-        artist = `VibeSDR: ${context}`;
+        artist = `CarFM: ${context}`;
       }
       VibePowerModule?.setNowPlaying(title, artist);
       // Local hardware / RTL-TCP reuse serverType 'ubersdr' for the client, but get
@@ -4435,7 +4435,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>{lostLabel} server stopped responding</Text>
             <Text style={styles.serverLostBody}>{route.params.serverType === 'kiwi'
-              ? "The receiver dropped the connection. KiwiSDR owners with few slots often restrict access: some allow only their own web page, so apps like VibeSDR are refused the moment they connect; some block broadcast / commercial bands and disconnect you when you tune there. If reconnecting drops the same way it's likely an owner restriction — try another receiver. Otherwise it may just be busy or restarting: wait a minute and reconnect."
+              ? "The receiver dropped the connection. KiwiSDR owners with few slots often restrict access: some allow only their own web page, so apps like CarFM are refused the moment they connect; some block broadcast / commercial bands and disconnect you when you tune there. If reconnecting drops the same way it's likely an owner restriction — try another receiver. Otherwise it may just be busy or restarting: wait a minute and reconnect."
               : `The receiver dropped the connection — ${lostLabel} servers restart from time to time. Please wait a minute, then reconnect — or pick another from the list.`}</Text>
             <View style={styles.serverLostBtnRow}>
               <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
@@ -4562,7 +4562,7 @@ export default function SDRScreen({ route, navigation }: Props) {
               No response from {instanceName || 'the receiver'}. {route.params.isLocal
                 ? 'Check the SDR is plugged in and try again, or pick another instance.'
                 : isKiwi
-                  ? "It may be offline or a temporary network issue — but if a retry also fails, this KiwiSDR's owner likely only allows their own web page and blocks apps like VibeSDR. Try another, or use UberSDR / OpenWebRX."
+                  ? "It may be offline or a temporary network issue — but if a retry also fails, this KiwiSDR's owner likely only allows their own web page and blocks apps like CarFM. Try another, or use UberSDR / OpenWebRX."
                   : 'It may be offline or unreachable — try again or pick another instance.'}
             </Text>
             <View style={styles.serverLostBtnRow}>
@@ -4815,7 +4815,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onRecordings={() => { setMenuOpen(false); setRecordingsOpen(true); }}
       />
 
-      {/* About VibeSDR — V2 changes, credits, GPL-3.0 */}
+      {/* About CarFM — V2 changes, credits, GPL-3.0 */}
       <AboutOverlay visible={aboutOpen} onClose={() => setAboutOpen(false)} />
       <RecordingsOverlay
         visible={recordingsOpen}

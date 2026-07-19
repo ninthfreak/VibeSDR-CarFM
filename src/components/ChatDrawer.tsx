@@ -5,7 +5,7 @@
  *   1. Join flow — callsign input + JOIN button
  *   2. Chat interface — message thread + input row
  *
- * Matches VibeSDR_Mockup_SAVE.html #lsv-chat-drawer exactly.
+ * Matches CarFM_Mockup_SAVE.html #lsv-chat-drawer exactly.
  * Chat button pulses blue in ControlsBar when chatUnread=true.
  */
 

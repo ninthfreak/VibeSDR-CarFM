@@ -53,7 +53,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const { colors: C, font: F } = themeFor();
 
   const [proto, setProto]         = useState<Proto>('vibeserver');
-  const [name, setName]           = useState(route.params?.name ?? 'VibeSDR');
+  const [name, setName]           = useState(route.params?.name ?? 'CarFM');
   const [advertise, setAdvertise] = useState(true);
   const [pinMode, setPinMode]     = useState<PinMode>('random');
   const [pin, setPin]             = useState(() => randomPin(Date.now()));
@@ -80,7 +80,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   // Load saved preferences + name.
   useEffect(() => {
     (async () => {
-      const n = await getServerName(route.params?.name ?? 'VibeSDR');
+      const n = await getServerName(route.params?.name ?? 'CarFM');
       setName(n);
       try {
         const [p, a, pm, sp, r, fp, cp, ws, ar] = await Promise.all([
@@ -206,7 +206,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     return new Promise<boolean>(resolve => {
       Alert.alert(
         'Allow background usage',
-        "This phone restricts VibeSDR when it isn't on screen, which will starve the server — clients drop out or stop connecting.\n\n" +
+        "This phone restricts CarFM when it isn't on screen, which will starve the server — clients drop out or stop connecting.\n\n" +
         "To fix it:\n" +
         "1. Tap \u201cOpen Settings\u201d.\n" +
         "2. Open \u201cApp battery usage\u201d (or \u201cBattery\u201d) and turn ON \u201cAllow background usage\u201d (some phones call it \u201cUnrestricted\u201d / \u201cDon't optimise\u201d).\n" +
@@ -224,7 +224,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     if (!(await checkBackgroundAllowed())) return;
     setError(null);
     setStarting(true);
-    const n = name.trim() || 'VibeSDR';
+    const n = name.trim() || 'CarFM';
     saveServerName(n);
     await AsyncStorage.multiSet([
       [K.proto, proto], [K.advertise, advertise ? '1' : '0'],
@@ -401,7 +401,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         {/* Shared: advertised name */}
         <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>ADVERTISED NAME</Text>
         <TextInput value={name} onChangeText={setName}
-          placeholder="VibeSDR" placeholderTextColor={C.goldDim}
+          placeholder="CarFM" placeholderTextColor={C.goldDim}
           style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
 
         {/* Shared: auto-discovery */}
@@ -415,7 +415,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           </View>
           <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
             {advertise
-              ? 'This server appears automatically on other VibeSDR devices on the network.'
+              ? 'This server appears automatically on other CarFM devices on the network.'
               : "Hidden — clients must enter this phone's address by hand. Good on a public hotspot" +
                 (proto === 'rtltcp' ? ' (RTL-TCP has no PIN).' : '.')}
           </Text>
@@ -503,7 +503,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             </View>
 
             {/* Web server. Turning this OFF means a browser gets nothing — only the
-                VibeSDR app can connect. It's the blunt lock for a server you don't
+                CarFM app can connect. It's the blunt lock for a server you don't
                 want a stranger stumbling into via a URL. */}
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WEB CLIENT</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
@@ -517,7 +517,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
                 {webServer
                   ? 'Anyone on the network can open this server in a browser (the PIN still applies).'
-                  : 'Browsers get nothing — only the VibeSDR app can connect.'}
+                  : 'Browsers get nothing — only the CarFM app can connect.'}
               </Text>
             </View>
 
@@ -596,7 +596,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           </>
         ) : (
           <TouchableOpacity style={[styles.startBtn, { borderColor: C.amber, backgroundColor: C.amber + '18' }]}
-            onPress={() => navigation.replace('RtlTcpServer', { name: name.trim() || 'VibeSDR RTL-SDR', advertise })}>
+            onPress={() => navigation.replace('RtlTcpServer', { name: name.trim() || 'CarFM RTL-SDR', advertise })}>
             <Text style={{ color: C.amber, fontFamily: F, fontSize: 16 }}>▶ Start RTL-TCP server</Text>
           </TouchableOpacity>
         )}

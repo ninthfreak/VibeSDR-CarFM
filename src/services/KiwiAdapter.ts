@@ -3,7 +3,7 @@
 // everything (control, waterfall, audio decode) lives in TS, and decoded PCM is
 // pushed to the native player via pushExternalPcm so background audio works the
 // same as OWRX. No native Kiwi engine, no Kiwi server-side extensions (deferred —
-// VibeSDR has its own decoders).
+// CarFM has its own decoders).
 //
 // Protocol distilled from the reference KiwiSDR web client (openwebrx.js /
 // audio.js / kiwi_util.js) + v3 brief §4–5:
@@ -403,7 +403,7 @@ export class KiwiAdapter implements SDRBackend {
     this.sendDemod();
     this.sndSend('SET agc=1 hang=0 thresh=-100 slope=6 decay=1000 manGain=50');
     this.sndSend('SET compression=1');
-    this.sndSend('SET ident_user=VibeSDR');
+    this.sndSend('SET ident_user=CarFM');
     this.cb.onStatus(this.getStatus());
   }
 

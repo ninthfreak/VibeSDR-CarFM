@@ -1,4 +1,4 @@
-package com.vibesdr.app
+package com.ninthfreak.carfm
 
 /**
  * VibeSDR V4 — local-SDR shim (Stage 1).

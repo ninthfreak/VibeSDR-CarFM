@@ -7,7 +7,7 @@
  * the network call.
  */
 
-const UA = 'VibeSDR-CarFM/1.0 (https://github.com/ninthfreak/VibeSDR-CarFM)';
+const UA = 'CarFM-CarFM/1.0 (https://github.com/ninthfreak/CarFM-CarFM)';
 
 /** SPARQL: item whose "call sign" (P2317) matches, returning its logo (P154). */
 export function buildSparql(callsign: string): string {

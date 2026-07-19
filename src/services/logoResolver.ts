@@ -58,7 +58,7 @@ export { base64ToBytes } from './base64';
 export async function fetchImage(url: string): Promise<{ bytes: Uint8Array; mime: string } | null> {
   try {
     if (!/^https?:\/\//i.test(url)) return null;
-    const res = await fetch(url, { headers: { 'User-Agent': 'VibeSDR-CarFM/1.0' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'CarFM-CarFM/1.0' } });
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
     if (!buf.byteLength || buf.byteLength > MAX_LOGO_BYTES) return null;

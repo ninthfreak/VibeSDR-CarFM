@@ -4,7 +4,7 @@
  * Original compression maths by M9PSY (Nathan / MadPsy) from vibeWaterfall.ts v1.5.
  * Auto-range algorithm extracted verbatim from UberSDR's spectrum-display.js
  * (updateAutoRange) — the exact algorithm that keeps the web waterfall calibrated.
- * Ported to TypeScript for VibeSDR v2 by Stuey3D + Claude.
+ * Ported to TypeScript for CarFM v2 by Stuey3D + Claude.
  *
  * This module owns ALL FFT-data→display mapping. It receives raw dBFS
  * Float32Arrays from UberSDRClient (server applies NO smoothing on the

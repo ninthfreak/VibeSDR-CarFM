@@ -11,7 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // audio + waterfall over a WebSocket, ~25x lighter than raw RTL-TCP IQ). The
 // heavy lifting is the SAME shim used for local listening — here it's LAN-bound
 // and silent on the serving phone, so the single client slot goes to the one
-// remote VibeSDR. Android-only (only Android owns the local USB dongle).
+// remote CarFM. Android-only (only Android owns the local USB dongle).
 
 const Local: any = (NativeModules as any).VibeLocalSDR;
 
@@ -40,7 +40,7 @@ export type VibeServerConfig = {
   maxBandwidthHz?: number;  // 0 = no cap
   maxFftRate?: number;      // 0 = server default (20 fps)
   compressAudio?: boolean;  // default true
-  /** Serve the browser client at GET /. Off = only the VibeSDR app can connect,
+  /** Serve the browser client at GET /. Off = only the CarFM app can connect,
    *  so a stranger can't stumble in from a URL. Default true. */
   webServer?: boolean;
   /** Pin the capture rate: clients cannot change it, and their picker is hidden.
@@ -260,7 +260,7 @@ export async function geocodeCity(name: string): Promise<ServerLocation | null> 
   try {
     const r = await fetch(
       `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`,
-      { headers: { 'User-Agent': 'VibeSDR/8 (https://github.com/stuey3d/VibeSDR)' } },
+      { headers: { 'User-Agent': 'CarFM/8 (https://github.com/stuey3d/CarFM)' } },
     );
     const j = await r.json() as Array<{ lat: string; lon: string; display_name?: string }>;
     if (!j?.length) return null;
@@ -302,7 +302,7 @@ export async function reverseGeocode(
 
     const r = await fetch(
       `https://nominatim.openstreetmap.org/reverse?format=json&zoom=13&lat=${lat}&lon=${lon}`,
-      { headers: { 'User-Agent': 'VibeSDR/8 (https://github.com/stuey3d/VibeSDR)' } },
+      { headers: { 'User-Agent': 'CarFM/8 (https://github.com/stuey3d/CarFM)' } },
     );
     const j = await r.json() as { address?: Record<string, string> };
     const a = j?.address ?? {};
@@ -382,7 +382,7 @@ export async function publishLocation(): Promise<void> {
   // (the host typed it). The POSITION is published only when opted into. Clients
   // show "Moto G35 / Northampton IO92nh" when both are known, and just the name
   // with a "location not set" note when only the name is.
-  const name = await getServerName('VibeSDR');
+  const name = await getServerName('CarFM');
   const emit = (extra: object = {}) => {
     try { Local.setLocationJson(JSON.stringify({ name, ...extra })); } catch {}
   };

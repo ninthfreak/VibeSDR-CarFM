@@ -2,7 +2,7 @@
  * SdrLinkHandler — parse the de-facto `sdr://host[:port]` SpyServer URI used by
  * SDR#, gqrx and the Airspy directory (<https://airspy.com/directory/>).
  *
- * Kept OUT of DeepLinkHandler.ts on purpose: that file is the `vibesdr://`
+ * Kept OUT of DeepLinkHandler.ts on purpose: that file is the `carfm://`
  * contract and shouldn't grow a second grammar. Pure logic, no UI — returns a
  * validated {host, port} or null. All input is untrusted; the caller toasts a
  * fixed string and only ever sees validated fields, never the raw URL.

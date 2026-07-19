@@ -17,7 +17,7 @@ type Props = {
  *
  * Single-colour, 24x24 grid. The trident keeps the bold USB-logo weight; the
  * antenna mast and waves are drawn finer. Pass `color={theme.fg}` and it tints
- * to the active VibeSDR theme (default or amber/Nixie). Reads best at ~28px+.
+ * to the active CarFM theme (default or amber/Nixie). Reads best at ~28px+.
  */
 export default function UsbSdrIcon({
   size = 24,

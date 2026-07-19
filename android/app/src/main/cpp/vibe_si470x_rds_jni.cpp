@@ -3,7 +3,7 @@
 // RdsDecoder — RDS is decoded once, downstream, never in the backend. Fully
 // additive: plain JNI-named exports, no JNI_OnLoad, touches nothing else.
 //
-// Kotlin side: com.vibesdr.app.Si470xRdsBridge { external fun reset();
+// Kotlin side: com.ninthfreak.carfm.Si470xRdsBridge { external fun reset();
 //   external fun pushGroup(a,b,c,d, okMask): String?  // JSON when state changed
 // }
 #include <jni.h>
@@ -84,7 +84,7 @@ std::string toJson(const State& s) {
 } // namespace
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_Si470xRdsBridge_reset(JNIEnv*, jobject) {
+Java_com_ninthfreak_carfm_Si470xRdsBridge_reset(JNIEnv*, jobject) {
     std::lock_guard<std::mutex> lk(g_mtx);
     if (!g_wired) wire();
     g_dec.reset();
@@ -92,7 +92,7 @@ Java_com_vibesdr_app_Si470xRdsBridge_reset(JNIEnv*, jobject) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vibesdr_app_Si470xRdsBridge_pushGroup(
+Java_com_ninthfreak_carfm_Si470xRdsBridge_pushGroup(
     JNIEnv* env, jobject, jint a, jint b, jint c, jint d, jint okMask) {
     std::lock_guard<std::mutex> lk(g_mtx);
     if (!g_wired) wire();

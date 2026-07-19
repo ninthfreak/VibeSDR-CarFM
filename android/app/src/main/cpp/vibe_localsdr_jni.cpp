@@ -32,7 +32,7 @@ static const char* tunerName(enum rtlsdr_tuner t) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeHello(JNIEnv* env, jobject /*thiz*/) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeHello(JNIEnv* env, jobject /*thiz*/) {
     LOGI("native shim loaded (SDR++ Brown core + librtlsdr linked)");
     return env->NewStringUTF("VibeSDR local-SDR shim: SDR++ Brown core + rtl_sdr linked");
 }
@@ -41,7 +41,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeHello(JNIEnv* env, jobject /*thiz*/) {
 // return a human-readable description. Returns a string starting with "ERROR:"
 // on failure. The fd stays owned by Kotlin; we close only the rtlsdr handle.
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeProbeRtl(JNIEnv* env, jobject /*thiz*/,
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeProbeRtl(JNIEnv* env, jobject /*thiz*/,
                                                  jint fd, jint vid, jint pid) {
     LOGI("probing RTL-SDR: fd=%d vid=0x%04x pid=0x%04x", fd, vid, pid);
 
@@ -72,7 +72,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeProbeRtl(JNIEnv* env, jobject /*thiz*/,
 // Start the local-SDR spectrum pipeline + localhost UberSDR server.
 // Returns the bound TCP port (>0), or -1 on failure (check logcat).
 extern "C" JNIEXPORT jint JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeStartSpectrum(
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeStartSpectrum(
         JNIEnv* env, jobject /*thiz*/, jint fd, jint vid, jint pid,
         jdouble centerFreq, jdouble sampleRate, jint gainTenthDb,
         jint fftSize, jdouble fftRate, jstring mode) {
@@ -89,7 +89,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStartSpectrum(
 // RTL-TCP: IQ from an rtl_tcp server (host:port) instead of a USB fd. Same return
 // contract as nativeStartSpectrum (bound localhost port, or -1).
 extern "C" JNIEXPORT jint JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeStartTcp(
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeStartTcp(
         JNIEnv* env, jobject /*thiz*/, jstring host, jint port,
         jdouble centerFreq, jdouble sampleRate, jint gainTenthDb,
         jint fftSize, jdouble fftRate, jstring mode) {
@@ -109,7 +109,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStartTcp(
 // SpyServer: IQ from a SpyServer-compatible server. Same return contract as
 // nativeStartTcp (bound localhost port, or -1).
 extern "C" JNIEXPORT jint JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeStartSpyServer(
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeStartSpyServer(
         JNIEnv* env, jobject /*thiz*/, jstring host, jint port,
         jdouble centerFreq, jdouble sampleRate, jint gainTenthDb,
         jint fftSize, jdouble fftRate, jstring mode) {
@@ -129,13 +129,13 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStartSpyServer(
 // VibeServer: bind the shim's WS server to the LAN. Must be called BEFORE
 // nativeStartSpectrum. Off by default — it exposes a tuning-control channel.
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetServeOnLan(JNIEnv*, jobject, jboolean on) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetServeOnLan(JNIEnv*, jobject, jboolean on) {
     vibe::LocalSdrShim::setServeOnLan(on);
 }
 
 // VibeServer PIN. Empty secret = open access (no PIN). Call BEFORE start().
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerAuth(JNIEnv* env, jobject, jstring secret) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetVibeServerAuth(JNIEnv* env, jobject, jstring secret) {
     const char* s = secret ? env->GetStringUTFChars(secret, nullptr) : nullptr;
     vibe::LocalSdrShim::setVibeServerAuth(s ? s : "");
     if (secret && s) env->ReleaseStringUTFChars(secret, s);
@@ -143,42 +143,42 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerAuth(JNIEnv* env, jobject, 
 
 // VibeServer compatibility limits. <=0 = no cap / server default. BEFORE start().
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLimits(JNIEnv*, jobject,
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetVibeServerLimits(JNIEnv*, jobject,
                                                             jdouble maxBwHz, jdouble maxFftRate) {
     vibe::LocalSdrShim::setVibeServerLimits(maxBwHz, maxFftRate);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerCompressAudio(JNIEnv*, jobject, jboolean on) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetVibeServerCompressAudio(JNIEnv*, jobject, jboolean on) {
     vibe::LocalSdrShim::setVibeServerCompressAudio(on);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerWebEnabled(JNIEnv*, jobject, jboolean on) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetVibeServerWebEnabled(JNIEnv*, jobject, jboolean on) {
     vibe::LocalSdrShim::setVibeServerWebEnabled(on);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLockedRate(JNIEnv*, jobject, jdouble rate) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetVibeServerLockedRate(JNIEnv*, jobject, jdouble rate) {
     vibe::LocalSdrShim::setVibeServerLockedRate(rate);
 }
 
 // Learned RDS station bookmarks. The shim LEARNS them (it is the only place that sees
 // both the tuned frequency and the decoded name); the app PERSISTS them.
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetBookmarksJson(JNIEnv* env, jobject, jstring json) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetBookmarksJson(JNIEnv* env, jobject, jstring json) {
     const char* c = env->GetStringUTFChars(json, nullptr);
     vibe::LocalSdrShim::setBookmarksJson(c ? c : "");
     if (c) env->ReleaseStringUTFChars(json, c);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeGetBookmarksJson(JNIEnv* env, jobject) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeGetBookmarksJson(JNIEnv* env, jobject) {
     return env->NewStringUTF(vibe::LocalSdrShim::getBookmarksJson().c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeClearBookmarks(JNIEnv*, jobject) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeClearBookmarks(JNIEnv*, jobject) {
     vibe::LocalSdrShim::clearBookmarks();
 }
 
@@ -186,7 +186,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeClearBookmarks(JNIEnv*, jobject) {
 // backgrounded whenever the server is actually serving, and its timers are suspended
 // there, so an import lived in memory and died at the next restart.
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetBookmarksPath(JNIEnv* env, jobject, jstring path) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetBookmarksPath(JNIEnv* env, jobject, jstring path) {
     const char* c = env->GetStringUTFChars(path, nullptr);
     vibe::LocalSdrShim::setBookmarksPath(c ? c : "");
     if (c) env->ReleaseStringUTFChars(path, c);
@@ -196,7 +196,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetBookmarksPath(JNIEnv* env, jobject, j
 // (what the app's Discovered list uses) but cannot publish a hostname A record, which is
 // what resolving a name in a browser actually needs.
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeStartMdns(JNIEnv* env, jobject, jstring host, jstring ip) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeStartMdns(JNIEnv* env, jobject, jstring host, jstring ip) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* i = env->GetStringUTFChars(ip, nullptr);
     vibe::LocalSdrShim::startMdns(h ? h : "", i ? i : "");
@@ -205,12 +205,12 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStartMdns(JNIEnv* env, jobject, jstring 
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeStopMdns(JNIEnv*, jobject) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeStopMdns(JNIEnv*, jobject) {
     vibe::LocalSdrShim::stopMdns();
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeMdnsHostname(JNIEnv* env, jobject) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeMdnsHostname(JNIEnv* env, jobject) {
     return env->NewStringUTF(vibe::LocalSdrShim::mdnsHostname().c_str());
 }
 
@@ -218,7 +218,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeMdnsHostname(JNIEnv* env, jobject) {
 // The APP supplies it because it already downloads + caches EiBi — and a browser
 // cannot fetch eibispace.de itself (no CORS headers), unlike React Native.
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetStationsJson(JNIEnv* env, jobject, jstring json) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetStationsJson(JNIEnv* env, jobject, jstring json) {
     const char* s = json ? env->GetStringUTFChars(json, nullptr) : nullptr;
     vibe::LocalSdrShim::setStationsJson(s ? s : "");
     if (json && s) env->ReleaseStringUTFChars(json, s);
@@ -226,14 +226,14 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetStationsJson(JNIEnv* env, jobject, js
 
 // The RECEIVER's coarse location, served at GET /location.
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetLocationJson(JNIEnv* env, jobject, jstring json) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetLocationJson(JNIEnv* env, jobject, jstring json) {
     const char* s = json ? env->GetStringUTFChars(json, nullptr) : nullptr;
     vibe::LocalSdrShim::setLocationJson(s ? s : "");
     if (json && s) env->ReleaseStringUTFChars(json, s);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeStopSpectrum(JNIEnv* /*env*/, jobject /*thiz*/) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeStopSpectrum(JNIEnv* /*env*/, jobject /*thiz*/) {
     // Tear down on a detached thread so the JS/bridge caller never blocks if the
     // teardown is slow (RTL cancel + thread joins) — the app must not lock up
     // when leaving a local session. stop() is serialised internally (g_lifecycle).
@@ -241,60 +241,60 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStopSpectrum(JNIEnv* /*env*/, jobject /*
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetGain(JNIEnv*, jobject, jint g) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetGain(JNIEnv*, jobject, jint g) {
     vibe::LocalSdrShim::instance().setGain(g);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetPpm(JNIEnv*, jobject, jint ppm) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetPpm(JNIEnv*, jobject, jint ppm) {
     vibe::LocalSdrShim::instance().setPpm(ppm);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetBiasTee(JNIEnv*, jobject, jboolean on) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetBiasTee(JNIEnv*, jobject, jboolean on) {
     vibe::LocalSdrShim::instance().setBiasTee(on);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetAgc(JNIEnv*, jobject, jboolean on) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetAgc(JNIEnv*, jobject, jboolean on) {
     vibe::LocalSdrShim::instance().setAgc(on);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetDirectSampling(JNIEnv*, jobject, jint mode) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetDirectSampling(JNIEnv*, jobject, jint mode) {
     vibe::LocalSdrShim::instance().setDirectSampling(mode);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetSampleRate(JNIEnv*, jobject, jdouble rate) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetSampleRate(JNIEnv*, jobject, jdouble rate) {
     vibe::LocalSdrShim::instance().setSampleRate(rate);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetDeemphasis(JNIEnv*, jobject, jdouble tau) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetDeemphasis(JNIEnv*, jobject, jdouble tau) {
     vibe::LocalSdrShim::instance().setDeemphasis(tau);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetSquelch(JNIEnv*, jobject, jboolean on, jfloat db) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetSquelch(JNIEnv*, jobject, jboolean on, jfloat db) {
     vibe::LocalSdrShim::instance().setSquelch(on, db);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetNR(JNIEnv*, jobject, jboolean on) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetNR(JNIEnv*, jobject, jboolean on) {
     vibe::LocalSdrShim::instance().setNR(on);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetNrStrength(JNIEnv*, jobject, jfloat s) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetNrStrength(JNIEnv*, jobject, jfloat s) {
     vibe::LocalSdrShim::instance().setNrStrength(s);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetNotch(JNIEnv*, jobject, jboolean on) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetNotch(JNIEnv*, jobject, jboolean on) {
     vibe::LocalSdrShim::instance().setNotch(on);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetStereoEnabled(JNIEnv*, jobject, jboolean on) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetStereoEnabled(JNIEnv*, jobject, jboolean on) {
     vibe::LocalSdrShim::instance().setStereoEnabled(on);
 }
 extern "C" JNIEXPORT jfloat JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeGetNrCpu(JNIEnv*, jobject) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeGetNrCpu(JNIEnv*, jobject) {
     return vibe::LocalSdrShim::instance().getNrCpu();
 }
 // ── Decoder-only sidecar (Kiwi/OWRX): decode the backend's audio natively ────
 extern "C" JNIEXPORT jint JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeStartDecoderService(JNIEnv* env, jobject) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeStartDecoderService(JNIEnv* env, jobject) {
     std::string err;
     int port = vibe::LocalSdrShim::instance().startDecoderService(err);
     if (port < 0) LOGE("startDecoderService: %s", err.c_str());
@@ -302,7 +302,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStartDecoderService(JNIEnv* env, jobject
 }
 // PCM is base64-encoded int16 LE (same form JS already builds for pushExternalPcm).
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeFeedDecoderPcm(JNIEnv* env, jobject, jstring b64, jint rate) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeFeedDecoderPcm(JNIEnv* env, jobject, jstring b64, jint rate) {
     if (!b64) return;
     const char* s = env->GetStringUTFChars(b64, nullptr);
     if (!s) return;
@@ -331,13 +331,13 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeFeedDecoderPcm(JNIEnv* env, jobject, jst
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetDecoderFreq(JNIEnv*, jobject, jdouble hz) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetDecoderFreq(JNIEnv*, jobject, jdouble hz) {
     vibe::LocalSdrShim::instance().setDecoderFreq((double)hz);
 }
 
 // ── RTL-TCP SERVER (share this device's USB dongle over the network) ─────────
 extern "C" JNIEXPORT jint JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeStartServer(
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeStartServer(
         JNIEnv* /*env*/, jobject, jint fd, jint vid, jint pid,
         jdouble sampleRate, jdouble centerFreq, jint gainTenthDb,
         jint port, jdouble overrideRate) {
@@ -350,20 +350,20 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStartServer(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeStopServer(JNIEnv*, jobject) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeStopServer(JNIEnv*, jobject) {
     // Detached like nativeStopSpectrum so the JS/bridge caller never blocks on the
     // teardown (socket closes + thread joins).
     std::thread([]{ vibe::RtlTcpServer::instance().stop(); }).detach();
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetServerSampleRate(JNIEnv*, jobject, jdouble rate) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetServerSampleRate(JNIEnv*, jobject, jdouble rate) {
     vibe::RtlTcpServer::instance().setSampleRateOverride((uint32_t)rate);
 }
 
 // Returns a small JSON status string for the UI + notification.
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
     auto s = vibe::RtlTcpServer::instance().getStatus();
     std::string j = "{";
     j += "\"running\":"       + std::string(s.running ? "true" : "false");
@@ -379,7 +379,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
 
 // VibeServer live status: client presence + SEPARATE spectrum/audio byte rates.
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeGetVibeServerStatus(JNIEnv* env, jobject) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeGetVibeServerStatus(JNIEnv* env, jobject) {
     auto s = vibe::LocalSdrShim::instance().getVibeServerStatus();
     std::string j = "{";
     j += "\"running\":"          + std::string(s.running ? "true" : "false");
@@ -398,7 +398,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetVibeServerStatus(JNIEnv* env, jobject
 
 // rtl_tcp CLIENT link health (jitter buffer). JSON, like the server status above.
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeGetNetStatus(JNIEnv* env, jobject) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeGetNetStatus(JNIEnv* env, jobject) {
     auto s = vibe::LocalSdrShim::instance().getNetStatus();
     std::string j = "{";
     j += "\"tcp\":"             + std::string(s.tcp ? "true" : "false");
@@ -413,7 +413,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetNetStatus(JNIEnv* env, jobject) {
 }
 
 extern "C" JNIEXPORT jintArray JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeGetTunerGains(JNIEnv* env, jobject) {
+Java_com_ninthfreak_carfm_VibeLocalSDR_nativeGetTunerGains(JNIEnv* env, jobject) {
     auto gains = vibe::LocalSdrShim::instance().getTunerGains();
     jintArray arr = env->NewIntArray((jsize)gains.size());
     if (arr && !gains.empty()) env->SetIntArrayRegion(arr, 0, (jsize)gains.size(), gains.data());

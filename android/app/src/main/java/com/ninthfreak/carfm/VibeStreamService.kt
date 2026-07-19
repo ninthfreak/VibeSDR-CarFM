@@ -1,4 +1,4 @@
-package com.vibesdr.app
+package com.ninthfreak.carfm
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -81,25 +81,25 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         const val BANDS_ID = "bands"
         const val NEARBY_ID = "nearby"
         // CarFM custom media actions (notification / Android Auto / AVRCP).
-        const val ACTION_CARFM_SAVE = "com.vibesdr.app.carfm.SAVE_PRESET"
-        const val ACTION_CARFM_SEEK_UP = "com.vibesdr.app.carfm.SEEK_UP"
-        const val ACTION_CARFM_SEEK_DOWN = "com.vibesdr.app.carfm.SEEK_DOWN"
-        const val ACTION_PLAY = "com.vibesdr.app.PLAY"
-        const val ACTION_PAUSE = "com.vibesdr.app.PAUSE"
-        const val ACTION_STOP = "com.vibesdr.app.STOP"
-        const val ACTION_NEXT = "com.vibesdr.app.NEXT"
-        const val ACTION_PREV = "com.vibesdr.app.PREV"
-        const val ACTION_START = "com.vibesdr.app.START"
-        const val ACTION_START_EXTERNAL = "com.vibesdr.app.START_EXTERNAL"
+        const val ACTION_CARFM_SAVE = "com.ninthfreak.carfm.carfm.SAVE_PRESET"
+        const val ACTION_CARFM_SEEK_UP = "com.ninthfreak.carfm.carfm.SEEK_UP"
+        const val ACTION_CARFM_SEEK_DOWN = "com.ninthfreak.carfm.carfm.SEEK_DOWN"
+        const val ACTION_PLAY = "com.ninthfreak.carfm.PLAY"
+        const val ACTION_PAUSE = "com.ninthfreak.carfm.PAUSE"
+        const val ACTION_STOP = "com.ninthfreak.carfm.STOP"
+        const val ACTION_NEXT = "com.ninthfreak.carfm.NEXT"
+        const val ACTION_PREV = "com.ninthfreak.carfm.PREV"
+        const val ACTION_START = "com.ninthfreak.carfm.START"
+        const val ACTION_START_EXTERNAL = "com.ninthfreak.carfm.START_EXTERNAL"
         // Local hardware (V4): the on-device shim's /ws/audio consumed NATIVELY, so
         // audio + the media card survive backgrounding (JS owns only the spectrum
         // WS, which is paused in the background to save power).
-        const val ACTION_START_LOCAL = "com.vibesdr.app.START_LOCAL"
+        const val ACTION_START_LOCAL = "com.ninthfreak.carfm.START_LOCAL"
         // FM-DX Webserver: the shared TEF6686 tuner's MP3-over-WS audio stream,
         // consumed + decoded (MediaCodec "audio/mpeg") NATIVELY so audio + the
         // media card survive backgrounding. Pause = stop the stream (power saving,
         // like UberSDR), play = reopen it. The /text + /chat control WS stay in JS.
-        const val ACTION_START_FMDX = "com.vibesdr.app.START_FMDX"
+        const val ACTION_START_FMDX = "com.ninthfreak.carfm.START_FMDX"
         const val EXTRA_PORT = "port"
         const val EXTRA_TUNE = "tune"
         const val EXTRA_HOST = "host"
