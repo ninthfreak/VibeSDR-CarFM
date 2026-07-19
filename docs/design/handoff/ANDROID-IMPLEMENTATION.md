@@ -1,6 +1,6 @@
 # DUDU OS FM Radio — Android implementation spec
 
-*Bundle v1.2.3 — 2026-07-18 (see `VERSION`).*
+*Bundle v1.4.0 — 2026-07-19 (see `VERSION`).*
 
 A complete build spec for the DUDU OS FM radio front-end on Android (Jetpack
 Compose primary; View/XML notes where helpful). It describes **intent, structure,
@@ -11,6 +11,31 @@ The HTML prototype is the reference for exact values when this document is silen
 `RadioFace` (main face), `CarFmLive` (state host + surface framing),
 `NearbyPicker`, `SettingsPanel`. Treat those as visual/behavioral truth; treat
 this document as the plan for expressing them in Android idioms.
+
+---
+
+## 0. Non-negotiable: build a real responsive layout, NOT scale-to-fit
+
+**Do not lay the face out at one fixed design-canvas size and `Modifier.scale()` /
+`transform: scale()` the whole thing to fit the screen. That approach is banned.**
+It looks faithful only at the exact reference resolutions and fails everywhere
+else, and it breaks three things this product must have:
+
+- **Font-scale** — a uniformly-scaled block can't let text grow with the OS
+  setting; `allowFontScaling={false}` (RN) or fixed `.sp`→`.dp` freezing is a
+  direct violation. Type must size in `sp` and respond to system font-scale.
+- **Touch targets** — scaling the canvas down shrinks buttons below the **48dp**
+  floor. Targets are specified in real dp and must stay ≥48dp at every surface.
+- **Reflow** — the design has **two layout tracks** and sub-modes precisely so it
+  *rearranges* per surface. Uniform zoom never reflows; it just shrinks one frozen
+  picture.
+
+Build it the Android way: real `dp`/`sp`, Compose layouts (`Row`/`Column`/`Box`/
+`LazyGrid`) that reflow, track chosen from `WindowSizeClass` (§2). The reference
+screenshots are **per-surface proportional targets** (match the composition and
+relative sizing at each surface's own density) — **not a master canvas to zoom to
+fit.** If your output is pixel-identical to a reference only because you scaled a
+fixed canvas, you built the wrong thing.
 
 ---
 
@@ -315,6 +340,9 @@ reference geometry.
   ease-out quint. Each moving card ends at its **resting transform** (peek cards
   keep their 0.88 base scale — never identity), so nothing pops. Express as
   animated bounds/scale/alpha transitions between the two card slots.
+  **This is the one animation most likely to be skipped — build it from the exact
+  FLIP procedure (capture bounds → tune → morph, two easings, resolve to the 0.88
+  peek base) in LOSSY-ELEMENTS.md #9. Verify against a screen recording, not a still.**
 - **Preset reorder move:** FLIP slide (~300ms, decelerate) as tiles swap.
 - **Scanning:** frequency ticks through values (~34ms/step) toward the target
   station; small vertical fade on the readout per step.
@@ -346,7 +374,10 @@ signal). Persist `freq` + `presets` (DataStore/prefs).
 ## 10. Safety constraints (must hold)
 - Frequency readout + MHz **always amber**, both themes, never re-themed.
 - **TA** must be visually loud (pulse) — traffic announcements override.
-- Hit targets **≥ 48dp**; honor font-scale to ×1.5 without overlap.
+- **No scale-to-fit.** Real responsive dp/sp layout that reflows per surface
+  (§0) — never a fixed canvas uniformly scaled to the screen.
+- Hit targets **≥ 48dp** in real dp (not a scaled-down canvas); honor font-scale
+  to ×1.5 without overlap.
 - Glance-legible type; nothing critical below ~15sp.
 
 ## 11. Verify on device

@@ -8,7 +8,7 @@ import { Image, Text, View } from 'react-native';
 
 import { getStationLogo } from '../../services/stationFinder';
 import { callsignBase } from '../../services/piCallsign';
-import { brandColor, monogram, FONT } from './tokens';
+import { brandColor, monogram, FONT_BOLD } from './tokens';
 
 const cache = new Map<string, string | null>();
 
@@ -52,7 +52,7 @@ export default function LogoTile({ name, size, radius }: {
         allowFontScaling={false}
         numberOfLines={1}
         style={{
-          color: '#FFFFFF', fontFamily: FONT, fontWeight: '700',
+          color: '#FFFFFF', fontFamily: FONT_BOLD,
           fontSize: Math.round(size * (label.length > 3 ? 0.26 : 0.34)),
         }}
       >

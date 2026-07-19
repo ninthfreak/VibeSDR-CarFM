@@ -15,7 +15,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { BatteryBolt, SignalWaves, WarningTriangle } from './icons';
-import { FONT, type CarFmPalette } from './tokens';
+import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 import { snapshotDate } from '../../services/stationDb';
 import { clearLogoCache } from '../../services/stationLogoCache';
 
@@ -315,37 +315,37 @@ const styles = StyleSheet.create({
     height: 76, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 26, borderBottomWidth: 1,
   },
-  title: { fontFamily: FONT, fontSize: 26, fontWeight: '700' },
+  title: { fontFamily: FONT_BOLD, fontSize: 26,  },
   close: { width: 52, height: 52, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   closeText: { fontSize: 22, fontWeight: '700' },
 
   body: { flex: 1 },
   bodyContent: { paddingHorizontal: 26, paddingTop: 4, paddingBottom: 26 },
-  sectionLabel: { fontFamily: FONT, fontSize: 12, fontWeight: '700', letterSpacing: 2, marginTop: 14, marginBottom: 8, marginHorizontal: 4 },
+  sectionLabel: { fontFamily: FONT_BOLD, fontSize: 12, letterSpacing: 2, marginTop: 14, marginBottom: 8, marginHorizontal: 4 },
   group: { borderRadius: 18, borderWidth: 1, padding: 10 },
   divider: { height: 1, marginVertical: 6, marginHorizontal: 6 },
-  subLabel: { fontFamily: FONT, fontSize: 12, fontWeight: '700', letterSpacing: 1, marginVertical: 4, marginHorizontal: 12 },
+  subLabel: { fontFamily: FONT_BOLD, fontSize: 12, letterSpacing: 1, marginVertical: 4, marginHorizontal: 12 },
 
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 16, minHeight: 62, paddingHorizontal: 12, paddingVertical: 6 },
   iconWrap: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   textWrap: { flex: 1, minWidth: 0, gap: 2 },
-  rowTitle: { fontFamily: FONT, fontSize: 18, fontWeight: '700' },
+  rowTitle: { fontFamily: FONT_BOLD, fontSize: 18,  },
   rowSub: { fontFamily: FONT, fontSize: 14, fontWeight: '400' },
   retryBtn: { height: 44, paddingHorizontal: 22, borderRadius: 12, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  retryText: { fontFamily: FONT, fontSize: 15, fontWeight: '700', letterSpacing: 1 },
+  retryText: { fontFamily: FONT_BOLD, fontSize: 15, letterSpacing: 1 },
   diagBtn: { height: 44, paddingHorizontal: 18, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  diagText: { fontFamily: FONT, fontSize: 14, fontWeight: '700', letterSpacing: 0.5 },
+  diagText: { fontFamily: FONT_BOLD, fontSize: 14, letterSpacing: 0.5 },
 
   diagPanel: { marginHorizontal: 12, marginTop: 2, marginBottom: 8, padding: 14, borderRadius: 12, borderWidth: 1, gap: 8 },
   diagLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 16 },
   diagKey: { fontFamily: FONT, fontSize: 14 },
-  diagVal: { fontFamily: FONT, fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  diagVal: { fontFamily: FONT_BOLD, fontSize: 15, fontVariant: ['tabular-nums'] },
 
   backendRow: { flexDirection: 'row', alignItems: 'center', gap: 16, minHeight: 60, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 14, borderWidth: 1 },
   radio: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   radioDot: { width: 12, height: 12, borderRadius: 6 },
-  backendName: { fontFamily: FONT, fontSize: 18, fontWeight: '700' },
-  badge: { fontFamily: FONT, fontSize: 13, fontWeight: '700', letterSpacing: 0.4, flexShrink: 0 },
+  backendName: { fontFamily: FONT_BOLD, fontSize: 18,  },
+  badge: { fontFamily: FONT_BOLD, fontSize: 13, letterSpacing: 0.4, flexShrink: 0 },
 
   switchRow: { flexDirection: 'row', alignItems: 'center', gap: 16, minHeight: 62, paddingHorizontal: 12, paddingVertical: 6 },
   track: { width: 60, height: 34, borderRadius: 17, flexShrink: 0, justifyContent: 'center' },
@@ -354,16 +354,16 @@ const styles = StyleSheet.create({
   themeRow: { flexDirection: 'row', alignItems: 'center', gap: 20, minHeight: 62, paddingHorizontal: 12, paddingVertical: 6 },
   segWrap: { flexDirection: 'row', gap: 8, width: 300, flexShrink: 0 },
   chip: { flex: 1, height: 44, borderRadius: 10, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
-  chipText: { fontFamily: FONT, fontSize: 14, fontWeight: '700', letterSpacing: 1 },
+  chipText: { fontFamily: FONT_BOLD, fontSize: 14, letterSpacing: 1 },
 
   okBadge: { height: 44, paddingHorizontal: 18, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  okBadgeText: { fontFamily: FONT, fontSize: 14, fontWeight: '700', letterSpacing: 1 },
+  okBadgeText: { fontFamily: FONT_BOLD, fontSize: 14, letterSpacing: 1 },
 
   clearRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 50, paddingHorizontal: 12, paddingVertical: 6 },
-  clearText: { fontFamily: FONT, fontSize: 16, fontWeight: '700' },
+  clearText: { fontFamily: FONT_BOLD, fontSize: 16,  },
 
   advRow: { flexDirection: 'row', alignItems: 'center', gap: 16, minHeight: 60, paddingHorizontal: 12, paddingVertical: 6 },
-  advTitle: { fontFamily: FONT, fontSize: 17, fontWeight: '700' },
+  advTitle: { fontFamily: FONT_BOLD, fontSize: 17,  },
   chevron: { fontSize: 26, fontWeight: '700', flexShrink: 0 },
 
   about: { fontFamily: FONT, textAlign: 'center', fontSize: 13, color: '#888', paddingTop: 20, paddingBottom: 4, letterSpacing: 0.3 },

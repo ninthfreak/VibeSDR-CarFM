@@ -1,9 +1,30 @@
-1.2.3 — 2026-07-18
+1.4.0 — 2026-07-19
 
 Android Car FM Radio Face — design handoff bundle.
 
 Changelog
 ---------
+1.4.0 (2026-07-19)
+  - ANDROID §0 (new, top): explicitly BANS scale-to-fit (one fixed canvas
+    uniformly scaled). Requires a real responsive dp/sp Compose layout that
+    reflows per surface, honors system font-scale, and keeps ≥48dp targets in
+    real dp. Reinforced in §10 safety constraints.
+  - CORRECTION-LOOP: reference PNGs reframed as per-surface PROPORTIONAL targets,
+    not a master canvas to zoom; added self-deception check for a fake
+    pixel-match produced by scaling a frozen canvas.
+  - LOSSY-ELEMENTS §6: seek digit slide marked required and specified as a single
+    two-endpoint transition (enter translateY ±14 / opacity 0.25 → timing to 0/1
+    over ~180–220ms), not a keyframe track and not a hard-swap.
+
+1.3.0 (2026-07-18)
+  - Documented the hero carousel prev/next SWAP animation as a first-class lossy
+    element (LOSSY-ELEMENTS #9) with the exact build procedure: capture slot bounds
+    → tune → four 520ms FLIP animations, two easings (cubic translate / quint scale),
+    direction semantics, and the resolve-to-0.88-peek-base rule. Added because the
+    Android build was hard-cutting the hero instead of morphing it. ANDROID §8 now
+    points at #9 and flags it as the most-likely-skipped motion; verify against a
+    screen recording, not a still.
+
 1.2.3 (2026-07-18)
   - Removed the overlay-state screenshots (nearby picker, numpad, reorder): the
     capture tooling non-deterministically persisted a stale cached build for these

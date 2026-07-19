@@ -9,7 +9,7 @@ import React, { useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BackspaceIcon } from './icons';
-import { FONT, FM_MAX_MHZ, FM_MIN_MHZ, type CarFmPalette } from './tokens';
+import { FONT, FONT_BOLD, FM_MAX_MHZ, FM_MIN_MHZ, type CarFmPalette } from './tokens';
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', '⌫'] as const;
 
@@ -65,7 +65,7 @@ export default function Numpad({ visible, pal, currentMHz, scanning, onSeek, onT
         <Pressable style={[styles.card, { backgroundColor: pal.panel, paddingVertical: S.cardPadV, paddingHorizontal: S.cardPadH, borderRadius: S.cardRadius }, maxHeight ? { maxHeight } : null]} onPress={() => {}}>
           {compact ? null : <Text style={[styles.title, { color: pal.dim }]}>TUNE</Text>}
           <View style={[styles.display, { height: S.dispH, borderRadius: S.dispRadius, backgroundColor: pal.raised, borderColor: error ? pal.amber : pal.border }]}>
-            <Text allowFontScaling={false} style={[styles.value, { fontSize: S.value, color: pal.amber, opacity: buf || scanning ? 1 : 0.45 }]}>
+            <Text style={[styles.value, { fontSize: S.value, color: pal.amber, opacity: buf || scanning ? 1 : 0.45 }]}>
               {buf || currentMHz}
             </Text>
             <Text style={[styles.unit, { color: pal.dim }]}>MHz</Text>
@@ -108,7 +108,7 @@ export default function Numpad({ visible, pal, currentMHz, scanning, onSeek, onT
               >
                 {k === '⌫'
                   ? <BackspaceIcon size={30} color={pal.text} />
-                  : <Text allowFontScaling={false} style={[styles.keyText, { fontSize: S.keyFont, color: pal.text }]}>{k}</Text>}
+                  : <Text style={[styles.keyText, { fontSize: S.keyFont, color: pal.text }]}>{k}</Text>}
               </Pressable>
             ))}
           </View>
@@ -149,31 +149,31 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 50, shadowOffset: { width: 0, height: 20 },
     elevation: 24,
   },
-  title: { fontFamily: FONT, fontSize: 14, fontWeight: '700', letterSpacing: 3, textAlign: 'center', marginBottom: 12 },
+  title: { fontFamily: FONT_BOLD, fontSize: 14, letterSpacing: 3, textAlign: 'center', marginBottom: 12 },
   display: {
     height: 78, borderRadius: 14, borderWidth: 1,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
   },
-  value: { fontFamily: FONT, fontSize: 46, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  unit: { fontFamily: FONT, fontSize: 18, fontWeight: '700', marginTop: 14 },
+  value: { fontFamily: FONT_BOLD, fontSize: 46, fontVariant: ['tabular-nums'] },
+  unit: { fontFamily: FONT_BOLD, fontSize: 18, marginTop: 14 },
   seekRow: { flexDirection: 'row', gap: 12, marginTop: 12 },
   seekBtn: {
     flex: 1, height: 56, borderRadius: 14, borderWidth: 1,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
   },
-  seekIcon: { fontFamily: FONT, fontSize: 24, fontWeight: '700', lineHeight: 26 },
-  seekText: { fontFamily: FONT, fontSize: 14, fontWeight: '700', letterSpacing: 2 },
-  err: { fontFamily: FONT, fontSize: 13, fontWeight: '700', textAlign: 'center', marginTop: 6 },
+  seekIcon: { fontFamily: FONT_BOLD, fontSize: 24, lineHeight: 26 },
+  seekText: { fontFamily: FONT_BOLD, fontSize: 14, letterSpacing: 2 },
+  err: { fontFamily: FONT_BOLD, fontSize: 13, textAlign: 'center', marginTop: 6 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 16 },
   key: {
     width: '30.5%', flexGrow: 1, height: 64, borderRadius: 14, borderWidth: 1,
     alignItems: 'center', justifyContent: 'center',
   },
-  keyText: { fontFamily: FONT, fontSize: 26, fontWeight: '700' },
+  keyText: { fontFamily: FONT_BOLD, fontSize: 26,  },
   actions: { flexDirection: 'row', gap: 12, marginTop: 16 },
   action: {
     flex: 1, height: 58, borderRadius: 14, borderWidth: 1,
     alignItems: 'center', justifyContent: 'center',
   },
-  actionText: { fontFamily: FONT, fontSize: 17, fontWeight: '700', letterSpacing: 2 },
+  actionText: { fontFamily: FONT_BOLD, fontSize: 17, letterSpacing: 2 },
 });

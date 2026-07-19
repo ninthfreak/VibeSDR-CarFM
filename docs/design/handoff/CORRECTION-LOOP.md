@@ -54,6 +54,14 @@ relative sizing you see in `surface-portrait-*`, not the literal pixel counts.
 Pick the reference whose aspect ratio matches your device surface and diff
 against that.
 
+**These PNGs are per-surface proportional targets, NOT a master canvas to scale
+to fit.** Do not lay the face out once at a reference size and `Modifier.scale()`
+it — that's banned (ANDROID §0). A screenshot that matches only because you zoomed
+a frozen canvas has *failed* this loop even though the pixels line up: font-scale
+is dead, touch targets shrank below 48dp, and nothing reflowed. Match each surface
+with a real dp/sp layout that reflows, then diff its screenshot against the
+reference at that surface.
+
 ## What to diff, in priority order
 
 1. **Track correctness** — did the right track render? Tall must stack the hero
@@ -83,4 +91,7 @@ both but uses a brighter value in dark.
 - "Values match the spec" — the spec is web; matching it can still look wrong.
 - "It compiles / `tsc` passes" — says nothing about pixels.
 - "Fixed on full screen" — the bug may only show in tall/slice; diff all surfaces.
+- **"It matches the reference pixel-for-pixel"** — check *how*. If you scaled one
+  fixed canvas to fit, the match is fake: font-scale is off, targets are sub-48dp,
+  and nothing reflowed (§0). A real layout matches proportionally, not by zoom.
 - Declaring done without a fresh screenshot from *this* round.

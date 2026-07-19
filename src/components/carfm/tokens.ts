@@ -18,6 +18,10 @@ export interface CarFmPalette {
   backdrop: string;
   meterEmpty: string;
   scrollThumb: string;
+  /** Nearby-search disc anatomy (ANDROID §7 shipped colors — not the accent system). */
+  nearbyLine: string;
+  nearbyDisc: string;
+  nearbyGlass: string;
 }
 
 export const LIGHT: CarFmPalette = {
@@ -34,6 +38,9 @@ export const LIGHT: CarFmPalette = {
   backdrop:  '#DCE0E6',
   meterEmpty: 'rgba(20,30,45,0.10)',
   scrollThumb: 'rgba(128,134,144,0.6)',
+  nearbyLine:  '#111111',
+  nearbyDisc:  '#FFFFFF',
+  nearbyGlass: '#DCE7F5',
 };
 
 export const DARK: CarFmPalette = {
@@ -50,10 +57,16 @@ export const DARK: CarFmPalette = {
   backdrop:  '#0C1218',
   meterEmpty: 'rgba(255,255,255,0.10)',
   scrollThumb: 'rgba(128,134,144,0.6)',
+  nearbyLine:  '#E9EEF4',
+  nearbyDisc:  '#2A3644',
+  nearbyGlass: '#2A3644',
 };
 
 /** Bundled via expo-font in App.tsx (no Google Fonts at runtime). */
 export const FONT = 'Atkinson Hyperlegible';
+/** Real 700 cut, registered as its own family — Android faux-bolds a single
+ *  family, which reads visibly lighter than the design's true bold (§3). */
+export const FONT_BOLD = 'AtkinsonHyperlegible-Bold';
 
 export const FM_MIN_MHZ = 87.5;
 export const FM_MAX_MHZ = 108.0;
