@@ -24,9 +24,10 @@ export const PEEK_SCALE = 0.88;
 export const PEEK_OPACITY = 0.6;
 
 export default function SidePresetCard({
-  name, pal, side, width, k = 1, onPress,
+  name, freqMhz, pal, side, width, k = 1, onPress,
 }: {
   name: string;
+  freqMhz?: number;              // dial frequency — resolves the callsign for the logo
   pal: CarFmPalette;
   side: 'left' | 'right';        // 'left' = PREV (tucks under the hero's left), 'right' = NEXT
   width: number;
@@ -51,7 +52,7 @@ export default function SidePresetCard({
       accessibilityLabel={side === 'left' ? `Previous preset ${name}` : `Next preset ${name}`}
     >
       {/* Design sideLogoStyle: 58% of card width, capped 92, radius 16. */}
-      <LogoTile name={name || undefined} size={Math.min(Math.round(width * 0.58), s(92))} radius={s(16)} />
+      <LogoTile name={name || undefined} freqMhz={freqMhz} size={Math.min(Math.round(width * 0.58), s(92))} radius={s(16)} />
       <Text style={[styles.call, { fontSize: Math.max(12, s(15)), color: pal.text }]} numberOfLines={1}>{name || 'FM'}</Text>
       {/* inner-edge fade */}
       <Svg style={StyleSheet.absoluteFill} pointerEvents="none">

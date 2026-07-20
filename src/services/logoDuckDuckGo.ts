@@ -45,7 +45,17 @@ async function fetchVqd(query: string): Promise<string | null> {
   }
 }
 
-interface DdgRawResult { image?: string; thumbnail?: string; width?: number; height?: number; title?: string; source?: string }
+interface DdgRawResult { image?: string; thumbnail?: string; url?: string; width?: number; height?: number; title?: string; source?: string }
+
+/** Registrable-ish host of a URL ("https://en.wikipedia.org/..." → "wikipedia.org").
+ *  DDG's own `source` field is just the provider ("Bing"), not the image origin —
+ *  derive the real domain from the result/page URL like the DDG UI does. */
+function hostOf(u?: string): string {
+  if (!u) return '';
+  const h = u.match(/^https?:\/\/([^/?#]+)/i)?.[1]?.replace(/^www\./i, '') ?? '';
+  const parts = h.split('.');
+  return parts.length > 2 ? parts.slice(-2).join('.') : h;
+}
 
 /** One picker-ready image result: a full-size `image` and a `thumbnail` to show. */
 export interface DdgImage { image: string; thumbnail: string; title: string; width?: number; height?: number; source?: string }
@@ -73,7 +83,9 @@ export async function ddgImageResults(query: string, n = 4): Promise<DdgImage[]>
         image: r.image!,
         thumbnail: r.thumbnail && /^https?:\/\//i.test(r.thumbnail) ? r.thumbnail : r.image!,
         title: r.title ?? '',
-        width: r.width, height: r.height, source: r.source,
+        width: r.width, height: r.height,
+        // Real origin domain (page URL, else image URL) — not DDG's "Bing" label.
+        source: hostOf(r.url) || hostOf(r.image) || r.source || '',
       }));
   } catch {
     return [];

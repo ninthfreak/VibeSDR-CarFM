@@ -11,7 +11,7 @@
 import React, { useEffect, useState } from 'react';
 import { Image, Text, View } from 'react-native';
 
-import { getStationLogo } from '../../services/stationFinder';
+import { getStationLogo, callsignForFreq } from '../../services/stationFinder';
 import { callsignBase } from '../../services/piCallsign';
 import { brandColor, monogram, FONT_BOLD } from './tokens';
 
@@ -33,13 +33,15 @@ export function invalidateLogoTile(base?: string): void {
   listeners.forEach((l) => l());
 }
 
-export default function LogoTile({ name, size, radius }: {
+export default function LogoTile({ name, freqMhz, size, radius }: {
   name?: string;          // station name / callsign-ish string
+  freqMhz?: number;       // dial frequency — resolves the callsign when `name` isn't one
   size: number;
   radius?: number;
 }) {
-  const base = callsignFrom(name) ? callsignBase(callsignFrom(name)!) : null;
-  const [uri, setUri] = useState<string | null>(base ? cache.get(base) ?? null : null);
+  const nameBase = callsignFrom(name) ? callsignBase(callsignFrom(name)!) : null;
+  const [base, setBase] = useState<string | null>(nameBase);
+  const [uri, setUri] = useState<string | null>(nameBase ? cache.get(nameBase) ?? null : null);
   const [tick, setTick] = useState(0);
 
   // Re-read when invalidateLogoTile() fires (a new logo was just assigned).
@@ -48,6 +50,15 @@ export default function LogoTile({ name, size, radius }: {
     listeners.add(l);
     return () => { listeners.delete(l); };
   }, []);
+
+  // Identity is the callsign: from `name` if it carries one, else resolved from
+  // the dial frequency via the FCC DB (a bare "FM 88.7" preset name has none).
+  useEffect(() => {
+    let cancelled = false;
+    if (nameBase) { setBase(nameBase); return; }
+    callsignForFreq(freqMhz).then((b) => { if (!cancelled) setBase(b); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [nameBase, freqMhz]);
 
   useEffect(() => {
     let cancelled = false;
