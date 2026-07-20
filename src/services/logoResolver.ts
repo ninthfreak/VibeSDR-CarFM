@@ -2,10 +2,12 @@
  * Layered logo resolver. Walks sources in priority order and persists the first
  * hit into the station DB (addendum §7, revised to store logos in-DB):
  *
- *   Wikidata (by callsign)  ->  station-homepage favicon
+ *   DuckDuckGo image search (by freq + callsign)  ->  Wikidata (by callsign)
+ *     ->  station-homepage favicon
  *
  * (Radio-Browser was removed — useless for much of the US; RadioDNS was dropped
- * earlier for sparse US coverage. A logo-search rework is pending.)
+ * earlier for sparse US coverage. The DuckDuckGo source is the logo-search
+ * rework — see logoDuckDuckGo.ts for why and its scope.)
  *
  * A manually-assigned logo is never overwritten (saveLogo guards source='manual').
  * On total network failure the station is queued (markWanted) for a later sweep;
@@ -15,20 +17,21 @@
 import { saveLogo, logoFetchedAt, markWanted } from './stationDb';
 import { wikidataLogo } from './logoWikidata';
 import { siteFaviconLogo } from './logoSiteFavicon';
+import { ddgStationLogo } from './logoDuckDuckGo';
 
 /**
- * TODO(logos): AUTOMATIC logo resolution is DISABLED (2026-07-17 device test:
- * the auto-downloaded logos were completely wrong — the sources below match on
- * callsign/name text and happily return unrelated images). The whole chain
- * needs a redesign around verified identity (e.g. Wikidata P2317 exact-match
- * ONLY, SVG-preferred per the logo_search findings, with a confidence gate)
- * before it can be trusted to run unattended. Until then:
- *   - resolveLogo() is a no-op (returns false, fetches nothing, writes nothing)
- *   - stations render their monogram tiles
- *   - MANUAL assignment still works and is never touched: the in-app Commons
- *     search + the DuckDuckGo share-back flow (stationFinder) both save with
- *     source='manual'.
- * Flip this to true only after the redesign.
+ * AUTOMATIC (background) logo resolution stays DISABLED (2026-07-17 device test:
+ * auto-downloaded logos were completely wrong — text-matching sources happily
+ * returned unrelated images). The logo-search rework (DuckDuckGo, freq+callsign)
+ * is trustworthy enough for a USER-INITIATED tap but a wrong #1 hit is still
+ * possible, so it must not run unattended. Therefore:
+ *   - resolveLogo() is a no-op for BACKGROUND callers (sweeps, prefetch, encounter):
+ *     returns false, fetches nothing, writes nothing; stations render monograms.
+ *   - resolveLogo(st, { force: true }) — an explicit user tap — DOES run, hitting
+ *     the DuckDuckGo source first, then Wikidata, then favicon.
+ *   - MANUAL assignment is never touched: the in-app Commons search + the
+ *     browser share-back flow (stationFinder) both save with source='manual'.
+ * Flip this to true only once background auto-resolution is proven safe.
  */
 export const AUTO_LOGO_RESOLUTION = false;
 
@@ -40,6 +43,7 @@ export interface LogoStation {
   callsign?: string;
   homepage?: string | null;
   name?: string | null;
+  freqMhz?: number;          // FM dial frequency — part of the DuckDuckGo query
 }
 
 interface SourceHit {
@@ -71,13 +75,22 @@ export async function fetchImage(url: string): Promise<{ bytes: Uint8Array; mime
  * Resolve + store a logo for one station. Returns true if an image was stored.
  * Honors a 30-day TTL (hits and recorded misses) so it isn't chatty.
  */
-export async function resolveLogo(st: LogoStation): Promise<boolean> {
-  if (!AUTO_LOGO_RESOLUTION) return false;   // see TODO(logos) above
+export async function resolveLogo(st: LogoStation, opts?: { force?: boolean }): Promise<boolean> {
+  // Background callers stay disabled; only an explicit user action (force) runs.
+  if (!AUTO_LOGO_RESOLUTION && !opts?.force) return false;   // see note above
   const base = st.base.toUpperCase();
   const at = await logoFetchedAt(base);
-  if (at != null && Date.now() - at < CACHE_TTL_MS) return false;
+  // A forced (user-initiated) resolve ignores the TTL — the user is asking now.
+  if (!opts?.force && at != null && Date.now() - at < CACHE_TTL_MS) return false;
 
   const attempts: Array<() => Promise<SourceHit | null>> = [];
+  const cs = st.callsign || st.base;
+  if (cs) {
+    attempts.push(async () => {
+      const url = await ddgStationLogo(st.freqMhz, cs);
+      return url ? { url, source: 'ddg' } : null;
+    });
+  }
   if (st.callsign) {
     attempts.push(async () => {
       const r = await wikidataLogo(st.callsign!);
