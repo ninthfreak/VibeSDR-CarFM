@@ -230,6 +230,16 @@ export function LogoSearchIcon({ size = 17, color = '#FFFFFF' }: { size?: number
   );
 }
 
+/** Left-pointing back-arrow — the Nearby genre filter's "reset to All" chip. */
+export function BackArrowIcon({ size = 22, color }: { size?: number; color: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M11 5 L4 12 L11 19" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M4 12 H19" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
 /** Backspace key glyph for the numpad. */
 export function BackspaceIcon({ size = 30, color }: { size?: number; color: string }) {
   return (

@@ -9,7 +9,7 @@ import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Tex
 
 import { getNearbyStations, type NearbyResult } from '../../services/stationFinder';
 import type { NearbyStation } from '../../services/stationTypes';
-import { SignalWaves, StarIcon } from './icons';
+import { BackArrowIcon, SignalWaves, StarIcon } from './icons';
 import { FONT, FONT_BOLD, brandColor, monogram, type CarFmPalette } from './tokens';
 
 const HOLD_MS = 550;
@@ -153,7 +153,10 @@ export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePr
     hasMusic: stations.some(isMusic),
     hasTalk: stations.some((s) => !isMusic(s)),
   }), [stations]);
-  const showBuckets = stations.length > 0 && hasMusic && hasTalk;
+  // Bucket row shows ONLY while All is active (§6.2); drilling into Music/Talk
+  // hides it entirely and shows the genre row (with its own back-to-All chip).
+  const showBucketBar = stations.length > 0 && hasMusic && hasTalk && bucket === 'All';
+  const showGenreBar = stations.length > 0 && bucket !== 'All';
   const bucketStations = useMemo(() => (
     bucket === 'All' ? stations : bucket === 'Music' ? stations.filter(isMusic) : stations.filter((s) => !isMusic(s))
   ), [stations, bucket]);
@@ -165,12 +168,15 @@ export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePr
   }, [bucket, bucketStations]);
   const activeGenre = genre && genres.includes(genre) ? genre : null;
   const shown = activeGenre ? bucketStations.filter((s) => (s.genre ?? '').trim() === activeGenre) : bucketStations;
-  // While a bucket other than All is active, the bucket row collapses to just
-  // "All" (tapping it clears the filter); All shows all three (design §6.2).
-  const bucketChips: Array<'All' | 'Music' | 'Talk'> = bucket === 'All'
-    ? ['All' as const, ...(hasMusic ? ['Music' as const] : []), ...(hasTalk ? ['Talk' as const] : [])]
-    : ['All'];
+  const bucketChips: Array<'All' | 'Music' | 'Talk'> =
+    ['All' as const, ...(hasMusic ? ['Music' as const] : []), ...(hasTalk ? ['Talk' as const] : [])];
   const pickBucket = (b: 'All' | 'Music' | 'Talk') => { setBucket(b); setGenre(null); };
+  // Genre chips laid out as a 2-row grid that flows column-by-column (design §6.2).
+  const genreCols = useMemo(() => {
+    const cols: string[][] = [];
+    for (let i = 0; i < genres.length; i += 2) cols.push(genres.slice(i, i + 2));
+    return cols;
+  }, [genres]);
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -201,7 +207,7 @@ export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePr
               <Text style={[styles.stateGlyph, { color: pal.dim }]}>⌖</Text>
               <Text style={[styles.stateTitle, { color: pal.text }]}>Waiting for GPS…</Text>
               <Text style={[styles.stateBody, { color: pal.dim }]}>
-                No position fix yet. Nearby stations will appear once a location is available.
+                No position fix yet. Waiting for a location fix to list nearby stations.
               </Text>
             </View>
           ) : empty ? (
@@ -218,8 +224,8 @@ export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePr
             </View>
           ) : (
             <>
-              {/* bucket filter — All / Music / Talk */}
-              {showBuckets ? (
+              {/* bucket filter — All / Music / Talk (only while All is active) */}
+              {showBucketBar ? (
                 <ScrollView
                   horizontal showsHorizontalScrollIndicator={false}
                   style={styles.filterBar} contentContainerStyle={[styles.filterBarContent, { paddingHorizontal: sidePad }]}
@@ -229,16 +235,31 @@ export default function NearbyPicker({ visible, pal, presetMHz, onTune, onSavePr
                   ))}
                 </ScrollView>
               ) : null}
-              {/* genre sub-filter — two rows, flows by column, scrolls horizontally */}
-              {bucket !== 'All' && genres.length > 1 ? (
-                <ScrollView
-                  horizontal showsHorizontalScrollIndicator={false}
-                  style={styles.subBar} contentContainerStyle={[styles.subBarContent, { paddingHorizontal: sidePad }]}
-                >
-                  {genres.map((g) => (
-                    <Chip key={g} label={g} active={g === activeGenre} pal={pal} onPress={() => setGenre((cur) => (cur === g ? null : g))} />
-                  ))}
-                </ScrollView>
+              {/* genre filter (drilled into Music/Talk): icon-only back-to-All reset
+                  chip + divider, then a 2-row genre grid flowing by column (§6.2). */}
+              {showGenreBar ? (
+                <View style={[styles.genreBar, { paddingHorizontal: sidePad }]}>
+                  <Pressable
+                    onPress={() => pickBucket('All')}
+                    style={({ pressed }) => [styles.allReset, { borderColor: pal.border, backgroundColor: pal.raised }, pressed && { opacity: 0.6 }]}
+                    accessibilityRole="button" accessibilityLabel="Back to all stations"
+                  >
+                    <BackArrowIcon size={22} color={pal.dim} />
+                  </Pressable>
+                  <View style={[styles.allDivider, { backgroundColor: pal.border }]} />
+                  <ScrollView
+                    horizontal showsHorizontalScrollIndicator={false}
+                    style={{ flex: 1 }} contentContainerStyle={styles.genreGrid}
+                  >
+                    {genreCols.map((col, ci) => (
+                      <View key={ci} style={styles.genreCol}>
+                        {col.map((g) => (
+                          <Chip key={g} label={g} active={g === activeGenre} pal={pal} onPress={() => setGenre((cur) => (cur === g ? null : g))} />
+                        ))}
+                      </View>
+                    ))}
+                  </ScrollView>
+                </View>
               ) : null}
               <ScrollView contentContainerStyle={[styles.list, { paddingHorizontal: sidePad, paddingVertical: narrow ? 12 : 16, gap: narrow ? 8 : 10 }]}>
                 {shown.map((st) => (
@@ -285,12 +306,15 @@ const styles = StyleSheet.create({
   close: { width: 52, height: 52, borderRadius: 14, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   closeText: { fontSize: 22, fontWeight: '700' },
 
-  // Filter bars (design filterBarStyle / subBarStyle).
+  // Filter bars (design filterBarStyle / genreBarStyle).
   filterBar: { flexGrow: 0, flexShrink: 0 },
   filterBarContent: { flexDirection: 'row', gap: 10, paddingHorizontal: 22, paddingTop: 14 },
-  subBar: { flexGrow: 0, flexShrink: 0 },
-  // Two rows, chips flow column-by-column, scrolls horizontally.
-  subBarContent: { flexDirection: 'column', flexWrap: 'wrap', height: 72, alignContent: 'flex-start', gap: 8, paddingHorizontal: 22, paddingTop: 10 },
+  // Drilled-in genre row: [back-to-All reset chip][divider][2-row genre grid].
+  genreBar: { flexShrink: 0, flexDirection: 'row', alignItems: 'stretch', gap: 12, paddingTop: 10, minWidth: 0 },
+  allReset: { alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, borderRadius: 8, borderWidth: 1 },
+  allDivider: { alignSelf: 'stretch', width: 1 },
+  genreGrid: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  genreCol: { gap: 8 },
   chip: { height: 32, paddingHorizontal: 13, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   chipText: { fontFamily: FONT_BOLD, fontSize: 13, letterSpacing: 0.3 },
 
