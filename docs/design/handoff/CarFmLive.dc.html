@@ -24,11 +24,15 @@
       presets="{{ presets }}" seek-style="{{ seekStyle }}" reordering="{{ reordering }}"
       scanning="{{ scanning }}" scan-dir="{{ scanDir }}" tuner-error="{{ tunerError }}" nearby-line="{{ nearbyLine }}" nearby-fill="{{ nearbyFill }}" nearby-border="{{ nearbyBorder }}" nearby-glass="{{ nearbyGlass }}" nearby-border-color="{{ nearbyBorderColor }}" nearby-line-dark="{{ nearbyLineDark }}" nearby-fill-dark="{{ nearbyFillDark }}" nearby-glass-dark="{{ nearbyGlassDark }}" nearby-border-color-dark="{{ nearbyBorderColorDark }}"
       on-freq-tap="{{ openNumpad }}" on-tune-down="{{ tuneDown }}" on-tune-up="{{ tuneUp }}"
-      on-preset-hold="{{ startReorder }}" on-preset-move="{{ movePreset }}" on-preset-remove="{{ removePreset }}" on-done-reorder="{{ doneReorder }}"
+      on-preset-hold="{{ startReorder }}" on-reorder="{{ reorderPresets }}" on-preset-logo="{{ editLogo }}" on-preset-remove="{{ removePreset }}" on-done-reorder="{{ doneReorder }}"
       on-scan-down="{{ scanDown }}" on-scan-up="{{ scanUp }}" on-prev-preset="{{ prevPreset }}" on-next-preset="{{ nextPreset }}"
       on-nearby="{{ openPicker }}" on-settings="{{ openSettings }}" on-save="{{ toggleSave }}" on-preset-tap="{{ tuneTo }}"
       tall="{{ tall }}" two-rows="{{ twoRows }}" landscape="{{ landscape }}"
       style="width:100%;height:100%;" hint-size="100%,100%"></dc-import>
+
+    <sc-if value="{{ logoNote }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ toastStyle }}"><span style="{{ toastIconStyle }}">{{ toastIcon }}</span><span>{{ logoNote }}</span></div>
+    </sc-if>
 
     <sc-if value="{{ pickerOpen }}" hint-placeholder-val="{{ false }}">
       <div style="{{ scrimStyle }}" onClick="{{ closeAll }}"></div>
@@ -51,6 +55,18 @@
             theme="{{ theme }}" tuner-error="{{ tunerError }}" theme-choice="{{ themeChoice }}" autostart="{{ autostart }}"
             on-set-theme="{{ setThemeChoice }}" on-set-autostart="{{ setAutostart }}"
             on-retry-tuner="{{ retryTuner }}" on-advanced="{{ openAdvanced }}" on-close="{{ closeAll }}"
+            style="width:100%;height:100%;" hint-size="100%,100%"></dc-import>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ logoSearchOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ scrimStyle }}" onClick="{{ closeLogo }}"></div>
+      <div style="{{ overlayCenterStyle }}">
+        <div style="{{ logoWrapStyle }}">
+          <dc-import name="LogoSearchOverlay"
+            theme="{{ theme }}" narrow="{{ pickerNarrow }}" demo-state="auto" station="{{ logoStation }}"
+            on-confirm="{{ confirmLogo }}" on-cancel="{{ closeLogo }}"
             style="width:100%;height:100%;" hint-size="100%,100%"></dc-import>
         </div>
       </div>
@@ -132,7 +148,7 @@ class Component extends DCLogic {
         { name:'WQLF-FM', freq:'102.1' },
         { name:'WWHG-FM', freq:'105.9' }
       ],
-      numpadOpen: false, pickerOpen: false, settingsOpen: false, npBuf: '', npError: false, reordering: false, scale: 1, scanning: false, scanDir: 0, scanDisplay: '', themeChoice: 'system', autostart: true
+      numpadOpen: false, pickerOpen: false, settingsOpen: false, logoSearchFor: null, npBuf: '', npError: false, reordering: false, logoNote: '', scale: 1, scanning: false, scanDir: 0, scanDisplay: '', themeChoice: 'system', autostart: true
     };
   }
 
@@ -229,13 +245,23 @@ class Component extends DCLogic {
 
   startReorder = () => this.setState({ reordering: true });
   doneReorder = () => this.setState({ reordering: false });
-  movePreset = (freq, dir) => {
-    const list = [...this.state.presets];
-    const i = list.findIndex(p => p.freq === freq);
-    const j = i + dir;
-    if (i < 0 || j < 0 || j >= list.length) return;
-    const tmp = list[i]; list[i] = list[j]; list[j] = tmp;
+  reorderPresets = (freqs) => {
+    const map = {}; this.state.presets.forEach(p => { map[String(p.freq)] = p; });
+    const list = freqs.map(f => map[f]).filter(Boolean);
+    if (list.length !== this.state.presets.length) return;
     this.setState({ presets: list }, () => this.persist());
+  };
+  editLogo = (freq) => {
+    this.setState({ logoSearchFor: freq, numpadOpen: false, pickerOpen: false, settingsOpen: false });
+  };
+  closeLogo = () => this.setState({ logoSearchFor: null });
+  confirmLogo = (url) => {
+    const f = this.state.logoSearchFor;
+    const info = this.DB[f];
+    const name = info ? info.ps : ('FM ' + f);
+    clearTimeout(this._logoT);
+    this.setState({ logoSearchFor: null, logoNote: 'Logo updated \u2014 ' + name });
+    this._logoT = setTimeout(() => this.setState({ logoNote: '' }), 2200);
   };
   removePreset = (freq) => {
     const presets = this.state.presets.filter(p => p.freq !== freq);
@@ -246,7 +272,7 @@ class Component extends DCLogic {
   cancelNumpad = () => { clearInterval(this._scan); this.setState({ scanning: false, scanDir: 0 }, () => this.setFreq(this.state.npOrigFreq || this.state.freq)); };
   openPicker = () => this.setState({ pickerOpen: true, numpadOpen: false, settingsOpen: false });
   openSettings = () => this.setState({ settingsOpen: true, numpadOpen: false, pickerOpen: false });
-  closeAll = () => this.setState({ numpadOpen: false, pickerOpen: false, settingsOpen: false });
+  closeAll = () => this.setState({ numpadOpen: false, pickerOpen: false, settingsOpen: false, logoSearchFor: null });
   setThemeChoice = (v) => this.setState({ themeChoice: v });
   setAutostart = (on) => this.setState({ autostart: on });
   retryTuner = () => {};
@@ -332,6 +358,10 @@ class Component extends DCLogic {
       scroll: rt.length > 46,
       saved: presets.some(pp => pp.freq === freq),
       reordering: s.reordering,
+      logoNote: s.logoNote,
+      toastIcon: React.createElement('svg', { width:20, height:20, viewBox:'0 0 24 24', fill:'none', stroke:t.blue, strokeWidth:2.2, strokeLinecap:'round', strokeLinejoin:'round' }, [ React.createElement('circle', { key:'c', cx:11, cy:11, r:7 }), React.createElement('line', { key:'l', x1:20.5, y1:20.5, x2:16.65, y2:16.65 }) ]),
+      toastIconStyle: { display:'flex', alignItems:'center', flexShrink:0 },
+      toastStyle: { position:'absolute', left:'50%', bottom:28, transform:'translateX(-50%)', zIndex:200, display:'flex', alignItems:'center', gap:10, padding:'12px 18px', borderRadius:14, backgroundColor:t.panel, border:'1px solid ' + t.border, color:t.text, fontSize:16, fontWeight:700, boxShadow:'0 16px 40px rgba(0,0,0,0.3)', pointerEvents:'none', maxWidth:'80%' },
       presets, nearby: this.nearby.map(st => Object.assign({}, st, { saved: presets.some(pp => pp.freq === this.round1(parseFloat(st.freq))) })),
       numpadOpen: s.numpadOpen, pickerOpen: s.pickerOpen, settingsOpen: s.settingsOpen,
       npDisplay: s.npBuf || (s.scanning ? s.scanDisplay : freq), npError: s.npError, npKeys,
@@ -340,7 +370,9 @@ class Component extends DCLogic {
       themeChoice: s.themeChoice, autostart: s.autostart,
       setThemeChoice: this.setThemeChoice, setAutostart: this.setAutostart, retryTuner: this.retryTuner, openAdvanced: this.openAdvanced,
       tuneUp: this.tuneUp, tuneDown: this.tuneDown, prevPreset: this.prevPreset, nextPreset: this.nextPreset,
-      startReorder: this.startReorder, doneReorder: this.doneReorder, movePreset: this.movePreset, removePreset: this.removePreset,
+      startReorder: this.startReorder, doneReorder: this.doneReorder, reorderPresets: this.reorderPresets, editLogo: this.editLogo, removePreset: this.removePreset,
+      logoSearchOpen: !!s.logoSearchFor, closeLogo: this.closeLogo, confirmLogo: this.confirmLogo,
+      logoStation: (() => { if (!s.logoSearchFor) return null; const di = this.DB[s.logoSearchFor]; const call = di ? di.ps : ('FM ' + s.logoSearchFor); return { name: call, callsign: call, freq: s.logoSearchFor, query: 'radio ' + s.logoSearchFor + ' ' + call.toLowerCase() + ' logo', logo: di ? di.logo : '', logoBg: di ? di.bg : '', logoFg: di ? di.fg : '' }; })(),
       tuneTo: this.tuneTo, toggleSave: this.toggleSave, pickAndTune: this.pickAndTune, savePresetFreq: this.savePresetFreq,
       commitNumpad: this.commitNumpad, scanUp: this.scanUp, scanDown: this.scanDown,
 
@@ -353,6 +385,7 @@ class Component extends DCLogic {
       cardWrapStyle: { borderRadius: 22, overflow: 'hidden', border: '1px solid ' + t.border, pointerEvents: 'auto', boxShadow: '0 20px 50px rgba(0,0,0,0.35)' },
       pickerWrapStyle: { width: Math.min(900, dims.w - 32), height: Math.min(600, dims.h - 32), borderRadius: 22, overflow: 'hidden', border: '1px solid ' + t.border, pointerEvents: 'auto', boxShadow: '0 20px 50px rgba(0,0,0,0.35)', boxSizing: 'border-box' },
       settingsWrapStyle: { width: Math.min(700, dims.w - 32), height: Math.min(576, dims.h - 32), borderRadius: 22, overflow: 'hidden', border: '1px solid ' + t.border, pointerEvents: 'auto', boxShadow: '0 20px 50px rgba(0,0,0,0.35)', boxSizing: 'border-box' },
+      logoWrapStyle: { width: Math.min(720, dims.w - 32), height: Math.min(560, dims.h - 32), borderRadius: 22, overflow: 'hidden', border: '1px solid ' + t.border, pointerEvents: 'auto', boxShadow: '0 20px 50px rgba(0,0,0,0.35)', boxSizing: 'border-box' },
 
       numpadCardStyle: { width: npW, padding: npCompact ? '16px 18px' : 24, borderRadius: npCompact ? 20 : 24, backgroundColor: t.panel, border: '1px solid ' + t.border, display: 'flex', flexDirection: 'column', gap: npCompact ? 9 : 14, pointerEvents: 'auto', fontFamily: font, boxShadow: '0 20px 50px rgba(0,0,0,0.35)', maxHeight: (dims.h - 24) + 'px', boxSizing: 'border-box' },
       npTitleStyle: { fontSize: 14, fontWeight: 700, letterSpacing: 2, color: t.dim, textAlign: 'center', display: npCompact ? 'none' : 'block' },

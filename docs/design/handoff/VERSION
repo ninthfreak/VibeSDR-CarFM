@@ -1,9 +1,24 @@
-1.5.0 — 2026-07-19
+1.7.0 — 2026-07-20
 
 Android Car FM Radio Face — design handoff bundle.
 
 Changelog
 ---------
+1.7.0 (2026-07-20)
+  - New surface: Preset logo-search window (LogoSearchOverlay.dc.html, spec §6.4).
+    Opened by a per-tile logo-search badge (magnifier-over-picture, top-left) in
+    reorder mode — the one and only way a logo is assigned. Auto-runs the search,
+    shows the first four candidates in a 2×2 grid (each with source domain + w×h),
+    tap one to select (blue border + fill + check), Confirm saves it as the
+    station's sticky manual logo; loading / no-results / error / saving states.
+  - Preset reorder is now DRAG (§4.3/§8), not move arrows: continuous long-press→
+    drag, picked-up tile lifts (scale 1.06 + shadow) and tracks the finger, the
+    other tiles slide apart to open a gap at the insertion slot (transform-only
+    ~160ms), commit-on-release + FLIP settle (300ms). The ‹ › move arrows are gone;
+    the reorder tile shows only the logo-search badge (top-left) + ✕ (top-right).
+  - Nearby genre filter: drilling into Music/Talk hides the bucket row and leads
+    the genre row with an icon-only back-to-All reset chip + divider (§6.2).
+
 1.5.0 (2026-07-19)
   - Design changes (live source + bundle copies re-synced, all 8 reference
     screenshots regenerated at 2×):

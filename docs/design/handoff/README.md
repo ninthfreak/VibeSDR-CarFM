@@ -1,6 +1,6 @@
 # Handoff: Android Car Head‑Unit — FM Radio Face
 
-**Bundle v1.5.0 — 2026-07-19.** Version is tracked in `VERSION`; check it matches
+**Bundle v1.7.0 — 2026-07-20.** Version is tracked in `VERSION`; check it matches
 your copy before building (stale downloads were the source of earlier drift).
 
 ## Overview
@@ -160,6 +160,22 @@ badge; **Start radio on boot** toggle), **APPEARANCE** (SYSTEM / LIGHT / DARK se
 (Advanced SDR view row). `SettingsPanel.dc.html` is the exact reference; see also
 `ANDROID-IMPLEMENTATION.md` §6.3.
 
+### 5. Preset logo search (modal) — `LogoSearchOverlay.dc.html`
+**Purpose:** Find and assign a station's brand logo. Opened by the per‑tile **logo‑search badge**
+(magnifier‑over‑picture) in reorder mode; the **only** way a logo is assigned (no auto‑fetch).
+Design size ~720×560, **responsive** (caps to the surface; the 2×2 grid fits the narrow track with
+no horizontal scroll). Opens straight into a search — **no query field**.
+
+- **Header:** current logo tile · station name · `callsign · frequency MHz`, plus a **query chip**
+  showing the exact searched string (e.g. `radio 98.1 wmgn logo`); close ✕.
+- **States:** **loading** (spinner) → **results** (four candidates in a 2×2 grid; each cell = the
+  candidate art on its own bg + `domain` and `w×h` caption) → **no‑results** / **error** (short
+  message + **Search again**) → **saving** (busy Confirm).
+- **Select** a cell = **blue** 2dp border + fill + check badge (single‑select; never red/green).
+  **Confirm** (enabled once selected) saves it as the station's sticky manual logo and closes;
+  **Cancel** / scrim / ✕ changes nothing. Backend (search/save/refresh) is host‑side; `demoState`
+  prop flips the five states for review. See `ANDROID-IMPLEMENTATION.md` §6.4.
+
 ## Interactions & Behavior
 - **Tune up/down:** ±0.1 MHz, wraps at the 87.5–108.0 band edges.
 - **Seek (scan):** steps to the next/previous station in the local station DB. Presented as a
@@ -167,10 +183,18 @@ badge; **Start radio on boot** toggle), **APPEARANCE** (SYSTEM / LIGHT / DARK se
   tile, star, and RadioText are hidden during the sweep, then it settles on the target.
 - **Presets:**
   - Tap → tune to that preset.
-  - **Long‑press 550ms** → reorder mode: tiles **wiggle** (`carfm-wiggle`, ±1.1° 0.42s loop), show
-    ‹ ›  move controls and a ✕ remove badge; the NEARBY button becomes **DONE**.
-  - Moving a tile animates all tiles to their new position via a **FLIP** transform
-    (300ms `cubic-bezier(.2,.8,.2,1)`), composited with the wiggle.
+  - **Long‑press 550ms** → reorder mode: tiles **wiggle** (`carfm-wiggle`, ±1.1° 0.42s loop) and each
+    shows a blue **logo‑search badge** (magnifier‑over‑picture glyph, top‑left) and an ✕ remove badge
+    (top‑right); the NEARBY button becomes **DONE**.
+  - **Drag to reorder** — one continuous gesture: the long‑press flows straight into a drag with the
+    same finger (no lift‑and‑re‑press). The dragged tile lifts (scale 1.06 + shadow) and follows the
+    pointer; the wiggle **freezes** on all tiles during the drag; the remaining tiles **slide apart to
+    open a real gap** at the insertion slot (transform‑only, ~160ms; geometry locked to slot rects
+    captured at drag start so it doesn't oscillate). The order commits **on release**, then tiles
+    resolve via a **FLIP** transform (300ms `cubic-bezier(.2,.8,.2,1)`) — the dropped tile slides from
+    the finger into its slot. Replaces the old ‹ › arrows.
+  - **Logo‑search badge** → opens the **logo‑search window** (`LogoSearchOverlay`, surface 5) for that
+    station; the one and only way a logo is assigned (no automatic fetch).
   - **PREV/NEXT** step through presets **in their displayed order** (wrapping), not by frequency.
   - Selecting a preset **auto‑scrolls** the strip to bring the active tile into view (centered).
 - **Star:** toggles the current frequency in/out of presets (persisted).
@@ -222,9 +246,10 @@ the numbers.
 - `CarFmLive.dc.html` — the interactive prototype: owns state, mock SDR/RDS/GPS data, numpad,
   persistence, and mounts the other two. **Best single source for behavior.**
 - `RadioFace.dc.html` — the main radio face UI (hero, presets, prev/next peek cards, custom
-  scrollbar, reorder + FLIP animation, nearby icon).
+  scrollbar, drag‑reorder gap‑opening + FLIP animation, nearby icon, logo‑search badge).
 - `NearbyPicker.dc.html` — the Nearby stations modal (list/nogps/empty states).
 - `SettingsPanel.dc.html` — the Settings modal (tuner source/status, theme, system, advanced).
+- `LogoSearchOverlay.dc.html` — the preset logo‑search modal (loading/results/empty/error/saving).
 - `support.js` — prototype runtime only; **do not port** (reference for reading the files if
   needed).
 
@@ -237,7 +262,8 @@ colors and seek style are fixed style parameters in the prototype, not user‑fa
 maps every target surface (head unit, portrait, slices, landscape, light/dark, tuner-error) to its
 reference image** — use that as the checklist; the clean full head-unit face is `surface-head-unit-light.png`.
 
-**Overlay states (numpad, nearby picker, settings, reorder) are not shipped as static screenshots** —
+**Overlay states (numpad, nearby picker, settings, reorder, logo search) are not shipped as static screenshots** —
 render them live by opening `CarFmLive.dc.html` (tap the frequency for the numpad, the NEARBY disc for
-the picker, the gear for settings, long-press a preset for reorder) and check against `ANDROID-IMPLEMENTATION.md`
-§6. `NearbyPicker.dc.html` and `SettingsPanel.dc.html` also open standalone.
+the picker, the gear for settings, long-press a preset for reorder, then the logo‑search badge for the
+logo window) and check against `ANDROID-IMPLEMENTATION.md`
+§6. `NearbyPicker.dc.html`, `SettingsPanel.dc.html` and `LogoSearchOverlay.dc.html` also open standalone.

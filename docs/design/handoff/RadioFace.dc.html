@@ -151,18 +151,15 @@
       <sc-if value="{{ hasChips }}" hint-placeholder-val="{{ true }}">
         <div style="{{ presetGridStyle }}" data-preset-grid="1" ref="{{ gridRef }}" onScroll="{{ onGridScroll }}">
           <sc-for list="{{ chips }}" as="chip" hint-placeholder-count="5">
-            <div style="{{ chip.tileStyle }}" data-freq="{{ chip.dataFreq }}" onClick="{{ chip.onClick }}" onPointerDown="{{ chip.onHoldStart }}" onPointerUp="{{ chip.onHoldEnd }}" onPointerLeave="{{ chip.onHoldEnd }}">
+            <div style="{{ chip.tileStyle }}" data-freq="{{ chip.dataFreq }}" onClick="{{ chip.onClick }}" onPointerDown="{{ chip.onPointerDown }}" onPointerUp="{{ chip.onPointerUp }}" onPointerLeave="{{ chip.onPointerLeave }}">
               <div style="{{ chip.logoStyle }}">{{ chip.logoText }}</div>
               <span style="{{ chip.callStyle }}">{{ chip.callText }}</span>
               <sc-if value="{{ chip.active }}" hint-placeholder-val="{{ false }}">
                 <div style="{{ chip.activeBarStyle }}"></div>
               </sc-if>
               <sc-if value="{{ chip.reordering }}" hint-placeholder-val="{{ false }}">
-                <div style="{{ chip.reorderRowStyle }}">
-                  <div style="{{ chip.moveLeftStyle }}" onClick="{{ chip.onMoveLeft }}">‹</div>
-                  <div style="{{ chip.moveRightStyle }}" onClick="{{ chip.onMoveRight }}">›</div>
-                </div>
-                <div style="{{ chip.removeStyle }}" onClick="{{ chip.onRemove }}">✕</div>
+                <div style="{{ chip.logoEditStyle }}" onPointerDown="{{ chip.onEditLogo }}">{{ chip.editIcon }}</div>
+                <div style="{{ chip.removeStyle }}" onPointerDown="{{ chip.onRemove }}">✕</div>
               </sc-if>
             </div>
           </sc-for>
@@ -195,7 +192,7 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1024,&quot;height&quot;:600},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light'|'dark'&quot;},&quot;freq&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;101.1&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;ps&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;BBC R2&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;logoText&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;R2&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;rt&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Now playing: Fleetwood Mac — Dreams&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;stereo&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;rds&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;tp&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;ta&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;af&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;hd&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:0,&quot;min&quot;:0,&quot;max&quot;:3,&quot;tsType&quot;:&quot;number&quot;},&quot;pty&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Rock&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;signalDb&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:-58,&quot;min&quot;:-120,&quot;max&quot;:0,&quot;unit&quot;:&quot;dB&quot;,&quot;tsType&quot;:&quot;number&quot;},&quot;segs&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:10,&quot;min&quot;:0,&quot;max&quot;:12,&quot;tsType&quot;:&quot;number&quot;},&quot;outOfBand&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;scroll&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;saved&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;reordering&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;nearbyLine&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#111111&quot;,&quot;options&quot;:[&quot;#111111&quot;,&quot;#FFFFFF&quot;,&quot;#1B74E4&quot;,&quot;#0E7C4A&quot;,&quot;#B0402A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyFill&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#1B74E4&quot;,&quot;options&quot;:[&quot;#1B74E4&quot;,&quot;#FFFFFF&quot;,&quot;#111111&quot;,&quot;#E9EEF5&quot;,&quot;#0E7C4A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyGlass&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#FFFFFF29&quot;,&quot;options&quot;:[&quot;#FFFFFF29&quot;,&quot;#FFFFFF&quot;,&quot;#DCE7F5&quot;,&quot;#111111&quot;,&quot;#1B74E4&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyBorder&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyBorderColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#111111&quot;,&quot;options&quot;:[&quot;#111111&quot;,&quot;#FFFFFF&quot;,&quot;#D5DAE1&quot;,&quot;#1B74E4&quot;,&quot;#0E7C4A&quot;,&quot;#B0402A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyLineDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#E9EEF4&quot;,&quot;options&quot;:[&quot;#E9EEF4&quot;,&quot;#FFFFFF&quot;,&quot;#4A9EFF&quot;,&quot;#7FD6A0&quot;,&quot;#E6A24A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyFillDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#212B38&quot;,&quot;options&quot;:[&quot;#212B38&quot;,&quot;#161E29&quot;,&quot;#2A3644&quot;,&quot;#0E2A52&quot;,&quot;#FFFFFF&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyGlassDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#2A3644&quot;,&quot;options&quot;:[&quot;#2A3644&quot;,&quot;#212B38&quot;,&quot;#0E2A52&quot;,&quot;#000000&quot;,&quot;#E9EEF4&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyBorderColorDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#3A4655&quot;,&quot;options&quot;:[&quot;#3A4655&quot;,&quot;#FFFFFF&quot;,&quot;#4A9EFF&quot;,&quot;#7FD6A0&quot;,&quot;#E6A24A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;seekStyle&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;seekbar&quot;,&quot;chevrons&quot;,&quot;ffwd&quot;,&quot;skip&quot;],&quot;default&quot;:&quot;seekbar&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;presets&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{name:string;freq:string;active?:boolean}[]&quot;}}">
 class Component extends DCLogic {
-  state = { canPrev: false, canNext: false, thumbW: 0.3, thumbL: 0, showBar: false };
+  state = { canPrev: false, canNext: false, thumbW: 0.3, thumbL: 0, showBar: false, dragFreq: null, dragDX: 0, dragDY: 0, shifts: {} };
   gridRef = React.createRef();
   trackRef = React.createRef();
   heroCardRef = React.createRef();
@@ -240,6 +237,14 @@ class Component extends DCLogic {
   componentDidUpdate(prevProps) {
     this.updateScroll();
     if (this._flipRects) { const first = this._flipRects; this._flipRects = null; this.runFlip(first); }
+    if (this._drag && !this._slotRects && (this.props.reordering === true || this.props.reordering === 'true')) {
+      const grid = this.gridRef && this.gridRef.current;
+      if (grid) {
+        const tiles = [...grid.querySelectorAll('[data-freq]')];
+        this._slotRects = tiles.map(t => t.getBoundingClientRect());
+        this._slotFreqs = tiles.map(t => t.getAttribute('data-freq'));
+      }
+    }
     this.scrollActiveIntoView();
     if (this._anim && prevProps && prevProps.freq !== this.props.freq) {
       const A = this._anim; this._anim = null;
@@ -303,19 +308,23 @@ class Component extends DCLogic {
   };
   captureRects = () => {
     const grid = this.gridRef && this.gridRef.current; if (!grid) return;
-    const m = {}; grid.querySelectorAll('[data-freq]').forEach(el => { m[el.getAttribute('data-freq')] = el.getBoundingClientRect().left; });
+    const m = {}; grid.querySelectorAll('[data-freq]').forEach(el => { const r = el.getBoundingClientRect(); m[el.getAttribute('data-freq')] = { left: r.left, top: r.top }; });
     this._flipRects = m;
   };
   runFlip = (first) => {
     const grid = this.gridRef && this.gridRef.current; if (!grid) return;
     grid.querySelectorAll('[data-freq]').forEach(el => {
-      const prev = first[el.getAttribute('data-freq')]; if (prev == null) return;
-      const dx = prev - el.getBoundingClientRect().left;
-      if (Math.abs(dx) < 1) return;
-      el.animate([{ transform:'translateX(' + dx + 'px)' }, { transform:'translateX(0)' }], { duration:300, easing:'cubic-bezier(.2,.8,.2,1)', composite:'add' });
+      const f = el.getAttribute('data-freq');
+      if (this._drag && f === String(this._drag.freq)) return;
+      const prev = first[f]; if (prev == null) return;
+      const r = el.getBoundingClientRect();
+      const sf = (el.offsetWidth && r.width / el.offsetWidth) || 1;
+      const dx = (prev.left - r.left) / sf, dy = (prev.top - r.top) / sf;
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+      el.animate([{ transform:'translate(' + dx + 'px,' + dy + 'px)' }, { transform:'translate(0,0)' }], { duration:300, easing:'cubic-bezier(.2,.8,.2,1)', composite:'add' });
     });
   };
-  componentWillUnmount() { window.removeEventListener('resize', this.updateScroll); clearTimeout(this._hold); }
+  componentWillUnmount() { window.removeEventListener('resize', this.updateScroll); clearTimeout(this._hold); clearTimeout(this._settleT); clearTimeout(this._clickT); }
   updateScroll = () => {
     const el = this.gridRef.current;
     if (!el) return;
@@ -348,11 +357,63 @@ class Component extends DCLogic {
     window.addEventListener('pointermove', mm);
     window.addEventListener('pointerup', up);
   };
-  holdStart = (freq) => {
+  holdStart = (e, freq) => {
     clearTimeout(this._hold);
-    this._hold = setTimeout(() => { this.props.onPresetHold && this.props.onPresetHold(freq); }, 550);
+    const startX = e.clientX, startY = e.clientY;
+    const el = e.currentTarget;
+    const sf = (el.offsetWidth && el.getBoundingClientRect().width / el.offsetWidth) || 1;
+    const cleanup = () => { clearTimeout(this._hold); window.removeEventListener('pointermove', preMove); window.removeEventListener('pointerup', preUp); };
+    const preMove = (ev) => { if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 12) cleanup(); };
+    const preUp = () => cleanup();
+    window.addEventListener('pointermove', preMove);
+    window.addEventListener('pointerup', preUp);
+    this._hold = setTimeout(() => {
+      window.removeEventListener('pointermove', preMove);
+      window.removeEventListener('pointerup', preUp);
+      this.props.onPresetHold && this.props.onPresetHold(freq);
+      this.beginDrag(freq, startX, startY, sf);
+    }, 550);
   };
   holdEnd = () => { clearTimeout(this._hold); };
+  beginDrag = (freq, ox, oy, sf) => {
+    this._drag = { freq, ox, oy, sf };
+    this._slotRects = null; this._slotFreqs = null;
+    this.setState({ dragFreq: freq, dragDX: 0, dragDY: 0, shifts: {} });
+    const move = (ev) => this.dragMove(ev);
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); this.dragEnd(); };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  dragStart = (e, freq) => {
+    e.preventDefault();
+    const el = e.currentTarget;
+    const sf = (el.offsetWidth && el.getBoundingClientRect().width / el.offsetWidth) || 1;
+    this.beginDrag(freq, e.clientX, e.clientY, sf);
+  };
+  dragMove = (ev) => {
+    const d = this._drag; if (!d) return;
+    const slots = this._slotRects, freqs = this._slotFreqs; if (!slots || !freqs) return;
+    const dx = (ev.clientX - d.ox) / d.sf, dy = (ev.clientY - d.oy) / d.sf;
+    const fromIdx = freqs.indexOf(String(d.freq));
+    let nearestSlot = fromIdx, best = Infinity;
+    slots.forEach((r, k) => { const dist = Math.hypot(ev.clientX - (r.left + r.width / 2), ev.clientY - (r.top + r.height / 2)); if (dist < best) { best = dist; nearestSlot = k; } });
+    const arr = freqs.slice(); arr.splice(fromIdx, 1); arr.splice(nearestSlot, 0, String(d.freq));
+    const shifts = {};
+    freqs.forEach((f, cur) => { if (f === String(d.freq)) return; const dest = arr.indexOf(f); shifts[f] = { dx: (slots[dest].left - slots[cur].left) / d.sf, dy: (slots[dest].top - slots[cur].top) / d.sf }; });
+    this._finalOrder = arr;
+    this.setState({ dragDX: dx, dragDY: dy, shifts });
+  };
+  dragEnd = () => {
+    const d = this._drag; if (!d) return;
+    const order = this._finalOrder;
+    this.captureRects();
+    this._drag = null; this._finalOrder = null; this._slotRects = null; this._slotFreqs = null;
+    if (order && this.props.onReorder) this.props.onReorder(order);
+    this.setState({ dragFreq: null, dragDX: 0, dragDY: 0, shifts: {} });
+    this._suppressClick = true;
+    clearTimeout(this._clickT);
+    this._clickT = setTimeout(() => { this._suppressClick = false; }, 120);
+  };
   renderVals() {
     const p = this.props;
     const bool = v => v === true || v === 'true';
@@ -497,6 +558,15 @@ class Component extends DCLogic {
       }
     };
     const seekStyle = ICONS[p.seekStyle] ? p.seekStyle : 'seekbar';
+    // Magnifier-over-picture: "find / replace this station's logo". Deliberately
+    // distinct from the Nearby magnifier (which sits over a radio tower + waves).
+    const editIcon = ce('svg', { width:17, height:17, viewBox:'0 0 24 24', fill:'none', stroke:'#FFFFFF', strokeWidth:2, strokeLinecap:'round', strokeLinejoin:'round' }, [
+      ce('rect', { key:'f', x:2.5, y:3.5, width:12, height:10, rx:2 }),
+      ce('circle', { key:'s', cx:6, cy:7, r:1.15, fill:'#FFFFFF', stroke:'none' }),
+      ce('path', { key:'m', d:'M3 12 L6.8 8.3 L10 11' }),
+      ce('circle', { key:'l', cx:16.5, cy:16, r:4.2 }),
+      ce('line', { key:'h', x1:19.6, y1:19.1, x2:22, y2:21.5 })
+    ]);
 
     const chips = presets.map((pr, idx) => {
       const active = bool(pr.active);
@@ -505,6 +575,9 @@ class Component extends DCLogic {
       const pfg = (pr.logoFg || '').trim();
       const call = (pr.name || '').trim();
       const big = !tall && !twoRows && active && !reordering;
+      const dragging = this.state.dragFreq === pr.freq;
+      const anyDrag = this.state.dragFreq != null;
+      const sh = (anyDrag && !dragging && this.state.shifts) ? this.state.shifts[String(pr.freq)] : null;
       const w = big ? (landscape ? 134 : 150) : (landscape ? 106 : 118), lg = big ? (landscape ? 50 : 58) : (landscape ? 38 : 44), lr = big ? 15 : 12, lf = big ? (landscape ? 18 : 20) : (landscape ? 14 : 16), cf = big ? (landscape ? 16 : 18) : (landscape ? 13 : 15);
       return {
         active, reordering, dataFreq: pr.freq,
@@ -512,21 +585,20 @@ class Component extends DCLogic {
         callText: call || ('FM ' + pr.freq),
         freqText: pr.freq,
         canLeft: idx > 0, canRight: idx < presets.length - 1,
-        tileStyle: { position:'relative', width: (tall || twoRows) ? 'auto' : w, height: tall ? 128 : ((twoRows || big) ? '100%' : '80%'), alignSelf: (tall || twoRows || big) ? 'stretch' : 'center', borderRadius:16, cursor: reordering ? 'default' : 'pointer', flexShrink:0, boxSizing:'border-box', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap: big ? 8 : 6, padding: big ? '12px 8px 16px' : '8px 6px 12px', backgroundColor: t.panel, border: active && !reordering ? ('2px solid ' + t.blue) : ('1px solid ' + t.border), animation: reordering ? 'carfm-wiggle 0.42s ease-in-out infinite' : 'none', transition:'width .25s ease, height .25s ease' },
+        tileStyle: { position:'relative', width: (tall || twoRows) ? 'auto' : w, height: tall ? 128 : ((twoRows || big) ? '100%' : '80%'), alignSelf: (tall || twoRows || big) ? 'stretch' : 'center', borderRadius:16, cursor: reordering ? (dragging ? 'grabbing' : 'grab') : 'pointer', flexShrink:0, boxSizing:'border-box', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap: big ? 8 : 6, padding: big ? '12px 8px 16px' : '8px 6px 12px', backgroundColor: t.panel, border: active && !reordering ? ('2px solid ' + t.blue) : ('1px solid ' + t.border), animation: (reordering && !anyDrag) ? 'carfm-wiggle 0.42s ease-in-out infinite' : 'none', transition: dragging ? 'none' : (anyDrag ? 'transform .16s ease' : 'width .25s ease, height .25s ease'), transform: dragging ? ('translate(' + this.state.dragDX + 'px,' + this.state.dragDY + 'px) scale(1.06)') : (sh ? ('translate(' + sh.dx + 'px,' + sh.dy + 'px)') : 'none'), zIndex: dragging ? 30 : 'auto', boxShadow: dragging ? '0 18px 40px rgba(0,0,0,0.35)' : 'none', touchAction: reordering ? 'none' : 'auto' },
         logoStyle: { width:lg, height:lg, borderRadius:lr, flexShrink:0, backgroundColor: plogo ? (pbg || t.raised) : t.raised, border: plogo ? 'none' : ('1px solid ' + t.border), display:'flex', alignItems:'center', justifyContent:'center', fontSize: big ? 20 : 16, fontWeight:700, letterSpacing:0.5, color: plogo ? (pfg || '#FFFFFF') : t.dim, transition:'width .25s ease, height .25s ease' },
         callStyle: { fontSize:cf, fontWeight:700, color:t.text, lineHeight:1.12, maxWidth:'100%', textAlign:'center', whiteSpace:'normal', wordBreak:'break-word' },
         freqTextStyle: { fontSize:13, fontWeight:700, color:t.dim, letterSpacing:0.3, lineHeight:1, fontVariantNumeric:'tabular-nums' },
         activeBarStyle: { position:'absolute', bottom:6, left:'50%', marginLeft:-13, width:26, height:3, borderRadius:2, backgroundColor: t.blue },
-        reorderRowStyle: { position:'absolute', top:6, left:0, width:'100%', display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 6px', boxSizing:'border-box' },
-        moveLeftStyle: { width:34, height:34, borderRadius:10, display:'flex', alignItems:'center', justifyContent:'center', fontSize:20, fontWeight:700, cursor: idx > 0 ? 'pointer' : 'default', backgroundColor: t.raised, color: idx > 0 ? t.text : t.meterEmpty, border:'1px solid ' + t.border },
-        moveRightStyle: { width:34, height:34, borderRadius:10, display:'flex', alignItems:'center', justifyContent:'center', fontSize:20, fontWeight:700, cursor: idx < presets.length - 1 ? 'pointer' : 'default', backgroundColor: t.raised, color: idx < presets.length - 1 ? t.text : t.meterEmpty, border:'1px solid ' + t.border },
+        logoEditStyle: { position:'absolute', top:-9, left:-9, width:28, height:28, borderRadius:14, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', backgroundColor: t.blue, color:'#FFFFFF', border:'2px solid ' + t.panel, touchAction:'none', lineHeight:1 },
         removeStyle: { position:'absolute', top:-9, right:-9, width:28, height:28, borderRadius:14, display:'flex', alignItems:'center', justifyContent:'center', fontSize:17, fontWeight:700, cursor:'pointer', backgroundColor: t.amber, color:'#FFFFFF', border:'2px solid ' + t.panel, lineHeight:1 },
-        onClick: () => { if (!reordering) p.onPresetTap && p.onPresetTap(pr.freq); },
-        onHoldStart: () => { if (!reordering) this.holdStart(pr.freq); },
-        onHoldEnd: this.holdEnd,
-        onMoveLeft: () => { if (idx > 0) { this.captureRects(); p.onPresetMove && p.onPresetMove(pr.freq, -1); } },
-        onMoveRight: () => { if (idx < presets.length - 1) { this.captureRects(); p.onPresetMove && p.onPresetMove(pr.freq, 1); } },
-        onRemove: () => p.onPresetRemove && p.onPresetRemove(pr.freq)
+        editIcon,
+        onClick: () => { if (this._suppressClick) return; if (!reordering) p.onPresetTap && p.onPresetTap(pr.freq); },
+        onPointerDown: (e) => { if (reordering) this.dragStart(e, pr.freq); else this.holdStart(e, pr.freq); },
+        onPointerUp: () => { if (!reordering) this.holdEnd(); },
+        onPointerLeave: () => { if (!reordering) this.holdEnd(); },
+        onEditLogo: (e) => { e.stopPropagation(); e.preventDefault(); p.onPresetLogo && p.onPresetLogo(pr.freq); },
+        onRemove: (e) => { if (e) { e.stopPropagation(); e.preventDefault(); } p.onPresetRemove && p.onPresetRemove(pr.freq); }
       };
     });
 

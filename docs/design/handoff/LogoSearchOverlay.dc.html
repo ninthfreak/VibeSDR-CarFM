@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,700&display=swap" rel="stylesheet">
+<style>
+@keyframes lso-spin { to { transform: rotate(360deg); } }
+[data-lso-grid]::-webkit-scrollbar { display: none; }
+</style>
+</helmet>
+<div style="{{ containerStyle }}">
+
+  <div style="{{ headerStyle }}">
+    <div style="{{ headerLeftStyle }}">
+      <div style="{{ stationLogoStyle }}">{{ stationMono }}</div>
+      <div style="{{ headerTextStyle }}">
+        <div style="{{ titleStyle }}">{{ title }}</div>
+        <div style="{{ subStyle }}">{{ sub }}</div>
+      </div>
+    </div>
+    <div style="{{ closeStyle }}" onClick="{{ onCancel }}">✕</div>
+  </div>
+
+  <div style="{{ queryRowStyle }}">
+    <span style="{{ queryIconStyle }}">{{ queryIcon }}</span>
+    <span style="{{ queryLabelStyle }}">Searched</span>
+    <span style="{{ queryTextStyle }}">{{ query }}</span>
+  </div>
+
+  <div style="{{ bodyStyle }}">
+    <sc-if value="{{ isLoading }}" hint-placeholder-val="{{ true }}">
+      <div style="{{ centerStyle }}">
+        <div style="{{ spinnerStyle }}"></div>
+        <div style="{{ centerTitleStyle }}">Searching for logos…</div>
+        <div style="{{ centerSubStyle }}">Looking up brand art for this station.</div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isResults }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ gridStyle }}" data-lso-grid="1">
+        <sc-for list="{{ cells }}" as="c" hint-placeholder-count="4">
+          <div style="{{ c.cellStyle }}" onClick="{{ c.onSelect }}">
+            <div style="{{ c.imgWrapStyle }}">
+              <div style="{{ c.logoStyle }}">{{ c.logoText }}</div>
+              <sc-if value="{{ c.selected }}" hint-placeholder-val="{{ false }}">
+                <div style="{{ c.checkStyle }}">{{ checkIcon }}</div>
+              </sc-if>
+            </div>
+            <div style="{{ c.metaStyle }}">
+              <span style="{{ c.domainStyle }}">{{ c.domain }}</span>
+              <span style="{{ c.dimsStyle }}">{{ c.dims }}</span>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isEmpty }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ centerStyle }}">
+        <div style="{{ centerGlyphStyle }}">{{ emptyGlyph }}</div>
+        <div style="{{ centerTitleStyle }}">No logos found</div>
+        <div style="{{ centerSubStyle }}">The search came back empty. You can try again or keep the current monogram.</div>
+        <div style="{{ retryStyle }}" onClick="{{ onRetry }}">{{ retryLabel }}</div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isError }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ centerStyle }}">
+        <div style="{{ centerGlyphStyle }}">{{ errorGlyph }}</div>
+        <div style="{{ centerTitleStyle }}">Search couldn’t finish</div>
+        <div style="{{ centerSubStyle }}">Something went wrong reaching the logo search. Check your connection and try again.</div>
+        <div style="{{ retryStyle }}" onClick="{{ onRetry }}">{{ retryLabel }}</div>
+      </div>
+    </sc-if>
+  </div>
+
+  <div style="{{ footerStyle }}">
+    <div style="{{ hintStyle }}">{{ footerHint }}</div>
+    <div style="{{ footerBtnsStyle }}">
+      <div style="{{ cancelBtnStyle }}" onClick="{{ onCancel }}">Cancel</div>
+      <div style="{{ confirmBtnStyle }}" onClick="{{ onConfirmClick }}">
+        <sc-if value="{{ saving }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ confirmSpinnerStyle }}"></div>
+        </sc-if>
+        <span>{{ confirmLabel }}</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:720,&quot;height&quot;:560},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light'|'dark'&quot;},&quot;demoState&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;auto&quot;,&quot;loading&quot;,&quot;results&quot;,&quot;empty&quot;,&quot;error&quot;,&quot;saving&quot;],&quot;default&quot;:&quot;results&quot;,&quot;tsType&quot;:&quot;'auto'|'loading'|'results'|'empty'|'error'|'saving'&quot;,&quot;section&quot;:&quot;Preview&quot;},&quot;narrow&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Preview&quot;},&quot;station&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{name:string;callsign:string;freq:string;query:string;logo?:string;logoBg?:string;logoFg?:string}&quot;},&quot;results&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{thumb:string;image:string;domain:string;w:number;h:number}[]&quot;}}">
+class Component extends DCLogic {
+  state = { sel: null, phase: null, saving: false };
+  componentDidMount() {
+    const forced = this.forced();
+    if (!forced) { this._t = setTimeout(() => this.setState({ phase: 'results' }), 950); }
+  }
+  componentWillUnmount() { clearTimeout(this._t); }
+  forced() { const d = this.props.demoState; return (d && d !== 'auto') ? d : null; }
+  effState() {
+    if (this.state.saving) return 'saving';
+    return this.forced() || this.state.phase || 'loading';
+  }
+  pick = (i) => { if (this.effState() !== 'results') return; this.setState({ sel: i }); };
+  retry = () => { this.setState({ sel: null, phase: 'loading', saving: false }); clearTimeout(this._t); this._t = setTimeout(() => this.setState({ phase: 'results' }), 950); };
+  confirm = () => {
+    const st = this.effState();
+    if (st !== 'results' || this.state.sel == null || this.state.saving) return;
+    const cell = this._cells && this._cells[this.state.sel];
+    this.setState({ saving: true });
+    this._st = setTimeout(() => { if (this.props.onConfirm) this.props.onConfirm(cell ? cell.image : ''); }, 750);
+  };
+  renderVals() {
+    const p = this.props;
+    const theme = p.theme === 'dark' ? 'dark' : 'light';
+    const T = {
+      light: { bg:'#EEF1F5', panel:'#FFFFFF', raised:'#F5F7FA', amber:'#C9760A', text:'#1B222C', dim:'#67717F', blue:'#2E86FF', border:'rgba(20,30,45,0.13)', blueFill:'rgba(46,134,255,0.12)', track:'rgba(20,30,45,0.10)' },
+      dark:  { bg:'#161E29', panel:'#212B38', raised:'#2A3644', amber:'#FFB833', text:'#E9EEF4', dim:'#8B97A7', blue:'#4A9EFF', border:'rgba(255,255,255,0.13)', blueFill:'rgba(74,158,255,0.18)', track:'rgba(255,255,255,0.10)' }
+    };
+    const t = T[theme];
+    const font = '"Atkinson Hyperlegible", system-ui, sans-serif';
+    const narrow = !!p.narrow;
+    const ce = React.createElement;
+
+    const stn = p.station || {};
+    const call = (stn.callsign || stn.name || 'FM').toString();
+    const name = (stn.name || call).toString();
+    const freq = (stn.freq != null ? String(stn.freq) : '').trim();
+    const mono = (stn.logo || call).toString();
+    const brand = (stn.logoBg || t.blue);
+    const brandFg = (stn.logoFg || '#FFFFFF');
+    const query = (stn.query || ('radio ' + freq + ' ' + call.toLowerCase() + ' logo')).trim();
+
+    const st = this.effState();
+    const isLoading = st === 'loading';
+    const isResults = st === 'results' || st === 'saving';
+    const isEmpty = st === 'empty';
+    const isError = st === 'error';
+    const saving = st === 'saving';
+
+    // Candidate results: real ones if injected, otherwise four believable mock hits
+    // so the design reads like an image search (varied art on their own backgrounds).
+    const provided = Array.isArray(p.results) ? p.results : null;
+    const mock = [
+      { domain:'wikimedia.org',    w:512, h:512, imgBg:'#FFFFFF', fg:brand,       variant:'wordmark' },
+      { domain:'tunein.com',       w:400, h:400, imgBg:brand,     fg:brandFg,     variant:'wordmark' },
+      { domain:'facebook.com',     w:600, h:315, imgBg:'#14181D', fg:'#F2F4F7',   variant:'wordmark' },
+      { domain:'radio-locator.com',w:300, h:300, imgBg:'#FFFFFF', fg:brand,       variant:'chip' }
+    ];
+    const src = provided ? provided.slice(0, 4) : mock;
+
+    const cells = src.map((r, i) => {
+      const selected = this.state.sel === i;
+      const imgBg = r.imgBg || '#FFFFFF';
+      const fg = r.fg || brand;
+      const isChip = r.variant === 'chip';
+      const logoStyle = isChip
+        ? { width: narrow ? 62 : 74, height: narrow ? 62 : 74, borderRadius:16, backgroundColor:brand, color:brandFg, display:'flex', alignItems:'center', justifyContent:'center', fontSize: narrow ? 20 : 24, fontWeight:700, letterSpacing:0.5 }
+        : { fontSize: narrow ? 26 : 32, fontWeight:700, fontStyle:'italic', color:fg, letterSpacing:0.5, textAlign:'center', padding:'0 14px', maxWidth:'100%', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' };
+      return {
+        image: r.image || '', thumb: r.thumb || r.image || '',
+        domain: r.domain || 'image', dims: (r.w && r.h) ? (r.w + '×' + r.h) : '',
+        logoText: mono, selected,
+        onSelect: () => this.pick(i),
+        cellStyle: { display:'flex', flexDirection:'column', gap:8, minHeight:0, cursor:'pointer', borderRadius:16, padding:8, boxSizing:'border-box', border: selected ? ('2px solid ' + t.blue) : ('1px solid ' + t.border), backgroundColor: selected ? t.blueFill : t.raised, transition:'background-color .12s ease, border-color .12s ease' },
+        imgWrapStyle: { position:'relative', flex:1, minHeight: narrow ? 58 : 70, borderRadius:10, backgroundColor:imgBg, display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden', boxShadow:'inset 0 0 0 1px rgba(0,0,0,0.05)' },
+        logoStyle,
+        checkStyle: { position:'absolute', top:8, right:8, width:28, height:28, borderRadius:14, backgroundColor:t.blue, color:'#FFFFFF', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 2px 8px rgba(0,0,0,0.25)' },
+        metaStyle: { display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, padding:'0 4px' },
+        domainStyle: { fontSize:13, fontWeight:700, color:t.dim, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' },
+        dimsStyle: { fontSize:12, fontWeight:400, color:t.dim, fontVariantNumeric:'tabular-nums', flexShrink:0 }
+      };
+    });
+    this._cells = cells;
+
+    const canConfirm = isResults && this.state.sel != null && !saving;
+    const confirmBase = { minWidth: narrow ? 120 : 148, height: narrow ? 50 : 56, padding:'0 22px', borderRadius:14, display:'flex', alignItems:'center', justifyContent:'center', gap:10, fontSize:16, fontWeight:700, letterSpacing:0.5, boxSizing:'border-box' };
+
+    return {
+      isLoading, isResults, isEmpty, isError, saving, cells,
+      title: name,
+      sub: (call && call !== name ? call + '  ·  ' : '') + (freq ? freq + ' MHz' : ''),
+      stationMono: mono,
+      query,
+      confirmLabel: saving ? 'Saving…' : 'Confirm',
+      footerHint: canConfirm ? 'Saved as this station’s logo' : (isResults ? 'Pick the correct logo' : ''),
+      retryLabel: 'Search again',
+      onCancel: p.onCancel, onConfirmClick: this.confirm, onRetry: this.retry,
+
+      queryIcon: ce('svg', { width:16, height:16, viewBox:'0 0 24 24', fill:'none', stroke:t.dim, strokeWidth:2.2, strokeLinecap:'round', strokeLinejoin:'round' }, [
+        ce('circle', { key:'c', cx:11, cy:11, r:7 }), ce('line', { key:'l', x1:20.5, y1:20.5, x2:16.65, y2:16.65 })
+      ]),
+      checkIcon: ce('svg', { width:17, height:17, viewBox:'0 0 24 24', fill:'none', stroke:'#FFFFFF', strokeWidth:3, strokeLinecap:'round', strokeLinejoin:'round' }, [
+        ce('polyline', { key:'p', points:'5 12.5 10 17.5 19 6.5' })
+      ]),
+      emptyGlyph: ce('svg', { width:46, height:46, viewBox:'0 0 24 24', fill:'none', stroke:t.dim, strokeWidth:1.8, strokeLinecap:'round', strokeLinejoin:'round' }, [
+        ce('rect', { key:'f', x:3, y:4, width:14, height:12, rx:2 }), ce('circle', { key:'s', cx:7.5, cy:8.5, r:1.4 }), ce('path', { key:'m', d:'M3.5 14 L8 9.5 L12 13' }),
+        ce('circle', { key:'l', cx:17, cy:17, r:4 }), ce('line', { key:'h', x1:20, y1:20, x2:22.5, y2:22.5 })
+      ]),
+      errorGlyph: ce('svg', { width:46, height:46, viewBox:'0 0 24 24', fill:'none', stroke:t.amber, strokeWidth:1.9, strokeLinecap:'round', strokeLinejoin:'round' }, [
+        ce('path', { key:'t', d:'M12 3 L22 20 H2 Z' }), ce('line', { key:'v', x1:12, y1:9.5, x2:12, y2:14.5 }), ce('circle', { key:'d', cx:12, cy:17.4, r:0.6, fill:t.amber, stroke:t.amber })
+      ]),
+
+      containerStyle: { width:'100%', height:'100%', backgroundColor:t.bg, color:t.text, fontFamily:font, display:'flex', flexDirection:'column', boxSizing:'border-box', overflow:'hidden' },
+
+      headerStyle: { display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, padding: narrow ? '14px 16px' : '16px 22px', borderBottom:'1px solid ' + t.border, flexShrink:0 },
+      headerLeftStyle: { display:'flex', alignItems:'center', gap: narrow ? 12 : 16, minWidth:0 },
+      stationLogoStyle: { width: narrow ? 48 : 56, height: narrow ? 48 : 56, borderRadius:14, flexShrink:0, backgroundColor:brand, color:brandFg, display:'flex', alignItems:'center', justifyContent:'center', fontSize: narrow ? 16 : 19, fontWeight:700, letterSpacing:0.5 },
+      headerTextStyle: { display:'flex', flexDirection:'column', gap:3, minWidth:0 },
+      titleStyle: { fontSize: narrow ? 22 : 26, fontWeight:700, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' },
+      subStyle: { fontSize:15, fontWeight:400, color:t.dim, letterSpacing:0.3 },
+      closeStyle: { width:52, height:52, borderRadius:12, cursor:'pointer', border:'1px solid ' + t.border, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, color:t.dim, boxSizing:'border-box', flexShrink:0 },
+
+      queryRowStyle: { display:'flex', alignItems:'center', gap:10, padding: narrow ? '10px 16px' : '12px 22px', flexShrink:0 },
+      queryIconStyle: { display:'flex', alignItems:'center', flexShrink:0 },
+      queryLabelStyle: { fontSize:12, fontWeight:700, letterSpacing:1.5, textTransform:'uppercase', color:t.dim, flexShrink:0 },
+      queryTextStyle: { fontSize:15, fontWeight:700, color:t.text, backgroundColor:t.raised, border:'1px solid ' + t.border, borderRadius:8, padding:'5px 12px', fontVariantNumeric:'tabular-nums', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' },
+
+      bodyStyle: { flex:1, minHeight:0, display:'flex', flexDirection:'column', padding: narrow ? '4px 16px 8px' : '4px 22px 10px' },
+      gridStyle: { flex:1, minHeight:0, display:'grid', gridTemplateColumns:'1fr 1fr', gridTemplateRows:'1fr 1fr', gap: narrow ? 10 : 14, overflowY:'auto', overflowX:'hidden', padding:'6px 2px' },
+
+      centerStyle: { flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:14, textAlign:'center', padding:'0 40px' },
+      centerGlyphStyle: { lineHeight:1 },
+      centerTitleStyle: { fontSize:22, fontWeight:700, color:t.text },
+      centerSubStyle: { fontSize:15, fontWeight:400, color:t.dim, lineHeight:1.5, maxWidth:420 },
+      spinnerStyle: { width:44, height:44, borderRadius:'50%', border:'4px solid ' + t.track, borderTopColor:t.blue, animation:'lso-spin 0.8s linear infinite' },
+      retryStyle: { marginTop:4, height:48, padding:'0 22px', borderRadius:12, cursor:'pointer', border:'1.5px solid ' + t.blue, backgroundColor:t.blueFill, color:t.blue, display:'flex', alignItems:'center', justifyContent:'center', fontSize:15, fontWeight:700 },
+
+      footerStyle: { display:'flex', alignItems:'center', justifyContent:'space-between', gap:16, padding: narrow ? '12px 16px' : '14px 22px', borderTop:'1px solid ' + t.border, flexShrink:0 },
+      hintStyle: { fontSize:14, fontWeight:700, color:t.dim, minWidth:0, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' },
+      footerBtnsStyle: { display:'flex', gap:12, flexShrink:0 },
+      cancelBtnStyle: { minWidth: narrow ? 96 : 120, height: narrow ? 50 : 56, padding:'0 22px', borderRadius:14, cursor:'pointer', border:'1px solid ' + t.border, display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, fontWeight:700, letterSpacing:0.5, color:t.dim, boxSizing:'border-box' },
+      confirmBtnStyle: canConfirm
+        ? Object.assign({}, confirmBase, { cursor:'pointer', border:'1.5px solid ' + t.blue, backgroundColor:t.blue, color:'#FFFFFF' })
+        : Object.assign({}, confirmBase, { cursor:'default', border:'1px solid ' + t.border, backgroundColor:'transparent', color:t.dim, opacity: saving ? 1 : 0.55 }),
+      confirmSpinnerStyle: { width:18, height:18, borderRadius:'50%', border:'3px solid rgba(255,255,255,0.4)', borderTopColor:'#FFFFFF', animation:'lso-spin 0.8s linear infinite' }
+    };
+  }
+}
+</script>
+</body>
+</html>
