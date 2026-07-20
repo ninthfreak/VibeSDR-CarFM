@@ -1,6 +1,6 @@
 # DUDU OS FM Radio — Android implementation spec
 
-*Bundle v1.5.0 — 2026-07-19 (see `VERSION`).*
+*Bundle v1.7.0 — 2026-07-20 (see `VERSION`).*
 
 A complete build spec for the DUDU OS FM radio front-end on Android (Jetpack
 Compose primary; View/XML notes where helpful). It describes **intent, structure,
@@ -233,9 +233,18 @@ face — it appears **only in the tune numpad** (§6.1).
 
 **Interactions:**
 - **Tap** a tile → tune to it.
-- **Long-press** (~550ms) any tile → **reorder mode**: tiles wiggle; each shows
-  `‹ ›` move handles and an ✕ remove badge; a **DONE** button appears in the band.
-  Moves animate with a FLIP slide (§8).
+- **Long-press** (~550ms) any tile → **reorder mode**: tiles wiggle; each shows a blue
+  **logo-search badge** (magnifier-over-picture glyph, top-left) and an ✕ remove badge
+  (top-right); a **DONE** button appears in the band.
+- **Drag to reorder** (one continuous gesture): the long-press flows straight into a
+  drag with the same finger — no lift-and-re-press. The picked-up tile lifts (scale
+  1.06 + shadow) and tracks the pointer; the wiggle freezes on every tile during the
+  drag; the remaining tiles **slide apart to open a real gap** at the insertion point,
+  and the gap tracks the pointer. The list is not reordered mid-drag — on release the
+  order commits and the dropped tile settles from the finger into the open slot (§8).
+  There are no on-screen move arrows.
+- **Logo-search badge** → opens the **preset logo-search window** (§6.4) for that
+  station. It is the one and only way a logo is assigned (no automatic fetching).
 - **Empty state:** dashed placeholder — "No presets yet — tune a station and tap
   the ★".
 
@@ -327,6 +336,37 @@ A header ("Settings" + close ✕) over a scrolling body of grouped sections:
 The built panel (`SettingsPanel.dc.html`, in this bundle) is the exact reference
 for these sections, values, and copy.
 
+### 6.4 Preset logo-search window (`LogoSearchOverlay`)
+A **modal card over the radio face** (same dim-scrim + rounded-card pattern as the
+numpad/picker/settings), opened by the per-tile logo-search badge in reorder mode. It
+is the **only** way a station logo is assigned — there is no automatic/background logo
+fetch. On open it **immediately runs the search** (query built from the station; no
+query field, no submit).
+
+- **Trigger glyph:** a **magnifier over a picture** (framed image with a tiny sun +
+  hill, lens at lower-right) — deliberately distinct from the Nearby magnifier-over-
+  tower (§7). White stroke on the blue badge; ≥48dp touch target (hitSlop is fine).
+- **Header:** the station's current logo tile, its **name**, and `callsign · frequency
+  MHz`, plus a **query chip** showing the exact string searched (e.g. `radio 98.1 wmgn
+  logo`) so the driver can trust the results. A close ✕.
+- **States, in order:** **Loading** (spinner + "Searching for logos…"); **Results** —
+  the first **four** image candidates in a **2×2 grid** (each cell = the candidate art
+  on its own background + a caption of source domain and pixel dimensions); **No
+  results** and **Error**, each a short message with a **Search again** action; and a
+  **Saving** busy state on Confirm.
+- **Selection:** tap a cell to select (single-select) — **blue** 2dp border + blue
+  fill tint + a blue check badge (never red/green; §6 colourblind rule). Selecting
+  enables **Confirm**.
+- **Confirm** (enabled only once a cell is selected): downloads the chosen image, saves
+  it as this station's **manual logo** (sticky — never overwritten later), refreshes
+  every tile showing that station, and closes. **Cancel** / scrim / ✕ closes and
+  changes nothing.
+- **Responsive:** the 2×2 grid fits the narrow track (phone portrait / ⅓ slice) with
+  no horizontal scroll; light/dark themes as elsewhere.
+- Backend wiring (search, save-as-manual, tile refresh) is host-side; the design
+  supplies the icon + window. `LogoSearchOverlay.dc.html` is the exact reference; its
+  `demoState` prop flips between the five states for review.
+
 ---
 
 ## 7. Nearby-search icon (match exactly — do not improvise)
@@ -362,7 +402,17 @@ reference geometry.
   **This is the one animation most likely to be skipped — build it from the exact
   FLIP procedure (capture bounds → tune → morph, two easings, resolve to the 0.88
   peek base) in LOSSY-ELEMENTS.md #9. Verify against a screen recording, not a still.**
-- **Preset reorder move:** FLIP slide (~300ms, decelerate) as tiles swap.
+- **Preset reorder (drag):** the picked-up tile lifts (scale 1.06 + shadow,
+  `touch-action:none`) and tracks the pointer. The other tiles **slide apart to open a
+  gap** at the insertion slot (transform-only, ~160ms ease; the wiggle is frozen for
+  the duration). Insertion geometry is computed against the slot rects captured at
+  drag start, so the gap does not oscillate as in-flight transforms move. The list is
+  NOT reordered mid-drag — on release the order commits and every tile (including the
+  dropped one, sliding from the finger) resolves to its new position with a FLIP slide
+  (~300ms, decelerate). Committing only on drop avoids the index-churn that live
+  reordering causes with an index-keyed list. The long-press→drag is one continuous
+  gesture (same pointer); a >12dp move before the long-press fires cancels it, so the
+  rail can still be scrolled.
 - **Scanning:** frequency ticks through values (~34ms/step) toward the target
   station; small vertical fade on the readout per step.
 - **TA flag:** continuous amber scale-pulse (~1.1s) while a traffic announcement
@@ -383,7 +433,8 @@ signal). Persist `freq` + `presets` (DataStore/prefs).
 - **Band:** 87.5–108.0 MHz, 0.1 step, wraps at the ends.
 - **Seek/scan:** jump to the next/previous station with signal.
 - **Save (★):** toggle the current station in/out of presets.
-- **Reorder / remove:** via long-press reorder mode.
+- **Reorder / remove / change logo:** via long-press reorder mode (drag to reorder,
+  ✕ to remove, logo-search badge to open the logo-search window §6.4).
 - Prototype station metadata is a fixed demo DB (Madison, WI market); the real
   build pulls PS/RT/PTY/flags from the RDS decoder and signal from the tuner, and
   nearby stations from the FCC dataset.
