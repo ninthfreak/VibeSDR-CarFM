@@ -21,7 +21,7 @@ import {
 import { useKeepAwake } from 'expo-keep-awake';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { getNearbyStations } from '../services/stationFinder';
+import { getNearbyStations, callsignForFreq } from '../services/stationFinder';
 import type { NearbyStation } from '../services/stationTypes';
 import { GearIcon, MagnifierTower, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
 import LogoTile, { callsignFrom } from './carfm/LogoTile';
@@ -644,7 +644,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         ) : (
           <>
             <View style={[styles.stationRow, tall && { gap: L.s(14) }]}>
-              <LogoTile name={callsign || undefined} size={L.logo} radius={L.s(20)} />
+              <LogoTile name={callsign || undefined} freqMhz={mhz} size={L.logo} radius={L.s(20)} />
               <Text
                 numberOfLines={1}
                 style={[
@@ -705,7 +705,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 { opacity: isEntering ? flip!.enterOpacity : PEEK_OPACITY },
               ]}
             >
-              <SidePresetCard name={preset.name} pal={pal} side={side} width={peekW} k={k} onPress={onPress} />
+              <SidePresetCard name={preset.name} freqMhz={preset.frequencyMhz} pal={pal} side={side} width={peekW} k={k} onPress={onPress} />
             </Animated.View>
           );
         };
@@ -789,13 +789,18 @@ export default function CarFmFace(props: CarFmFaceProps) {
         onSearchLogo={(i) => {
           const p = items[i];
           if (!p) return;
-          const cs = callsignFrom(p.name);
-          setLogoSearch({
-            base: cs ? callsignBase(cs) : p.name.toUpperCase().trim(),
-            callsign: cs || p.name,
-            freqMhz: p.frequencyMhz,
-            name: p.name,
-          });
+          // Resolve the real callsign: from the name if it carries one, else from
+          // the frequency (FCC DB) — the preset name may be a bare "FM 88.7".
+          void (async () => {
+            const cs = callsignFrom(p.name);
+            const base = cs ? callsignBase(cs) : (await callsignForFreq(p.frequencyMhz));
+            setLogoSearch({
+              base: base || p.name.toUpperCase().trim(),
+              callsign: base || '',           // '' → query is "radio <freq> logo", never junk
+              freqMhz: p.frequencyMhz,
+              name: p.name,
+            });
+          })();
         }}
       />
       </View>

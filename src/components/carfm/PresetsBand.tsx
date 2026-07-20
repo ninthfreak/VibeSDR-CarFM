@@ -151,7 +151,7 @@ function Tile({
             </Pressable>
           </>
         ) : null}
-        <LogoTile name={p.name} size={size.logo} radius={size.logoRadius} />
+        <LogoTile name={p.name} freqMhz={p.frequencyMhz} size={size.logo} radius={size.logoRadius} />
         <Text style={[styles.tileName, { fontSize: size.nameFont, color: pal.text }]} numberOfLines={2}>
           {p.name}
         </Text>

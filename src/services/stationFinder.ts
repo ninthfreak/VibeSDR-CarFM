@@ -138,6 +138,34 @@ export async function getStationDataDate(): Promise<string | null> {
   return snapshotDate();
 }
 
+// ── callsign by frequency (FCC DB) ────────────────────────────────────────────
+// Presets are saved under the on-air PS name — or a bare "FM 88.7" when no name
+// was captured — NOT the callsign. So station identity (logo key, logo-search
+// query) must resolve the callsign from the dial frequency against the bundled
+// FCC dataset. Cached briefly since it's hit once per visible tile.
+let freqCallsignCache: { at: number; map: Map<number, string> } | null = null;
+const FREQ_CACHE_MS = 60 * 1000;
+
+/** Resolve the closest FM station's callsign base for a dial frequency, or null
+ *  (no GPS / not in the dataset). Nearest by distance when several share a freq. */
+export async function callsignForFreq(freqMhz?: number): Promise<string | null> {
+  if (freqMhz == null || !isFinite(freqMhz)) return null;
+  if (!freqCallsignCache || Date.now() - freqCallsignCache.at > FREQ_CACHE_MS) {
+    try {
+      const { stations } = await getNearbyStations({ enrich: false });
+      const map = new Map<number, string>();
+      stations
+        .filter((s) => s.service === 'FM')
+        .sort((a, b) => a.distanceKm - b.distanceKm)
+        .forEach((s) => { const k = Math.round(s.frequencyMhz * 10); if (!map.has(k)) map.set(k, s.callsignBase); });
+      freqCallsignCache = { at: Date.now(), map };
+    } catch {
+      freqCallsignCache = { at: Date.now(), map: new Map() };
+    }
+  }
+  return freqCallsignCache.map.get(Math.round(freqMhz * 10)) ?? null;
+}
+
 // ── manual assignment + web image search (addendum §7, user addition) ─────────
 /**
  * Assign a logo to a station from an image URL (a web-search result or a pasted
