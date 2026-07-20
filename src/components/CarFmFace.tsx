@@ -24,10 +24,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getNearbyStations } from '../services/stationFinder';
 import type { NearbyStation } from '../services/stationTypes';
 import { GearIcon, MagnifierTower, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
-import LogoTile from './carfm/LogoTile';
+import LogoTile, { callsignFrom } from './carfm/LogoTile';
+import LogoSearchOverlay, { type LogoSearchTarget } from './carfm/LogoSearchOverlay';
 import NearbyPicker from './carfm/NearbyPicker';
 import Numpad from './carfm/Numpad';
 import PresetsBand, { type PresetItem } from './carfm/PresetsBand';
+import { callsignBase } from '../services/piCallsign';
 import SidePresetCard, { PEEK_OPACITY, PEEK_SCALE } from './carfm/SidePresetCard';
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
 import { DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT } from './carfm/tokens';
@@ -223,6 +225,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const [numpadOpen, setNumpadOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [reordering, setReordering] = useState(false);
+  const [logoSearch, setLogoSearch] = useState<LogoSearchTarget | null>(null);
   const [scan, setScan] = useState<{ dir: 1 | -1; display: number } | null>(null);
   const scanTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   // ── Aspect-ratio layout tracks (handoff: fill the container, switch layout by
@@ -641,7 +644,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         ) : (
           <>
             <View style={[styles.stationRow, tall && { gap: L.s(14) }]}>
-              <LogoTile name={callsign || undefined} size={L.logo} radius={L.s(20)} interactive freqMhz={mhz} />
+              <LogoTile name={callsign || undefined} size={L.logo} radius={L.s(20)} />
               <Text
                 numberOfLines={1}
                 style={[
@@ -783,6 +786,17 @@ export default function CarFmFace(props: CarFmFaceProps) {
         onMove={onReorderPreset}
         onRemove={onRemovePreset}
         onOpenNearby={() => setPickerOpen(true)}
+        onSearchLogo={(i) => {
+          const p = items[i];
+          if (!p) return;
+          const cs = callsignFrom(p.name);
+          setLogoSearch({
+            base: cs ? callsignBase(cs) : p.name.toUpperCase().trim(),
+            callsign: cs || p.name,
+            freqMhz: p.frequencyMhz,
+            name: p.name,
+          });
+        }}
       />
       </View>
 
@@ -817,6 +831,12 @@ export default function CarFmFace(props: CarFmFaceProps) {
         onSetTheme={(t) => onSetTheme?.(t)}
         onAdvanced={() => { setSettingsOpen(false); onOpenAdvanced(); }}
         onClose={() => setSettingsOpen(false)}
+      />
+      {/* PLACEHOLDER window — logic only; Claude Design owns its look. */}
+      <LogoSearchOverlay
+        visible={!!logoSearch}
+        target={logoSearch}
+        onClose={() => setLogoSearch(null)}
       />
     </View>
   );

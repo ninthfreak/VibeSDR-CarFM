@@ -45,33 +45,56 @@ async function fetchVqd(query: string): Promise<string | null> {
   }
 }
 
-interface DdgImageResult { image?: string; thumbnail?: string; width?: number; height?: number; title?: string }
+interface DdgRawResult { image?: string; thumbnail?: string; width?: number; height?: number; title?: string; source?: string }
+
+/** One picker-ready image result: a full-size `image` and a `thumbnail` to show. */
+export interface DdgImage { image: string; thumbnail: string; title: string; width?: number; height?: number; source?: string }
 
 /**
- * Return the top image-result URL for a query, or null. Two-step DDG flow:
- * page -> `vqd` token -> `i.js` JSON. Best-effort; any failure yields null so
- * callers fall back to a monogram.
+ * Return up to `n` image results for a query. Two-step DDG flow:
+ * page -> `vqd` token -> `i.js` JSON. Best-effort; any failure yields [] so
+ * callers fall back to a monogram / empty state.
  */
-export async function ddgImageSearch(query: string): Promise<string | null> {
+export async function ddgImageResults(query: string, n = 4): Promise<DdgImage[]> {
   const vqd = await fetchVqd(query);
-  if (!vqd) return null;
+  if (!vqd) return [];
   try {
     const u = `https://duckduckgo.com/i.js?l=us-en&o=json&q=${encodeURIComponent(query)}`
       + `&vqd=${encodeURIComponent(vqd)}&f=,,,&p=1&t=${APP_TAG}`;
     const res = await fetch(u, {
       headers: { 'User-Agent': UA, 'Referer': 'https://duckduckgo.com/', 'Accept': 'application/json' },
     });
-    if (!res.ok) return null;
-    const json = (await res.json()) as { results?: DdgImageResult[] };
-    const top = json.results?.find((r) => typeof r.image === 'string' && /^https?:\/\//i.test(r.image!));
-    return top?.image ?? null;
+    if (!res.ok) return [];
+    const json = (await res.json()) as { results?: DdgRawResult[] };
+    return (json.results ?? [])
+      .filter((r) => typeof r.image === 'string' && /^https?:\/\//i.test(r.image!))
+      .slice(0, n)
+      .map((r) => ({
+        image: r.image!,
+        thumbnail: r.thumbnail && /^https?:\/\//i.test(r.thumbnail) ? r.thumbnail : r.image!,
+        title: r.title ?? '',
+        width: r.width, height: r.height, source: r.source,
+      }));
   } catch {
-    return null;
+    return [];
   }
+}
+
+/** Return just the top image-result URL for a query, or null. */
+export async function ddgImageSearch(query: string): Promise<string | null> {
+  return (await ddgImageResults(query, 1))[0]?.image ?? null;
 }
 
 /** Convenience: resolve a station logo URL from its frequency + callsign. */
 export async function ddgStationLogo(freqMhz: number | undefined, callsign: string): Promise<string | null> {
   if (!callsign) return null;
   return ddgImageSearch(stationLogoQuery(freqMhz, callsign));
+}
+
+/** Convenience: the first `n` logo candidates for a station (the picker window). */
+export async function ddgStationLogoResults(
+  freqMhz: number | undefined, callsign: string, n = 4,
+): Promise<DdgImage[]> {
+  if (!callsign) return [];
+  return ddgImageResults(stationLogoQuery(freqMhz, callsign), n);
 }
