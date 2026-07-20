@@ -641,7 +641,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         ) : (
           <>
             <View style={[styles.stationRow, tall && { gap: L.s(14) }]}>
-              <LogoTile name={callsign || undefined} size={L.logo} radius={L.s(20)} />
+              <LogoTile name={callsign || undefined} size={L.logo} radius={L.s(20)} interactive freqMhz={mhz} />
               <Text
                 numberOfLines={1}
                 style={[
