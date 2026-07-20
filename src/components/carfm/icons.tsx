@@ -212,6 +212,24 @@ export function WarningTriangle({ size = 26, color }: { size?: number; color: st
   );
 }
 
+/**
+ * Magnifier-over-picture — the reorder-mode "find/replace this station's logo"
+ * badge glyph (RadioFace editIcon). A framed image (tiny sun + hill) with a lens
+ * at lower-right; deliberately distinct from the Nearby magnifier-over-tower.
+ * White stroke on the blue badge.
+ */
+export function LogoSearchIcon({ size = 17, color = '#FFFFFF' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Rect x="2.5" y="3.5" width="12" height="10" rx="2" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <Circle cx="6" cy="7" r="1.15" fill={color} />
+      <Path d="M3 12 L6.8 8.3 L10 11" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <Circle cx="16.5" cy="16" r="4.2" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <Line x1="19.6" y1="19.1" x2="22" y2="21.5" stroke={color} strokeWidth="2" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
 /** Backspace key glyph for the numpad. */
 export function BackspaceIcon({ size = 30, color }: { size?: number; color: string }) {
   return (

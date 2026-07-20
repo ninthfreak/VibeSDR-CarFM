@@ -15,7 +15,7 @@ import {
   type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent,
 } from 'react-native';
 
-import { MagnifierTower } from './icons';
+import { LogoSearchIcon, MagnifierTower } from './icons';
 import LogoTile from './LogoTile';
 import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 
@@ -79,14 +79,26 @@ function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX
       >
         {reordering ? (
           <>
+            {/* Logo-search badge (§6.4): magnifier-over-picture, top-left, blue,
+                2px panel ring. Opens the logo-search window for this station. */}
+            <Pressable
+              onPress={onSearchLogo}
+              hitSlop={10}
+              style={[styles.logoEdit, { backgroundColor: pal.blue, borderColor: pal.panel }]}
+              accessibilityRole="button" accessibilityLabel={`Find logo for ${p.name}`}
+            >
+              <LogoSearchIcon size={17} />
+            </Pressable>
             <Pressable
               onPress={onRemove}
-              hitSlop={9}
-              style={[styles.removeBadge, { backgroundColor: pal.amber }]}
+              hitSlop={10}
+              style={[styles.removeBadge, { backgroundColor: pal.amber, borderColor: pal.panel }]}
               accessibilityRole="button" accessibilityLabel={`Remove preset ${p.name}`}
             >
               <Text style={styles.removeText}>✕</Text>
             </Pressable>
+            {/* Move arrows remain until drag-to-reorder (v1.7.0 §4.3/§8) lands —
+                that interaction change is what replaces these. */}
             <Pressable
               onPress={() => onMove(-1)} disabled={first}
               hitSlop={7}
@@ -102,17 +114,6 @@ function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX
               accessibilityRole="button" accessibilityLabel="Move right"
             >
               <Text style={[styles.moveText, { color: pal.text }]}>›</Text>
-            </Pressable>
-            {/* PLACEHOLDER trigger for the logo-search window. Claude Design owns
-                the real icon + its placement (see handoff-logo-search.md); this
-                bare button only wires the flow so it can be exercised now. */}
-            <Pressable
-              onPress={onSearchLogo}
-              hitSlop={7}
-              style={[styles.logoBtn, { backgroundColor: pal.raised, borderColor: pal.border }]}
-              accessibilityRole="button" accessibilityLabel={`Find logo for ${p.name}`}
-            >
-              <Text style={[styles.logoBtnText, { color: pal.text }]}>LOGO</Text>
             </Pressable>
           </>
         ) : null}
@@ -449,11 +450,17 @@ const styles = StyleSheet.create({
   },
   tileName: { fontFamily: FONT_BOLD, textAlign: 'center' },
   activeBar: { position: 'absolute', bottom: 6, width: 26, height: 3, borderRadius: 2 },
-  removeBadge: {
-    position: 'absolute', top: -6, right: -6, zIndex: 2,
-    width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center',
+  // §6.4 badge anatomy: 28×28, top corners at -9, 2px panel ring.
+  logoEdit: {
+    position: 'absolute', top: -9, left: -9, zIndex: 2,
+    width: 28, height: 28, borderRadius: 14, borderWidth: 2,
+    alignItems: 'center', justifyContent: 'center',
   },
-  removeText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
+  removeBadge: {
+    position: 'absolute', top: -9, right: -9, zIndex: 2, borderWidth: 2,
+    width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
+  },
+  removeText: { color: '#FFF', fontSize: 17, fontWeight: '700', lineHeight: 18 },
   moveBtn: {
     position: 'absolute', top: 6, zIndex: 2, width: 34, height: 34, borderRadius: 10,
     alignItems: 'center', justifyContent: 'center',
@@ -461,12 +468,6 @@ const styles = StyleSheet.create({
   moveLeft: { left: 6 },
   moveRight: { right: 6 },
   moveText: { fontSize: 22, fontWeight: '700', lineHeight: 24 },
-  // PLACEHOLDER logo-search trigger — neutral, not a design choice.
-  logoBtn: {
-    position: 'absolute', bottom: 6, zIndex: 2, height: 22, paddingHorizontal: 8,
-    borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center',
-  },
-  logoBtnText: { fontSize: 10, fontWeight: '700', letterSpacing: 1 },
   track: { height: 6, borderRadius: 999, marginTop: 6, overflow: 'hidden' },
   thumb: { position: 'absolute', top: 0, bottom: 0, borderRadius: 999 },
   nearby: {

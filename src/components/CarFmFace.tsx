@@ -832,9 +832,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
         onAdvanced={() => { setSettingsOpen(false); onOpenAdvanced(); }}
         onClose={() => setSettingsOpen(false)}
       />
-      {/* PLACEHOLDER window — logic only; Claude Design owns its look. */}
+      {/* Preset logo-search window (design §6.4). */}
       <LogoSearchOverlay
         visible={!!logoSearch}
+        pal={pal}
         target={logoSearch}
         onClose={() => setLogoSearch(null)}
       />
