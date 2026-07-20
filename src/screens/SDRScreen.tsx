@@ -3630,13 +3630,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     onAddBookmark(name, true);   // GLOBAL scope — preset is independent of the tuner/URL
   }, [status.frequency, fmPresets, fmRemoveAt, onAddBookmark]);
 
-  // Reorder/remove from the face's reorder mode (indexes are displayed order).
-  const onFmReorderPreset = useCallback((index: number, dir: 1 | -1) => {
-    const j = index + dir;
-    if (index < 0 || j < 0 || index >= fmPresets.length || j >= fmPresets.length) return;
-    const keys = fmPresets.map((p) => fmKeyOf(p.frequency));
-    [keys[index], keys[j]] = [keys[j], keys[index]];
-    persistFmOrder(keys);
+  // Reorder from the face's drag-reorder: `order` is the new arrangement as the
+  // original displayed indices (order[newPos] = oldIndex). Map to keys and persist.
+  const onFmReorderPreset = useCallback((order: number[]) => {
+    const cur = fmPresets.map((p) => fmKeyOf(p.frequency));
+    if (order.length !== cur.length) return;
+    const next = order.map((i) => cur[i]);
+    if (next.some((k) => k == null)) return;
+    persistFmOrder(next);
   }, [fmPresets, persistFmOrder]);
   const onFmRemovePreset = useCallback((index: number) => {
     const p = fmPresets[index];

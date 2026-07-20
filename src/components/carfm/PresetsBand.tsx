@@ -4,11 +4,23 @@
  *             active tile grows; smaller tiles in the short landscape track.
  *   - tworow  (⅔ slice): 2-row horizontal grid (columns of two).
  *   - grid    (tall / ⅓ slice / portrait): 3-column vertical grid, scrolls down.
- * Long-press a tile → reorder mode: tiles wiggle, show ‹ › move + ✕ remove; the
- * NEARBY disc becomes DONE. In the tall track NEARBY/DONE + nav live in the top
- * bar (the face passes showNav/showNearby=false there).
+ * Long-press a tile → reorder mode: tiles wiggle and show the logo-search badge
+ * (top-left) + ✕ remove badge (top-right); the NEARBY disc becomes DONE.
+ *
+ * Reorder is by DRAG (§4.3/§8), not arrows: the long-press flows straight into a
+ * drag with the same finger (no lift-and-re-press). The picked-up tile lifts
+ * (scale 1.06 + shadow) and tracks the finger; the wiggle freezes; the other
+ * tiles slide apart to open a real gap at the insertion slot (transform-only,
+ * ~160ms; geometry locked to slot rects captured in WINDOW coords at drag start,
+ * so it works across all tracks and doesn't oscillate). The list is NOT reordered
+ * mid-drag — on release the order commits and every tile (incl. the dropped one,
+ * sliding from the finger) resolves via a FLIP slide (~300ms cubic-bezier).
+ *
+ * NOTE: the drag gesture + Animated transforms + measureInWindow all need a real
+ * device; they cannot be exercised in the headless still-harness. Verify on a
+ * device screen recording (CORRECTION-LOOP), not a screenshot.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated, Easing, PanResponder, Pressable,
   ScrollView, StyleSheet, Text, View,
@@ -24,6 +36,7 @@ export interface PresetItem { name: string; frequencyMhz: number; }
 const TILE_W = 148;
 const GAP = 10;
 const HOLD_MS = 550;
+const keyOf = (p: PresetItem) => `${p.name}|${p.frequencyMhz}`;
 
 interface TileSize {
   w: number | 'auto'; h: number | string; logo: number; logoRadius: number; nameFont: number;
@@ -32,31 +45,71 @@ interface TileSize {
   padTop: number; padBottom: number;
 }
 
-/** One preset tile; wiggles (±1.1°, 0.42s loop) while reordering. */
-function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX, onPress, onLongPress, onMove, onRemove, onSearchLogo }: {
-  p: PresetItem; pal: CarFmPalette; active: boolean; reordering: boolean;
-  first: boolean; last: boolean; size: TileSize;
-  flipX: Animated.Value; onMeasureX: (x: number) => void;
-  onPress: () => void; onLongPress: () => void;
-  onMove: (dir: 1 | -1) => void; onRemove: () => void;
-  onSearchLogo?: () => void;
+interface DragCallbacks {
+  begin: (pageX: number, pageY: number) => void;
+  move: (pageX: number, pageY: number) => void;
+  end: () => void;
+}
+
+/** One preset tile; wiggles (±1.1°, 0.42s loop) while reordering, frozen mid-drag. */
+function Tile({
+  p, pal, active, reordering, size, dragging, anyDrag,
+  translate, flip, shift, tileRef, onMeasure, onPress, onLongPress, onRemove, onSearchLogo, drag,
+}: {
+  p: PresetItem; pal: CarFmPalette; active: boolean; reordering: boolean; size: TileSize;
+  dragging: boolean; anyDrag: boolean;
+  translate: Animated.ValueXY; flip: Animated.ValueXY; shift: Animated.ValueXY;
+  tileRef: (v: View | null) => void; onMeasure: (x: number, y: number) => void;
+  onPress: () => void; onLongPress: () => void; onRemove: () => void; onSearchLogo?: () => void;
+  drag: DragCallbacks;
 }) {
   const rot = useRef(new Animated.Value(0)).current;
+  // Wiggle only while reordering AND no drag is in progress (the drag freezes it).
   useEffect(() => {
-    if (!reordering) { rot.setValue(0); return; }
+    if (!reordering || anyDrag) { return; }
     const loop = Animated.loop(Animated.sequence([
-      Animated.timing(rot, { toValue: 1, duration: 210, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-      Animated.timing(rot, { toValue: -1, duration: 210, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      Animated.timing(rot, { toValue: 1, duration: 210, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
+      Animated.timing(rot, { toValue: -1, duration: 210, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
     ]));
     loop.start();
     return () => loop.stop();
-  }, [reordering, rot]);
+  }, [reordering, anyDrag, rot]);
+  useEffect(() => { if (!reordering) rot.setValue(0); }, [reordering, rot]);
   const rotate = rot.interpolate({ inputRange: [-1, 1], outputRange: ['-1.1deg', '1.1deg'] });
 
+  // The active translate source: the dragged tile follows the finger; others use
+  // their gap-shift while a drag is live, else their FLIP-settle value. Only one
+  // source drives a given view, so native (flip/shift) and JS (drag) never mix.
+  const t = dragging ? translate : (anyDrag ? shift : flip);
+
+  const cb = useRef(drag); cb.current = drag;
+  const reorderingRef = useRef(reordering); reorderingRef.current = reordering;
+  const pan = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onStartShouldSetPanResponderCapture: () => false,
+    // In reorder mode, a >4dp move on a tile becomes a drag — captured from the
+    // inner Pressable / badges so the whole tile picks up.
+    onMoveShouldSetPanResponderCapture: (_e, g) =>
+      reorderingRef.current && (Math.abs(g.dx) > 4 || Math.abs(g.dy) > 4),
+    onPanResponderGrant: (_e, g) => cb.current.begin(g.x0, g.y0),
+    onPanResponderMove: (_e, g) => cb.current.move(g.moveX, g.moveY),
+    onPanResponderRelease: () => cb.current.end(),
+    onPanResponderTerminate: () => cb.current.end(),
+  })).current;
+
+  // translate + scale + rotate on one view. All of drag (JS setValue), flip,
+  // shift and the wiggle are JS-driven (useNativeDriver:false), so no single
+  // transform array mixes a JS-driven and a native-driven value.
   return (
     <Animated.View
-      style={{ transform: [{ translateX: flipX }, { rotate }] }}
-      onLayout={(e: LayoutChangeEvent) => onMeasureX(e.nativeEvent.layout.x)}
+      ref={tileRef}
+      collapsable={false}
+      style={[
+        { transform: [{ translateX: t.x }, { translateY: t.y }, { scale: dragging ? 1.06 : 1 }, { rotate }] },
+        dragging && styles.lifted,
+      ]}
+      onLayout={(e: LayoutChangeEvent) => onMeasure(e.nativeEvent.layout.x, e.nativeEvent.layout.y)}
+      {...pan.panHandlers}
     >
       <Pressable
         onPress={onPress}
@@ -75,12 +128,11 @@ function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX
         ]}
         accessibilityRole="button"
         accessibilityState={{ selected: active }}
-        accessibilityLabel={`Preset ${p.name}${active ? ', playing' : ''}${reordering ? ', reordering' : ''}`}
+        accessibilityLabel={`Preset ${p.name}${active ? ', playing' : ''}${reordering ? ', reordering — drag to move' : ''}`}
       >
         {reordering ? (
           <>
-            {/* Logo-search badge (§6.4): magnifier-over-picture, top-left, blue,
-                2px panel ring. Opens the logo-search window for this station. */}
+            {/* Logo-search badge (§6.4): magnifier-over-picture, top-left, blue. */}
             <Pressable
               onPress={onSearchLogo}
               hitSlop={10}
@@ -97,24 +149,6 @@ function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX
             >
               <Text style={styles.removeText}>✕</Text>
             </Pressable>
-            {/* Move arrows remain until drag-to-reorder (v1.7.0 §4.3/§8) lands —
-                that interaction change is what replaces these. */}
-            <Pressable
-              onPress={() => onMove(-1)} disabled={first}
-              hitSlop={7}
-              style={[styles.moveBtn, styles.moveLeft, { backgroundColor: pal.raised, opacity: first ? 0.3 : 1 }]}
-              accessibilityRole="button" accessibilityLabel="Move left"
-            >
-              <Text style={[styles.moveText, { color: pal.text }]}>‹</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => onMove(1)} disabled={last}
-              hitSlop={7}
-              style={[styles.moveBtn, styles.moveRight, { backgroundColor: pal.raised, opacity: last ? 0.3 : 1 }]}
-              accessibilityRole="button" accessibilityLabel="Move right"
-            >
-              <Text style={[styles.moveText, { color: pal.text }]}>›</Text>
-            </Pressable>
           </>
         ) : null}
         <LogoTile name={p.name} size={size.logo} radius={size.logoRadius} />
@@ -129,7 +163,7 @@ function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX
 
 export default function PresetsBand({
   pal, presets, activeIndex, reordering,
-  onSelect, onEnterReorder, onExitReorder, onMove, onRemove, onOpenNearby, onSearchLogo,
+  onSelect, onEnterReorder, onExitReorder, onReorder, onRemove, onOpenNearby, onSearchLogo,
   grow = false, bandHeight = 140, showNav = true, showNearby = true,
   tall = false, twoRows = false, landscape = false, k = 1,
 }: {
@@ -140,10 +174,11 @@ export default function PresetsBand({
   onSelect: (p: PresetItem) => void;
   onEnterReorder: () => void;
   onExitReorder: () => void;
-  onMove: (index: number, dir: 1 | -1) => void;
+  /** New order as original indices in their new arrangement (order[newPos] = oldIndex). */
+  onReorder: (order: number[]) => void;
   onRemove: (index: number) => void;
   onOpenNearby: () => void;
-  /** Reorder-mode logo-search trigger. Fired by the (Claude-Design) tile icon. */
+  /** Reorder-mode logo-search trigger (the tile badge). */
   onSearchLogo?: (index: number) => void;
   /** Tall track: fill remaining height instead of a fixed band height. */
   grow?: boolean;
@@ -165,7 +200,6 @@ export default function PresetsBand({
   const S = (v: number) => Math.round(v * (k ?? 1));
   const scroll = useRef<ScrollView>(null);
   const [viewW, setViewW] = useState(0);
-  const [viewH, setViewH] = useState(0);
   const [contentW, setContentW] = useState(0);
   const [scrollX, setScrollX] = useState(0);
   const [trackW, setTrackW] = useState(0);
@@ -182,7 +216,8 @@ export default function PresetsBand({
   const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) =>
     setScrollX(e.nativeEvent.contentOffset.x);
 
-  // Track/thumb are draggable: pointer x → scrollLeft.
+  // Track/thumb are draggable: pointer x → scrollLeft. (Still works in reorder
+  // mode, where the rail's own scroll is disabled so tile drags aren't stolen.)
   const pan = useRef(PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
@@ -205,43 +240,128 @@ export default function PresetsBand({
     scroll.current?.scrollTo({ x: Math.max(0, Math.min(maxScroll, target)), animated: true });
   }, [strip, activeIndex, showBar, viewW, maxScroll]);
 
-  // Preset-reflow FLIP (design runFlip): on a reorder/remove the list re-lays
-  // out instantly, then each tile that shifted animates translateX from its old
-  // position to its new one over 300ms cubic-bezier(.2,.8,.2,1). RN has no CSS
-  // FLIP → capture each tile's x before the change, diff against the post-change
-  // x reported by onLayout, and drive a per-tile translateX back to 0.
-  const tileX = useRef<Map<string, number>>(new Map()).current;        // last measured x
-  const flipVals = useRef<Map<string, Animated.Value>>(new Map()).current;
-  const pending = useRef<Map<string, number>>(new Map()).current;      // pre-change x snapshot
-  const flipVal = useCallback((key: string) => {
-    let v = flipVals.get(key);
-    if (!v) { v = new Animated.Value(0); flipVals.set(key, v); }
-    return v;
+  // ── FLIP + drag machinery ──────────────────────────────────────────────────
+  // FLIP settle (design runFlip): after a reorder/remove the list re-lays out
+  // instantly, then each tile that shifted animates translate from its old
+  // position to its new one (300ms). RN has no CSS FLIP → capture each tile's
+  // {x,y} before the change, diff against the post-change layout from onLayout,
+  // and drive a per-tile translate back to 0. 2D so it works in the grids too.
+  const tilePos = useRef<Map<string, { x: number; y: number }>>(new Map()).current;   // last measured layout pos
+  const pending = useRef<Map<string, { x: number; y: number }>>(new Map()).current;    // pre-change snapshot
+  const flipVals = useRef<Map<string, Animated.ValueXY>>(new Map()).current;
+  const shiftVals = useRef<Map<string, Animated.ValueXY>>(new Map()).current;
+  const flipOf = useCallback((key: string) => {
+    let v = flipVals.get(key); if (!v) { v = new Animated.ValueXY(); flipVals.set(key, v); } return v;
   }, [flipVals]);
+  const shiftOf = useCallback((key: string) => {
+    let v = shiftVals.get(key); if (!v) { v = new Animated.ValueXY(); shiftVals.set(key, v); } return v;
+  }, [shiftVals]);
+  const onMeasure = useCallback((key: string, x: number, y: number) => {
+    const old = pending.get(key);
+    tilePos.set(key, { x, y });
+    if (!old) return;
+    pending.delete(key);
+    const dx = old.x - x, dy = old.y - y;
+    if (Math.hypot(dx, dy) < 1) return;
+    const v = flipOf(key);
+    v.setValue({ x: dx, y: dy });
+    Animated.timing(v, { toValue: { x: 0, y: 0 }, duration: 300, easing: Easing.bezier(0.2, 0.8, 0.2, 1), useNativeDriver: false }).start();
+  }, [pending, tilePos, flipOf]);
   const snapshot = useCallback(() => {
     pending.clear();
-    tileX.forEach((x, k) => pending.set(k, x));
-  }, [pending, tileX]);
-  const onMeasureX = useCallback((key: string, x: number) => {
-    const old = pending.get(key);
-    tileX.set(key, x);
-    if (old == null) return;
-    pending.delete(key);
-    const dx = old - x;
-    if (Math.abs(dx) < 1) return;
-    const v = flipVal(key);
-    v.setValue(dx);
-    Animated.timing(v, { toValue: 0, duration: 300, easing: Easing.bezier(0.2, 0.8, 0.2, 1), useNativeDriver: true }).start();
-  }, [pending, tileX, flipVal]);
+    tilePos.forEach((pos, key) => pending.set(key, pos));
+  }, [pending, tilePos]);
 
-  const move = useCallback((index: number, dir: 1 | -1) => {
-    snapshot();
-    onMove(index, dir);
-  }, [onMove, snapshot]);
-  const remove = useCallback((index: number) => {
-    snapshot();
-    onRemove(index);
-  }, [onRemove, snapshot]);
+  // Latest-value refs for the drag closures (created once in each Tile).
+  const tileRefs = useRef<Map<string, View | null>>(new Map()).current;
+  const dragXY = useRef(new Animated.ValueXY()).current;
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const dragRef = useRef<{ key: string; ox: number; oy: number; dx: number; dy: number } | null>(null);
+  const slotRef = useRef<{ keys: string[]; centers: { x: number; y: number }[] } | null>(null);
+  const shiftTargets = useRef<Map<string, { x: number; y: number }>>(new Map()).current;
+  const finalOrderRef = useRef<number[] | null>(null);
+  const suppressPress = useRef(false);
+
+  const keyIndex = useMemo(() => {
+    const m = new Map<string, number>();
+    presets.forEach((p, i) => m.set(keyOf(p), i));
+    return m;
+  }, [presets]);
+  const keyIndexRef = useRef(keyIndex); keyIndexRef.current = keyIndex;
+  const onReorderRef = useRef(onReorder); onReorderRef.current = onReorder;
+
+  const measureAll = useCallback((done: (keys: string[], centers: { x: number; y: number }[]) => void) => {
+    const keys = presets.map(keyOf);
+    const centers: { x: number; y: number }[] = new Array(keys.length);
+    let left = keys.length;
+    if (left === 0) { done(keys, centers); return; }
+    keys.forEach((key, i) => {
+      const ref = tileRefs.get(key);
+      if (!ref) { centers[i] = { x: 0, y: 0 }; if (--left === 0) done(keys, centers); return; }
+      ref.measureInWindow((x, y, w, h) => {
+        centers[i] = { x: x + w / 2, y: y + h / 2 };
+        if (--left === 0) done(keys, centers);
+      });
+    });
+  }, [presets, tileRefs]);
+
+  const beginDrag = useCallback((key: string, pageX: number, pageY: number) => {
+    dragRef.current = { key, ox: pageX, oy: pageY, dx: 0, dy: 0 };
+    dragXY.setValue({ x: 0, y: 0 });
+    shiftVals.forEach((v) => v.setValue({ x: 0, y: 0 }));
+    shiftTargets.clear();
+    setDragKey(key);
+    measureAll((keys, centers) => { slotRef.current = { keys, centers }; });
+  }, [dragXY, shiftVals, shiftTargets, measureAll]);
+
+  const moveDrag = useCallback((pageX: number, pageY: number) => {
+    const d = dragRef.current, slot = slotRef.current;
+    if (!d || !slot) return;
+    d.dx = pageX - d.ox; d.dy = pageY - d.oy;
+    dragXY.setValue({ x: d.dx, y: d.dy });
+    // nearest slot to the finger
+    let best = Infinity, ns = 0;
+    slot.centers.forEach((c, i) => { const dist = Math.hypot(pageX - c.x, pageY - c.y); if (dist < best) { best = dist; ns = i; } });
+    const fromIdx = slot.keys.indexOf(d.key);
+    if (fromIdx < 0) return;
+    const arr = slot.keys.slice(); arr.splice(fromIdx, 1); arr.splice(ns, 0, d.key);
+    finalOrderRef.current = arr.map((kk) => keyIndexRef.current.get(kk) ?? 0);
+    // Open the gap: every other tile shifts from its current slot to its dest slot.
+    slot.keys.forEach((f, cur) => {
+      if (f === d.key) return;
+      const dest = arr.indexOf(f);
+      const tx = slot.centers[dest].x - slot.centers[cur].x;
+      const ty = slot.centers[dest].y - slot.centers[cur].y;
+      const prev = shiftTargets.get(f);
+      if (!prev || prev.x !== tx || prev.y !== ty) {
+        shiftTargets.set(f, { x: tx, y: ty });
+        Animated.timing(shiftOf(f), { toValue: { x: tx, y: ty }, duration: 160, easing: Easing.out(Easing.quad), useNativeDriver: false }).start();
+      }
+    });
+  }, [dragXY, shiftOf, shiftTargets]);
+
+  const endDrag = useCallback(() => {
+    const d = dragRef.current;
+    if (!d) return;
+    const order = finalOrderRef.current;
+    // FLIP snapshot = each tile's VISUAL position (layout + its live transform),
+    // so the settle runs from where the finger/gap left them, not a pre-drag jump.
+    pending.clear();
+    tilePos.forEach((pos, key) => {
+      if (key === d.key) pending.set(key, { x: pos.x + d.dx, y: pos.y + d.dy });
+      else { const s = shiftTargets.get(key) || { x: 0, y: 0 }; pending.set(key, { x: pos.x + s.x, y: pos.y + s.y }); }
+    });
+    dragRef.current = null; slotRef.current = null; finalOrderRef.current = null;
+    setDragKey(null);
+    dragXY.setValue({ x: 0, y: 0 });
+    shiftVals.forEach((v) => v.setValue({ x: 0, y: 0 }));
+    shiftTargets.clear();
+    suppressPress.current = true;
+    setTimeout(() => { suppressPress.current = false; }, 150);
+    if (order && onReorderRef.current) onReorderRef.current(order);
+  }, [pending, tilePos, dragXY, shiftVals, shiftTargets]);
+
+  const remove = useCallback((index: number) => { snapshot(); onRemove(index); }, [onRemove, snapshot]);
 
   // Per-track tile sizing (design renderVals). The active tile grows only in the
   // strip tracks; grid/two-row tiles are uniform.
@@ -253,9 +373,6 @@ export default function PresetsBand({
       return { w, h: S(128), logo: S(50), logoRadius: 13, nameFont: nf(15), padTop: S(8), padBottom: S(12) };
     }
     if (twoRows) {
-      // Fixed row height from the band height (no measure dependency) so the two
-      // rows are stable from the first frame; 16 reserves the scrollbar track
-      // beneath the grid (design: rows are 1fr of the remaining band).
       const rowH = Math.max(S(90), Math.round((bandHeight - GAP - 16) / 2));
       return { w: S(150), h: rowH, logo: S(46), logoRadius: 12, nameFont: nf(15), padTop: S(8), padBottom: S(12) };
     }
@@ -271,8 +388,9 @@ export default function PresetsBand({
     };
   };
 
+  const anyDrag = dragKey != null;
   const tiles = presets.map((p, i) => {
-    const key = `${p.name}|${p.frequencyMhz}`;
+    const key = keyOf(p);
     return (
       <Tile
         key={key}
@@ -280,16 +398,23 @@ export default function PresetsBand({
         pal={pal}
         active={i === activeIndex}
         reordering={reordering}
-        first={i === 0}
-        last={i === presets.length - 1}
         size={tileSizeFor(i === activeIndex)}
-        flipX={flipVal(key)}
-        onMeasureX={(x) => onMeasureX(key, x)}
-        onPress={() => (reordering ? undefined : onSelect(p))}
+        dragging={dragKey === key}
+        anyDrag={anyDrag}
+        translate={dragXY}
+        flip={flipOf(key)}
+        shift={shiftOf(key)}
+        tileRef={(v) => { if (v) tileRefs.set(key, v); else tileRefs.delete(key); }}
+        onMeasure={(x, y) => onMeasure(key, x, y)}
+        onPress={() => { if (suppressPress.current) return; if (!reordering) onSelect(p); }}
         onLongPress={onEnterReorder}
-        onMove={(dir) => move(i, dir)}
         onRemove={() => remove(i)}
         onSearchLogo={onSearchLogo ? () => onSearchLogo(i) : undefined}
+        drag={{
+          begin: (x, y) => beginDrag(key, x, y),
+          move: moveDrag,
+          end: endDrag,
+        }}
       />
     );
   });
@@ -303,13 +428,15 @@ export default function PresetsBand({
     </View>
   );
 
-  // The scrollable preset area, one of three layouts.
+  // The scrollable preset area, one of three layouts. Rail scroll is disabled in
+  // reorder mode so a tile drag isn't stolen by the ScrollView (the scrollbar and
+  // ‹ › nav still scroll it programmatically).
   let gridArea: React.ReactNode;
   if (tall) {
-    // 3-column vertical grid, scrolls down; top-aligned (PHONEPORTRAITFIXES §2).
     gridArea = (
       <ScrollView
         ref={scroll}
+        scrollEnabled={!reordering}
         showsVerticalScrollIndicator={false}
         onLayout={(e: LayoutChangeEvent) => setViewW(e.nativeEvent.layout.width)}
         contentContainerStyle={[styles.gridWrapTall, { gap: S(12) }]}
@@ -318,11 +445,6 @@ export default function PresetsBand({
       </ScrollView>
     );
   } else if (twoRows) {
-    // 2-row grid: explicit stacked columns of two (column-major, matching the
-    // design). Built as real rows rather than a flexWrap-by-measured-height,
-    // which collapses to a single row before the height is known (LOSSY-ELEMENTS
-    // #3). tile i and i+1 share a column, so the grid reads top-to-bottom then
-    // left-to-right.
     const cols: React.ReactNode[][] = [];
     for (let i = 0; i < tiles.length; i += 2) cols.push(tiles.slice(i, i + 2));
     gridArea = (
@@ -330,6 +452,7 @@ export default function PresetsBand({
         <ScrollView
           ref={scroll}
           horizontal
+          scrollEnabled={!reordering}
           showsHorizontalScrollIndicator={false}
           onLayout={(e: LayoutChangeEvent) => setViewW(e.nativeEvent.layout.width)}
           onContentSizeChange={(w: number) => setContentW(w)}
@@ -352,12 +475,12 @@ export default function PresetsBand({
       </>
     );
   } else {
-    // Horizontal strip with custom scrollbar.
     gridArea = (
       <>
         <ScrollView
           ref={scroll}
           horizontal
+          scrollEnabled={!reordering}
           showsHorizontalScrollIndicator={false}
           onLayout={(e: LayoutChangeEvent) => setViewW(e.nativeEvent.layout.width)}
           onContentSizeChange={(w: number) => setContentW(w)}
@@ -448,6 +571,8 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 8,
   },
+  // Picked-up tile: raised above its neighbours with a drop shadow (design §8).
+  lifted: { zIndex: 30, elevation: 12, shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 20, shadowOffset: { width: 0, height: 18 } },
   tileName: { fontFamily: FONT_BOLD, textAlign: 'center' },
   activeBar: { position: 'absolute', bottom: 6, width: 26, height: 3, borderRadius: 2 },
   // §6.4 badge anatomy: 28×28, top corners at -9, 2px panel ring.
@@ -461,13 +586,6 @@ const styles = StyleSheet.create({
     width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
   },
   removeText: { color: '#FFF', fontSize: 17, fontWeight: '700', lineHeight: 18 },
-  moveBtn: {
-    position: 'absolute', top: 6, zIndex: 2, width: 34, height: 34, borderRadius: 10,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  moveLeft: { left: 6 },
-  moveRight: { right: 6 },
-  moveText: { fontSize: 22, fontWeight: '700', lineHeight: 24 },
   track: { height: 6, borderRadius: 999, marginTop: 6, overflow: 'hidden' },
   thumb: { position: 'absolute', top: 0, bottom: 0, borderRadius: 999 },
   nearby: {

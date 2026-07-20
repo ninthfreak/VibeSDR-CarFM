@@ -70,7 +70,7 @@ export interface CarFmFaceProps {
   presets: CarFmPreset[];   // displayed order (user-arranged)
   onTuneHz: (hz: number) => void;
   onToggleSave: () => void;              // star: save/remove current frequency
-  onReorderPreset: (index: number, dir: 1 | -1) => void;
+  onReorderPreset: (order: number[]) => void;   // new order as original indices
   onRemovePreset: (index: number) => void;
   onSaveStationPreset: (name: string, freqMhz: number) => void;  // nearby hold
   onOpenAdvanced: () => void;
@@ -783,7 +783,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         onSelect={(p) => onTuneHz(Math.round(p.frequencyMhz * 1e6))}
         onEnterReorder={() => setReordering(true)}
         onExitReorder={() => setReordering(false)}
-        onMove={onReorderPreset}
+        onReorder={onReorderPreset}
         onRemove={onRemovePreset}
         onOpenNearby={() => setPickerOpen(true)}
         onSearchLogo={(i) => {
