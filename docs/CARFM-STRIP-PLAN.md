@@ -5,6 +5,15 @@ Goal: reduce the VibeSDR codebase to the CarFM car-FM-radio experience. Ranked b
 demands risky surgery. Work top-down (🟢 first). Scope decisions already made:
 **keep all receiver backends for now**; **full iOS removal**.
 
+## Status
+- ✅ **Items 1–9 DONE** (commits `a2d7a91`, `592f91f`): dead files, iOS project +
+  pod, app.json ios block, `Platform.OS==='ios'` branches, BrowserOverlay, Apple
+  Watch (watchProvider/watchBoot + all call sites), Siri + CarPlay (Android Auto
+  kept).
+- ⬜ **Items 10–19 remaining** (below).
+- ⬜ **Other open items** from earlier in the project — see the last section so
+  they aren't lost.
+
 ## The one structural fact that drives everything
 - `CarFmFace.tsx` is **purely presentational** — 23-file import closure, zero SDR
   backends; it gets frequency/RDS/signal/stereo as **props**.
@@ -58,5 +67,40 @@ demands risky surgery. Work top-down (🟢 first). Scope decisions already made:
 - Do 🟢 first (each is independent and low-risk), then 🟡, then 🔴.
 - **DecoderClient cluster (14–16)** must go together — chat + maps + decoders share it.
 - **Backend-adjacent items (11, 12)** are parked pending your "decide backends later".
-- **watchProvider (8)** is the trickiest 🟡 because of the App.tsx boot gate — treat it as its own careful pass.
 - After each cut: `tsc --noEmit` + a harness render of the CarFM face to confirm the FM pipeline still feeds it.
+
+---
+
+# Other open items (carried over — do not lose)
+
+Threads raised across the project that are NOT part of the strip list.
+
+## A. Design — device-only verification (a still harness can't check these)
+- ⬜ **The three animations** on an on-device screen recording: hero prev/next
+  swap FLIP (LOSSY #9, 520ms), preset-reorder FLIP (300ms), seek-digit slide
+  (±14 / 0.25→1, ~200ms). Built to spec but never verified in motion.
+- ⬜ **Font-scale ×1.3 / ×1.5** — no overlap; frequency stays amber (§10/§11).
+- ⬜ **Peek-card callsign exposure** at true 360dp portrait (renders fine on wide;
+  the tall sliver is just too narrow to read in a still).
+- ⬜ **Post-strip smoke test** — after items 8/9, confirm Android Auto + app boot
+  on a real APK (removed code was iOS/watch no-ops, but SDRScreen wasn't run).
+
+## B. Rebrand / separation loose ends
+- ⬜ **EAS `projectId` + `owner: stuey3d`** in `app.json` — still the original
+  author's Expo account; run your own `eas init` before building.
+- ⬜ **Internal docs still say "VibeSDR"** — `docs/STORE-SUBMISSION.md`, the
+  `BRIEF-*.md` set, `files/*.md`. Not shipped, but inconsistent.
+- ⬜ **Native VibeServer web-page title** — `android/app/src/main/cpp/vibe_web_page.h`
+  still `<title>VibeSDR</title>` (native; out of the scope you set earlier).
+- ⬜ **`APPSTORE-EXCEPTION.md`** — Stuart's GPLv3 §7 store-distribution exception;
+  moot for an Android-only fork. Decide keep vs remove.
+- ⬜ **README positioning** — currently "a fork of VibeSDR, a mobile SDR receiver"
+  (what the code is). If CarFM is really the *car FM radio* product, give the
+  positioning and it gets refocused.
+
+## C. About screen — authored content (needs your voice, I won't fabricate)
+- ⬜ **`AboutOverlay.tsx` personal message** is still **Stuart's** first-person
+  origin story (PSKR badge, M9PSY, "Pocket UberSDR"). Offered to *neutralize* it
+  to a factual fork note rather than rewrite it in your voice — pending your call.
+- ⬜ **Changelog / version history** in AboutOverlay is VibeSDR's release history
+  (App Store, TestFlight, "new in vN") — inherited, not CarFM's. Decide keep/trim.
