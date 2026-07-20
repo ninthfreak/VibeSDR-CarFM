@@ -1,7 +1,7 @@
 /**
  * Wikidata logo source: look up a US station item by callsign and read its logo
  * (property P154, a Wikimedia Commons image). Decent coverage for named stations
- * and better than Radio-Browser for small US markets. Keyless, no auth.
+ * Keyless, no auth.
  *
  * Pure helpers (buildSparql / parseSparqlLogo) are unit-tested; wikidataLogo does
  * the network call.

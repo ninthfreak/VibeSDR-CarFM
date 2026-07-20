@@ -36,7 +36,7 @@ export interface VtsNotifData {
   badge?:     string;   // live-data tag (e.g. 'RDS', 'DMR') — shown before the name
   source?:    'eibi' | 'server' | 'user';  // bookmark origin → source icon
   flag?:      string;   // transmitter-country flag (EiBi bookmarks / RDS)
-  logoUrl?:   string;   // resolved WFM RDS station logo (radio-browser favicon)
+  logoUrl?:   string;   // resolved WFM RDS station logo
 }
 
 const NOTIF_MS = 8000;

@@ -3280,7 +3280,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveStation.name, liveStation.text, liveStation.countryIso, liveLogo, status.mode]);
 
-  // ── Station logo (radio-browser favicon) ────────────────────────────────────
+  // ── Station logo ────────────────────────────────────
   // NOT gated on WFM any more. The gate existed because a station name only ever
   // arrived via RDS, which is FM-only — but a name now also comes from a bookmark or
   // the EiBi schedule, so an AM or shortwave station has one too, and EiBi even states

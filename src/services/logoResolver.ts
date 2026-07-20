@@ -2,10 +2,10 @@
  * Layered logo resolver. Walks sources in priority order and persists the first
  * hit into the station DB (addendum §7, revised to store logos in-DB):
  *
- *   Wikidata (by callsign)  ->  station-homepage favicon  ->  Radio-Browser
+ *   Wikidata (by callsign)  ->  station-homepage favicon
  *
- * (RadioDNS was dropped — sparse US coverage, and it was the only source needing
- * a hardcoded DoH resolver; the app now uses only the device's DNS.)
+ * (Radio-Browser was removed — useless for much of the US; RadioDNS was dropped
+ * earlier for sparse US coverage. A logo-search rework is pending.)
  *
  * A manually-assigned logo is never overwritten (saveLogo guards source='manual').
  * On total network failure the station is queued (markWanted) for a later sweep;
@@ -15,7 +15,6 @@
 import { saveLogo, logoFetchedAt, markWanted } from './stationDb';
 import { wikidataLogo } from './logoWikidata';
 import { siteFaviconLogo } from './logoSiteFavicon';
-import { fetchRadioBrowser } from './radioBrowser';
 
 /**
  * TODO(logos): AUTOMATIC logo resolution is DISABLED (2026-07-17 device test:
@@ -91,7 +90,6 @@ export async function resolveLogo(st: LogoStation): Promise<boolean> {
       return r ? { url: r.url, source: 'favicon' } : null;
     });
   }
-  attempts.push(() => fetchRadioBrowser(base, st.name ?? undefined));
 
   try {
     for (const attempt of attempts) {

@@ -352,9 +352,9 @@ export default function TunerScreen({ route, navigation }: Props) {
     return () => { sub.remove(); subVol.remove(); };
   }, [meterBus]);
 
-  // ── Station logo (radio-browser, EXACT-name match only so we never show the
-  //    wrong station's logo). Use the transmitter's full station name — far
-  //    better than the truncated RDS PS. Monogram when there's no confident hit. ──
+  // ── Station logo. Use the transmitter's full station name — far better than
+  //    the truncated RDS PS. Monogram when there's no logo (the online source was
+  //    removed; a logo-search rework is pending). ──
   const logoName = st?.tx?.tx?.trim() || st?.ps?.trim() || '';
   const logoIso = countryOf(st);
   useEffect(() => {

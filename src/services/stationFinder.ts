@@ -3,7 +3,7 @@
  * Offline-first: the list always comes from the bundled FCC DB and NEVER blocks
  * on the network. Logos live in the same DB (blobs); they're read instantly and
  * resolved in the background through the layered source chain (addendum §7):
- * Wikidata -> site favicon -> Radio-Browser, with manual override.
+ * Wikidata -> site favicon, with manual override (logo-search rework pending).
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';

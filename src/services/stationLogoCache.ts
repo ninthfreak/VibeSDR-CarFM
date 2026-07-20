@@ -1,9 +1,12 @@
 // On-device station-logo cache, keyed by RDS country+PI. A logo discovered
-// online (radio-browser, on ANY backend — FM-DX or local RTL-SDR) is downloaded
-// to disk and remembered against the station's PI code, so it displays OFFLINE
-// later — e.g. discover Pride Radio's logo on an FM-DX server, then tune it
-// locally on an offline RTL-SDR (the PI + ECC decode locally, no network). Stale
-// entries refresh in the background when online so logo changes are picked up.
+// online (on ANY backend — FM-DX or local RTL-SDR) is downloaded to disk and
+// remembered against the station's PI code, so it displays OFFLINE later — e.g.
+// discover Pride Radio's logo on an FM-DX server, then tune it locally on an
+// offline RTL-SDR (the PI + ECC decode locally, no network). Stale entries
+// refresh in the background when online so logo changes are picked up.
+//
+// NOTE: the online source (Radio-Browser) was removed; lookupStationLogo returns
+// null until the logo-search rework lands, so this resolves to cached/null only.
 
 import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -73,15 +76,15 @@ export async function clearLogoCache(): Promise<void> {
  * Resolve a station logo, cache-first (offline-capable):
  *  1. Cached (by country+PI) → return the local file URI; refresh in the
  *     background if stale + online.
- *  2. Not cached → online radio-browser lookup, download, cache by PI.
+ *  2. Not cached → online lookup, download, cache by PI (no source yet — rework pending).
  *  3. Offline + not cached → null (caller shows a monogram, no placeholder).
  */
 export async function resolveStationLogo(opts: { pi?: string; name: string; iso?: string }): Promise<string | null> {
   // TODO(logos): disabled with the rest of AUTO logo resolution (see
-  // logoResolver.AUTO_LOGO_RESOLUTION) — this chain name-matches on
-  // radio-browser and produced completely wrong images (device test
-  // 2026-07-17). The DISK CACHE is skipped too: wrong logos may already be
-  // cached on installed devices, and showing them is worse than showing none.
+  // logoResolver.AUTO_LOGO_RESOLUTION). The Radio-Browser source was removed for
+  // producing wrong images (device test 2026-07-17); a new logo search is pending.
+  // The DISK CACHE is skipped too: wrong logos may already be cached on installed
+  // devices, and showing them is worse than showing none.
   if (!AUTO_LOGO_RESOLUTION) return null;
   const { pi, name, iso } = opts;
   if (!name) return null;

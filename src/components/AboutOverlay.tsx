@@ -267,8 +267,6 @@ const CREDITS: { name: string; detail: string }[] = [
     detail: 'The KiwiSDR receiver and its open web client — protocol reference for the KiwiSDR backend.' },
   { name: 'FM-DX Webserver — NoobishSVK & contributors',
     detail: 'The FM-DX Webserver project and the servers.fmdx.org receiver map — protocol reference for CarFM’s FM-DX backend (tuning, RDS, signal, transmitter data, chat) and its 3LAS MP3 audio stream. Licensed under the GNU GPL v3.' },
-  { name: 'radio-browser.info',
-    detail: 'The community radio-station directory used to look up and match station logos, by name and country — on every backend, and on AM and shortwave stations as well as FM. Community data, freely licensed.' },
   { name: 'Nominatim & OpenStreetMap',
     detail: 'Geocoding for the receiver’s location: turning a town name into a position, and a position back into a town and country, so a VibeServer can tell its clients where it actually is. Data © OpenStreetMap contributors, ODbL. Used sparingly — once per receiver, then cached — in line with the Nominatim usage policy.' },
   { name: 'librdsparser — Konrad Kosmatka',

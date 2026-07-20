@@ -15,7 +15,7 @@ export interface StationRow {
   facilityId: number;
 }
 
-/** Online enrichment (Radio-Browser). Every field is optional/absent offline. */
+/** Online enrichment. Every field is optional/absent offline. */
 export interface Enrichment {
   genre: string | null;
   logoUri: string | null;    // local cached file:// path, or null
