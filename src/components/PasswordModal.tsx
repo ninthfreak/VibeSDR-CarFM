@@ -40,7 +40,7 @@ export default function PasswordModal({ visible, serverUrl, onSubmit, onCancel }
     >
       <KeyboardAvoidingView
         style={styles.overlay}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior="height"
       >
         <View style={styles.box}>
           <Text style={styles.title}>Password Required</Text>

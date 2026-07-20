@@ -32,9 +32,7 @@ export const VibePowerModule = NativeModules.VibePowerModule as
       setMediaSkipMode:  (mode: 'step' | 'bookmark') => void;
       setBrowseItems?:   (json: string) => void;
       setReconnectFailed?: (failed: boolean) => void;
-      setDefaultInstance?: (name: string) => void;   // '' = none (Siri "set a default")
-      setVoiceConnected?: (connected: boolean) => void;   // Siri: emit now vs stash
-      getPendingVoiceQuery?: () => Promise<string | null>;   // cold-launch Siri query
+      setDefaultInstance?: (name: string) => void;   // '' = none
       getDebugInfoSync:  () => string;
       addListener:       (name: string) => void;
       removeListeners:   (count: number) => void;

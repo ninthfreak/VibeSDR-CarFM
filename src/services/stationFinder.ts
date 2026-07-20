@@ -2,8 +2,10 @@
  * Public facade for the "stations near me" feature — the surface the UI calls.
  * Offline-first: the list always comes from the bundled FCC DB and NEVER blocks
  * on the network. Logos live in the same DB (blobs); they're read instantly and
- * resolved in the background through the layered source chain (addendum §7):
- * Wikidata -> site favicon -> Radio-Browser, with manual override.
+ * resolved through the layered source chain (addendum §7): DuckDuckGo image
+ * search (freq + callsign) -> Wikidata -> site favicon, with manual override.
+ * Auto/background resolution is OFF — the chain runs only on an explicit user
+ * action (enrichNow / resolveLogo force); see logoResolver.AUTO_LOGO_RESOLUTION.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -18,6 +20,7 @@ import {
   type NearbyDbResult,
 } from './stationDb';
 import { resolveLogo, fetchImage, base64ToBytes, type LogoStation } from './logoResolver';
+import { stationLogoQuery } from './logoDuckDuckGo';
 import { piToCallsign, callsignBase } from './piCallsign';
 import type { NearbyStation, StationIdentity, StationRow } from './stationTypes';
 
@@ -43,6 +46,7 @@ function toLogoStation(r: NearbyDbResult): LogoStation {
     callsign: r.callsign,
     homepage: r.homepage,
     name: r.callsign,
+    freqMhz: r.frequencyMhz,   // feeds the DuckDuckGo "radio <freq> <callsign> logo" query
   };
 }
 
@@ -96,8 +100,9 @@ export async function identifyByPi(pi: number, psText?: string): Promise<Station
     if (other && other[1] !== base) { confident = false; note = `PS text names ${other[1]}, not ${dec.callsign}`; }
   }
 
-  // Tuning to it counts as an encounter — resolve its logo.
-  void noteEncountered({ base, callsign: dec.callsign, homepage: null, name: station?.callsign });
+  // Tuning to it counts as an encounter — resolve its logo (background: no-op
+  // until AUTO is enabled; freq carried so a later forced resolve has it).
+  void noteEncountered({ base, callsign: dec.callsign, homepage: null, name: station?.callsign, freqMhz: station?.frequencyMhz });
   return { pi, callsign: dec.callsign, confident, station, note };
 }
 
@@ -114,9 +119,19 @@ export async function getStationLogo(base: string): Promise<string | null> {
   return getLogoDataUri(base);
 }
 
-/** Force logo resolution for one station now. */
-export async function enrichNow(base: string, nameHint?: string): Promise<boolean> {
-  return resolveLogo({ base, callsign: base, name: nameHint });
+/**
+ * Force logo resolution for one station NOW, on explicit user request. Unlike the
+ * background paths this bypasses the AUTO gate and runs the DuckDuckGo source, so
+ * pass the real dial frequency + callsign to build the proven query. Result is
+ * stored in the DB (source='ddg'); a manual assignment still wins over it later.
+ */
+export async function enrichNow(
+  base: string, opts?: { callsign?: string; freqMhz?: number; nameHint?: string },
+): Promise<boolean> {
+  return resolveLogo(
+    { base, callsign: opts?.callsign ?? base, freqMhz: opts?.freqMhz, name: opts?.nameHint },
+    { force: true },
+  );
 }
 
 export async function getStationDataDate(): Promise<string | null> {
@@ -179,9 +194,14 @@ const IMAGE_SEARCH_URL = (q: string) => `https://duckduckgo.com/?iax=images&ia=i
  * app then assigns it via consumeSharedLogo(). We remember which station the
  * search was for so the shared image lands on the right one.
  */
-export async function openLogoWebSearch(base: string, query?: string): Promise<void> {
+export async function openLogoWebSearch(
+  base: string, opts?: { query?: string; callsign?: string; freqMhz?: number },
+): Promise<void> {
   await AsyncStorage.setItem(PENDING_LOGO_TARGET, base.toUpperCase());
-  await Linking.openURL(IMAGE_SEARCH_URL(query ?? `${base} radio station logo`));
+  // Default to the proven DDG query shape: "radio <freq> <lowercase-callsign> logo"
+  // (see logoDuckDuckGo.stationLogoQuery — it returned the right logo #1, 7/7).
+  const q = opts?.query ?? stationLogoQuery(opts?.freqMhz, opts?.callsign ?? base);
+  await Linking.openURL(IMAGE_SEARCH_URL(q));
 }
 
 /**

@@ -58,8 +58,10 @@ identifyByPi(pi: number, psText?: string): Promise<StationIdentity>;
 // row scrolls into view and you didn't get logoUri in the list payload.
 getStationLogo(callsignBase: string): Promise<string | null>;
 
-// Force a logo/genre fetch for one station now.
-enrichNow(callsignBase: string, nameHint?: string): Promise<boolean>;
+// Force a logo fetch for one station NOW, on explicit user request. Bypasses the
+// AUTO gate and runs the DuckDuckGo source, so pass the dial frequency + callsign
+// to build the proven "radio <freq> <callsign> logo" query. Stored source='ddg'.
+enrichNow(callsignBase: string, opts?: { callsign?: string; freqMhz?: number; nameHint?: string }): Promise<boolean>;
 
 // LMS snapshot date for the unobtrusive "station data as of …" label.
 getStationDataDate(): Promise<string | null>;
@@ -84,15 +86,22 @@ searchLogoImages(query: string, limit?: number): Promise<ImageResult[]>;
 //   remembers the target station. The user long-presses the logo and shares it
 //   to CarFM; consumeSharedLogo() (already wired to fire on app resume) assigns
 //   the shared image to that station. Returns the base that got a logo, or null.
-openLogoWebSearch(callsignBase: string, query?: string): Promise<void>;
+openLogoWebSearch(callsignBase: string, opts?: { query?: string; callsign?: string; freqMhz?: number }): Promise<void>;
 consumeSharedLogo(): Promise<string | null>;
 ```
 
-**Logo sources are layered** (auto), best hit wins, all stored in the DB:
-`Wikidata` (by callsign) → station **homepage favicon** → `Radio-Browser` (last
-resort). (RadioDNS was dropped: sparse US coverage, and it was the only source
+**Logo sources are layered**, best hit wins, all stored in the DB:
+`DuckDuckGo` image search (by `radio <freq> <callsign> logo`) → `Wikidata` (by
+callsign) → station **homepage favicon**. The DuckDuckGo source is the logo-search
+rework — see `logoDuckDuckGo.ts`. (Radio-Browser was removed — useless for much of
+the US. RadioDNS was dropped: sparse US coverage, and it was the only source
 needing DNS-over-HTTPS — so the app now uses only the device's own DNS. If a DoH
 provider is ever reintroduced, use **Quad9** — `dns.quad9.net` / 9.9.9.9.)
+
+**Auto (background) resolution stays OFF.** The chain runs only on an explicit
+user action — `resolveLogo(st, { force: true })`, surfaced as `enrichNow()`. A
+wrong #1 DDG hit is possible, so it must not run unattended; each station is
+cached by PI after the first hit.
 
 **Manual assignment** wins over everything and is never re-fetched. Two ways to
 find a logo, both non-Google: a quick in-app search (`searchLogoImages`, Wikimedia

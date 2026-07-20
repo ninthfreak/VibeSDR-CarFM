@@ -33,12 +33,13 @@ interface TileSize {
 }
 
 /** One preset tile; wiggles (±1.1°, 0.42s loop) while reordering. */
-function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX, onPress, onLongPress, onMove, onRemove }: {
+function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX, onPress, onLongPress, onMove, onRemove, onSearchLogo }: {
   p: PresetItem; pal: CarFmPalette; active: boolean; reordering: boolean;
   first: boolean; last: boolean; size: TileSize;
   flipX: Animated.Value; onMeasureX: (x: number) => void;
   onPress: () => void; onLongPress: () => void;
   onMove: (dir: 1 | -1) => void; onRemove: () => void;
+  onSearchLogo?: () => void;
 }) {
   const rot = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -102,6 +103,17 @@ function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX
             >
               <Text style={[styles.moveText, { color: pal.text }]}>›</Text>
             </Pressable>
+            {/* PLACEHOLDER trigger for the logo-search window. Claude Design owns
+                the real icon + its placement (see handoff-logo-search.md); this
+                bare button only wires the flow so it can be exercised now. */}
+            <Pressable
+              onPress={onSearchLogo}
+              hitSlop={7}
+              style={[styles.logoBtn, { backgroundColor: pal.raised, borderColor: pal.border }]}
+              accessibilityRole="button" accessibilityLabel={`Find logo for ${p.name}`}
+            >
+              <Text style={[styles.logoBtnText, { color: pal.text }]}>LOGO</Text>
+            </Pressable>
           </>
         ) : null}
         <LogoTile name={p.name} size={size.logo} radius={size.logoRadius} />
@@ -116,7 +128,7 @@ function Tile({ p, pal, active, reordering, first, last, size, flipX, onMeasureX
 
 export default function PresetsBand({
   pal, presets, activeIndex, reordering,
-  onSelect, onEnterReorder, onExitReorder, onMove, onRemove, onOpenNearby,
+  onSelect, onEnterReorder, onExitReorder, onMove, onRemove, onOpenNearby, onSearchLogo,
   grow = false, bandHeight = 140, showNav = true, showNearby = true,
   tall = false, twoRows = false, landscape = false, k = 1,
 }: {
@@ -130,6 +142,8 @@ export default function PresetsBand({
   onMove: (index: number, dir: 1 | -1) => void;
   onRemove: (index: number) => void;
   onOpenNearby: () => void;
+  /** Reorder-mode logo-search trigger. Fired by the (Claude-Design) tile icon. */
+  onSearchLogo?: (index: number) => void;
   /** Tall track: fill remaining height instead of a fixed band height. */
   grow?: boolean;
   /** Fixed band height when not growing (per aspect track). In the tall track the
@@ -274,6 +288,7 @@ export default function PresetsBand({
         onLongPress={onEnterReorder}
         onMove={(dir) => move(i, dir)}
         onRemove={() => remove(i)}
+        onSearchLogo={onSearchLogo ? () => onSearchLogo(i) : undefined}
       />
     );
   });
@@ -446,6 +461,12 @@ const styles = StyleSheet.create({
   moveLeft: { left: 6 },
   moveRight: { right: 6 },
   moveText: { fontSize: 22, fontWeight: '700', lineHeight: 24 },
+  // PLACEHOLDER logo-search trigger — neutral, not a design choice.
+  logoBtn: {
+    position: 'absolute', bottom: 6, zIndex: 2, height: 22, paddingHorizontal: 8,
+    borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center',
+  },
+  logoBtnText: { fontSize: 10, fontWeight: '700', letterSpacing: 1 },
   track: { height: 6, borderRadius: 999, marginTop: 6, overflow: 'hidden' },
   thumb: { position: 'absolute', top: 0, bottom: 0, borderRadius: 999 },
   nearby: {
