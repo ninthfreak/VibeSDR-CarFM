@@ -44,10 +44,4 @@
     <usb-device vendor-id="8013" product-id="51203" />  <!-- 0x1f4d:0xc803 -->
     <usb-device vendor-id="8013" product-id="53894" />  <!-- 0x1f4d:0xd286 -->
     <usb-device vendor-id="8013" product-id="55299" />  <!-- 0x1f4d:0xd803 -->
-    <!-- Si470x USB FM dongles (tuner-backends addendum, Backend C) -->
-    <usb-device vendor-id="4292" product-id="33162" />  <!-- 0x10c4:0x818a SiLabs FM reference design -->
-    <usb-device vendor-id="1761" product-id="41301" />  <!-- 0x06e1:0xa155 ADS/Tech Instant FM Music -->
-    <usb-device vendor-id="7040" product-id="55040" />  <!-- 0x1b80:0xd700 KWorld FM700 -->
-    <usb-device vendor-id="4293" product-id="33178" />  <!-- 0x10c5:0x819a Sanei/DealExtreme PCear -->
-    <usb-device vendor-id="4815" product-id="28945" />  <!-- 0x12cf:0x7111 Axentia ALERT FM -->
 </resources>

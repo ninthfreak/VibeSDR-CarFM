@@ -38,7 +38,15 @@ demands risky surgery. Work top-down (🟢 first). Scope decisions already made:
 
 ## 🟢 LOW harm — safe, do first (isolated / dead / iOS-inert on Android)
 1. **VTSDisplay.tsx** — orphaned, imported nowhere. Pure delete.
-2. **si470xTuner.ts** — dead (zero importers; only a disabled SettingsPanel row names `'si470x'`). Delete unless Si470x USB tuner is on the roadmap.
+2. ✅ **Si470x — REMOVED completely** (2026-07-21). It was NOT just a JS stub: real
+   native code existed (`vibe_si470x_rds_jni.cpp`, `Si470xTuner.kt`,
+   `Si470xSession.kt`) wired into CMake (`vibelocalsdr` lib), `VibeLocalSdrModule`
+   (list/start/stop/tune/seek ReactMethods), the USB `device_filter.xml`, and the
+   settings tuner-source picker. All removed atomically; the generic hardware-RDS
+   parser entry (`RdsDecoder::pushGroup`) was KEPT (backend-agnostic, reusable).
+   Rationale (per owner): SiLabs' reference USB dongle is discontinued and no one
+   else shipped a USB variant — remaining Si470x parts are I²C Arduino/SBC boards
+   with analog audio jacks that don't integrate.
 3. **`app.json` → `expo.ios` block** — config only.
 4. **`ios/` directory** (incl. `VibeSDRWatch/` Apple-Watch app, 3 MB) — Android build never touches it; JS native names are satisfied by the Kotlin modules.
 5. **`modules/vibe-local-sdr/`** — the iOS pod + prebuilt `.a` + `build_ios.sh`. iOS-only. (Keep `android/.../cpp` — `build_ios.sh` referenced it, but Android needs it.)

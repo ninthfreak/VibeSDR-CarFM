@@ -20,14 +20,19 @@ Tooling: `androguard` 4.1.4 (manifest + AIDL signatures + decompile), `strings`.
 
 ---
 
-## VERDICT: **GO** — pending on-device validation only
+## VERDICT: **GO** — core path validated on-device ✅
 
 All three feared blockers (bind permission, antenna power, RDS availability) came
 back favorable, and the audio path is now **characterized** (MCU-routed analog +
-a broadcast source switch — see Q_audio). Nothing left is a *design* unknown;
-what remains is confirming the mapped recipe on real hardware (audio actually
-comes out, reception matches the stock app) — which only you can run. No
-architectural risk is outstanding.
+a broadcast source switch — see Q_audio). No architectural risk is outstanding.
+
+**On-device spike result (2026-07-21):** the `nwd-tuner-probe` app bound
+`RadioService`, connected to the tuner, and **changed stations successfully** on
+the real head unit. The bind/permission model, the AIDL method map, and tuning
+are confirmed working against live hardware — not just static analysis. What's
+still worth a closer look during the real backend build is the audio-source
+switch behaviour and RDS callback fidelity under sustained use; the fundamentals
+are proven.
 
 ---
 
@@ -147,3 +152,87 @@ Smallest app that validates the map on hardware:
 4. `setCurrentFrequency(<local station>, FM, …)`; log the callback (freq, PS, RT).
 5. **Confirm audio comes out** (and whether a source switch is needed) + reception.
 Only after the spike passes should the full `TunerSource` backend be written.
+
+---
+
+# Hardware identity, vendor & compatibility
+
+Written for the eventual product/distribution question: *which head units does the
+built-in-tuner backend actually support, and how would a stranger know if theirs
+qualifies?* (Web research 2026-07-21; sources at the bottom.)
+
+## What "NWD" is
+- **NWD = NOWADA**, a Chinese aftermarket head-unit **firmware/OEM vendor**. It is
+  one of a known set of firmware houses (NWD, OH, HDKJ, HR, JYT, …) whose
+  three-letter codes appear in head-unit firmware filenames
+  (e.g. `K2001N_NWD_S212701`, `t3_k2001_nwd`, build host `NWD-SERVER-N254`).
+- The tuner interface we reverse-engineered — **`com.nwd.radio.service`** — is
+  **NOWADA firmware's radio service**. So supporting it = supporting head units
+  that ship NOWADA firmware exposing that service.
+
+## Chipset correlation (but NOT the compatibility axis — read below)
+- NOWADA/NWD units are commonly **Allwinner T3 / T3L** (ARM Cortex-A7 ~1.2 GHz,
+  `sun8iw11p1`). Newer NOWADA units also appear on **Rockchip RK3562**.
+- Model designations seen in the wild: **K2001, K2001N, K2001O, K2101, P1, P9**,
+  and rebrands such as **Seicane NWD-K2101**; Android **4 → 13**. These are
+  widespread, cheap, universal double-DIN aftermarket units.
+
+## ⚠️ The compatibility axis is the FIRMWARE VENDOR, not the chipset
+This is the single most important finding for distribution. **Do not advertise
+"Allwinner support" — it would over-promise.** Two units with the *same* Allwinner
+T3 chip expose the FM tuner through *completely different* APIs depending on whose
+firmware they run:
+- **NOWADA/NWD firmware** → `com.nwd.radio.service` (clean named AIDL — what we support).
+- **TopWay firmware** (e.g. MST768 boards) → `android.tw.john.TWUtil` / `TWClient`
+  (proven by the open-source `ivvlev/CarRadio` app targeting that platform).
+- **FYT / DuduOS firmware** → `com.syu.ms` (a numeric register/command scheme;
+  this was the *original* scouting target before we found this unit runs `com.nwd`).
+
+So the true statement is: **"supports head units running NOWADA (NWD) firmware."**
+The chipset is a helpful hint for a buyer ("often Allwinner T3 units like the
+K2001/K2101"), not the guarantee.
+
+## How the app should decide support at runtime (and how a stranger checks)
+- **Runtime capability detection is the mechanism.** The app queries Android for
+  whether **`com.nwd.radio.service`** resolves (via `PackageManager` + the
+  `<queries>` entry already declared in the probe manifest). If it resolves →
+  offer the built-in-radio backend; if not → hide it. No hard-coded model
+  whitelist to maintain, and no false promises.
+- **For a user figuring out if their unit qualifies:** it qualifies if the
+  built-in-radio option lights up in the app. (Under the hood: their firmware
+  provides `com.nwd.radio.service`.) A rough pre-check is "does the unit's factory
+  radio app / firmware come from NOWADA (NWD)?" — but the app's own detection is
+  the authoritative answer.
+
+## Suggested store-listing / README language (drop-in)
+> **Built-in FM radio** works on head units running **NOWADA (NWD) firmware** —
+> commonly Allwinner T3-based aftermarket units (e.g. K2001, K2101, P1/P9, and
+> Seicane NWD-* rebrands). The app auto-detects whether your unit's tuner is
+> supported and only shows the built-in-radio option when it is. Units from other
+> firmware vendors (FYT/DuduOS, TopWay, …) are not yet supported. RTL-SDR USB
+> tuners are supported on any unit.
+
+## Naming decision (locked)
+- **serverType id:** `nwd` (names the protocol/firmware — the real compatibility
+  line — not the misleading chipset).
+- **Adapter class:** `NwdTunerAdapter` (sits alongside `FmdxAdapter` / `OwrxAdapter`).
+- **User-facing label:** "Built-in FM radio".
+- Referred to informally as **NWD / NOWADA**.
+
+## Expansion roadmap (per-vendor adapters, NavRadio+ model)
+The commercial reference app **NavRadio+** covers many units by shipping **one
+tuner backend per firmware vendor**. Mirror that: keep `NwdTunerAdapter` as the
+first of a family. Candidate next backends, each a distinct interface:
+- **FYT / DuduOS** — `com.syu.ms` (numeric register/command). A disabled/greyed
+  placeholder is already in the CarFM settings tuner-source picker.
+- **TopWay** — `android.tw.john.*` (open-source client exists to crib from).
+- Others (OH, HDKJ, HR, JYT firmware) — unknown interfaces; investigate if demand.
+
+## Sources
+- Seicane NWD-K2101 (Allwinner T3 NWD unit): https://www.ebay.com/itm/286612639617
+- NOWADA RK3562 head unit (vendor confirmation): https://www.amazon.com/Universal-Android-Wireless-CarPlay-Navigation/dp/B0F8HV773F
+- NWD G5 car radio: https://www.aliexpress.com/s/wiki-ssr/article/nwd-g5
+- XDA — Allwinner quad-core T3 K2001N-NWD: https://xdaforums.com/t/allwinner-quad-core-t3-k2001n-nwd.4240581/
+- XDA — firmware K2001_NWD_S212109 (sun8iw11p1): https://xdaforums.com/t/firmware-update-help-allwinner-t3-k2001_nwd_s212109-sun8iw11p1.4507007/
+- ivvlev/CarRadio — Allwinner T3 / TopWay `android.tw.john.*`: https://github.com/ivvlev/CarRadio
+- NavRadio+ (multi-vendor reference app): https://play.google.com/store/apps/details?id=com.navimods.radio

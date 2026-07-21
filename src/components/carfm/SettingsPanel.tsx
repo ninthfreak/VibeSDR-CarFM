@@ -2,10 +2,9 @@
  * CarFM settings panel — the delivered Claude Design panel (SettingsPanel.dc.html).
  * Opened by the face's gear. Sections:
  *   TUNER       status (+ RETRY on error / Details diagnostics when connected),
- *               tuner-source picker (Auto / RTL-SDR / Si470x / rtl_tcp), boot autostart
+ *               tuner-source picker (Auto / RTL-SDR / FYT-DuduOS / rtl_tcp), boot autostart
  *   APPEARANCE  theme override (SYSTEM / LIGHT / DARK)
  *   SYSTEM      battery-optimization exemption (+ FIX), station-logos toggle (+ clear)
- *   ADVANCED    the one deliberate escape into the stock SDR view
  * Face design language throughout; no red-vs-green state (amber/blue/neutral).
  */
 import React, { useCallback, useEffect, useState } from 'react';
@@ -98,7 +97,9 @@ export default function SettingsPanel({
   const backends: BackendDef[] = [
     { id: 'auto', name: 'Auto (recommended)', kind: 'Probe all sources at startup', available: true, detected: null },
     { id: 'rtl', name: 'RTL-SDR', kind: 'USB software-defined radio', available: true, detected: !tunerError },
-    { id: 'si470x', name: 'Si470x FM dongle', kind: 'USB hardware tuner', available: false, detected: false },
+    // Built-in head-unit tuners. FYT/DuduOS speaks the `com.syu.ms` register scheme
+    // (see docs/BUILTIN-TUNER-FINDINGS.md); no adapter yet → disabled/greyed.
+    { id: 'fyt', name: 'FYT / DuduOS built-in radio', kind: 'Head-unit FM tuner (com.syu.ms) — not yet supported', available: false, detected: false },
     { id: 'rtltcp', name: 'rtl_tcp', kind: 'Network stream (dev)', available: true, detected: false },
   ];
 
