@@ -104,3 +104,9 @@ Threads raised across the project that are NOT part of the strip list.
   to a factual fork note rather than rewrite it in your voice — pending your call.
 - ⬜ **Changelog / version history** in AboutOverlay is VibeSDR's release history
   (App Store, TestFlight, "new in vN") — inherited, not CarFM's. Decide keep/trim.
+
+## D. Logos — future polish (feature works; these are refinements)
+- ⬜ **Logo sizing / fit** — better optimize how fetched logos are sized and laid
+  out in the tiles (wide wordmarks vs square marks, padding, `resizeMode`, upscale
+  of small hits). Deferred by request; the search + assign + display pipeline is
+  working as of 2026-07-20.

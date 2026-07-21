@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+
+    <!-- Android 11+ package visibility: needed to bind the radio service by package -->
+    <queries>
+        <package android:name="com.nwd.radio.service"/>
+        <intent>
+            <action android:name="com.nwd.radio.service.ACTION_RADIO_SERVICE"/>
+        </intent>
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:label="NWD Tuner Probe">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
