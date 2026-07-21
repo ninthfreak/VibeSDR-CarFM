@@ -42,6 +42,7 @@ import { splashBridge }                 from '../../App';
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
+import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSetRds, nwdSetAudio, onNwd } from '../services/nwdRadio';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { localSessionGen, newLocalSession } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
@@ -625,6 +626,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const fmFaceActiveRef = useRef(fmFaceActive);
   fmFaceActiveRef.current = fmFaceActive;
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
+  // True while the head unit's built-in NWD tuner is driving the face (a
+  // tunerless carFm launch on an NWD/NOWADA unit). Routes tune commands to it.
+  const nwdActiveRef = useRef(false);
   // PI-derived station identity (addendum §6): RDS PI arrives in block 1 almost
   // immediately, so we can name the station from the bundled DB before PS text
   // assembles. A hint only — PS wins when present.
@@ -2828,6 +2832,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     // and reads back as the user's choice — even with no dongle connected.
     if (!c) {
       setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(hz) }));
+      // Built-in NWD tuner (no SDR client): drive the hardware tuner directly.
+      if (nwdActiveRef.current) nwdTune(Math.round(hz) / 1e6).catch(() => {});
       return;
     }
     const [loHz, hiHz] = c.caps.freqRange;
@@ -3659,6 +3665,51 @@ export default function SDRScreen({ route, navigation }: Props) {
     });
     return () => sub.remove();
   }, [carFm, onFmToggleSave, onFmMediaSeek]);
+
+  // ── Built-in NWD/NOWADA tuner (Backend E) ────────────────────────────────────
+  // On a tunerless carFm launch (no SDR dongle) — the normal case on a permanent
+  // head-unit install — bind the unit's own FM tuner if it exposes the NWD radio
+  // service, and drive the face from IT instead of showing the tuner-error pill.
+  // Audio is analog + MCU-routed; PS/RadioText/PTY/TA/stereo arrive as native
+  // callback events. Tune commands route via onTuneHz's nwdActiveRef branch.
+  useEffect(() => {
+    if (!carFm || !route.params.tunerless) return;
+    let cancelled = false;
+    const subs: Array<() => void> = [];
+    (async () => {
+      if (!(await isNwdAvailable()) || cancelled) return;
+      try {
+        const info = await nwdConnect();
+        if (cancelled) { nwdDisconnect(); return; }
+        nwdActiveRef.current = true;
+        setFmTunerError(false);
+        nwdSetRds(true);
+        nwdSetAudio(true);
+        if (typeof info.mhz === 'number' && info.mhz > 0) {
+          setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(info.mhz! * 1e6) }));
+          if (info.ps) liveStationRef.current = info.ps;
+        }
+      } catch { return; }
+      if (cancelled) return;
+      // Decoded RDS + tuning state pushed from the service (Binder → JS events).
+      subs.push(onNwd('NwdRadioFrequency', (p) => {
+        liveStationRef.current = p.ps ?? '';
+        setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(p.mhz * 1e6) }));
+        setLiveStation((prev) => ({ ...prev, name: p.ps || undefined }));
+      }));
+      subs.push(onNwd('NwdRadioRt', (p) => setLiveStation((prev) => ({ ...prev, text: p.rt || undefined }))));
+      subs.push(onNwd('NwdRadioStereo', (p) => setFmStereo(p.on)));
+      subs.push(onNwd('NwdRadioPty', (p) => setLiveStation((prev) => ({ ...prev, pty: p.pty }))));
+      subs.push(onNwd('NwdRadioTa', (p) => setLiveStation((prev) => ({ ...prev, ta: p.ta }))));
+    })();
+    return () => {
+      cancelled = true;
+      nwdActiveRef.current = false;
+      subs.forEach((u) => u());
+      nwdSetAudio(false);   // release the radio audio source before unbinding
+      nwdDisconnect();
+    };
+  }, [carFm, route.params.tunerless]);
 
   // TA: a real car radio breaks mute for traffic announcements. If TA rises
   // while muted, unmute for the announcement and restore the mute when it

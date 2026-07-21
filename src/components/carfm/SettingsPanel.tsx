@@ -17,6 +17,7 @@ import { BatteryBolt, SignalWaves, WarningTriangle } from './icons';
 import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 import { snapshotDate } from '../../services/stationDb';
 import { clearLogoCache } from '../../services/stationLogoCache';
+import { isNwdAvailable } from '../../services/nwdRadio';
 
 export type CarFmTheme = 'system' | 'light' | 'dark';
 
@@ -60,6 +61,7 @@ export default function SettingsPanel({
   const [diagOpen, setDiagOpen] = useState(false);
   const [backend, setBackend] = useState('rtl');
   const [batteryExempt, setBatteryExempt] = useState<boolean | null>(null);
+  const [nwdAvail, setNwdAvail] = useState<boolean | null>(null);   // built-in NWD tuner present?
   const [logosOn, setLogosOn] = useState(false);
   const [dataDate, setDataDate] = useState<string | null>(null);
 
@@ -77,6 +79,7 @@ export default function SettingsPanel({
       try { const b = await AsyncStorage.getItem(BACKEND_KEY); if (b && b !== 'rtltcp' && !cancelled) setBackend(b); } catch {}
       try { const l = await AsyncStorage.getItem(LOGOS_KEY); if (!cancelled) setLogosOn(l === '1'); } catch {}
       try { const d = await snapshotDate(); if (!cancelled) setDataDate(d); } catch {}
+      try { const n = await isNwdAvailable(); if (!cancelled) setNwdAvail(n); } catch { if (!cancelled) setNwdAvail(false); }
       try {
         const ex = await Local?.isIgnoringBatteryOptimizations?.();
         if (!cancelled) setBatteryExempt(!!ex);
@@ -100,8 +103,10 @@ export default function SettingsPanel({
     { id: 'rtl', name: 'RTL-SDR', kind: 'USB software-defined radio', available: true, detected: !tunerError },
     // Built-in head-unit tuners — same concept (the radio baked into the head
     // unit), differentiated only by the unit's platform. Parallel copy on purpose;
-    // the state badge carries supported-vs-not. NWD lands with its adapter; FYT
-    // (com.syu.ms) has no adapter yet → greyed. See docs/BUILTIN-TUNER-FINDINGS.md.
+    // the state badge carries supported-vs-not. NWD self-detects via the vendor
+    // service; FYT (com.syu.ms) has no adapter yet → greyed. See
+    // docs/BUILTIN-TUNER-FINDINGS.md.
+    { id: 'nwd', name: 'NWD / NOWADA built-in radio', kind: 'Integrated head-unit FM tuner', available: !!nwdAvail, detected: nwdAvail },
     { id: 'fyt', name: 'FYT / DuduOS built-in radio', kind: 'Integrated head-unit FM tuner', available: false, detected: false },
     // Last, not the default: a fallback for unusual setups (e.g. a unit with BOTH
     // a USB dongle and a built-in tuner) — probe every source, use what answers.

@@ -34,6 +34,34 @@ still worth a closer look during the real backend build is the audio-source
 switch behaviour and RDS callback fidelity under sustained use; the fundamentals
 are proven.
 
+## Wired into CarFM (2026-07-21)
+
+The backend is now integrated (not just the spike). Pieces:
+- **`NwdRadioModule.kt`** — RN module `NwdRadio`: `isAvailable` (PackageManager
+  probe), `connect`/`disconnect` (bind + registCallback), `tune(mhz)`, `seek`,
+  `setRdsEnabled`, `setAudioEnabled`; RadioCallback → DeviceEventEmitter events.
+  Self-calibrates freq scale + band from `getCurrentFrequency` on connect.
+- **AIDL + parcelables** copied into the app tree; `buildFeatures { aidl true }`
+  added (AGP 8); `<queries><package .../></queries>` added for Android 11+ bind
+  visibility; module registered in `VibeStreamPackage`.
+- **`src/services/nwdRadio.ts`** — typed JS wrapper + event subscriptions.
+- **SettingsPanel** — the "NWD / NOWADA built-in radio" row now self-detects.
+- **SDRScreen** — on a **tunerless carFm launch** (no dongle), if NWD is present
+  it binds, clears the tuner-error pill, and drives the face from the callback
+  events; `onTuneHz` routes to `nwdTune` while NWD is active.
+
+**Built but NOT compiled/run here** (no device/Android build in this env) — needs
+an on-device build to confirm. What to watch:
+- **Audio**: `setAudioEnabled(true)` fires the experimental source-switch
+  broadcasts (exact `EXTRA_MEDIA_SOURCE` still unknown) — confirm sound comes out.
+- **Signal meter reads low/empty**: NWD's mapped callbacks expose no RSSI, so
+  `fmSignalDb` isn't fed on this path. Left honest (not faked). Open item: find a
+  signal source (maybe `notifyState`/`getRadioState`, or a poll) on-device.
+- **Seek** currently retunes to the next FCC-DB station (via `onTuneHz`), not the
+  hardware `seek()` — works, but hardware seek would catch non-DB stations.
+- **Picker routing**: NWD auto-activates in the tunerless case; the settings
+  picker selection is still cosmetic (doesn't force NWD when a dongle is present).
+
 ---
 
 ## Q1 — Binding (mechanics)  ✅ clean
