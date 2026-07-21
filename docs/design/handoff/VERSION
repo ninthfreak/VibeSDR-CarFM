@@ -1,23 +1,87 @@
-1.7.0 — 2026-07-20
+1.8.1 — 2026-07-21
 
 Android Car FM Radio Face — design handoff bundle.
 
 Changelog
 ---------
+1.8.1 (2026-07-21)
+  - Hero real-logo now GROWS to reclaim freed space when the per-station Display Call
+    Sign / Display Frequency options (§6.4) are off: one element hidden → larger box,
+    both hidden → largest, per layout track, so short-aspect logos (WERN/WWHG) fill the
+    hero as well as a wide wordmark (WIBA) does. Live source (RadioFace) re-synced;
+    ANDROID §4.5 hero bullet updated.
+
+1.8.0 — 2026-07-21
+  - Real station-logo image model (live source + bundle re-synced; 3 sample logo
+    assets added under logos/). Logos are now real image assets with arbitrary
+    aspect ratios, not just monogram tiles. New ANDROID §4.5 "Station logos — real
+    image assets & per-surface fit" is the authoritative guidance for MAX COVERAGE:
+    the containment invariant (Fit, never crop/overflow, plate-separate-from-image),
+    bounding-box crop + record-aspect on assign, and the per-surface budget below.
+    - Hero: a real logo REPLACES the big call sign (logo sized to a generous share of
+      the card, Fit); the call sign becomes a small label beneath it. No real logo →
+      NO monogram tile on the hero (just call sign + frequency). Star always corner.
+    - Preset tiles + prev/next peek cards: real logo fills a borderless transparent
+      plate (Fit; landscape-tolerant so wordmarks read); freq + call sign hidden on a
+      logo tile. No logo → monogram cube + (frequency then call sign).
+    - Nearby search: logos REMOVED entirely (small square can't render detailed/wide
+      logos legibly; low-traffic surface). Row = freq · callsign · city/genre · signal ·
+      distance. §6.2 updated; dead logo paths deleted from NearbyPicker source.
+  - Call signs now display as the 4 core letters only — `-FM`/`-AM` suffixes and
+    hyphens stripped everywhere (e.g. WWHG-FM → WWHG). README + §4.2/§4.3/§6.2.
+  - Logo-search window (§6.4) now opens on a LANDING view, not a search:
+    - Has a logo → shows the current logo + two options, **Display Call Sign** and
+      **Display Frequency** (both ON by default), + "Search for a different logo".
+    - No logo → "No Logo Installed" + "Search for a logo".
+    - The two options affect the HERO CARD ONLY, saved per station; unchecking hides
+      that element on the hero when tuned. Search runs only on button press.
+      New demoState value `landing` (now the default). §6.4 rewritten.
+  - Settings TUNER sources corrected to the shipping set (§6.3 + README surface 4):
+    RTL-SDR (USB SDR, detected/not) · NWD / NOWADA built-in (integrated head-unit FM
+    tuner) · FYT / DuduOS built-in (unavailable — greyed) · Auto (probe all sources).
+  - NOTE: the per-surface reference PNGs still show monogram tiles; the real-logo
+    hero/preset/peek visuals are documented in §4.5 and render live from
+    CarFmLive.dc.html (same live-render policy as the overlay states).
+
 1.7.0 (2026-07-20)
-  - New surface: Preset logo-search window (LogoSearchOverlay.dc.html, spec §6.4).
-    Opened by a per-tile logo-search badge (magnifier-over-picture, top-left) in
-    reorder mode — the one and only way a logo is assigned. Auto-runs the search,
-    shows the first four candidates in a 2×2 grid (each with source domain + w×h),
-    tap one to select (blue border + fill + check), Confirm saves it as the
-    station's sticky manual logo; loading / no-results / error / saving states.
-  - Preset reorder is now DRAG (§4.3/§8), not move arrows: continuous long-press→
-    drag, picked-up tile lifts (scale 1.06 + shadow) and tracks the finger, the
-    other tiles slide apart to open a gap at the insertion slot (transform-only
-    ~160ms), commit-on-release + FLIP settle (300ms). The ‹ › move arrows are gone;
-    the reorder tile shows only the logo-search badge (top-left) + ✕ (top-right).
-  - Nearby genre filter: drilling into Music/Talk hides the bucket row and leads
-    the genre row with an icon-only back-to-All reset chip + divider (§6.2).
+  - Preset logo search implemented (new surface + live source/bundle re-synced),
+    per the incoming Claude Code handoff (docs/design/handoff-logo-search.md):
+    - New modal LogoSearchOverlay.dc.html: opens over the face, runs the search on
+      open (no query field), header shows the station + exact query string, four
+      image candidates in a 2×2 grid, tap-to-select (blue border+fill+check; never
+      red/green), Confirm/Cancel, plus loading / no-results / error / saving states.
+      Responsive (2×2 fits the narrow track), light/dark. demoState prop flips the
+      five states for review. Backend (search/save-as-manual/tile-refresh) is host-
+      side. New ANDROID §6.4 + README surface 5.
+    - Preset tile trigger is now a magnifier-over-picture "logo-search" badge (was a
+      pencil that fired a placeholder toast); opens the window for that station. Kept
+      visually distinct from the Nearby magnifier-over-tower (§7).
+  - Preset drag-reorder reworked to gap-opening (live source + bundle re-synced):
+    long-press now flows straight into the drag with the same finger (continuous
+    gesture; a >12dp pre-fire move cancels so the rail still scrolls). Sibling tiles
+    slide apart to open a real gap at the insertion slot (wiggle frozen during drag;
+    geometry locked to slot rects captured at drag start so it doesn't oscillate).
+    Commits on release with the FLIP slide. Replaces the dashed drop-outline of 1.6.1.
+    §4.3/§8 + README updated.
+
+1.6.1 (2026-07-20)
+  - Fixed erratic preset drag-reorder (live source + bundle copies re-synced).
+    Live mid-drag reordering fought the index-keyed preset list (node/content
+    swap desynced from the direct-manipulated drag transform), making cards jump.
+    Reworked to commit-on-drop: the dragged tile floats freely under the pointer,
+    the nearest preset shows a dashed drop outline, and the reorder commits once on
+    release with a FLIP reflow (dropped tile slides from the finger into its slot).
+    FLIP translate now divides by the stage scale factor. §4.3/§8 + README updated.
+
+1.6.0 (2026-07-20)
+  - Preset reorder redesigned (live source + bundle copies re-synced):
+    - Drag-to-reorder replaces the on-screen ‹ › move arrows. In reorder mode a
+      picked-up tile lifts (scale 1.06 + shadow, touch-action:none) and tracks the
+      pointer; remaining tiles reflow live via the existing FLIP slide and the tile
+      settles into the nearest slot on release. §4.3/§8 + README updated.
+    - Added a per-tile logo-edit badge (blue pencil, top-left) that opens the app's
+      station-logo search (deep-link; prototype shows a placeholder toast). The ✕
+      remove badge and DONE button are unchanged. §4.3 + Behavior list updated.
 
 1.5.0 (2026-07-19)
   - Design changes (live source + bundle copies re-synced, all 8 reference

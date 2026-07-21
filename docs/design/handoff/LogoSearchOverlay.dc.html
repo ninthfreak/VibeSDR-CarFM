@@ -29,13 +29,46 @@
     <div style="{{ closeStyle }}" onClick="{{ onCancel }}">✕</div>
   </div>
 
+  <sc-if value="{{ showQueryRow }}" hint-placeholder-val="{{ false }}">
   <div style="{{ queryRowStyle }}">
     <span style="{{ queryIconStyle }}">{{ queryIcon }}</span>
     <span style="{{ queryLabelStyle }}">Searched</span>
     <span style="{{ queryTextStyle }}">{{ query }}</span>
   </div>
+  </sc-if>
 
   <div style="{{ bodyStyle }}">
+    <sc-if value="{{ isLanding }}" hint-placeholder-val="{{ true }}">
+      <div style="{{ landingStyle }}">
+        <sc-if value="{{ landingHasLogo }}" hint-placeholder-val="{{ true }}">
+          <div style="{{ landingLogoWrapStyle }}">
+            <img src="{{ landingLogoUrl }}" style="{{ landingLogoImgStyle }}" alt="" />
+          </div>
+          <div style="{{ optListStyle }}">
+            <div style="{{ optRowStyle }}" onClick="{{ onToggleCall }}">
+              <div style="{{ callBoxStyle }}">
+                <sc-if value="{{ showCall }}" hint-placeholder-val="{{ true }}">{{ checkIcon }}</sc-if>
+              </div>
+              <span style="{{ optLabelStyle }}">Display Call Sign</span>
+            </div>
+            <div style="{{ optRowStyle }}" onClick="{{ onToggleFreq }}">
+              <div style="{{ freqBoxStyle }}">
+                <sc-if value="{{ showFreq }}" hint-placeholder-val="{{ true }}">{{ checkIcon }}</sc-if>
+              </div>
+              <span style="{{ optLabelStyle }}">Display Frequency</span>
+            </div>
+          </div>
+          <div style="{{ searchBtnStyle }}" onClick="{{ onSearch }}">{{ searchBtnLabel }}</div>
+        </sc-if>
+        <sc-if value="{{ landingNoLogo }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ noLogoGlyphStyle }}">{{ emptyGlyph }}</div>
+          <div style="{{ centerTitleStyle }}">No Logo Installed</div>
+          <div style="{{ centerSubStyle }}">This station doesn’t have a logo yet.</div>
+          <div style="{{ searchBtnStyle }}" onClick="{{ onSearch }}">{{ searchBtnLabel }}</div>
+        </sc-if>
+      </div>
+    </sc-if>
+
     <sc-if value="{{ isLoading }}" hint-placeholder-val="{{ true }}">
       <div style="{{ centerStyle }}">
         <div style="{{ spinnerStyle }}"></div>
@@ -97,27 +130,35 @@
 
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:720,&quot;height&quot;:560},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light'|'dark'&quot;},&quot;demoState&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;auto&quot;,&quot;loading&quot;,&quot;results&quot;,&quot;empty&quot;,&quot;error&quot;,&quot;saving&quot;],&quot;default&quot;:&quot;results&quot;,&quot;tsType&quot;:&quot;'auto'|'loading'|'results'|'empty'|'error'|'saving'&quot;,&quot;section&quot;:&quot;Preview&quot;},&quot;narrow&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Preview&quot;},&quot;station&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{name:string;callsign:string;freq:string;query:string;logo?:string;logoBg?:string;logoFg?:string}&quot;},&quot;results&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{thumb:string;image:string;domain:string;w:number;h:number}[]&quot;}}">
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:720,&quot;height&quot;:560},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light'|'dark'&quot;},&quot;demoState&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;auto&quot;,&quot;landing&quot;,&quot;loading&quot;,&quot;results&quot;,&quot;empty&quot;,&quot;error&quot;,&quot;saving&quot;],&quot;default&quot;:&quot;auto&quot;,&quot;tsType&quot;:&quot;'auto'|'landing'|'loading'|'results'|'empty'|'error'|'saving'&quot;,&quot;section&quot;:&quot;Preview&quot;},&quot;narrow&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Preview&quot;},&quot;station&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{name:string;callsign:string;freq:string;query:string;logo?:string;logoBg?:string;logoFg?:string}&quot;},&quot;results&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{thumb:string;image:string;domain:string;w:number;h:number}[]&quot;}}">
 class Component extends DCLogic {
-  state = { sel: null, phase: null, saving: false };
+  state = { sel: null, phase: 'landing', saving: false, showCall: null, showFreq: null };
   componentDidMount() {
-    const forced = this.forced();
-    if (!forced) { this._t = setTimeout(() => this.setState({ phase: 'results' }), 950); }
+    const stn = this.props.station || {};
+    this.setState({ showCall: stn.showCall !== false, showFreq: stn.showFreq !== false });
   }
-  componentWillUnmount() { clearTimeout(this._t); }
+  componentWillUnmount() { clearTimeout(this._t); clearTimeout(this._st); }
   forced() { const d = this.props.demoState; return (d && d !== 'auto') ? d : null; }
   effState() {
     if (this.state.saving) return 'saving';
-    return this.forced() || this.state.phase || 'loading';
+    return this.forced() || this.state.phase || 'landing';
   }
+  startSearch = () => { clearTimeout(this._t); this.setState({ sel: null, phase: 'loading' }); this._t = setTimeout(() => this.setState({ phase: 'results' }), 950); };
   pick = (i) => { if (this.effState() !== 'results') return; this.setState({ sel: i }); };
   retry = () => { this.setState({ sel: null, phase: 'loading', saving: false }); clearTimeout(this._t); this._t = setTimeout(() => this.setState({ phase: 'results' }), 950); };
+  toggleCall = () => this.setState(s => ({ showCall: !s.showCall }));
+  toggleFreq = () => this.setState(s => ({ showFreq: !s.showFreq }));
   confirm = () => {
     const st = this.effState();
-    if (st !== 'results' || this.state.sel == null || this.state.saving) return;
-    const cell = this._cells && this._cells[this.state.sel];
+    if (this.state.saving) return;
+    const showCall = this.state.showCall !== false;
+    const showFreq = this.state.showFreq !== false;
+    let image;
+    if (st === 'landing') { image = (this.props.station || {}).logoUrl || ''; }
+    else if (st === 'results' && this.state.sel != null) { const cell = this._cells && this._cells[this.state.sel]; image = cell ? cell.image : ''; }
+    else return;
     this.setState({ saving: true });
-    this._st = setTimeout(() => { if (this.props.onConfirm) this.props.onConfirm(cell ? cell.image : ''); }, 750);
+    this._st = setTimeout(() => { if (this.props.onConfirm) this.props.onConfirm(image, showCall, showFreq); }, 750);
   };
   renderVals() {
     const p = this.props;
@@ -141,11 +182,16 @@ class Component extends DCLogic {
     const query = (stn.query || ('radio ' + freq + ' ' + call.toLowerCase() + ' logo')).trim();
 
     const st = this.effState();
+    const isLanding = st === 'landing';
     const isLoading = st === 'loading';
     const isResults = st === 'results' || st === 'saving';
     const isEmpty = st === 'empty';
     const isError = st === 'error';
     const saving = st === 'saving';
+    const hasLogo = !!(stn.logoUrl && String(stn.logoUrl).trim());
+    const showCall = this.state.showCall == null ? (stn.showCall !== false) : this.state.showCall;
+    const showFreq = this.state.showFreq == null ? (stn.showFreq !== false) : this.state.showFreq;
+    const optBox = (on) => ({ width:26, height:26, borderRadius:7, border: on ? ('2px solid ' + t.blue) : ('2px solid ' + t.border), backgroundColor: on ? t.blue : 'transparent', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 });
 
     // Candidate results: real ones if injected, otherwise four believable mock hits
     // so the design reads like an image search (varied art on their own backgrounds).
@@ -182,17 +228,24 @@ class Component extends DCLogic {
     });
     this._cells = cells;
 
-    const canConfirm = isResults && this.state.sel != null && !saving;
+    const canConfirm = !saving && (isLanding || (isResults && this.state.sel != null));
     const confirmBase = { minWidth: narrow ? 120 : 148, height: narrow ? 50 : 56, padding:'0 22px', borderRadius:14, display:'flex', alignItems:'center', justifyContent:'center', gap:10, fontSize:16, fontWeight:700, letterSpacing:0.5, boxSizing:'border-box' };
 
     return {
       isLoading, isResults, isEmpty, isError, saving, cells,
+      isLanding, showQueryRow: !isLanding,
+      landingHasLogo: isLanding && hasLogo, landingNoLogo: isLanding && !hasLogo,
+      landingLogoUrl: (stn.logoUrl || ''),
+      showCall, showFreq,
+      callBoxStyle: optBox(showCall), freqBoxStyle: optBox(showFreq),
+      onToggleCall: this.toggleCall, onToggleFreq: this.toggleFreq, onSearch: this.startSearch,
+      searchBtnLabel: hasLogo ? 'Search for a different logo' : 'Search for a logo',
       title: name,
       sub: (call && call !== name ? call + '  ·  ' : '') + (freq ? freq + ' MHz' : ''),
       stationMono: mono,
       query,
-      confirmLabel: saving ? 'Saving…' : 'Confirm',
-      footerHint: canConfirm ? 'Saved as this station’s logo' : (isResults ? 'Pick the correct logo' : ''),
+      confirmLabel: saving ? 'Saving…' : (isLanding ? 'Save' : 'Confirm'),
+      footerHint: isLanding ? (hasLogo ? 'Display options apply to the main card' : '') : (canConfirm ? 'Saved as this station’s logo' : (isResults ? 'Pick the correct logo' : '')),
       retryLabel: 'Search again',
       onCancel: p.onCancel, onConfirmClick: this.confirm, onRetry: this.retry,
 
@@ -211,6 +264,15 @@ class Component extends DCLogic {
       ]),
 
       containerStyle: { width:'100%', height:'100%', backgroundColor:t.bg, color:t.text, fontFamily:font, display:'flex', flexDirection:'column', boxSizing:'border-box', overflow:'hidden' },
+
+      landingStyle: { flex:1, minHeight:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap: narrow ? 18 : 24, textAlign:'center', padding: narrow ? '8px 18px' : '10px 34px' },
+      landingLogoWrapStyle: { display:'flex', alignItems:'center', justifyContent:'center', backgroundColor:'#FFFFFF', borderRadius:16, padding:'14px 22px', maxWidth:'82%', boxShadow:'inset 0 0 0 1px ' + t.border },
+      landingLogoImgStyle: { maxWidth:'100%', maxHeight: narrow ? 112 : 148, width:'auto', height:'auto', objectFit:'contain', display:'block' },
+      optListStyle: { display:'flex', flexDirection:'column', gap:12, width:'100%', alignItems:'center' },
+      optRowStyle: { display:'flex', alignItems:'center', gap:14, cursor:'pointer', padding:'13px 18px', borderRadius:12, border:'1px solid ' + t.border, backgroundColor:t.raised, width:'100%', maxWidth:400, boxSizing:'border-box' },
+      optLabelStyle: { fontSize:17, fontWeight:700, color:t.text },
+      searchBtnStyle: { height:54, padding:'0 26px', borderRadius:13, cursor:'pointer', border:'1.5px solid ' + t.blue, backgroundColor:t.blueFill, color:t.blue, display:'flex', alignItems:'center', justifyContent:'center', gap:10, fontSize:16, fontWeight:700, letterSpacing:0.3 },
+      noLogoGlyphStyle: { lineHeight:1, opacity:0.85 },
 
       headerStyle: { display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, padding: narrow ? '14px 16px' : '16px 22px', borderBottom:'1px solid ' + t.border, flexShrink:0 },
       headerLeftStyle: { display:'flex', alignItems:'center', gap: narrow ? 12 : 16, minWidth:0 },

@@ -1,6 +1,6 @@
 # DUDU OS FM Radio — Android implementation spec
 
-*Bundle v1.7.0 — 2026-07-20 (see `VERSION`).*
+*Bundle v1.8.1 — 2026-07-21 (see `VERSION`).*
 
 A complete build spec for the DUDU OS FM radio front-end on Android (Jetpack
 Compose primary; View/XML notes where helpful). It describes **intent, structure,
@@ -189,17 +189,31 @@ Three zones — **left** (signal), **center** (stereo + tells + genre), **right*
     track it sits in the preset band instead (§4.3). Icon spec in §7.
 
 ### 4.2 Hero (middle) — the primary readout
-A centered column: **station row** (logo tile · station name · save ★ button),
-**frequency row** (large amber number, **no "MHz" unit label**), and a **RadioText
+A centered column: **station row**, **frequency row** (large amber number, **no "MHz" unit label**), and a **RadioText
 strip** beneath the hero card. FM is always MHz, so the unit label is omitted on the
+face. The **star save button always sits in the top-right corner of the card** (both tracks),
+never inline with the station identity — it is not part of the logo/name centering.
+
+The station row has **two forms**, decided by whether the tuned station has a real logo (§4.5):
+- **Real logo present:** the logo image REPLACES the big call-sign text — it sits centered in a
+  box sized to a generous share of the card (`ContentScale.Fit`, §4.5), and the **call sign
+  appears as a small label directly beneath the logo**. Frequency row unchanged below.
+- **No real logo:** **no monogram tile is shown on the hero** — just the big **call sign** (largest
+  text; italic-dim "Tuning…" / "Scanning…" when no PS name) and the frequency. The generated cube
+  adds no value at hero size, so it is omitted here (it still appears on preset tiles/peek cards).
+
+The call sign and the frequency on the hero can each be **independently hidden** per station via
+the **Display Call Sign** / **Display Frequency** options in the logo window (§6.4) — those toggles
+affect the **hero only**, never the preset tiles, peek cards, or Nearby.
 face — it appears **only in the tune numpad** (§6.1).
 
 - **Frequency** — largest element, amber, tabular figures (~52–60sp). Tap opens
   the **tune numpad** (§6.1).
 - **Station name** — second largest; italic-dim "Tuning…" / "Scanning…" when no
-  program-service name is present.
-- **Logo tile** — rounded square with station brand bg/fg; initials fallback.
-- **★ save** — toggles the current station as a preset (filled amber when saved).
+  program-service name is present. Shown as the **4 core call letters only** (`-FM`/`-AM`
+  and hyphens stripped, e.g. `WWHG-FM` → `WWHG`) — this applies everywhere a call sign appears.
+- **Logo** — see §4.5 for the real-image model, per-surface fit, and the no-logo behavior.
+- **★ save** — toggles the current station as a preset (filled amber when saved); **top-right corner**.
 - **RadioText strip** — raised rounded bar. Long text (> ~46 chars)
   **marquee-scrolls** (continuous left ticker, ~16s loop); short text is centered
   static; dim italic placeholder when empty.
@@ -216,7 +230,11 @@ face — it appears **only in the tune numpad** (§6.1).
   470–720dp) flanked by the prev/next **peek cards**.
 
 ### 4.3 Preset band (bottom)
-**Preset tiles** (logo · call sign · active underline) plus band controls.
+**Preset tiles** plus band controls. A tile shows **either** a real logo **or** (monogram + text):
+- **Real logo:** the image fills a **borderless, transparent** plate (§4.5, landscape-tolerant so
+  wordmarks read); **frequency and call sign are hidden** — the logo carries the identity.
+- **No real logo:** the colored **monogram cube** + a text row of **frequency then call sign**
+  (call sign = 4 core letters, §4.2). Active tile shows the amber underline.
 
 - **Wide (default):** a horizontal **scroll rail** of tiles with `‹ ›` page-nav
   buttons on each end, a thin drag scrollbar beneath, and the **nearby-search**
@@ -252,11 +270,64 @@ face — it appears **only in the tune numpad** (§6.1).
 Step through the preset list and retune by tapping the **peek cards** (§5) that
 flank the hero on both tracks.
 
+### 4.5 Station logos — real image assets & per-surface fit
+
+Logos are **real image assets** (transparent or opaque PNG/SVG), not just monogram
+tiles. There is **no standard aspect ratio** — expect square badges, wide wordmarks
+(up to ~3:1), and tall stacked lockups. Two logo kinds coexist:
+- **Real logo** — an image assigned via the logo window (§6.4), with its own intrinsic aspect.
+- **Generated monogram** — the colored rounded tile with call letters, used as the fallback
+  wherever no real logo exists (preset tiles / peek cards only; never on the hero — see below).
+
+**Containment invariant (every surface, non-negotiable):** a logo renders **fully visible** —
+`ContentScale.Fit` (= CSS `object-fit: contain`), **never cropped, never overflowing its box,
+centered**. The box has **fixed geometry**; the image scales to the largest size that fits
+inside. This single rule handles all aspect ratios automatically: a wide wordmark uses the
+box's full width, a square badge or tall lockup uses its full height. **Never size the box from
+the logo, and never resize or crop the source to force it into a slot.**
+
+**Separate the plate from the image.** The plate (white tile or transparent container) owns its
+own size + padding; the image is width/height 100% with `Fit` **inside** the padded box. That
+separation is what mathematically prevents overflow — do **not** hand-tune per-logo pixel heights
+(that was the bug we chased before adopting this model).
+
+**Prep on assign.** When a logo is saved, **bounding-box crop** the surrounding transparent/white
+margin so the *visible mark* — not baked-in whitespace — fills the box, and **record the intrinsic
+aspect ratio** (or bucket it: square / wide wordmark / tall lockup). The hero doesn't need the ratio
+to render (Fit handles it), but storing it lets small slots make fallback decisions without re-measuring.
+
+**Per-surface budget (this is how you get max coverage):**
+- **Hero — maximum room.** A real logo **replaces the big call sign**: box = a generous share of
+  the card, leaving room for the small call-sign label + frequency beneath; `Fit`. **When the call
+  sign and/or frequency are hidden** (per-station options, §6.4), the logo box **grows to reclaim
+  the freed vertical space** (one element hidden → larger, both hidden → largest), so the logo keeps
+  filling the card regardless of aspect. **No real logo →** show no monogram on the hero at all
+  (call sign + frequency only). Star always corner.
+- **Preset tiles & prev/next peek cards — aspect-tolerant.** Real logo → **borderless, transparent**
+  plate that the image fills; use a **non-square / landscape-ish** plate so wide wordmarks read.
+  Freq + call sign are **hidden** on a tile that shows a real logo. No logo → monogram cube + text.
+- **Nearby search — no logos.** A small fixed square on a text-baseline row cannot render a detailed
+  or wide logo legibly, and Nearby is low-traffic, so **there is no logo column** — the row is
+  freq · callsign · city/genre · signal · distance.
+
+**General fallback rule (for the real pipeline, beyond the sample data):** hero always uses the
+image; tiles/peek use the image whenever one exists; if a future surface needs a *small fixed box*,
+**gate on a legibility budget** — skip the image and show the monogram/callsign when the mark would
+render below ~28–32dp tall or its aspect is too extreme — rather than forcing an unreadable shrink.
+Brands commonly ship **two marks** (a horizontal lockup and a compact icon/monogram); when both are
+available, prefer the **lockup for the hero** and the **icon for small slots**.
+
+**Test with deliberately extreme aspects** — one square badge, one ~3:1 wordmark, one tall stacked
+lockup — on every surface, light and dark. A roughly-square sample (like WERN) looks fine everywhere
+and **hides** the wide/tall failure modes, so it is not a sufficient test on its own.
+
 ---
 
 ## 5. Prev/Next peek cards
 
-Flanking the hero, the previous and next presets show as **smaller cards**
+Flanking the hero, the previous and next presets show as **smaller cards**. Each shows the
+station's **real logo image** when one exists (borderless, Fit — §4.5), otherwise the colored
+monogram cube, with the 4-letter call sign beneath.
 (≈ scale 0.88, ≈ 60% opacity, outer edge softened by a fade gradient) that peek in
 from the sides and sit slightly behind the hero. Tapping one steps to that preset.
 They flank the hero on **both** tracks whenever a previous/next preset exists —
@@ -292,9 +363,9 @@ Header (title "Nearby stations" + subtitle "Tap to tune · hold to save a preset
 best signal first") with a close ✕, a filter area, a scrolling **station list**,
 and a footer ("FCC data as of <snapshot date>").
 
-- **Station row:** brand logo tile · frequency (large, tabular, **no "MHz"
-  label**) · call sign · optional service badge (when not "FM"); a second line of
+- **Station row:** frequency (large, tabular, **no "MHz" label**) · call sign · optional service badge (when not "FM"); a second line of
   `city · genre`; a trailing signal icon + distance ("<km> km"); a saved ★ when
+  already a preset. **No logo column** — Nearby does not show station logos (§4.5).
   already a preset; a `›` chevron. **Tap** tunes; **long-press** (~550ms) saves it
   as a preset. Rows are sorted best-signal-first. On a **narrow** picker (phone
   portrait / ⅓ vertical slice, i.e. when the picker is clamped below ~620dp wide)
@@ -326,6 +397,11 @@ A header ("Settings" + close ✕) over a scrolling body of grouped sections:
   (recommended), RTL-SDR, Si470x FM dongle, rtl_tcp — each with a
   detected/not-detected/unavailable badge; unavailable rows are disabled. A
   **Start radio on boot** toggle.
+- **TUNER** — source picker (single-select), each row = name · kind · status badge:
+  **RTL-SDR** (USB software-defined radio; Detected / Not detected) ·
+  **NWD / NOWADA built-in radio** (integrated head-unit FM tuner; Detected / Not detected) ·
+  **FYT / DuduOS built-in radio** (integrated head-unit FM tuner; **Unavailable — greyed**) ·
+  **Auto** (probe all sources; no badge). `Auto` is the default selection.
 - **APPEARANCE** — **Theme** segmented control: SYSTEM / LIGHT / DARK.
 - **SYSTEM** — **Battery optimization** status (amber "Not exempt" with a **FIX**
   action, or blue "EXEMPT"); **Station logos** toggle with a "Clear downloaded
@@ -340,8 +416,20 @@ for these sections, values, and copy.
 A **modal card over the radio face** (same dim-scrim + rounded-card pattern as the
 numpad/picker/settings), opened by the per-tile logo-search badge in reorder mode. It
 is the **only** way a station logo is assigned — there is no automatic/background logo
-fetch. On open it **immediately runs the search** (query built from the station; no
-query field, no submit).
+fetch.
+
+**It opens on a LANDING view, not a search:**
+- **Station has a logo:** shows the **current logo** (large, Fit) plus two option rows,
+  **Display Call Sign** and **Display Frequency** — both **checked by default** — and a
+  **"Search for a different logo"** button.
+- **No logo:** shows a **"No Logo Installed"** message + a **"Search for a logo"** button.
+
+**Display Call Sign / Display Frequency affect the HERO CARD ONLY**, saved per station: when
+unchecked, that element is hidden on the hero while that station is tuned. They do not change the
+preset tiles, peek cards, or Nearby. They persist with the station.
+
+**Search runs only when the Search button is pressed** (query built from the station; no query
+field, no submit).
 
 - **Trigger glyph:** a **magnifier over a picture** (framed image with a tiny sun +
   hill, lens at lower-right) — deliberately distinct from the Nearby magnifier-over-
@@ -357,15 +445,16 @@ query field, no submit).
 - **Selection:** tap a cell to select (single-select) — **blue** 2dp border + blue
   fill tint + a blue check badge (never red/green; §6 colourblind rule). Selecting
   enables **Confirm**.
-- **Confirm** (enabled only once a cell is selected): downloads the chosen image, saves
-  it as this station's **manual logo** (sticky — never overwritten later), refreshes
+- **Confirm** (enabled on the landing view, or once a cell is selected in results): saves the
+  chosen image as this station's **manual logo** (sticky — never overwritten later) together with
+  the **Display Call Sign / Display Frequency** choices, refreshes
   every tile showing that station, and closes. **Cancel** / scrim / ✕ closes and
   changes nothing.
 - **Responsive:** the 2×2 grid fits the narrow track (phone portrait / ⅓ slice) with
   no horizontal scroll; light/dark themes as elsewhere.
 - Backend wiring (search, save-as-manual, tile refresh) is host-side; the design
   supplies the icon + window. `LogoSearchOverlay.dc.html` is the exact reference; its
-  `demoState` prop flips between the five states for review.
+  `demoState` prop flips between the states for review (`landing` is the default).
 
 ---
 

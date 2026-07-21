@@ -1,6 +1,6 @@
 # Handoff: Android Car Head‑Unit — FM Radio Face
 
-**Bundle v1.7.0 — 2026-07-20.** Version is tracked in `VERSION`; check it matches
+**Bundle v1.8.1 — 2026-07-21.** Version is tracked in `VERSION`; check it matches
 your copy before building (stale downloads were the source of earlier drift).
 
 ## Overview
@@ -70,9 +70,12 @@ presets, and open Nearby search.
    strip centered beneath it and the genre centered below that; the signal icon keeps its dB
    **stacked below the icon** in the left zone.
 2. **Hero band** — the tuned station, centered:
-   - **Center hero card:** station logo tile + call letters + star save button, then frequency
-     (amber, **no "MHz" label** — FM is always MHz; the unit shows only in the tune numpad). The
-     **RadioText strip** sits below the hero (marquee when text > 46 chars).
+   - **Center hero card:** the station identity + frequency (amber, **no "MHz" label**), with the
+     **save star pinned to the top-right corner**. Identity has two forms (see §4.5 for the logo
+     model): a **real logo replaces the call sign** (call sign shown small beneath it); with **no
+     real logo**, no monogram is drawn here — just the big **4-letter call sign** + frequency. The
+     **RadioText strip** sits below the hero (marquee when text > 46 chars). The hero call sign and
+     frequency can each be hidden per station via the logo window options (§6.4 / surface 5).
    - **Prev/Next peek cards** flank the hero: the previous and next presets rendered as smaller,
      ~0.88-scale, ~60%-opacity cards that peek in from the sides and sit slightly behind the hero;
      tapping one steps to that preset. Shown on **both** tracks whenever a prev/next preset exists,
@@ -86,13 +89,15 @@ presets, and open Nearby search.
 **Key components**
 - **Station logo tile:** 92×92, `border-radius:20` (or 46 if circle), station brand bg/fg, 34px 700.
 - **Call letters:** 66px, 700, `color:text` (italic `dim` when tuning/unknown), `letter-spacing:-1`.
+  Shown as the **4 core letters only** — `-FM`/`-AM` + hyphens stripped (e.g. `WWHG-FM` → `WWHG`), everywhere.
 - **Frequency:** 60px, 700, `color:amber`, `font-variant-numeric:tabular-nums`, tap opens numpad.
 - **Star save button:** 56×56, `border-radius:16`; filled amber star when the freq is saved, else
   outline in `dim`.
 - **Preset tile:** width **148**, full height; `border-radius:16`, `bg:panel`,
-  border `2px solid blue` when active else `1px solid border`. Contents: brand logo (58×58,
-  `radius:15`) + **full call sign** (18px 700, centered, wraps — **no frequency shown**). Active
-  tile shows a 26×3 amber bar at bottom. Long‑press enters reorder mode.
+  border `2px solid blue` when active else `1px solid border`. Shows **either** a real logo
+  (borderless, transparent, fills the tile — §4.5; **freq + call sign hidden**) **or** the colored
+  monogram cube + a text row of **frequency then 4-letter call sign**. Active tile shows a 26×3
+  amber bar at bottom. Long‑press enters reorder mode.
 - **SEEK controls:** now inside the tap‑to‑tune / numpad window (in `CarFmLive.dc.html`), not on
   the main face. Scan icon = a vertical bar + chevron (down/up variants).
 - **Prev/Next peek cards:** stepping to the previous/next preset is driven by the **peek cards**
@@ -129,8 +134,7 @@ Also has `nogps` ("Waiting for GPS…") and `empty` states — placeholder scaff
 
 **Row anatomy** (min‑height 92, `bg:raised`, `1px solid border`, `radius:16`, 18px gap;
 **compact metrics on a narrow picker** — phone portrait / ⅓ slice, clamped below ~620dp wide —
-smaller logo/freq/callsign/gaps/padding so the callsign never wraps):
-- Brand logo (60×60; ~46 narrow).
+smaller freq/callsign/gaps/padding so the callsign never wraps). **No logo column** (§4.5):
 - **Main info block** (sizes to content on wide, takes the row's slack on narrow): line 1 =
   frequency (32px 700; **no "MHz" label**) + callsign (20px 700) + **service badge only when the
   station has a non‑FM
@@ -154,27 +158,31 @@ Input capped at 4 digits, one decimal; commit parses and rounds to 0.1, validati
 **Purpose:** Tuner source + connection status, appearance (theme), and system options. Design
 size ~700×576, **responsive** (caps to the surface, body scrolls). Grouped sections: **TUNER**
 (connection status with RETRY when errored + expandable diagnostics; a **Tuner source** radio list
-— Auto / RTL-SDR / Si470x FM dongle / rtl_tcp, each with a detected/not-detected/unavailable
-badge; **Start radio on boot** toggle), **APPEARANCE** (SYSTEM / LIGHT / DARK segmented control),
+— Auto / RTL-SDR / NWD·NOWADA built-in / FYT·DuduOS built-in, each with a detected / not-detected /
+unavailable badge; **Start radio on boot** toggle), **APPEARANCE** (SYSTEM / LIGHT / DARK segmented control),
 **SYSTEM** (battery-optimization status with FIX/EXEMPT; station-logos toggle), **ADVANCED**
 (Advanced SDR view row). `SettingsPanel.dc.html` is the exact reference; see also
 `ANDROID-IMPLEMENTATION.md` §6.3.
 
 ### 5. Preset logo search (modal) — `LogoSearchOverlay.dc.html`
-**Purpose:** Find and assign a station's brand logo. Opened by the per‑tile **logo‑search badge**
-(magnifier‑over‑picture) in reorder mode; the **only** way a logo is assigned (no auto‑fetch).
-Design size ~720×560, **responsive** (caps to the surface; the 2×2 grid fits the narrow track with
-no horizontal scroll). Opens straight into a search — **no query field**.
+**Purpose:** View/replace a station's brand logo and set its hero display options. Opened by the
+per‑tile **logo‑search badge** (magnifier‑over‑picture) in reorder mode; the **only** way a logo is
+assigned (no auto‑fetch). Design size ~720×560, **responsive** (caps to the surface; the 2×2 grid
+fits the narrow track with no horizontal scroll).
 
-- **Header:** current logo tile · station name · `callsign · frequency MHz`, plus a **query chip**
-  showing the exact searched string (e.g. `radio 98.1 wmgn logo`); close ✕.
-- **States:** **loading** (spinner) → **results** (four candidates in a 2×2 grid; each cell = the
-  candidate art on its own bg + `domain` and `w×h` caption) → **no‑results** / **error** (short
-  message + **Search again**) → **saving** (busy Confirm).
+- **Opens on a landing view**, not a search:
+  - *Has a logo* → the current logo (large) + two option rows **Display Call Sign** and **Display
+    Frequency** (both ON by default) + a **"Search for a different logo"** button.
+  - *No logo* → **"No Logo Installed"** + a **"Search for a logo"** button.
+- **Display Call Sign / Display Frequency** affect the **hero card only**, saved per station
+  (unchecked hides that element on the hero when tuned).
+- **Search** (button‑triggered) → **loading** → **results** (four candidates in a 2×2 grid; each cell =
+  the candidate art on its own bg + `domain` and `w×h` caption) → **no‑results** / **error** (short
+  message + **Search again**) → **saving**.
 - **Select** a cell = **blue** 2dp border + fill + check badge (single‑select; never red/green).
-  **Confirm** (enabled once selected) saves it as the station's sticky manual logo and closes;
-  **Cancel** / scrim / ✕ changes nothing. Backend (search/save/refresh) is host‑side; `demoState`
-  prop flips the five states for review. See `ANDROID-IMPLEMENTATION.md` §6.4.
+  **Confirm** saves the logo + display options and closes; **Cancel** / scrim / ✕ changes nothing.
+  Backend (search/save/refresh) is host‑side; `demoState` prop flips the states for review
+  (`landing` default). See `ANDROID-IMPLEMENTATION.md` §6.4 and the logo model in §4.5.
 
 ## Interactions & Behavior
 - **Tune up/down:** ±0.1 MHz, wraps at the 87.5–108.0 band edges.
@@ -238,18 +246,21 @@ the numbers.
 - **Font:** Atkinson Hyperlegible via Google Fonts. Bundle it in‑app.
 - **Icons:** all custom, drawn inline as SVG (signal waves, magnifier/tower, star, chevrons).
   No external icon files. Recreate as vector drawables / SVG.
-- **Station brand logos:** represented as colored monogram tiles (text on brand bg), not image
-  assets — real brand art would replace these later.
-- No raster images are required by the design.
+- **Station brand logos:** **real image assets** (transparent or opaque), assigned via the logo
+  window (§6.4) and fitted per surface (§4.5); a colored **monogram tile** (call letters on brand
+  bg) is the fallback on preset tiles / peek cards when no real logo exists. Three sample logos ship
+  under `logos/` (WERN, WWHG, WIBA) exercising square and wide-wordmark aspects.
+- No other raster images are required by the design.
 
 ## Files (design references in this bundle)
 - `CarFmLive.dc.html` — the interactive prototype: owns state, mock SDR/RDS/GPS data, numpad,
   persistence, and mounts the other two. **Best single source for behavior.**
 - `RadioFace.dc.html` — the main radio face UI (hero, presets, prev/next peek cards, custom
-  scrollbar, drag‑reorder gap‑opening + FLIP animation, nearby icon, logo‑search badge).
+  scrollbar, drag‑reorder gap‑opening + FLIP animation, nearby icon, logo‑search badge, real-logo fit).
 - `NearbyPicker.dc.html` — the Nearby stations modal (list/nogps/empty states).
 - `SettingsPanel.dc.html` — the Settings modal (tuner source/status, theme, system, advanced).
-- `LogoSearchOverlay.dc.html` — the preset logo‑search modal (loading/results/empty/error/saving).
+- `LogoSearchOverlay.dc.html` — the preset logo‑search modal (landing / loading / results / empty / error / saving).
+- `logos/` — sample real logo image assets referenced by the prototype (WERN, WWHG, WIBA).
 - `support.js` — prototype runtime only; **do not port** (reference for reading the files if
   needed).
 

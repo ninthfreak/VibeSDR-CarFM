@@ -49,9 +49,6 @@
     <div style="{{ listStyle }}">
       <sc-for list="{{ rows }}" as="row" hint-placeholder-count="5">
         <div style="{{ row.rowStyle }}" onPointerDown="{{ row.onDown }}" onPointerUp="{{ row.onUp }}" onPointerLeave="{{ row.onLeave }}">
-          <sc-if value="{{ row.hasLogo }}" hint-placeholder-val="{{ false }}">
-            <div style="{{ row.logoStyle }}">{{ row.logo }}</div>
-          </sc-if>
           <div style="{{ row.mainStyle }}">
             <div style="{{ row.line1Style }}">
               <span style="{{ row.freqStyle }}">{{ row.freq }}</span>
@@ -159,16 +156,12 @@ class Component extends DCLogic {
 
     const heights = [11, 14, 17, 20, 23];
     const rows = filtered.map(s => {
+      const cleanCall = x => String(x || '').replace(/[\s-]*(fm|am)\b/ig, '').replace(/[-\s]+/g, '').trim();
       const bars = Math.max(0, Math.min(5, Number(s.bars) || 0));
-      const logo = (s.logo || '').trim();
-      const lbg = (s.logoBg || '').trim();
-      const lfg = (s.logoFg || '').trim();
-      const lcircle = s.logoShape === 'circle';
       const meta = [s.city, s.genre].filter(x => x && String(x).trim()).join('  ·  ');
       const svc = (s.service && s.service !== 'FM') ? s.service : '';
       return {
-        freq: s.freq, callsign: s.callsign || '', service: svc, hasSvc: !!svc,
-        logo, hasLogo: !!logo,
+        freq: s.freq, callsign: cleanCall(s.callsign) || '', service: svc, hasSvc: !!svc,
         metaText: meta, hasMeta: !!meta,
         distText: (s.distanceKm != null ? s.distanceKm : '--') + ' km',
         onDown: () => this.pressStart(s.freq), onUp: () => this.pressEnd(s.freq), onLeave: () => this.pressCancel(),
@@ -192,9 +185,6 @@ class Component extends DCLogic {
           ]);
         })(),
         rowStyle: { minHeight:M.rowMinH, padding:M.rowPad, borderRadius:16, cursor:'pointer', backgroundColor:t.raised, border:'1px solid ' + t.border, display:'flex', alignItems:'center', gap:M.rowGap, boxSizing:'border-box' },
-        logoStyle: lbg
-          ? { width:M.logo, height:M.logo, borderRadius: lcircle ? M.logo/2 : (narrow ? 12 : 15), flexShrink:0, backgroundColor:lbg, display:'flex', alignItems:'center', justifyContent:'center', fontSize: narrow ? 18 : 22, fontWeight:700, color: lfg || '#FFFFFF' }
-          : { width:M.logo, height:M.logo, borderRadius: narrow ? 11 : 13, flexShrink:0, backgroundColor:t.panel, border:'1px solid ' + t.border, display:'flex', alignItems:'center', justifyContent:'center', fontSize: narrow ? 18 : 22, fontWeight:700, color:t.blue },
         mainStyle: { flex: narrow ? '1 1 auto' : '0 1 auto', display:'flex', flexDirection:'column', gap: narrow ? 3 : 5, minWidth:0 },
         line1Style: { display:'flex', alignItems:'baseline', gap: narrow ? 6 : 8, minWidth:0 },
         freqStyle: { fontSize:M.freq, fontWeight:700, color:t.text, fontVariantNumeric:'tabular-nums', letterSpacing:-0.5, flexShrink:0 },

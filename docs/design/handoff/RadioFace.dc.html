@@ -100,30 +100,49 @@
     <div style="{{ heroRowStyle }}">
       <sc-if value="{{ wideHero }}" hint-placeholder-val="{{ false }}">
         <div style="{{ prevCardStyle }}" onClick="{{ navPrev }}" ref="{{ prevCardRef }}">
-          <div style="{{ prevCardLogoStyle }}">{{ prevCardLogo }}</div>
+          <div style="{{ prevCardLogoStyle }}">
+            <sc-if value="{{ prevCardHasLogo }}" hint-placeholder-val="{{ false }}"><img src="{{ prevCardLogoUrl }}" style="{{ sideLogoImgStyle }}" alt="" /></sc-if>
+            <sc-if value="{{ prevCardNoLogo }}" hint-placeholder-val="{{ true }}">{{ prevCardLogo }}</sc-if>
+          </div>
           <span style="{{ sideCardCallStyle }}">{{ prevCardCall }}</span>
         </div>
       </sc-if>
       <div style="{{ heroMainStyle }}" ref="{{ heroCardRef }}">
         <div style="{{ stationRowStyle }}">
-          <sc-if value="{{ notScanning }}" hint-placeholder-val="{{ true }}">
-            <div style="{{ logoTileStyle }}">{{ logoText }}</div>
+          <sc-if value="{{ heroRealLogo }}" hint-placeholder-val="{{ false }}">
+            <div style="{{ heroLogoColStyle }}">
+              <div style="{{ heroLogoTileStyle }}">
+                <img src="{{ heroLogoUrl }}" style="{{ heroLogoImgStyle }}" alt="" />
+              </div>
+              <sc-if value="{{ heroShowCall }}" hint-placeholder-val="{{ true }}">
+                <span style="{{ heroCallStyle }}">{{ station }}</span>
+              </sc-if>
+            </div>
           </sc-if>
-          <div style="{{ stationStyle }}">{{ station }}</div>
+          <sc-if value="{{ heroNoLogo }}" hint-placeholder-val="{{ true }}">
+            <sc-if value="{{ heroTextVisible }}" hint-placeholder-val="{{ true }}">
+              <div style="{{ stationStyle }}">{{ station }}</div>
+            </sc-if>
+          </sc-if>
           <sc-if value="{{ notScanning }}" hint-placeholder-val="{{ true }}">
-            <div style="{{ starBtnStyle }}" onClick="{{ onSave }}">{{ starIcon }}</div>
+            <div style="{{ heroStarStyle }}" onClick="{{ onSave }}">{{ starIcon }}</div>
           </sc-if>
         </div>
+        <sc-if value="{{ heroShowFreq }}" hint-placeholder-val="{{ true }}">
         <div style="{{ freqRowStyle }}" onClick="{{ onFreqTap }}">
           <span style="{{ freqStyle }}">{{ freq }}</span>
         </div>
+        </sc-if>
         <sc-if value="{{ oob }}" hint-placeholder-val="{{ false }}">
           <div style="{{ capStyle }}">{{ capText }}</div>
         </sc-if>
       </div>
       <sc-if value="{{ wideHero }}" hint-placeholder-val="{{ false }}">
         <div style="{{ nextCardStyle }}" onClick="{{ navNext }}" ref="{{ nextCardRef }}">
-          <div style="{{ nextCardLogoStyle }}">{{ nextCardLogo }}</div>
+          <div style="{{ nextCardLogoStyle }}">
+            <sc-if value="{{ nextCardHasLogo }}" hint-placeholder-val="{{ false }}"><img src="{{ nextCardLogoUrl }}" style="{{ sideLogoImgStyle }}" alt="" /></sc-if>
+            <sc-if value="{{ nextCardNoLogo }}" hint-placeholder-val="{{ true }}">{{ nextCardLogo }}</sc-if>
+          </div>
           <span style="{{ sideCardCallStyle }}">{{ nextCardCall }}</span>
         </div>
       </sc-if>
@@ -152,8 +171,16 @@
         <div style="{{ presetGridStyle }}" data-preset-grid="1" ref="{{ gridRef }}" onScroll="{{ onGridScroll }}">
           <sc-for list="{{ chips }}" as="chip" hint-placeholder-count="5">
             <div style="{{ chip.tileStyle }}" data-freq="{{ chip.dataFreq }}" onClick="{{ chip.onClick }}" onPointerDown="{{ chip.onPointerDown }}" onPointerUp="{{ chip.onPointerUp }}" onPointerLeave="{{ chip.onPointerLeave }}">
-              <div style="{{ chip.logoStyle }}">{{ chip.logoText }}</div>
-              <span style="{{ chip.callStyle }}">{{ chip.callText }}</span>
+              <div style="{{ chip.logoStyle }}">
+                <sc-if value="{{ chip.hasLogo }}" hint-placeholder-val="{{ false }}"><img src="{{ chip.logoUrl }}" style="{{ chip.logoImgStyle }}" alt="" /></sc-if>
+                <sc-if value="{{ chip.noLogo }}" hint-placeholder-val="{{ true }}">{{ chip.logoText }}</sc-if>
+              </div>
+              <sc-if value="{{ chip.noLogo }}" hint-placeholder-val="{{ true }}">
+                <div style="{{ chip.callRowStyle }}">
+                  <span style="{{ chip.freqTextStyle }}">{{ chip.freqText }}</span>
+                  <span style="{{ chip.callStyle }}">{{ chip.callText }}</span>
+                </div>
+              </sc-if>
               <sc-if value="{{ chip.active }}" hint-placeholder-val="{{ false }}">
                 <div style="{{ chip.activeBarStyle }}"></div>
               </sc-if>
@@ -417,6 +444,7 @@ class Component extends DCLogic {
   renderVals() {
     const p = this.props;
     const bool = v => v === true || v === 'true';
+    const cleanCall = s => String(s || '').replace(/[\s-]*(fm|am)\b/ig, '').replace(/[-\s]+/g, '').trim();
     const reordering = bool(p.reordering);
     const theme = p.theme === 'light' ? 'light' : 'dark';
     const T = {
@@ -438,6 +466,8 @@ class Component extends DCLogic {
     const scroll = bool(p.scroll);
     const saved = bool(p.saved);
     const scanning = bool(p.scanning);
+    const heroShowCall = (p.heroShowCall === undefined || p.heroShowCall === '') ? true : bool(p.heroShowCall);
+    const heroShowFreq = (p.heroShowFreq === undefined || p.heroShowFreq === '') ? true : bool(p.heroShowFreq);
     const tall = bool(p.tall);
     const twoRows = !bool(p.tall) && bool(p.twoRows);
     const landscape = !bool(p.tall) && bool(p.landscape);
@@ -448,6 +478,8 @@ class Component extends DCLogic {
     const db = (p.signalDb === undefined || p.signalDb === null || p.signalDb === '') ? '--' : String(p.signalDb);
     const presets = Array.isArray(p.presets) ? p.presets : [];
     const logo = (p.logoText || '').trim();
+    const heroLogoUrl = (p.logoUrl || '').trim();
+    const hasHeroLogo = !!heroLogoUrl;
     const logoBg = (p.logoBg || '').trim();
     const logoFg = (p.logoFg || '').trim();
     const circle = p.logoShape === 'circle';
@@ -571,6 +603,7 @@ class Component extends DCLogic {
     const chips = presets.map((pr, idx) => {
       const active = bool(pr.active);
       const plogo = (pr.logo || '').trim();
+      const plogoUrl = (pr.logoUrl || '').trim();
       const pbg = (pr.logoBg || '').trim();
       const pfg = (pr.logoFg || '').trim();
       const call = (pr.name || '').trim();
@@ -578,16 +611,18 @@ class Component extends DCLogic {
       const dragging = this.state.dragFreq === pr.freq;
       const anyDrag = this.state.dragFreq != null;
       const sh = (anyDrag && !dragging && this.state.shifts) ? this.state.shifts[String(pr.freq)] : null;
-      const w = big ? (landscape ? 134 : 150) : (landscape ? 106 : 118), lg = big ? (landscape ? 50 : 58) : (landscape ? 38 : 44), lr = big ? 15 : 12, lf = big ? (landscape ? 18 : 20) : (landscape ? 14 : 16), cf = big ? (landscape ? 16 : 18) : (landscape ? 13 : 15);
+      const w = big ? (landscape ? 134 : 150) : (landscape ? 106 : 118), lg = big ? (landscape ? 50 : 58) : (landscape ? 38 : 44), imgH = big ? (landscape ? 68 : 78) : (landscape ? 54 : 62), imgW = big ? (landscape ? 122 : 138) : (landscape ? 100 : 112), lr = big ? 15 : 12, lf = big ? (landscape ? 18 : 20) : (landscape ? 14 : 16), cf = big ? (landscape ? 16 : 18) : (landscape ? 13 : 15);
       return {
         active, reordering, dataFreq: pr.freq,
-        logoText: plogo || 'FM',
-        callText: call || ('FM ' + pr.freq),
+        logoText: plogo || 'FM', logoUrl: plogoUrl, hasLogo: !!plogoUrl, noLogo: !plogoUrl,
+        logoImgStyle: { width:'100%', height:'100%', objectFit:'contain', padding:0, boxSizing:'border-box' },
+        callText: cleanCall(call) || ('FM ' + pr.freq),
+        callRowStyle: { display:'flex', alignItems:'baseline', justifyContent:'center', gap:6, maxWidth:'100%', flexWrap:'nowrap', overflow:'hidden' },
         freqText: pr.freq,
         canLeft: idx > 0, canRight: idx < presets.length - 1,
         tileStyle: { position:'relative', width: (tall || twoRows) ? 'auto' : w, height: tall ? 128 : ((twoRows || big) ? '100%' : '80%'), alignSelf: (tall || twoRows || big) ? 'stretch' : 'center', borderRadius:16, cursor: reordering ? (dragging ? 'grabbing' : 'grab') : 'pointer', flexShrink:0, boxSizing:'border-box', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap: big ? 8 : 6, padding: big ? '12px 8px 16px' : '8px 6px 12px', backgroundColor: t.panel, border: active && !reordering ? ('2px solid ' + t.blue) : ('1px solid ' + t.border), animation: (reordering && !anyDrag) ? 'carfm-wiggle 0.42s ease-in-out infinite' : 'none', transition: dragging ? 'none' : (anyDrag ? 'transform .16s ease' : 'width .25s ease, height .25s ease'), transform: dragging ? ('translate(' + this.state.dragDX + 'px,' + this.state.dragDY + 'px) scale(1.06)') : (sh ? ('translate(' + sh.dx + 'px,' + sh.dy + 'px)') : 'none'), zIndex: dragging ? 30 : 'auto', boxShadow: dragging ? '0 18px 40px rgba(0,0,0,0.35)' : 'none', touchAction: reordering ? 'none' : 'auto' },
-        logoStyle: { width:lg, height:lg, borderRadius:lr, flexShrink:0, backgroundColor: plogo ? (pbg || t.raised) : t.raised, border: plogo ? 'none' : ('1px solid ' + t.border), display:'flex', alignItems:'center', justifyContent:'center', fontSize: big ? 20 : 16, fontWeight:700, letterSpacing:0.5, color: plogo ? (pfg || '#FFFFFF') : t.dim, transition:'width .25s ease, height .25s ease' },
-        callStyle: { fontSize:cf, fontWeight:700, color:t.text, lineHeight:1.12, maxWidth:'100%', textAlign:'center', whiteSpace:'normal', wordBreak:'break-word' },
+        logoStyle: { width: plogoUrl ? '100%' : lg, maxWidth:'100%', height: plogoUrl ? 'auto' : lg, flex: plogoUrl ? '1 1 auto' : '0 0 auto', minHeight:0, borderRadius:lr, flexShrink:0, overflow:'hidden', backgroundColor: plogoUrl ? 'transparent' : (plogo ? (pbg || t.raised) : t.raised), border: plogoUrl ? 'none' : (plogo ? 'none' : ('1px solid ' + t.border)), display:'flex', alignItems:'center', justifyContent:'center', fontSize: big ? 20 : 16, fontWeight:700, letterSpacing:0.5, color: plogo ? (pfg || '#FFFFFF') : t.dim, transition:'width .25s ease, height .25s ease' },
+        callStyle: { fontSize:cf, fontWeight:700, color:t.text, lineHeight:1.12, maxWidth:'100%', textAlign:'center', whiteSpace:'nowrap' },
         freqTextStyle: { fontSize:13, fontWeight:700, color:t.dim, letterSpacing:0.3, lineHeight:1, fontVariantNumeric:'tabular-nums' },
         activeBarStyle: { position:'absolute', bottom:6, left:'50%', marginLeft:-13, width:26, height:3, borderRadius:2, backgroundColor: t.blue },
         logoEditStyle: { position:'absolute', top:-9, left:-9, width:28, height:28, borderRadius:14, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', backgroundColor: t.blue, color:'#FFFFFF', border:'2px solid ' + t.panel, touchAction:'none', lineHeight:1 },
@@ -609,22 +644,35 @@ class Component extends DCLogic {
       if (pIdx < 0) { prevP = presets[presets.length - 1]; nextP = presets[0]; }
       else { prevP = presets[(pIdx - 1 + presets.length) % presets.length]; nextP = presets[(pIdx + 1) % presets.length]; }
     }
-    const sideLogoStyle = (pp) => ({ width:'58%', maxWidth:92, aspectRatio:'1 / 1', borderRadius:16, flexShrink:0, backgroundColor: pp && pp.logoBg ? pp.logoBg : t.raised, color: pp && pp.logoFg ? pp.logoFg : t.dim, border: pp && pp.logoBg ? 'none' : ('1px solid ' + t.border), display:'flex', alignItems:'center', justifyContent:'center', fontSize:24, fontWeight:700, letterSpacing:0.5 });
+    const sideLogoStyle = (pp) => (pp && pp.logoUrl)
+      ? { width:'86%', maxWidth:170, aspectRatio:'1 / 1', borderRadius:14, flexShrink:0, overflow:'hidden', backgroundColor:'transparent', display:'flex', alignItems:'center', justifyContent:'center' }
+      : { width:'58%', maxWidth:92, aspectRatio:'1 / 1', borderRadius:16, flexShrink:0, backgroundColor: pp && pp.logoBg ? pp.logoBg : t.raised, color: pp && pp.logoFg ? pp.logoFg : t.dim, border: pp && pp.logoBg ? 'none' : ('1px solid ' + t.border), display:'flex', alignItems:'center', justifyContent:'center', fontSize:24, fontWeight:700, letterSpacing:0.5 };
+    const sideLogoImgStyle = { width:'100%', height:'100%', objectFit:'contain', display:'block' };
     const sideCardBase = { position:'relative', zIndex:1, flexShrink:0, width:'20%', maxWidth:206, aspectRatio:'1 / 1', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, padding:16, boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:24, cursor:'pointer', opacity:0.6, transform:'scale(0.88)' };
 
     return {
       scroll, notScroll: !scroll, oob,
       showPresetNav: !tall,
       wideHero: presets.length > 0,
-      prevCardLogo: prevP ? (prevP.logo || 'FM') : '', prevCardCall: prevP ? (prevP.name || ('FM ' + prevP.freq)) : '',
-      nextCardLogo: nextP ? (nextP.logo || 'FM') : '', nextCardCall: nextP ? (nextP.name || ('FM ' + nextP.freq)) : '',
+      prevCardLogo: prevP ? (prevP.logo || 'FM') : '', prevCardCall: prevP ? (cleanCall(prevP.name) || ('FM ' + prevP.freq)) : '',
+      nextCardLogo: nextP ? (nextP.logo || 'FM') : '', nextCardCall: nextP ? (cleanCall(nextP.name) || ('FM ' + nextP.freq)) : '',
+      prevCardHasLogo: !!(prevP && prevP.logoUrl), prevCardNoLogo: !(prevP && prevP.logoUrl), prevCardLogoUrl: prevP ? (prevP.logoUrl || '') : '',
+      nextCardHasLogo: !!(nextP && nextP.logoUrl), nextCardNoLogo: !(nextP && nextP.logoUrl), nextCardLogoUrl: nextP ? (nextP.logoUrl || '') : '',
+      sideLogoImgStyle,
       prevCardLogoStyle: sideLogoStyle(prevP), nextCardLogoStyle: sideLogoStyle(nextP),
       prevCardStyle: Object.assign({}, sideCardBase, { marginRight: tall ? -46 : -72, WebkitMaskImage:'linear-gradient(to right, #000 55%, rgba(0,0,0,0.1) 100%)', maskImage:'linear-gradient(to right, #000 55%, rgba(0,0,0,0.1) 100%)' }),
       nextCardStyle: Object.assign({}, sideCardBase, { marginLeft: tall ? -46 : -72, WebkitMaskImage:'linear-gradient(to left, #000 55%, rgba(0,0,0,0.1) 100%)', maskImage:'linear-gradient(to left, #000 55%, rgba(0,0,0,0.1) 100%)' }),
       sideCardCallStyle: { fontSize:15, fontWeight:700, color:t.text, textAlign:'center', maxWidth:'100%', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', lineHeight:1.1 },
       nearbyInTopbar: tall && !reordering, nearbyInBand: !tall && !reordering,
-      freq: p.freq || '--', station: scanning ? 'Scanning…' : (ps || 'Tuning…'), logoText: logo || 'FM',
+      freq: p.freq || '--', station: scanning ? 'Scanning…' : (cleanCall(ps) || 'Tuning…'), logoText: logo || 'FM',
+      heroLogoUrl, heroRealLogo: !scanning && hasHeroLogo, heroNoLogo: scanning || !hasHeroLogo,
+      heroLogoColStyle: { display:'flex', flexDirection:'column', alignItems:'center', gap: tall ? 8 : 10, maxWidth:'100%', minWidth:0 },
+      heroLogoTileStyle: { maxWidth:'100%', boxSizing:'border-box', backgroundColor:'#FFFFFF', borderRadius:16, padding:'4px 8px', display:'flex', alignItems:'center', justifyContent:'center' },
+      heroLogoImgStyle: { height: (function(){ var hidden=(heroShowCall?0:1)+(heroShowFreq?0:1); var base=tall?90:(landscape?98:118); var big=tall?126:(landscape?140:168); var max=tall?156:(landscape?176:210); return hidden===0?base:(hidden===1?big:max); })(), width:'auto', maxWidth:'100%', objectFit:'contain', display:'block' },
+      heroCallStyle: { fontSize: tall ? 22 : (landscape ? 20 : 26), fontWeight:700, color:t.dim, letterSpacing:0.5, lineHeight:1, textAlign:'center' },
+      heroStarStyle: { position:'absolute', top: tall ? 16 : 18, right: tall ? 16 : 18, zIndex:4, width:52, height:52, borderRadius:16, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', backgroundColor: saved ? t.blueFill : 'transparent', border:'1px solid ' + (saved ? 'transparent' : t.border) },
       scanning, notScanning: !scanning,
+      heroShowCall, heroShowFreq, heroTextVisible: scanning || heroShowCall,
       onFreqTap: p.onFreqTap, onTuneDown: p.onTuneDown, onTuneUp: p.onTuneUp, onNearby: p.onNearby, onSettings: p.onSettings, onSave: p.onSave, onScanDown: p.onScanDown, onScanUp: p.onScanUp, onPrevPreset: p.onPrevPreset, onNextPreset: p.onNextPreset,
       heroCardRef: this.heroCardRef, prevCardRef: this.prevCardRef, nextCardRef: this.nextCardRef, navPrev: this.navPrev, navNext: this.navNext,
       reordering, notReordering: !reordering, onDoneReorder: p.onDoneReorder,
@@ -690,7 +738,7 @@ class Component extends DCLogic {
       heroStyle: { flex:1, display:'flex', flexDirection:'column', alignItems:'stretch', justifyContent:'flex-start', gap:0, minHeight:0 },
       heroMainStyle: tall
         ? { position:'relative', zIndex:3, flex:'0 0 auto', width:'82%', maxWidth:560, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16, padding:'30px 26px', boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:28, boxShadow: dark ? '0 20px 44px rgba(0,0,0,0.5)' : '0 20px 44px rgba(20,30,45,0.16)' }
-        : { position:'relative', zIndex:3, flex:'0 0 auto', width:'clamp(470px, 62%, 720px)', height:'98%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:14, padding:'24px 30px', boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:28, boxShadow: dark ? '0 20px 44px rgba(0,0,0,0.5)' : '0 20px 44px rgba(20,30,45,0.16)' },
+        : { position:'relative', zIndex:3, flex:'0 0 auto', width:'clamp(470px, 62%, 720px)', height:'98%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:14, padding:'42px 30px', boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:28, boxShadow: dark ? '0 20px 44px rgba(0,0,0,0.5)' : '0 20px 44px rgba(20,30,45,0.16)' },
       freqRowStyle: { display:'flex', alignItems:'baseline', gap:9, cursor:'pointer' },
       freqStyle: { fontSize: tall ? 58 : (landscape ? 48 : 60), lineHeight:0.95, fontWeight:700, color:t.amber, letterSpacing:-1, fontVariantNumeric:'tabular-nums' },
       scanArrowStyle: { fontSize:34, fontWeight:700, color:t.blue, lineHeight:1 },
