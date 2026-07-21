@@ -9,16 +9,17 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Modal, NativeModules, Pressable, ScrollView, StyleSheet, Text, View,
+  Alert, Modal, NativeModules, Pressable, ScrollView, StyleSheet, Text, View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system/legacy';
 
 import { BatteryBolt, SignalWaves, WarningTriangle } from './icons';
 import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 import { snapshotDate } from '../../services/stationDb';
 import { clearLogoCache } from '../../services/stationLogoCache';
 import { isNwdAvailable } from '../../services/nwdRadio';
-import { isDiagEnabled, setDiagEnabled, diagLines, clearDiag, subscribeDiag } from '../../services/diag';
+import { isDiagEnabled, setDiagEnabled, diagLines, diagText, clearDiag, subscribeDiag } from '../../services/diag';
 
 export type CarFmTheme = 'system' | 'light' | 'dark';
 
@@ -76,6 +77,25 @@ export default function SettingsPanel({
 
   const toggleDiag = useCallback(() => {
     setDiagOn((v) => { const nv = !v; setDiagEnabled(nv); return nv; });
+  }, []);
+
+  // Export the log to a folder the user picks — Android's Storage Access
+  // Framework picker includes a connected USB drive, so this saves straight to it.
+  const saveLog = useCallback(async () => {
+    const text = diagText();
+    if (!text.trim()) { Alert.alert('Nothing to save', 'The tuner log is empty.'); return; }
+    try {
+      const perm = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+      if (!perm.granted) return;   // user cancelled the picker
+      const d = new Date();
+      const p = (n: number) => String(n).padStart(2, '0');
+      const name = `carfm-tuner-log-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+      const uri = await FileSystem.StorageAccessFramework.createFileAsync(perm.directoryUri, name, 'text/plain');
+      await FileSystem.writeAsStringAsync(uri, text, { encoding: FileSystem.EncodingType.UTF8 });
+      Alert.alert('Saved', `${name}.txt written to the folder you chose.`);
+    } catch (e) {
+      Alert.alert('Save failed', String(e));
+    }
   }, []);
 
   const Local = (NativeModules as any).VibeLocalSDR as
@@ -335,6 +355,11 @@ export default function SettingsPanel({
                       <Text allowFontScaling={false} style={[styles.diagLogLine, { color: pal.dim }]}>No events yet — tune a station.</Text>
                     )}
                   </ScrollView>
+                  <Pressable style={styles.clearRow} onPress={saveLog} accessibilityRole="button" accessibilityLabel="Save log to a file">
+                    <Text style={[styles.clearText, { color: pal.blue }]}>Save to file (USB…)</Text>
+                    <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
+                  </Pressable>
+                  <View style={[styles.divider, { backgroundColor: pal.border }]} />
                   <Pressable style={styles.clearRow} onPress={clearDiag} accessibilityRole="button" accessibilityLabel="Clear log">
                     <Text style={[styles.clearText, { color: pal.blue }]}>Clear log</Text>
                     <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
