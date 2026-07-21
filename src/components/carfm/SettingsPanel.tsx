@@ -2,7 +2,7 @@
  * CarFM settings panel — the delivered Claude Design panel (SettingsPanel.dc.html).
  * Opened by the face's gear. Sections:
  *   TUNER       status (+ RETRY on error / Details diagnostics when connected),
- *               tuner-source picker (Auto / RTL-SDR / FYT-DuduOS / rtl_tcp), boot autostart
+ *               tuner-source picker (Auto / RTL-SDR / FYT-DuduOS), boot autostart
  *   APPEARANCE  theme override (SYSTEM / LIGHT / DARK)
  *   SYSTEM      battery-optimization exemption (+ FIX), station-logos toggle (+ clear)
  * Face design language throughout; no red-vs-green state (amber/blue/neutral).
@@ -100,8 +100,9 @@ export default function SettingsPanel({
     // Built-in head-unit tuners. FYT/DuduOS speaks the `com.syu.ms` register scheme
     // (see docs/BUILTIN-TUNER-FINDINGS.md); no adapter yet → disabled/greyed.
     { id: 'fyt', name: 'FYT / DuduOS built-in radio', kind: 'Head-unit FM tuner (com.syu.ms) — not yet supported', available: false, detected: false },
-    { id: 'rtltcp', name: 'rtl_tcp', kind: 'Network stream (dev)', available: true, detected: false },
   ];
+  // rtl_tcp / networked-SDR sources are hidden from the picker for now (the
+  // backend still exists; parked for a future advanced/developer mode).
 
   const badgeFor = (b: BackendDef) =>
     b.detected === null ? '' : b.detected ? 'Detected' : b.available ? 'Not detected' : 'Unavailable';
