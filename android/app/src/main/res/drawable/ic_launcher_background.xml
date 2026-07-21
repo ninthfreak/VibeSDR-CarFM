@@ -1,6 +1,5 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-  <item android:drawable="@color/splashscreen_background"/>
-  <item>
-    <bitmap android:gravity="center" android:src="@drawable/splashscreen_logo"/>
-  </item>
+  <!-- Solid CarFM-dark icon background. (Was the VibeSDR SDR-radar bitmap over
+       the colour; the radar drawable was removed with the splash.) -->
+  <item android:drawable="@color/iconBackground"/>
 </layer-list>
