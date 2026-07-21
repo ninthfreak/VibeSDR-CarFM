@@ -200,6 +200,27 @@ const LOCAL_MODES: { id: string; label: string }[] = [
   { id: 'lsb', label: 'LSB' }, { id: 'usb', label: 'USB' },
 ];
 
+// The live-station snapshot that feeds the CarFM face (name/RadioText/RDS flags).
+type LiveStation = { name?: string; text?: string; rtArtist?: string; rtTitle?: string; tp?: boolean; ta?: boolean; pty?: number; af?: boolean; afMhz?: number[]; badge?: string; countryIso?: string; pi?: string };
+
+function sameNums(a?: number[], b?: number[]): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+// RDS RadioText arrives as several fragments/sec; many carry nothing the face
+// actually shows. Gate setLiveStation on a real change so identical ticks don't
+// re-render the (SVG-heavy) CarFM face for nothing. Compares every displayed
+// field; afMhz is the only non-primitive (element-wise).
+function liveStationEqual(a: LiveStation, b: LiveStation): boolean {
+  return a.name === b.name && a.text === b.text && a.rtArtist === b.rtArtist &&
+    a.rtTitle === b.rtTitle && a.tp === b.tp && a.ta === b.ta && a.pty === b.pty &&
+    a.af === b.af && a.badge === b.badge && a.countryIso === b.countryIso &&
+    a.pi === b.pi && sameNums(a.afMhz, b.afMhz);
+}
+
 export default function SDRScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName, password } = route.params;
   useKeepAwake();
@@ -584,7 +605,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [aircraft, setAircraft] = useState<Aircraft[]>([]);
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
-  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; rtArtist?: string; rtTitle?: string; tp?: boolean; ta?: boolean; pty?: number; af?: boolean; afMhz?: number[]; badge?: string; countryIso?: string; pi?: string }>({});
+  const [liveStation, setLiveStation] = useState<LiveStation>({});
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
   const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
@@ -1983,7 +2004,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         // so a live station name shows uniformly regardless of source.
         liveStationRef.current = meta.stationName ?? '';
         liveBadgeRef.current = meta.badge;
-        setLiveStation({ name: meta.stationName, text: meta.text, rtArtist: meta.rtArtist, rtTitle: meta.rtTitle, tp: meta.tp, ta: meta.ta, pty: meta.pty, af: meta.af, afMhz: meta.afMhz, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi });
+        const nextLive: LiveStation = { name: meta.stationName, text: meta.text, rtArtist: meta.rtArtist, rtTitle: meta.rtTitle, tp: meta.tp, ta: meta.ta, pty: meta.pty, af: meta.af, afMhz: meta.afMhz, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi };
+        setLiveStation(prev => liveStationEqual(prev, nextLive) ? prev : nextLive);
         if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
