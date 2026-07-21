@@ -21,8 +21,9 @@ import {
 import Svg, { Circle, Line, Path, Rect } from 'react-native-svg';
 
 import { ddgStationLogoResults, stationLogoQuery, type DdgImage } from '../../services/logoDuckDuckGo';
-import { setStationLogoFromUrl } from '../../services/stationFinder';
-import LogoTile, { invalidateLogoTile } from './LogoTile';
+import { setStationLogoFromUrl, getStationLogo } from '../../services/stationFinder';
+import { getStationPrefs, setStationPrefs } from '../../services/stationDb';
+import LogoTile, { invalidateLogoTile, invalidateStationDisplay } from './LogoTile';
 import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 
 export interface LogoSearchTarget {
@@ -32,7 +33,7 @@ export interface LogoSearchTarget {
   name: string;        // preset display name, for the header
 }
 
-type Phase = 'loading' | 'results' | 'empty' | 'error';
+type Phase = 'landing' | 'loading' | 'results' | 'empty' | 'error';
 
 export default function LogoSearchOverlay({ visible, pal, target, onClose, onAssigned }: {
   visible: boolean;
@@ -46,34 +47,54 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
   const cardH = Math.min(560, height - 32);
   const narrow = cardW < 620;
 
-  const [phase, setPhase] = useState<Phase>('loading');
+  // Opens on a LANDING view (§6.4), not a search: the current logo (if any) +
+  // the per-station Display Call Sign / Frequency toggles. Search runs only when
+  // the Search button is pressed.
+  const [phase, setPhase] = useState<Phase>('landing');
   const [results, setResults] = useState<DdgImage[]>([]);
   const [sel, setSel] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const [currentUri, setCurrentUri] = useState<string | null>(null);
+  const [showCall, setShowCall] = useState(true);
+  const [showFreq, setShowFreq] = useState(true);
 
   const query = target ? stationLogoQuery(target.freqMhz, target.callsign) : '';
 
   const runSearch = useCallback((t: LogoSearchTarget) => {
-    let cancelled = false;
-    setPhase('loading'); setResults([]); setSel(null); setSaving(false);
+    setPhase('loading'); setResults([]); setSel(null);
     ddgStationLogoResults(t.freqMhz, t.callsign, 4)
-      .then((r) => { if (cancelled) return; setResults(r); setPhase(r.length ? 'results' : 'empty'); })
-      .catch(() => { if (!cancelled) setPhase('error'); });
-    return () => { cancelled = true; };
+      .then((r) => { setResults(r); setPhase(r.length ? 'results' : 'empty'); })
+      .catch(() => setPhase('error'));
   }, []);
 
+  // On open: load the current logo + saved display prefs, land on the landing view.
   useEffect(() => {
     if (!visible || !target) return;
-    return runSearch(target);
-  }, [visible, target, runSearch]);
+    let cancelled = false;
+    setPhase('landing'); setResults([]); setSel(null); setSaving(false);
+    getStationLogo(target.base).then((u) => { if (!cancelled) setCurrentUri(u); }).catch(() => {});
+    getStationPrefs(target.base).then((p) => {
+      if (!cancelled) { setShowCall(p.showCall); setShowFreq(p.showFreq); }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [visible, target]);
 
   const confirm = async () => {
-    if (phase !== 'results' || sel == null || !results[sel] || saving || !target) return;
+    if (!target || saving) return;
+    const picking = phase === 'results' && sel != null && !!results[sel];
+    if (phase !== 'landing' && !picking) return;
     setSaving(true);
     try {
-      const ok = await setStationLogoFromUrl(target.base, results[sel].image);
-      if (ok) { invalidateLogoTile(target.base); onAssigned?.(target.base); onClose(); }
-      else setPhase('error');
+      if (picking) {
+        const ok = await setStationLogoFromUrl(target.base, results[sel!].image);
+        if (!ok) { setPhase('error'); setSaving(false); return; }
+      }
+      // Persist the per-station hero display choices alongside the logo.
+      await setStationPrefs(target.base, showCall, showFreq);
+      invalidateLogoTile(target.base);
+      invalidateStationDisplay();
+      onAssigned?.(target.base);
+      onClose();
     } catch {
       setPhase('error');
     } finally {
@@ -81,7 +102,9 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
     }
   };
 
-  const canConfirm = phase === 'results' && sel != null && !saving;
+  // Confirm is enabled on the landing view (save the display choices) or once a
+  // result cell is picked.
+  const canConfirm = !saving && (phase === 'landing' || (phase === 'results' && sel != null));
   const pad = narrow
     ? { hx: 16, hy: 14, qx: 16, qy: 10, bx: 16, fx: 16, fy: 12 }
     : { hx: 22, hy: 16, qx: 22, qy: 12, bx: 22, fx: 22, fy: 14 };
@@ -114,21 +137,77 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
             </Pressable>
           </View>
 
-          {/* Query chip */}
-          <View style={[styles.queryRow, { paddingHorizontal: pad.qx, paddingVertical: pad.qy }]}>
-            <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-              <Circle cx="11" cy="11" r="7" stroke={pal.dim} strokeWidth="2.2" />
-              <Line x1="20.5" y1="20.5" x2="16.65" y2="16.65" stroke={pal.dim} strokeWidth="2.2" strokeLinecap="round" />
-            </Svg>
-            <Text style={[styles.queryLabel, { color: pal.dim }]}>SEARCHED</Text>
-            <Text numberOfLines={1} style={[styles.queryText, { color: pal.text, backgroundColor: pal.raised, borderColor: pal.border }]}>
-              {query}
-            </Text>
-          </View>
+          {/* Query chip — shown only during/after a search (not on the landing view) */}
+          {phase !== 'landing' ? (
+            <View style={[styles.queryRow, { paddingHorizontal: pad.qx, paddingVertical: pad.qy }]}>
+              <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                <Circle cx="11" cy="11" r="7" stroke={pal.dim} strokeWidth="2.2" />
+                <Line x1="20.5" y1="20.5" x2="16.65" y2="16.65" stroke={pal.dim} strokeWidth="2.2" strokeLinecap="round" />
+              </Svg>
+              <Text style={[styles.queryLabel, { color: pal.dim }]}>SEARCHED</Text>
+              <Text numberOfLines={1} style={[styles.queryText, { color: pal.text, backgroundColor: pal.raised, borderColor: pal.border }]}>
+                {query}
+              </Text>
+            </View>
+          ) : null}
 
           {/* Body */}
           <View style={[styles.body, { paddingHorizontal: pad.bx }]}>
-            {phase === 'loading' ? (
+            {phase === 'landing' ? (
+              <ScrollView contentContainerStyle={styles.landing} showsVerticalScrollIndicator={false}>
+                {currentUri ? (
+                  <>
+                    <View style={styles.landingLogo}>
+                      <Image source={{ uri: currentUri }} style={styles.landingLogoImg} resizeMode="contain" />
+                    </View>
+                    <View style={styles.optList}>
+                      {([['Display Call Sign', showCall, () => setShowCall((v) => !v)],
+                         ['Display Frequency', showFreq, () => setShowFreq((v) => !v)]] as const).map(([label, on, toggle]) => (
+                        <Pressable
+                          key={label}
+                          onPress={toggle}
+                          style={({ pressed }) => [styles.optRow, { backgroundColor: pal.raised, borderColor: pal.border }, pressed && { opacity: 0.7 }]}
+                          accessibilityRole="checkbox" accessibilityState={{ checked: on }} accessibilityLabel={label}
+                        >
+                          <View style={[styles.checkbox, on ? { backgroundColor: pal.blue, borderColor: pal.blue } : { borderColor: pal.border }]}>
+                            {on ? (
+                              <Svg width={15} height={15} viewBox="0 0 24 24" fill="none">
+                                <Path d="M5 12.5 L10 17.5 L19 6.5" stroke="#FFFFFF" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                              </Svg>
+                            ) : null}
+                          </View>
+                          <Text style={[styles.optLabel, { color: pal.text }]}>{label}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                    <Pressable
+                      onPress={() => target && runSearch(target)}
+                      style={({ pressed }) => [styles.searchBtn, { borderColor: pal.blue, backgroundColor: pal.blueFill }, pressed && { opacity: 0.7 }]}
+                      accessibilityRole="button" accessibilityLabel="Search for a different logo"
+                    >
+                      <Text style={[styles.searchBtnText, { color: pal.blue }]}>Search for a different logo</Text>
+                    </Pressable>
+                  </>
+                ) : (
+                  <>
+                    <Svg width={46} height={46} viewBox="0 0 24 24" fill="none">
+                      <Rect x="3" y="4" width="14" height="12" rx="2" stroke={pal.dim} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                      <Circle cx="7.5" cy="8.5" r="1.4" stroke={pal.dim} strokeWidth="1.8" />
+                      <Path d="M3.5 14 L8 9.5 L12 13" stroke={pal.dim} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    </Svg>
+                    <Text style={[styles.centerTitle, { color: pal.text }]}>No Logo Installed</Text>
+                    <Text style={[styles.centerSub, { color: pal.dim }]}>This station doesn’t have a logo yet.</Text>
+                    <Pressable
+                      onPress={() => target && runSearch(target)}
+                      style={({ pressed }) => [styles.searchBtn, { borderColor: pal.blue, backgroundColor: pal.blueFill }, pressed && { opacity: 0.7 }]}
+                      accessibilityRole="button" accessibilityLabel="Search for a logo"
+                    >
+                      <Text style={[styles.searchBtnText, { color: pal.blue }]}>Search for a logo</Text>
+                    </Pressable>
+                  </>
+                )}
+              </ScrollView>
+            ) : phase === 'loading' ? (
               <View style={styles.center}>
                 <ActivityIndicator size="large" color={pal.blue} />
                 <Text style={[styles.centerTitle, { color: pal.text }]}>Searching for logos…</Text>
@@ -208,7 +287,9 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
           {/* Footer: hint · Cancel · Confirm */}
           <View style={[styles.footer, { paddingHorizontal: pad.fx, paddingVertical: pad.fy, borderTopColor: pal.border }]}>
             <Text numberOfLines={1} style={[styles.hint, { color: pal.dim }]}>
-              {canConfirm ? 'Saved as this station’s logo' : (phase === 'results' ? 'Pick the correct logo' : '')}
+              {phase === 'landing'
+                ? (currentUri ? 'Choose what shows on the hero' : '')
+                : (canConfirm ? 'Saved as this station’s logo' : (phase === 'results' ? 'Pick the correct logo' : ''))}
             </Text>
             <View style={styles.footerBtns}>
               <Pressable
@@ -266,6 +347,20 @@ const styles = StyleSheet.create({
 
   body: { flex: 1, paddingTop: 4, paddingBottom: 10 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14, paddingHorizontal: 40 },
+
+  // Landing view (§6.4): current logo + Display Call Sign / Frequency toggles.
+  landing: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: 18, paddingVertical: 12 },
+  landingLogo: {
+    width: '70%', maxWidth: 320, height: 120, borderRadius: 14, backgroundColor: '#FFFFFF',
+    paddingVertical: 8, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+  },
+  landingLogoImg: { width: '100%', height: '100%' },
+  optList: { width: '100%', maxWidth: 420, gap: 10 },
+  optRow: { flexDirection: 'row', alignItems: 'center', gap: 14, minHeight: 52, paddingHorizontal: 16, borderRadius: 12, borderWidth: 1 },
+  checkbox: { width: 26, height: 26, borderRadius: 7, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  optLabel: { fontFamily: FONT_BOLD, fontSize: 17 },
+  searchBtn: { marginTop: 2, height: 52, paddingHorizontal: 24, borderRadius: 12, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  searchBtnText: { fontFamily: FONT_BOLD, fontSize: 16, letterSpacing: 0.3 },
   centerTitle: { fontFamily: FONT_BOLD, fontSize: 22, textAlign: 'center' },
   centerSub: { fontFamily: FONT, fontSize: 15, lineHeight: 22, textAlign: 'center', maxWidth: 420 },
   retry: { marginTop: 4, height: 48, paddingHorizontal: 22, borderRadius: 12, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
