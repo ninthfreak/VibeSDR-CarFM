@@ -14,22 +14,36 @@ from the service). No decompiled vendor code is included.
 **Easiest — Android Studio:**
 1. `File → Open…` and select this folder (`spike/nwd-tuner-probe`).
 2. Let it sync; accept any AGP/Gradle upgrade prompt it offers.
-3. Plug in the head unit (or use its network `adb`), press **Run ▶**.
+3. **Build ▸ Build APK(s)** to produce the APK (see path below), then install it on
+   the unit via removable media as described in "Getting the APK onto the unit".
+   (Only use **Run ▶** if the unit is actually connected to your computer via adb.)
 
-**Command line.** The Gradle **wrapper is committed** and pins Gradle 8.9, so use
-`./gradlew` — do **not** run `gradle wrapper` (your system Gradle is older than
-AGP 8 needs; that's what the `dependencyResolutionManagement` error was). You need
-JDK 17+ (you have 21 — fine) and the Android SDK. If Gradle can't find the SDK,
-point it at one:
+**Command line — build only.** The Gradle **wrapper is committed** and pins Gradle
+8.9, so use `./gradlew` — do **not** run `gradle wrapper` (your system Gradle is
+older than AGP 8 needs; that's what the `dependencyResolutionManagement` error
+was). You need JDK 17+ (21 is fine) and the Android SDK. If Gradle can't find the
+SDK, point it at one:
 ```bash
 cd spike/nwd-tuner-probe
 export ANDROID_HOME=$HOME/Android/Sdk      # or wherever your SDK is
 #   ...or create local.properties with:  sdk.dir=/home/you/Android/Sdk
 ./gradlew assembleDebug                     # downloads Gradle 8.9 on first run
-adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
-No Android SDK installed? Use the Android Studio path above instead — it bundles
-the SDK, JDK, and a compatible Gradle, and sidesteps all of this.
+This just **produces the APK**; it does not put it anywhere. The build output is:
+```
+app/build/outputs/apk/debug/app-debug.apk
+```
+
+## Getting the APK onto the unit
+
+The head unit does not have to be connected to your computer. Pick whichever fits:
+
+- **Removable media (no connection needed):** copy `app-debug.apk` onto a USB
+  stick / SD card, plug it into the unit, open it with the unit's file manager,
+  and tap to install (allow "install from unknown sources" once).
+- **adb — only if your unit is actually reachable** (USB-debugging cable, or
+  `adb connect <unit-ip>:5555`): `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
+  If your unit isn't networked/connected, ignore this.
 
 ## Test sequence (on the unit)
 
