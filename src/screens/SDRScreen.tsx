@@ -3,7 +3,6 @@
  *
  * Hierarchy:
  *   SDRScreen
- *   ├── WaterfallView         (GPU Skia waterfall + spectrum, fills full screen)
  *   ├── ControlsBar           (drums, sig-frame, freq/mode pill, step, menu — absolute overlay)
  *   ├── MenuSheet             (slide-up panel)
  *   ├── StepPicker            (bottom-sheet step selector)
@@ -80,7 +79,6 @@ import { setDefaultInstance, getDefaultInstance,
 import { getFavourites, toggleFavourite }              from '../services/favourites';
 import { useTheme }                                     from '../contexts/ThemeContext';
 
-import WaterfallView   from '../components/WaterfallView';
 import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
@@ -654,10 +652,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     bandwidthLow: -3000, bandwidthHigh: 3000,
     binCount: 1024, binBandwidth: 0, centerHz: 0, bwHz: 0,
   });
-  // Hot-path frame sink — WaterfallView registers its imperative frame handler
-  // here; spectrum frames bypass React state entirely (CPU audit 2026-06-11:
-  // setState per 10–20Hz frame re-rendered the whole tree ≈ a full core).
-  const wfFrameSink = useRef<((b: Float32Array, s: SDRStatus) => void) | null>(null);
   // Muted via media controls (AirPods squeeze → pause = mute) — native emits
   // VibeMuted so the UI can show a tap-to-unmute banner.
   const [isMuted, setIsMuted] = useState(false);
@@ -2022,12 +2016,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           Math.abs(prev.binBandwidth - s.binBandwidth) < 1e-6
             ? prev : s);
         // The FM face is opaque and draws its own meter from the audio SNR, so the
-        // waterfall render + the per-frame bin math below are pure waste while it's
-        // up. Skip them (WaterfallView is unmounted then too — see the render).
+        // per-frame bin math below is pure waste while it's up. Skip it.
         if (fmFaceActiveRef.current) return;
-        // Waterfall/spectrum render imperatively — no React state per frame.
-        wfFrameSink.current?.(newBins, s);
-        // ── Derive signal level + SNR from bins ────────────────────────────
+        // ── Derive signal level + SNR from bins (advanced-view meter only) ──
         // Full data rate (~10Hz) — updates only re-render the two meter leaf
         // widgets via the bus, so there's no need to throttle anymore.
         // Find peak bin power in the current bandwidth window
@@ -2645,69 +2636,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       .catch(() => {});
   }, [baseUrl, instanceName, route.params.serverType]);
 
-  // ── Waterfall gestures ────────────────────────────────────────────────────
-
-  const onWfPanDelta = useCallback((dxPx: number) => {
-    const c = client.current; if (!c) return;
-    if (vfoLockedRef.current) return;                 // no free pan while locked
-    markInteract();
-    // Predicted view: pan() updates it synchronously, so successive deltas
-    // compound correctly. Re-basing on getStatus() made every delta in an RTT
-    // window re-apply from the same stale centre (rubber-banding).
-    const s = c.getView(); if (!s.bwHz || !s.centerHz) return;
-    const span = c.panSpan();
-    const target = s.centerHz + Math.round((dxPx / screenW) * s.bwHz);
-    // Silently clamp at the boundary walls (the visible walls show the limit;
-    // no toast — per Stuart, VTS pop-ups caused more trouble than they solved).
-    let clamped: number;
-    if (span.movable) {
-      // Local Fs window: span bounds the CENTRE directly (keeps the VFO inside
-      // the capture window; the VFO itself may leave the visible view).
-      clamped = Math.max(span.loHz, Math.min(span.hiHz, target));
-    } else {
-      // Hard walls (band edge / profile / rx range): keep the whole VIEW inside.
-      const half = s.bwHz / 2;
-      const loC = span.loHz + half, hiC = span.hiHz - half;
-      clamped = loC <= hiC ? Math.max(loC, Math.min(hiC, target))
-                           : Math.round((span.loHz + span.hiHz) / 2);
-    }
-    c.pan(clamped);
-  }, [screenW]);
-
-  // Same gesture-accumulator pattern as the BW drum (ladder snap-back).
-  const wfZoomAcc = useRef({ base: 0, f: 1, t: 0 });
-  const wfZoomBy = useCallback((factor: number) => {
-    const c = client.current; if (!c) return;
-    markInteract();
-    const s = c.getView(); if (!s.binBandwidth || !s.centerHz) return;
-    const a = wfZoomAcc.current;
-    const now = Date.now();
-    if (now - a.t > 400 || !a.base) { a.base = s.binBandwidth; a.f = 1; }
-    a.t = now;
-    a.f *= factor;
-    c.zoom(zoomAnchorHz(s), Math.max(0.5, a.base * a.f));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const onWfZoomDelta = useCallback((dyPx: number) => {
-    wfZoomBy(Math.pow(0.985, dyPx));
-  }, [wfZoomBy]);
-
-  const onWfPinchZoom = useCallback((scaleDelta: number) => {
-    wfZoomBy(1 / scaleDelta);
-  }, [wfZoomBy]);
-
-  const onWfTapTune = useCallback((hz: number) => {
-    const c = client.current; if (!c) return;
-    // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
-    // thing a VFO can do is drag you OFF the block and kill the decode.
-    if (isWholeProfileMode(String(c.getStatus().mode))) return;
-    markInteract();
-    const [loHz, hiHz] = c.caps.freqRange;
-    const clamped = Math.max(loHz, Math.min(hiHz, hz));
-    c.tune(clamped);
-    setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
-  }, []);
 
   // ── Mode / filter / tune ──────────────────────────────────────────────────
 
@@ -3859,69 +3787,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     >
       <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />
 
-      {/* Waterfall — fills screen below the status bar / Dynamic Island so the
-          band plan strip is never hidden under the notch. NOT mounted while the
-          opaque FM face is up: it's fully hidden, and a full-screen Skia GPU
-          waterfall + 10Hz DSP behind it is the biggest perf drain on a weak unit. */}
-      {!fmFaceActive && (
-      <View style={{ marginTop: insets.top }}>
-      <WaterfallView
-        frameSink={wfFrameSink}
-        binCount={status.binCount}
-        centerHz={status.centerHz}
-        bwHz={status.bwHz}
-        tuneHz={status.frequency}
-        filterLow={status.bandwidthLow}
-        filterHigh={status.bandwidthHigh}
-        dbMin={dbMin}
-        dbMax={dbMax}
-        wfCoarse={wfCoarse}
-        colormap={colormap}
-        width={screenW}
-        height={screenH - insets.top}
-        // Block waterfall tune/pan/pinch in the bottom gap (home-indicator
-        // zone): the whole strip below the pill when controls show, else just
-        // the home bar. Preserves swipe-up-to-minimise + menu Modals.
-        bottomGuard={controlsHidden ? bottomInset : bottomInset + 8}
-        // The drawn band segments must follow the RECEIVER's region like every
-        // other consumer of the plan (0 = not yet known → keep the R1 default,
-        // since WaterfallView's filter would otherwise drop every regional band).
-        ituRegion={ituRegion || 1}
-        onPanDelta={onWfPanDelta}
-        onZoomDelta={onWfZoomDelta}
-        onTapTune={onWfTapTune}
-        onPinchZoom={onWfPinchZoom}
-        specShow={specShow}
-        autoContrast={autoContrast}
-        specSmoothing={specSmoothing}
-        specFloor={specFloor}
-        specPeakScale={specPeakScale}
-        peakHold={peakHold}
-        spatialSmooth={spatialSmooth}
-        smoothTune={smoothTune}
-        lastInteractAt={lastInteractRef}
-        wfBrightness={wfBrightness}
-        wfContrast={wfContrast}
-        wfSharpness={wfSharpness}
-        frameRate={frameRate}
-        needleColor={vfoNeedle}
-        needleIntensity={vfoIntensity}
-        needleFrost={vfoFrost}
-        bgImageUrl={bgImageUrl}
-        bgOpacity={bgOpacity / 10}
-        stationId={stationId}
-        specFrac={specFrac}
-        panLoHz={walls?.loHz}
-        panHiHz={walls?.hiHz}
-        showWalls={!!walls}
-        // RF-centre marker = the dongle/RF centre (derived to mirror the shim).
-        // Sits at the display centre until the dongle locks; then the view pans
-        // on across the captured band and the marker slides off to the side.
-        centerMarkerHz={localRf?.rf ?? status.centerHz}
-        showCenterMarker={isLocal && !vfoLocked}
-      />
-      </View>
-      )}
+      {/* SDR waterfall removed — not used by CarFM (strip item 17). The
+          appearance state (colormap/dbMin/…) is kept for the advanced-view
+          menu controls, which are now inert pending item 19. */}
 
       {/* Spec ratio overlay — floats above pill */}
       <SpecRatioOverlay
