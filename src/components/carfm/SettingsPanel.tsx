@@ -2,7 +2,7 @@
  * CarFM settings panel — the delivered Claude Design panel (SettingsPanel.dc.html).
  * Opened by the face's gear. Sections:
  *   TUNER       status (+ RETRY on error / Details diagnostics when connected),
- *               tuner-source picker (Auto / RTL-SDR / FYT-DuduOS), boot autostart
+ *               tuner-source picker (RTL-SDR / built-in head-unit tuners), boot autostart
  *   APPEARANCE  theme override (SYSTEM / LIGHT / DARK)
  *   SYSTEM      battery-optimization exemption (+ FIX), station-logos toggle (+ clear)
  * Face design language throughout; no red-vs-green state (amber/blue/neutral).
@@ -58,7 +58,7 @@ export default function SettingsPanel({
   onClose: () => void;
 }) {
   const [diagOpen, setDiagOpen] = useState(false);
-  const [backend, setBackend] = useState('auto');
+  const [backend, setBackend] = useState('rtl');
   const [batteryExempt, setBatteryExempt] = useState<boolean | null>(null);
   const [logosOn, setLogosOn] = useState(false);
   const [dataDate, setDataDate] = useState<string | null>(null);
@@ -72,7 +72,9 @@ export default function SettingsPanel({
     if (!visible) return;
     let cancelled = false;
     (async () => {
-      try { const b = await AsyncStorage.getItem(BACKEND_KEY); if (b && !cancelled) setBackend(b); } catch {}
+      // Ignore retired ids (the old 'auto' selector, the hidden 'rtltcp') so a
+      // legacy stored value doesn't leave no row highlighted.
+      try { const b = await AsyncStorage.getItem(BACKEND_KEY); if (b && b !== 'auto' && b !== 'rtltcp' && !cancelled) setBackend(b); } catch {}
       try { const l = await AsyncStorage.getItem(LOGOS_KEY); if (!cancelled) setLogosOn(l === '1'); } catch {}
       try { const d = await snapshotDate(); if (!cancelled) setDataDate(d); } catch {}
       try {
@@ -95,11 +97,12 @@ export default function SettingsPanel({
   const fixBattery = useCallback(() => { Local?.requestIgnoreBatteryOptimizations?.(); }, [Local]);
 
   const backends: BackendDef[] = [
-    { id: 'auto', name: 'Auto (recommended)', kind: 'Probe all sources at startup', available: true, detected: null },
     { id: 'rtl', name: 'RTL-SDR', kind: 'USB software-defined radio', available: true, detected: !tunerError },
-    // Built-in head-unit tuners. FYT/DuduOS speaks the `com.syu.ms` register scheme
-    // (see docs/BUILTIN-TUNER-FINDINGS.md); no adapter yet → disabled/greyed.
-    { id: 'fyt', name: 'FYT / DuduOS built-in radio', kind: 'Head-unit FM tuner (com.syu.ms) — not yet supported', available: false, detected: false },
+    // Built-in head-unit tuners — same concept (the radio baked into the head
+    // unit), differentiated only by the unit's platform. Parallel copy on purpose;
+    // the state badge carries supported-vs-not. NWD lands with its adapter; FYT
+    // (com.syu.ms) has no adapter yet → greyed. See docs/BUILTIN-TUNER-FINDINGS.md.
+    { id: 'fyt', name: 'FYT / DuduOS built-in radio', kind: 'Integrated head-unit FM tuner', available: false, detected: false },
   ];
   // rtl_tcp / networked-SDR sources are hidden from the picker for now (the
   // backend still exists; parked for a future advanced/developer mode).
