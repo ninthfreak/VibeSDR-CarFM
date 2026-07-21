@@ -13,7 +13,7 @@
     "android": {
       "package": "com.ninthfreak.carfm",
       "adaptiveIcon": {
-        "backgroundColor": "#0A0A12",
+        "backgroundColor": "#161E29",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"

@@ -598,6 +598,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const carFm = !!route.params.carFm;
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const fmFaceActive = carFm && !advancedOpen;
+  // Ref mirror for the per-frame onSpectrum closure (avoids a stale capture): the
+  // FM face is opaque and self-contained, so all waterfall/meter work is wasted
+  // while it's up.
+  const fmFaceActiveRef = useRef(fmFaceActive);
+  fmFaceActiveRef.current = fmFaceActive;
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
   // PI-derived station identity (addendum §6): RDS PI arrives in block 1 almost
   // immediately, so we can name the station from the bundled DB before PS text
@@ -2001,14 +2006,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onSpectrum:   (newBins, s) => {
         if (destroyed.current) return;
-        // Waterfall/spectrum render imperatively — no React state per frame.
-        wfFrameSink.current?.(newBins, s);
         // Geometry/status drives the React overlay (band plan, readouts) —
         // only update when something actually changed (settled frames don't).
         // Epsilon gate: radiod's per-frame frequency stamps can jitter ±1Hz —
         // exact comparison leaked ~3-5 full-tree renders/s while settled
         // (render-counter diagnostic 2026-06-11). Sub-2Hz wobble is invisible
-        // at any usable span; real changes pass untouched.
+        // at any usable span; real changes pass untouched. Kept even under the FM
+        // face so the tuned-frequency readout stays live.
         setStatus((prev: SDRStatus) =>
           Math.abs(prev.centerHz - s.centerHz) < 2 &&
           Math.abs(prev.bwHz - s.bwHz) < 2 &&
@@ -2017,6 +2021,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           prev.binCount === s.binCount &&
           Math.abs(prev.binBandwidth - s.binBandwidth) < 1e-6
             ? prev : s);
+        // The FM face is opaque and draws its own meter from the audio SNR, so the
+        // waterfall render + the per-frame bin math below are pure waste while it's
+        // up. Skip them (WaterfallView is unmounted then too — see the render).
+        if (fmFaceActiveRef.current) return;
+        // Waterfall/spectrum render imperatively — no React state per frame.
+        wfFrameSink.current?.(newBins, s);
         // ── Derive signal level + SNR from bins ────────────────────────────
         // Full data rate (~10Hz) — updates only re-render the two meter leaf
         // widgets via the bus, so there's no need to throttle anymore.
@@ -3850,7 +3860,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />
 
       {/* Waterfall — fills screen below the status bar / Dynamic Island so the
-          band plan strip is never hidden under the notch */}
+          band plan strip is never hidden under the notch. NOT mounted while the
+          opaque FM face is up: it's fully hidden, and a full-screen Skia GPU
+          waterfall + 10Hz DSP behind it is the biggest perf drain on a weak unit. */}
+      {!fmFaceActive && (
       <View style={{ marginTop: insets.top }}>
       <WaterfallView
         frameSink={wfFrameSink}
@@ -3908,6 +3921,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         showCenterMarker={isLocal && !vfoLocked}
       />
       </View>
+      )}
 
       {/* Spec ratio overlay — floats above pill */}
       <SpecRatioOverlay
@@ -4155,7 +4169,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       )}
 
       {/* Controls pill — absolute overlay, margin 8px each side */}
-      {!controlsHidden && <View
+      {!fmFaceActive && !controlsHidden && <View
         style={[styles.pillWrap, { bottom: bottomInset + 8 }]}
         onLayout={(e: any) => {
           // Track pill top so bottom-anchored overlays can sit above it
@@ -4198,10 +4212,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       </View>}
 
       {/* VTS popup — station / band-crossing notifications above the pill */}
-      {!controlsHidden && <VTSBar notif={vtsNotif} bottom={pillBottom + 8} serverType={isLocal ? 'local' : route.params.serverType} />}
+      {!fmFaceActive && !controlsHidden && <VTSBar notif={vtsNotif} bottom={pillBottom + 8} serverType={isLocal ? 'local' : route.params.serverType} />}
 
       {/* Floating CENTRE ON VFO — unlocked + VFO off-screen (BRIEF §5.8) */}
-      <CenterVfoButton visible={vfoOffscreen && !controlsHidden} bottom={pillBottom + 56} onPress={onCentreVfo} />
+      <CenterVfoButton visible={!fmFaceActive && vfoOffscreen && !controlsHidden} bottom={pillBottom + 56} onPress={onCentreVfo} />
 
       {/* Menu sheet */}
       <MenuSheet

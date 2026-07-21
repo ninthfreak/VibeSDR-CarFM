@@ -1,5 +1,7 @@
 <resources>
-  <color name="splashscreen_background">#FFFFFF</color>
-  <color name="iconBackground">#0A0A12</color>
-  <color name="colorPrimary">#023c69</color>
+  <!-- CarFM palette. Replaces the old VibeSDR splash/brand colours (#FFFFFF/#0A0A12
+       dark + #023c69 teal) that were showing at launch. #161E29 = CarFM dark bg. -->
+  <color name="splashscreen_background">#161E29</color>
+  <color name="iconBackground">#161E29</color>
+  <color name="colorPrimary">#2E86FF</color>
 </resources>
