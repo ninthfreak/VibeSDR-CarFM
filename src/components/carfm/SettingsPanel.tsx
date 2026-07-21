@@ -18,6 +18,7 @@ import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 import { snapshotDate } from '../../services/stationDb';
 import { clearLogoCache } from '../../services/stationLogoCache';
 import { isNwdAvailable } from '../../services/nwdRadio';
+import { isDiagEnabled, setDiagEnabled, diagLines, clearDiag, subscribeDiag } from '../../services/diag';
 
 export type CarFmTheme = 'system' | 'light' | 'dark';
 
@@ -64,6 +65,18 @@ export default function SettingsPanel({
   const [nwdAvail, setNwdAvail] = useState<boolean | null>(null);   // built-in NWD tuner present?
   const [logosOn, setLogosOn] = useState(false);
   const [dataDate, setDataDate] = useState<string | null>(null);
+  const [diagOn, setDiagOn] = useState(isDiagEnabled());
+  const [, forceTick] = useState(0);
+
+  // Refresh the log view as events arrive while the panel is open.
+  useEffect(() => {
+    if (!visible || !diagOn) return;
+    return subscribeDiag(() => forceTick((n) => n + 1));
+  }, [visible, diagOn]);
+
+  const toggleDiag = useCallback(() => {
+    setDiagOn((v) => { const nv = !v; setDiagEnabled(nv); return nv; });
+  }, []);
 
   const Local = (NativeModules as any).VibeLocalSDR as
     | { isIgnoringBatteryOptimizations?: () => Promise<boolean>; requestIgnoreBatteryOptimizations?: () => void }
@@ -297,6 +310,39 @@ export default function SettingsPanel({
               ) : null}
             </View>
 
+            {/* ── DIAGNOSTICS ── (head-unit substitute for adb logcat) */}
+            <SectionLabel text="DIAGNOSTICS" pal={pal} />
+            <View style={[styles.group, { backgroundColor: pal.panel, borderColor: pal.border }]}>
+              <Pressable style={styles.switchRow} onPress={toggleDiag} accessibilityRole="switch" accessibilityState={{ checked: diagOn }}>
+                <View style={styles.textWrap}>
+                  <Text style={[styles.rowTitle, { color: pal.text }]}>Tuner log</Text>
+                  <Text style={[styles.rowSub, { color: pal.dim }]}>
+                    Capture tuner events — connect, signal (arg), RDS/RadioText, stereo, audio — for troubleshooting on the head unit.
+                  </Text>
+                </View>
+                <Toggle on={diagOn} pal={pal} onToggle={toggleDiag} label="Tuner log" />
+              </Pressable>
+              {diagOn ? (
+                <>
+                  <ScrollView
+                    style={[styles.diagLog, { borderColor: pal.border, backgroundColor: pal.raised }]}
+                    contentContainerStyle={{ padding: 10 }}
+                    nestedScrollEnabled
+                  >
+                    {diagLines().length ? diagLines().map((l, i) => (
+                      <Text key={i} allowFontScaling={false} style={[styles.diagLogLine, { color: pal.dim }]}>{l}</Text>
+                    )) : (
+                      <Text allowFontScaling={false} style={[styles.diagLogLine, { color: pal.dim }]}>No events yet — tune a station.</Text>
+                    )}
+                  </ScrollView>
+                  <Pressable style={styles.clearRow} onPress={clearDiag} accessibilityRole="button" accessibilityLabel="Clear log">
+                    <Text style={[styles.clearText, { color: pal.blue }]}>Clear log</Text>
+                    <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
+                  </Pressable>
+                </>
+              ) : null}
+            </View>
+
             <Text style={[styles.about, { color: pal.dim }]}>{aboutText}</Text>
           </ScrollView>
         </View>
@@ -359,6 +405,8 @@ const styles = StyleSheet.create({
   okBadge: { height: 44, paddingHorizontal: 18, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   okBadgeText: { fontFamily: FONT_BOLD, fontSize: 14, letterSpacing: 1 },
 
+  diagLog: { marginHorizontal: 10, marginTop: 2, maxHeight: 240, borderRadius: 12, borderWidth: 1 },
+  diagLogLine: { fontFamily: 'monospace', fontSize: 12, lineHeight: 17 },
   clearRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 50, paddingHorizontal: 12, paddingVertical: 6 },
   clearText: { fontFamily: FONT_BOLD, fontSize: 16,  },
 

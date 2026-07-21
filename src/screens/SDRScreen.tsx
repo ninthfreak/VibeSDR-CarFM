@@ -43,6 +43,7 @@ import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberS
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
 import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSetRds, nwdSetAudio, onNwd } from '../services/nwdRadio';
+import { diag } from '../services/diag';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { localSessionGen, newLocalSession } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
@@ -3680,7 +3681,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     let cancelled = false;
     const subs: Array<() => void> = [];
     (async () => {
-      if (!(await isNwdAvailable()) || cancelled) return;
+      const avail = await isNwdAvailable();
+      diag(`NWD available? ${avail}`);
+      if (!avail || cancelled) return;
       try {
         const info = await nwdConnect();
         if (cancelled) { nwdDisconnect(); return; }
@@ -3688,11 +3691,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         setFmTunerError(false);
         nwdSetRds(true);
         nwdSetAudio(true);
+        diag(`NWD connected: band=${info.band} freqMult=${info.freqMult} mhz=${info.mhz ?? '?'} ps='${info.ps ?? ''}'; RDS on; audio-switch fired`);
         if (typeof info.mhz === 'number' && info.mhz > 0) {
           setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(info.mhz! * 1e6) }));
           if (info.ps) liveStationRef.current = info.ps;
         }
-      } catch { return; }
+      } catch (e) { diag(`NWD connect FAILED: ${String(e)}`); return; }
       if (cancelled) return;
       // Decoded RDS + tuning state pushed from the service (Binder → JS events).
       subs.push(onNwd('NwdRadioFrequency', (p) => {
@@ -3703,11 +3707,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         // weak≈3). Map to an approximate dBFS so the face's waves + readout track
         // it. Relative, not true dBFS — the ceiling still wants calibrating.
         setFmSignalDb(-95 + Math.max(0, p.arg) * 6);
+        diag(`freq ${p.mhz.toFixed(1)} arg=${p.arg} PS='${p.ps}'`);
       }));
-      subs.push(onNwd('NwdRadioRt', (p) => setLiveStation((prev) => ({ ...prev, text: p.rt || undefined }))));
-      subs.push(onNwd('NwdRadioStereo', (p) => setFmStereo(p.on)));
-      subs.push(onNwd('NwdRadioPty', (p) => setLiveStation((prev) => ({ ...prev, pty: p.pty }))));
-      subs.push(onNwd('NwdRadioTa', (p) => setLiveStation((prev) => ({ ...prev, ta: p.ta }))));
+      subs.push(onNwd('NwdRadioRt', (p) => { setLiveStation((prev) => ({ ...prev, text: p.rt || undefined })); diag(`RT '${p.rt}'`); }));
+      subs.push(onNwd('NwdRadioStereo', (p) => { setFmStereo(p.on); diag(`stereo ${p.on}`); }));
+      subs.push(onNwd('NwdRadioPty', (p) => { setLiveStation((prev) => ({ ...prev, pty: p.pty })); diag(`PTY ${p.pty}`); }));
+      subs.push(onNwd('NwdRadioTa', (p) => { setLiveStation((prev) => ({ ...prev, ta: p.ta })); diag(`TA ${p.ta}`); }));
     })();
     return () => {
       cancelled = true;
