@@ -86,6 +86,14 @@ Threads raised across the project that are NOT part of the strip list.
   on a real APK (removed code was iOS/watch no-ops, but SDRScreen wasn't run).
 
 ## B. Rebrand / separation loose ends
+- ⬜ **Rename/remove the internal `Vibe*` functional names** — `VibeDSP`,
+  `VibeLocalSDR`, `VibeStream*`, `VibeServer`, `VibePowerModule`, `VibeMDNS`, the
+  `vibedsp/` + `spyserver/` C++ trees, `vibesdr.local` mDNS host, the lowercase
+  `vibeserver` detection marker. These were left as-is during the rebrand; it was
+  NOT confirmed you wanted them kept (assistant assumed it). LARGE + risky: the
+  Android package rename showed the JNI symbols must move atomically or the app
+  crashes (UnsatisfiedLinkError), and the `vibeserver`/`vibesdr.local` markers are
+  load-bearing for server detection. Do as a deliberate, tsc+build-gated pass.
 - ⬜ **EAS `projectId` + `owner: stuey3d`** in `app.json` — still the original
   author's Expo account; run your own `eas init` before building.
 - ⬜ **Internal docs still say "VibeSDR"** — `docs/STORE-SUBMISSION.md`, the
