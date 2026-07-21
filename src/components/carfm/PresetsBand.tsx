@@ -28,8 +28,8 @@ import {
 } from 'react-native';
 
 import { LogoSearchIcon, MagnifierTower } from './icons';
-import LogoTile from './LogoTile';
-import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
+import LogoTile, { useStationLogo } from './LogoTile';
+import { cleanCall, FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 
 export interface PresetItem { name: string; frequencyMhz: number; }
 
@@ -63,6 +63,13 @@ function Tile({
   onPress: () => void; onLongPress: () => void; onRemove: () => void; onSearchLogo?: () => void;
   drag: DragCallbacks;
 }) {
+  // A real logo fills the tile (borderless, Fit, landscape-tolerant); freq + call
+  // sign are hidden. No logo → monogram cube + freq-then-callsign text (§4.3).
+  const { hasLogo } = useStationLogo(p.name, p.frequencyMhz);
+  const logoFillH = typeof size.h === 'number'
+    ? Math.max(size.logo, size.h - size.padTop - size.padBottom - 6)
+    : Math.round(size.logo * 1.7);
+  const logoFillW = typeof size.w === 'number' ? Math.round(size.w * 0.86) : Math.round(size.logo * 2.4);
   const rot = useRef(new Animated.Value(0)).current;
   // Wiggle only while reordering AND no drag is in progress (the drag freezes it).
   useEffect(() => {
@@ -151,10 +158,19 @@ function Tile({
             </Pressable>
           </>
         ) : null}
-        <LogoTile name={p.name} freqMhz={p.frequencyMhz} size={size.logo} radius={size.logoRadius} />
-        <Text style={[styles.tileName, { fontSize: size.nameFont, color: pal.text }]} numberOfLines={2}>
-          {p.name}
-        </Text>
+        {hasLogo ? (
+          <LogoTile name={p.name} freqMhz={p.frequencyMhz} w={logoFillW} h={logoFillH} radius={size.logoRadius} />
+        ) : (
+          <>
+            <LogoTile name={p.name} freqMhz={p.frequencyMhz} size={size.logo} radius={size.logoRadius} />
+            <Text style={[styles.tileFreq, { fontSize: Math.max(11, size.nameFont - 2), color: pal.dim }]} numberOfLines={1}>
+              {p.frequencyMhz.toFixed(1)}
+            </Text>
+            <Text style={[styles.tileName, { fontSize: size.nameFont, color: pal.text }]} numberOfLines={1}>
+              {cleanCall(p.name)}
+            </Text>
+          </>
+        )}
         {active ? <View style={[styles.activeBar, { backgroundColor: pal.blue }]} /> : null}
       </Pressable>
     </Animated.View>
@@ -574,6 +590,7 @@ const styles = StyleSheet.create({
   // Picked-up tile: raised above its neighbours with a drop shadow (design §8).
   lifted: { zIndex: 30, elevation: 12, shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 20, shadowOffset: { width: 0, height: 18 } },
   tileName: { fontFamily: FONT_BOLD, textAlign: 'center' },
+  tileFreq: { fontFamily: FONT_BOLD, textAlign: 'center', fontVariant: ['tabular-nums'], letterSpacing: 0.3 },
   activeBar: { position: 'absolute', bottom: 6, width: 26, height: 3, borderRadius: 2 },
   // §6.4 badge anatomy: 28×28, top corners at -9, 2px panel ring.
   logoEdit: {

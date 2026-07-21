@@ -15,7 +15,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated, Easing, Pressable, StyleSheet, Text, View, useColorScheme,
+  Animated, Easing, Image, Pressable, StyleSheet, Text, View, useColorScheme,
   type LayoutChangeEvent,
 } from 'react-native';
 import { useKeepAwake } from 'expo-keep-awake';
@@ -24,7 +24,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getNearbyStations, callsignForFreq } from '../services/stationFinder';
 import type { NearbyStation } from '../services/stationTypes';
 import { GearIcon, MagnifierTower, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
-import LogoTile, { callsignFrom } from './carfm/LogoTile';
+import LogoTile, { callsignFrom, useStationLogo, useStationDisplay } from './carfm/LogoTile';
 import LogoSearchOverlay, { type LogoSearchTarget } from './carfm/LogoSearchOverlay';
 import NearbyPicker from './carfm/NearbyPicker';
 import Numpad from './carfm/Numpad';
@@ -32,7 +32,7 @@ import PresetsBand, { type PresetItem } from './carfm/PresetsBand';
 import { callsignBase } from '../services/piCallsign';
 import SidePresetCard, { PEEK_OPACITY, PEEK_SCALE } from './carfm/SidePresetCard';
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
-import { DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT } from './carfm/tokens';
+import { cleanCall, DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT } from './carfm/tokens';
 
 export interface CarFmPreset {
   name: string;
@@ -183,6 +183,35 @@ function SlidingFreq({ value, dir, fontSize, color }: {
   );
 }
 
+// ── Hero real logo (§4.5) ────────────────────────────────────────────────────
+// A real logo REPLACES the big call sign on the hero. Fixed HEIGHT (grows as the
+// call sign / frequency are hidden); the white plate hugs the logo's width once
+// its aspect ratio is known (captured on load), so square badges and wide
+// wordmarks both sit tight rather than in a big empty box. Fit — never cropped.
+function HeroLogo({ uri, height, maxWidth, radius }: {
+  uri: string; height: number; maxWidth: number; radius: number;
+}) {
+  const [aspect, setAspect] = useState<number | null>(null);
+  const w = aspect ? Math.min(maxWidth, Math.round(height * aspect)) : maxWidth;
+  return (
+    <View style={{
+      height, width: w, maxWidth, borderRadius: radius, backgroundColor: '#FFFFFF',
+      paddingVertical: 4, paddingHorizontal: 8, overflow: 'hidden',
+      alignItems: 'center', justifyContent: 'center',
+    }}>
+      <Image
+        source={{ uri }}
+        onLoad={(e) => {
+          const s = e.nativeEvent.source as { width?: number; height?: number };
+          if (s?.width && s?.height) setAspect(s.width / s.height);
+        }}
+        style={{ width: '100%', height: '100%' }}
+        resizeMode="contain"
+      />
+    </View>
+  );
+}
+
 // The header's little status letters ("tells"): lit when true, ghosted when
 // not. HD is never lit — an RTL-SDR pipeline doesn't decode IBOC — but the
 // slot stays so the strip reads the same as a factory head unit's.
@@ -301,7 +330,13 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const inBand = mhz >= FM_MIN_MHZ - 0.05 && mhz <= FM_MAX_MHZ + 0.05;
   const ps = (stationName ?? '').trim();
   const rt = (radioText ?? '').trim();
-  const callsign = ps || callsignHint || '';
+  const callsign = cleanCall(ps || callsignHint || '');
+  // Hero real-logo model (§4.5): a real logo replaces the big call sign, which
+  // becomes a small label beneath; no logo → big call sign, no monogram. The
+  // per-station Display Call Sign / Frequency flags hide those on the hero and
+  // the logo grows to reclaim the freed space.
+  const heroLogo = useStationLogo(callsign || undefined, mhz);
+  const heroDisp = useStationDisplay(heroLogo.base);
 
   // Displayed-order presets in MHz for the band + saved checks.
   const items = useMemo<PresetItem[]>(
@@ -629,6 +664,35 @@ export default function CarFmFace(props: CarFmFaceProps) {
         // ≥48dp touch floor (§10): when the ramp sizes a control below 48dp,
         // hitSlop extends the touchable area without changing the visual.
         const starSlop = Math.max(0, Math.ceil((48 - L.star) / 2));
+        // Hero real-logo sizing (§4.5): the logo box HEIGHT grows as the call sign
+        // and/or frequency are hidden (0/1/2 hidden → base/big/max), so the logo
+        // keeps filling the freed vertical space regardless of aspect.
+        const heroHidden = (heroDisp.showCall ? 0 : 1) + (heroDisp.showFreq ? 0 : 1);
+        const heroLogoH = L.s(heroHidden === 0 ? (tall ? 90 : 118) : heroHidden === 1 ? (tall ? 126 : 168) : (tall ? 156 : 210));
+        const heroLogoMaxW = (tall ? tallHeroW : L.heroCardW) - L.s(tall ? 60 : 68);
+        // Star always sits in the card's top-right corner (both tracks), never
+        // inline with the identity.
+        const heroStar = (
+          <Pressable
+            onPress={onToggleSave}
+            hitSlop={starSlop}
+            style={({ pressed }) => [
+              styles.heroStarAbs,
+              {
+                top: L.s(tall ? 16 : 18), right: L.s(tall ? 16 : 18),
+                width: L.star, height: L.star, borderRadius: L.s(16),
+                backgroundColor: saved ? pal.blueFill : 'transparent',
+                borderWidth: 1, borderColor: saved ? 'transparent' : pal.border,
+              },
+              pressed && { opacity: 0.55 },
+            ]}
+            accessibilityRole="button"
+            accessibilityState={{ selected: saved }}
+            accessibilityLabel={saved ? 'Remove this frequency from presets' : 'Save this frequency as a preset'}
+          >
+            <StarIcon size={L.s(30)} filled={saved} color={pal.amber} outline={pal.dim} />
+          </Pressable>
+        );
         const heroCenter = scan ? (
           <View style={styles.scanWrap}>
             <Text style={[styles.call, { fontSize: L.call, color: pal.dim, fontStyle: 'italic' }]}>
@@ -641,8 +705,18 @@ export default function CarFmFace(props: CarFmFaceProps) {
           </View>
         ) : (
           <>
-            <View style={[styles.stationRow, tall && { gap: L.s(14) }]}>
-              <LogoTile name={callsign || undefined} freqMhz={mhz} size={L.logo} radius={L.s(20)} />
+            {heroLogo.hasLogo && heroLogo.uri ? (
+              // Real logo REPLACES the big call sign; call sign is a small label beneath.
+              <View style={styles.heroLogoCol}>
+                <HeroLogo uri={heroLogo.uri} height={heroLogoH} maxWidth={heroLogoMaxW} radius={L.s(16)} />
+                {heroDisp.showCall && !!callsign ? (
+                  <Text numberOfLines={1} style={[styles.heroCallLabel, { fontSize: L.s(tall ? 22 : 26), color: pal.dim }]}>
+                    {callsign}
+                  </Text>
+                ) : null}
+              </View>
+            ) : (
+              // No real logo: big call sign, NO monogram tile on the hero.
               <Text
                 numberOfLines={1}
                 style={[
@@ -653,34 +727,18 @@ export default function CarFmFace(props: CarFmFaceProps) {
               >
                 {callsign || 'Tuning…'}
               </Text>
+            )}
+            {heroDisp.showFreq ? (
               <Pressable
-                onPress={onToggleSave}
-                hitSlop={starSlop}
-                style={({ pressed }) => [
-                  styles.starBtn,
-                  {
-                    width: L.star, height: L.star, borderRadius: L.s(16),
-                    backgroundColor: saved ? pal.blueFill : 'transparent',
-                    borderWidth: 1, borderColor: saved ? 'transparent' : pal.border,
-                  },
-                  pressed && { opacity: 0.55 },
-                ]}
+                onPress={() => setNumpadOpen(true)}
                 accessibilityRole="button"
-                accessibilityState={{ selected: saved }}
-                accessibilityLabel={saved ? 'Remove this frequency from presets' : 'Save this frequency as a preset'}
+                accessibilityLabel={`Frequency ${fmt(mhz)} megahertz. Tap to enter a frequency.`}
               >
-                <StarIcon size={L.s(30)} filled={saved} color={pal.amber} outline={pal.dim} />
+                <View style={styles.freqRow}>
+                  <SlidingFreq value={fmt(mhz)} dir={seekLandDir.current} fontSize={L.freq} color={pal.amber} />
+                </View>
               </Pressable>
-            </View>
-            <Pressable
-              onPress={() => setNumpadOpen(true)}
-              accessibilityRole="button"
-              accessibilityLabel={`Frequency ${fmt(mhz)} megahertz. Tap to enter a frequency.`}
-            >
-              <View style={styles.freqRow}>
-                <SlidingFreq value={fmt(mhz)} dir={seekLandDir.current} fontSize={L.freq} color={pal.amber} />
-              </View>
-            </Pressable>
+            ) : null}
           </>
         );
 
@@ -722,6 +780,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
               ]}
             >
               {heroCenter}
+              {!scan ? heroStar : null}
             </Animated.View>
             {nextP ? renderPeek('right', nextP, () => stepPreset(1)) : null}
             {flip ? (
@@ -919,6 +978,11 @@ const styles = StyleSheet.create({
   stationRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 22, maxWidth: '100%' },
   call: { fontFamily: FONT_BOLD, fontSize: 66, letterSpacing: -1, flexShrink: 1 },
   starBtn: { width: 56, height: 56, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  // Hero real-logo column (§4.5): logo above a small dim call-sign label.
+  heroLogoCol: { alignItems: 'center', justifyContent: 'center', gap: 8, maxWidth: '100%' },
+  heroCallLabel: { fontFamily: FONT_BOLD, letterSpacing: 0.5, textAlign: 'center' },
+  // Star pinned to the hero card corner (both tracks).
+  heroStarAbs: { position: 'absolute', zIndex: 4, alignItems: 'center', justifyContent: 'center' },
   freqRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 6 },
   freq: { fontFamily: FONT_BOLD, fontSize: 60, fontVariant: ['tabular-nums'] },
   mhz: { fontFamily: FONT_BOLD, fontSize: 20,  },

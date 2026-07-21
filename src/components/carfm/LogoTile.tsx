@@ -12,11 +12,13 @@ import React, { useEffect, useState } from 'react';
 import { Image, Text, View } from 'react-native';
 
 import { getStationLogo, callsignForFreq } from '../../services/stationFinder';
+import { getStationPrefs } from '../../services/stationDb';
 import { callsignBase } from '../../services/piCallsign';
 import { brandColor, monogram, FONT_BOLD } from './tokens';
 
 const cache = new Map<string, string | null>();
 const listeners = new Set<() => void>();
+const dispListeners = new Set<() => void>();
 
 /** Extract a plausible callsign base ("WJJO-FM" / "94.1 WJJO" → "WJJO"). */
 export function callsignFrom(name?: string): string | null {
@@ -71,6 +73,29 @@ export function useStationLogo(name?: string, freqMhz?: number): {
   }, [base, tick]);
 
   return { base, uri, hasLogo: !!uri };
+}
+
+/** Notify every mounted hero that a station's Display Call Sign / Frequency
+ *  choices changed (called by the logo window on save). */
+export function invalidateStationDisplay(): void { dispListeners.forEach((l) => l()); }
+
+/** Per-station hero display flags (Display Call Sign / Display Frequency, §6.4).
+ *  Both default true; re-reads when invalidateStationDisplay() fires. */
+export function useStationDisplay(base: string | null): { showCall: boolean; showFreq: boolean } {
+  const [prefs, setPrefs] = useState<{ showCall: boolean; showFreq: boolean }>({ showCall: true, showFreq: true });
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const l = () => setTick((n) => n + 1);
+    dispListeners.add(l);
+    return () => { dispListeners.delete(l); };
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    if (!base) { setPrefs({ showCall: true, showFreq: true }); return; }
+    getStationPrefs(base).then((p) => { if (!cancelled) setPrefs(p); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [base, tick]);
+  return prefs;
 }
 
 export default function LogoTile({ name, freqMhz, size, w, h, radius, plateBg, showMonogram = true }: {

@@ -17,8 +17,8 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 
-import LogoTile from './LogoTile';
-import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
+import LogoTile, { useStationLogo } from './LogoTile';
+import { cleanCall, FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 
 export const PEEK_SCALE = 0.88;
 export const PEEK_OPACITY = 0.6;
@@ -36,6 +36,12 @@ export default function SidePresetCard({
   onPress?: () => void;
 }) {
   const s = (v: number) => Math.round(v * k);
+  // A real logo gets a larger, borderless transparent plate (86%); the monogram
+  // fallback stays at 58%. Call sign shows beneath in both cases (§5).
+  const { hasLogo } = useStationLogo(name || undefined, freqMhz);
+  const logoBox = hasLogo
+    ? Math.min(Math.round(width * 0.86), s(170))
+    : Math.min(Math.round(width * 0.58), s(92));
   const gid = `sidefade-${side}`;
   // PREV (left card) fades on its RIGHT (inner) edge; NEXT fades on its LEFT.
   const x1 = side === 'left' ? '0' : '1';
@@ -51,9 +57,8 @@ export default function SidePresetCard({
       accessibilityRole={onPress ? 'button' : undefined}
       accessibilityLabel={side === 'left' ? `Previous preset ${name}` : `Next preset ${name}`}
     >
-      {/* Design sideLogoStyle: 58% of card width, capped 92, radius 16. */}
-      <LogoTile name={name || undefined} freqMhz={freqMhz} size={Math.min(Math.round(width * 0.58), s(92))} radius={s(16)} />
-      <Text style={[styles.call, { fontSize: Math.max(12, s(15)), color: pal.text }]} numberOfLines={1}>{name || 'FM'}</Text>
+      <LogoTile name={name || undefined} freqMhz={freqMhz} size={logoBox} radius={s(16)} />
+      <Text style={[styles.call, { fontSize: Math.max(12, s(15)), color: pal.text }]} numberOfLines={1}>{cleanCall(name) || 'FM'}</Text>
       {/* inner-edge fade */}
       <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
         <Defs>
