@@ -2,7 +2,7 @@
  * CarFM settings panel — the delivered Claude Design panel (SettingsPanel.dc.html).
  * Opened by the face's gear. Sections:
  *   TUNER       status (+ RETRY on error / Details diagnostics when connected),
- *               tuner-source picker (RTL-SDR / built-in head-unit tuners), boot autostart
+ *               tuner-source picker (RTL-SDR / built-in head-unit tuners / Auto), boot autostart
  *   APPEARANCE  theme override (SYSTEM / LIGHT / DARK)
  *   SYSTEM      battery-optimization exemption (+ FIX), station-logos toggle (+ clear)
  * Face design language throughout; no red-vs-green state (amber/blue/neutral).
@@ -72,9 +72,9 @@ export default function SettingsPanel({
     if (!visible) return;
     let cancelled = false;
     (async () => {
-      // Ignore retired ids (the old 'auto' selector, the hidden 'rtltcp') so a
-      // legacy stored value doesn't leave no row highlighted.
-      try { const b = await AsyncStorage.getItem(BACKEND_KEY); if (b && b !== 'auto' && b !== 'rtltcp' && !cancelled) setBackend(b); } catch {}
+      // Ignore the retired hidden 'rtltcp' id so a legacy stored value doesn't
+      // leave the picker with no row highlighted.
+      try { const b = await AsyncStorage.getItem(BACKEND_KEY); if (b && b !== 'rtltcp' && !cancelled) setBackend(b); } catch {}
       try { const l = await AsyncStorage.getItem(LOGOS_KEY); if (!cancelled) setLogosOn(l === '1'); } catch {}
       try { const d = await snapshotDate(); if (!cancelled) setDataDate(d); } catch {}
       try {
@@ -103,6 +103,9 @@ export default function SettingsPanel({
     // the state badge carries supported-vs-not. NWD lands with its adapter; FYT
     // (com.syu.ms) has no adapter yet → greyed. See docs/BUILTIN-TUNER-FINDINGS.md.
     { id: 'fyt', name: 'FYT / DuduOS built-in radio', kind: 'Integrated head-unit FM tuner', available: false, detected: false },
+    // Last, not the default: a fallback for unusual setups (e.g. a unit with BOTH
+    // a USB dongle and a built-in tuner) — probe every source, use what answers.
+    { id: 'auto', name: 'Auto', kind: 'Probe all sources', available: true, detected: null },
   ];
   // rtl_tcp / networked-SDR sources are hidden from the picker for now (the
   // backend still exists; parked for a future advanced/developer mode).
