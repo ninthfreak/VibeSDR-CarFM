@@ -46,7 +46,7 @@ function SectionLabel({ text, pal }: { text: string; pal: CarFmPalette }) {
 
 export default function SettingsPanel({
   visible, pal, tunerError, autostart, theme,
-  onRetryTuner, onSetAutostart, onSetTheme, onAdvanced, onClose,
+  onRetryTuner, onSetAutostart, onSetTheme, onClose,
 }: {
   visible: boolean;
   pal: CarFmPalette;
@@ -56,7 +56,6 @@ export default function SettingsPanel({
   onRetryTuner?: () => void;
   onSetAutostart: (on: boolean) => void;
   onSetTheme: (t: CarFmTheme) => void;
-  onAdvanced: () => void;
   onClose: () => void;
 }) {
   const [diagOpen, setDiagOpen] = useState(false);
@@ -285,18 +284,6 @@ export default function SettingsPanel({
               ) : null}
             </View>
 
-            {/* ── ADVANCED ── */}
-            <SectionLabel text="ADVANCED" pal={pal} />
-            <View style={[styles.group, { backgroundColor: pal.panel, borderColor: pal.border }]}>
-              <Pressable style={styles.advRow} onPress={onAdvanced} accessibilityRole="button" accessibilityLabel="Open advanced SDR view">
-                <View style={styles.textWrap}>
-                  <Text style={[styles.advTitle, { color: pal.dim }]}>Advanced SDR view</Text>
-                  <Text style={[styles.rowSub, { color: pal.dim }]}>Opens the stock SDR interface (waterfall, gain, raw controls)</Text>
-                </View>
-                <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
-              </Pressable>
-            </View>
-
             <Text style={[styles.about, { color: pal.dim }]}>{aboutText}</Text>
           </ScrollView>
         </View>
@@ -362,8 +349,6 @@ const styles = StyleSheet.create({
   clearRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 50, paddingHorizontal: 12, paddingVertical: 6 },
   clearText: { fontFamily: FONT_BOLD, fontSize: 16,  },
 
-  advRow: { flexDirection: 'row', alignItems: 'center', gap: 16, minHeight: 60, paddingHorizontal: 12, paddingVertical: 6 },
-  advTitle: { fontFamily: FONT_BOLD, fontSize: 17,  },
   chevron: { fontSize: 26, fontWeight: '700', flexShrink: 0 },
 
   about: { fontFamily: FONT, textAlign: 'center', fontSize: 13, color: '#888', paddingTop: 20, paddingBottom: 4, letterSpacing: 0.3 },

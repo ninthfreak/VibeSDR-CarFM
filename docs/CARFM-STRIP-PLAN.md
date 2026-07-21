@@ -59,7 +59,18 @@ demands risky surgery. Work top-down (🟢 first). Scope decisions already made:
 16. **Maps & aircraft** — MapOverlay.tsx + AircraftPanel.tsx. Shares DecoderClient spot rows.
 17. **GPU waterfall** — WaterfallView.tsx (1353 LOC, inline Skia shaders). **39 SDRScreen refs**, ~40 wired props; also read by watchProvider. Hidden under the CarFM overlay anyway.
 18. **Non-FM demod modes** — ModeSelector + StepPicker + the mode/step **state machine** in SDRScreen + `dataModes` (DAB/ADS-B). CarFM forces `wfm`; stripping the rest is state-machine surgery.
-19. **The whole "Advanced SDR view"** — ControlsBar (978) + MenuSheet (1691) + DrumWheel + the entire non-car UI branch of SDRScreen. Only visible when NOT in CarFM. Biggest cut: means splitting SDRScreen's FM-wiring from its SDR-UI. Highest harm; likely the final step (and gated on whether CarFM keeps an "advanced" escape hatch at all).
+19. **The whole "Advanced SDR view"** — ControlsBar (978) + MenuSheet (1691) + DrumWheel + the entire non-car UI branch of SDRScreen. Only visible when NOT in CarFM. Biggest cut: means splitting SDRScreen's FM-wiring from its SDR-UI. Highest harm; likely the final step.
+   - 🟨 **Escape hatch REMOVED** (2026-07-21): the CarFM→advanced route is gone —
+     `advancedOpen` state, `onOpenAdvanced` prop, the SettingsPanel "Advanced SDR
+     view" row, and the `◂ FM` return button are all deleted; `fmFaceActive` is
+     now just `carFm`. Confirmed: CarFM can no longer reach the stock SDR UI.
+   - ⬜ **Still to do — the actual component deletion.** The SDR-UI branch
+     (`!fmFaceActive`: ControlsBar, MenuSheet, DrumWheel, ModeSelector, VTSBar,
+     CenterVfoButton, waterfall-appearance state) still EXISTS and still renders
+     for **non-carFm / dev launches** (InstancePicker's remote-server connect
+     paths — `InstancePickerScreen.tsx` navigate('SDR') without `carFm:true`, and
+     TunerScreen/ServerMode). Deleting it means also cutting those dev entry
+     points. Large, tsc+build-gated, on-device smoke test after. Noted, not done.
 
 ---
 
@@ -118,3 +129,33 @@ Threads raised across the project that are NOT part of the strip list.
   out in the tiles (wide wordmarks vs square marks, padding, `resizeMode`, upscale
   of small hits). Deferred by request; the search + assign + display pipeline is
   working as of 2026-07-20.
+
+## E. Performance / "disconnect what we aren't using" — future review
+Findings from the 2026-07-21 perf pass. What was safe was done; the rest is here
+so it isn't lost.
+- ✅ **DONE — live-station equality gate.** `setLiveStation` now returns `prev`
+  when nothing displayed changed (`liveStationEqual`), so redundant RDS-RadioText
+  ticks (several/sec) no longer re-render the SVG-heavy face. (SDRScreen.tsx.)
+- ⚠️ **The spectrum WebSocket CANNOT be disconnected in CarFM — it carries RDS.**
+  Important correction: for the local-hardware FM path the `type:"rds"` control
+  messages (station name, RadioText, PTY, TP/TA, PI, stereo) are multiplexed on
+  the **same spectrum WS** that carries the FFT waterfall frames
+  (`UberSDRClient.ts` `_handleSpectrumMessage`, ~L993–1035). Killing the socket
+  would gut the face. The socket stays.
+- ⬜ **FFT-frame throttle (the real, bounded lever).** The FFT *frames* are still
+  waste behind the face (no waterfall). The existing `set_rate` divisor
+  (`UberSDRClient.setRateDivisor`) can throttle them toward zero **while keeping
+  the socket open for RDS**. Unverified assumption: the shim keeps emitting
+  `type:"rds"` when FFT is throttled (server-side `user_spectrum_websocket.go` —
+  not in this repo). Needs an on-device check before trusting. Smaller win than a
+  disconnect; the per-frame decode/GC cost drops in proportion to the divisor.
+- ⬜ **Background-timer audit under carFm.** Most candidates are already off or
+  are actually used, so DON'T gate blindly: learned-bookmarks poll (30s,
+  `if (isLocal)` — RUNS in carFm, but feeds the "what this aerial hears" list, may
+  be used by NearbyPicker); server-bookmarks (10min) and EiBi (10min) are gated
+  off for local/disabled; decoder spot-flush only starts with a decoder active.
+  Confirm each is genuinely unused in carFm before touching.
+- ⬜ **Child React.memo pass ("Fix 2").** Redraw only the changed leaf when the
+  face does re-render (Tell/SignalWaves/StereoWave/LogoTile). Parked pending an
+  on-device profile after the equality gate — riskier (silent memo failures,
+  stale-UI bugs) and not verifiable in a still harness.

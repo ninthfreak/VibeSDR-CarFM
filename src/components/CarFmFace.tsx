@@ -73,7 +73,6 @@ export interface CarFmFaceProps {
   onReorderPreset: (order: number[]) => void;   // new order as original indices
   onRemovePreset: (index: number) => void;
   onSaveStationPreset: (name: string, freqMhz: number) => void;  // nearby hold
-  onOpenAdvanced: () => void;
 }
 
 const CHANNEL_HZ = 100_000;             // 0.1 MHz — the design's tune/seek step
@@ -211,7 +210,6 @@ export default function CarFmFace(props: CarFmFaceProps) {
     rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
     onSetAutostart, onSetTheme, onRetryTuner, presets,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
-    onOpenAdvanced,
   } = props;
   const insets = useSafeAreaInsets();
   const scheme = useColorScheme();
@@ -834,7 +832,6 @@ export default function CarFmFace(props: CarFmFaceProps) {
         onRetryTuner={onRetryTuner}
         onSetAutostart={(on) => onSetAutostart?.(on)}
         onSetTheme={(t) => onSetTheme?.(t)}
-        onAdvanced={() => { setSettingsOpen(false); onOpenAdvanced(); }}
         onClose={() => setSettingsOpen(false)}
       />
       {/* Preset logo-search window (design §6.4). */}

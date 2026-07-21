@@ -615,8 +615,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   // CarFM: the FM-only face covers the full SDR UI when active. "Advanced" lets
   // the normal SDR UI (waterfall/decoders/all modes) back in without leaving.
   const carFm = !!route.params.carFm;
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const fmFaceActive = carFm && !advancedOpen;
+  // CarFM has no advanced-SDR escape hatch: the face IS the whole UI in a carFm
+  // session. (The stock SDR view still exists for non-carFm/dev launches — see
+  // the !fmFaceActive branch below — but nothing in CarFM can reach it.)
+  const fmFaceActive = carFm;
   // Ref mirror for the per-frame onSpectrum closure (avoids a stale capture): the
   // FM face is opaque and self-contained, so all waterfall/meter work is wasted
   // while it's up.
@@ -4522,36 +4524,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           onReorderPreset={onFmReorderPreset}
           onRemovePreset={onFmRemovePreset}
           onSaveStationPreset={onFmSaveStationPreset}
-          onOpenAdvanced={() => setAdvancedOpen(true)}
         />
-      ) : null}
-
-      {/* CarFM advanced view: a way back to the FM face (the full SDR UI shows) */}
-      {carFm && advancedOpen ? (
-        <Pressable
-          onPress={() => setAdvancedOpen(false)}
-          style={[styles.fmReturn, { top: insets.top + 8 }]}
-          accessibilityRole="button"
-          accessibilityLabel="Back to FM radio"
-        >
-          <Text style={styles.fmReturnText}>◂ FM</Text>
-        </Pressable>
       ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  fmReturn: {
-    position: 'absolute', left: 12, zIndex: 61,
-    backgroundColor: 'rgba(5,7,10,0.92)', borderWidth: 1,
-    borderColor: 'rgba(59,158,255,0.6)', borderRadius: 8,
-    paddingHorizontal: 14, paddingVertical: 9,
-  },
-  fmReturnText: {
-    color: '#3B9EFF', fontFamily: 'Atkinson Hyperlegible',
-    fontSize: 15, fontWeight: '800', letterSpacing: 1,
-  },
   rotateBanner: {
     position: 'absolute', alignSelf: 'center', zIndex: 55,
     backgroundColor: 'rgba(8,12,6,0.92)', borderWidth: 1,
