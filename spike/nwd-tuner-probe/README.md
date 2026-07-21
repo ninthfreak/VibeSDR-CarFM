@@ -16,13 +16,20 @@ from the service). No decompiled vendor code is included.
 2. Let it sync; accept any AGP/Gradle upgrade prompt it offers.
 3. Plug in the head unit (or use its network `adb`), press **Run ▶**.
 
-**Command line** (needs a local Android SDK + JDK 17):
+**Command line.** The Gradle **wrapper is committed** and pins Gradle 8.9, so use
+`./gradlew` — do **not** run `gradle wrapper` (your system Gradle is older than
+AGP 8 needs; that's what the `dependencyResolutionManagement` error was). You need
+JDK 17+ (you have 21 — fine) and the Android SDK. If Gradle can't find the SDK,
+point it at one:
 ```bash
 cd spike/nwd-tuner-probe
-gradle wrapper            # once, if you don't have ./gradlew
-./gradlew assembleDebug
+export ANDROID_HOME=$HOME/Android/Sdk      # or wherever your SDK is
+#   ...or create local.properties with:  sdk.dir=/home/you/Android/Sdk
+./gradlew assembleDebug                     # downloads Gradle 8.9 on first run
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+No Android SDK installed? Use the Android Studio path above instead — it bundles
+the SDK, JDK, and a compatible Gradle, and sidesteps all of this.
 
 ## Test sequence (on the unit)
 
