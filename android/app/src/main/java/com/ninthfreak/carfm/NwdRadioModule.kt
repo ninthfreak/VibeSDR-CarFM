@@ -169,6 +169,8 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             emit("NwdRadioFrequency", Arguments.createMap().apply {
                 putInt("band", band.toInt()); putInt("freq", freq)
                 putDouble("mhz", freq.toDouble() / freqMult); putString("ps", ps ?: "")
+                // `arg` is the tuner's signal level (confirmed on-device: strong≈6, weak≈3).
+                putInt("arg", arg)
             })
         override fun notifyNearOn(on: Boolean) {}
         override fun notifyStereo(on: Boolean) = emit("NwdRadioStereo", Arguments.createMap().apply { putBoolean("on", on) })

@@ -3400,6 +3400,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!fmFaceActive) return;
     const t = setInterval(() => {
+      // The built-in NWD tuner drives the meter from its own signal level (arg);
+      // don't overwrite it with the SDR-path audio SNR (which is stale/0 there).
+      if (nwdActiveRef.current) return;
       const v = audioSnrRef.current;
       setFmSignalDb(Number.isFinite(v) ? v : null);
     }, 500);
@@ -3696,6 +3699,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         liveStationRef.current = p.ps ?? '';
         setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(p.mhz * 1e6) }));
         setLiveStation((prev) => ({ ...prev, name: p.ps || undefined }));
+        // Signal: the tuner reports a relative level in `arg` (on-device: strong≈6,
+        // weak≈3). Map to an approximate dBFS so the face's waves + readout track
+        // it. Relative, not true dBFS — the ceiling still wants calibrating.
+        setFmSignalDb(-95 + Math.max(0, p.arg) * 6);
       }));
       subs.push(onNwd('NwdRadioRt', (p) => setLiveStation((prev) => ({ ...prev, text: p.rt || undefined }))));
       subs.push(onNwd('NwdRadioStereo', (p) => setFmStereo(p.on)));

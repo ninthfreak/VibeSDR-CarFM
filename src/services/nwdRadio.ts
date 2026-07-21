@@ -57,7 +57,7 @@ export function nwdSetAudio(on: boolean): void { native?.setAudioEnabled(on); }
 
 // ── Events ───────────────────────────────────────────────────────────────────
 export type NwdEvents = {
-  NwdRadioFrequency: { band: number; freq: number; mhz: number; ps: string };
+  NwdRadioFrequency: { band: number; freq: number; mhz: number; ps: string; arg: number };
   NwdRadioRt: { rt: string };
   NwdRadioStereo: { on: boolean };
   NwdRadioPty: { pty: number };
