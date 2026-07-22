@@ -148,18 +148,25 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         try { radio?.setRDSState(0.toByte(), on) } catch (e: Throwable) { Log.w(TAG, "setRDSState failed", e) }
     }
 
-    /** Route FM audio to the amp: become the active MCU source + keep it alive +
-     *  unmute music. Analog path — nothing is streamed to the app. */
+    /** Keep the tuner's (analog, MCU-routed) audio alive + unmute music. Does NOT
+     *  fire the source-switch broadcasts: on-device those launched the STOCK radio
+     *  app over CarFM. Kept as a separate, opt-in call for later experimentation. */
     @ReactMethod
     fun setAudioEnabled(on: Boolean) {
         try { radio?.setRadioBackServiceOn(on) } catch (e: Throwable) { Log.w(TAG, "setRadioBackServiceOn failed", e) }
         if (on) {
-            reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE"))
-            reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_CHANGE_SOURCE"))
-            reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_REQUEST_GOTO_CURRENT_SOURCE"))
             (reactContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
                 ?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
         }
+    }
+
+    /** The source-switch broadcasts, split out so they're NOT fired automatically
+     *  (they launch the stock radio app). Exposed for deliberate testing only. */
+    @ReactMethod
+    fun requestAudioSource() {
+        reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE"))
+        reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_CHANGE_SOURCE"))
+        reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_REQUEST_GOTO_CURRENT_SOURCE"))
     }
 
     // ── Callbacks → JS events ──────────────────────────────────────────────────

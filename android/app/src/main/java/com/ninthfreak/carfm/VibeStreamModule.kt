@@ -303,6 +303,64 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.shareRecordingNative(path)
     }
 
+    // ── GPS speed (drive / standstill detection) ─────────────────────────────
+    // Low-rate GPS updates (~30s) → emit VibeSpeed { mps, hasSpeed }. JS
+    // (services/motion.ts) derives is_moving + a display speed, filtering the
+    // standstill / low-speed GPS noise. FINE location must be granted first.
+    private var speedListener: android.location.LocationListener? = null
+
+    private fun emitSpeed(mps: Float, hasSpeed: Boolean) {
+        try {
+            val map = com.facebook.react.bridge.Arguments.createMap()
+            map.putDouble("mps", mps.toDouble())
+            map.putBoolean("hasSpeed", hasSpeed)
+            reactContext.getJSModule(
+                com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java,
+            ).emit("VibeSpeed", map)
+        } catch (_: Throwable) {}
+    }
+
+    @ReactMethod
+    fun startSpeed() {
+        if (speedListener != null) return
+        try {
+            val lm = reactContext.getSystemService(android.content.Context.LOCATION_SERVICE)
+                as android.location.LocationManager
+            val listener = object : android.location.LocationListener {
+                override fun onLocationChanged(loc: android.location.Location) {
+                    emitSpeed(if (loc.hasSpeed()) loc.speed else -1f, loc.hasSpeed())
+                }
+                override fun onProviderEnabled(p: String) {}
+                override fun onProviderDisabled(p: String) {}
+                @Deprecated("legacy callback") override fun onStatusChanged(p: String?, s: Int, e: android.os.Bundle?) {}
+            }
+            speedListener = listener
+            try {
+                lm.requestLocationUpdates(
+                    android.location.LocationManager.GPS_PROVIDER, 30_000L, 0f, listener,
+                    android.os.Looper.getMainLooper(),
+                )
+            } catch (_: SecurityException) { speedListener = null; return }
+            // Seed immediately from the last known fix so JS gets a value at once.
+            try {
+                lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)?.let {
+                    emitSpeed(if (it.hasSpeed()) it.speed else -1f, it.hasSpeed())
+                }
+            } catch (_: SecurityException) {}
+        } catch (_: Exception) {}
+    }
+
+    @ReactMethod
+    fun stopSpeed() {
+        val l = speedListener ?: return
+        try {
+            val lm = reactContext.getSystemService(android.content.Context.LOCATION_SERVICE)
+                as android.location.LocationManager
+            lm.removeUpdates(l)
+        } catch (_: Exception) {}
+        speedListener = null
+    }
+
     // NativeEventEmitter housekeeping (events arrive via RCTDeviceEventEmitter)
     @ReactMethod
     fun addListener(eventName: String) { /* no-op */ }
