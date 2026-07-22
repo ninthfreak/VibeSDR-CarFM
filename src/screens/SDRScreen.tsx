@@ -42,7 +42,7 @@ import { splashBridge }                 from '../../App';
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
-import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSetRds, nwdSetAudio, onNwd } from '../services/nwdRadio';
+import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdSetRds, nwdSetAudio, onNwd } from '../services/nwdRadio';
 import { diag } from '../services/diag';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { localSessionGen, newLocalSession } from '../services/localSession';
@@ -630,6 +630,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   // True while the head unit's built-in NWD tuner is driving the face (a
   // tunerless carFm launch on an NWD/NOWADA unit). Routes tune commands to it.
   const nwdActiveRef = useRef(false);
+  const [nwdActive, setNwdActive] = useState(false);   // built-in NWD tuner is the live source
+  // Built-in tuner hardware seek: land on the next real station (freq arrives via
+  // the NWD callback). Passed to the face only while NWD drives.
+  const onFmHardwareSeek = useCallback((dir: 1 | -1) => { nwdSeek(dir > 0); }, []);
   // PI-derived station identity (addendum §6): RDS PI arrives in block 1 almost
   // immediately, so we can name the station from the bundled DB before PS text
   // assembles. A hint only — PS wins when present.
@@ -3688,6 +3692,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         const info = await nwdConnect();
         if (cancelled) { nwdDisconnect(); return; }
         nwdActiveRef.current = true;
+        setNwdActive(true);
         setFmTunerError(false);
         nwdSetRds(true);
         nwdSetAudio(true);
@@ -3717,6 +3722,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => {
       cancelled = true;
       nwdActiveRef.current = false;
+      setNwdActive(false);
       subs.forEach((u) => u());
       nwdSetAudio(false);   // release the radio audio source before unbinding
       nwdDisconnect();
@@ -4581,6 +4587,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           onSetTheme={onFmSetTheme}
           onSetAutostart={onFmSetAutostart}
           onRetryTuner={route.params.tunerless ? () => { void tryTunerNow(); } : undefined}
+          nwdActive={nwdActive}
+          onHardwareSeek={nwdActive ? onFmHardwareSeek : undefined}
           presets={fmPresets}
           onTuneHz={onTuneHz}
           onToggleSave={onFmToggleSave}

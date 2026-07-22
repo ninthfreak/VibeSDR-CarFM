@@ -47,12 +47,14 @@ function SectionLabel({ text, pal }: { text: string; pal: CarFmPalette }) {
 }
 
 export default function SettingsPanel({
-  visible, pal, tunerError, autostart, theme,
+  visible, pal, tunerError, nwdActive = false, autostart, theme,
   onRetryTuner, onSetAutostart, onSetTheme, onClose,
 }: {
   visible: boolean;
   pal: CarFmPalette;
   tunerError: boolean;
+  /** The built-in NWD tuner is the live source (so RTL-SDR is NOT what's connected). */
+  nwdActive?: boolean;
   autostart: boolean;
   theme: CarFmTheme;
   onRetryTuner?: () => void;
@@ -84,17 +86,28 @@ export default function SettingsPanel({
   const saveLog = useCallback(async () => {
     const text = diagText();
     if (!text.trim()) { Alert.alert('Nothing to save', 'The tuner log is empty.'); return; }
+    // Some head units have no Files/DocumentsUI app, so the folder picker can't
+    // launch. Guard hard and fail with a message instead of crashing — and always
+    // point at the reliable fallback (screenshot the log).
+    const SAF = (FileSystem as { StorageAccessFramework?: {
+      requestDirectoryPermissionsAsync: () => Promise<{ granted: boolean; directoryUri: string }>;
+      createFileAsync: (dir: string, name: string, mime: string) => Promise<string>;
+    } }).StorageAccessFramework;
+    if (!SAF?.requestDirectoryPermissionsAsync) {
+      Alert.alert('Not available', 'File export isn’t available on this unit. Screenshot the log instead.');
+      return;
+    }
     try {
-      const perm = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
-      if (!perm.granted) return;   // user cancelled the picker
+      const perm = await SAF.requestDirectoryPermissionsAsync();
+      if (!perm?.granted) return;   // user cancelled the picker
       const d = new Date();
       const p = (n: number) => String(n).padStart(2, '0');
       const name = `carfm-tuner-log-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-      const uri = await FileSystem.StorageAccessFramework.createFileAsync(perm.directoryUri, name, 'text/plain');
+      const uri = await SAF.createFileAsync(perm.directoryUri, name, 'text/plain');
       await FileSystem.writeAsStringAsync(uri, text, { encoding: FileSystem.EncodingType.UTF8 });
       Alert.alert('Saved', `${name}.txt written to the folder you chose.`);
     } catch (e) {
-      Alert.alert('Save failed', String(e));
+      Alert.alert('Couldn’t save', `The file picker failed on this unit — screenshot the log instead.\n\n${String(e)}`);
     }
   }, []);
 
@@ -133,7 +146,7 @@ export default function SettingsPanel({
   const fixBattery = useCallback(() => { Local?.requestIgnoreBatteryOptimizations?.(); }, [Local]);
 
   const backends: BackendDef[] = [
-    { id: 'rtl', name: 'RTL-SDR', kind: 'USB software-defined radio', available: true, detected: !tunerError },
+    { id: 'rtl', name: 'RTL-SDR', kind: 'USB software-defined radio', available: true, detected: nwdActive ? false : !tunerError },
     // Built-in head-unit tuners — same concept (the radio baked into the head
     // unit), differentiated only by the unit's platform. Parallel copy on purpose;
     // the state badge carries supported-vs-not. NWD self-detects via the vendor
@@ -182,7 +195,9 @@ export default function SettingsPanel({
                 <View style={styles.textWrap}>
                   <Text style={[styles.rowTitle, { color: pal.text }]}>{tunerError ? 'Not connected' : 'Connected'}</Text>
                   <Text style={[styles.rowSub, { color: pal.dim }]}>
-                    {tunerError ? 'No USB tuner found' : 'Local hardware · RTL-SDR (RTL2832U)'}
+                    {tunerError ? 'No USB tuner found'
+                      : nwdActive ? 'Built-in tuner · NWD / NOWADA'
+                      : 'Local hardware · RTL-SDR (RTL2832U)'}
                   </Text>
                 </View>
                 {tunerError && onRetryTuner ? (
@@ -193,7 +208,7 @@ export default function SettingsPanel({
                   >
                     <Text style={[styles.retryText, { color: pal.blue }]}>RETRY</Text>
                   </Pressable>
-                ) : !tunerError ? (
+                ) : (!tunerError && !nwdActive) ? (
                   <Pressable
                     onPress={() => setDiagOpen((v) => !v)}
                     style={({ pressed }) => [styles.diagBtn, { borderColor: pal.border }, pressed && { opacity: 0.6 }]}
@@ -204,7 +219,7 @@ export default function SettingsPanel({
                 ) : null}
               </View>
 
-              {diagOpen && !tunerError ? (
+              {diagOpen && !tunerError && !nwdActive ? (
                 <View style={[styles.diagPanel, { backgroundColor: pal.raised, borderColor: pal.border }]}>
                   {[['Device', 'Realtek RTL2832U + R820T2'], ['USB ID', '0bda:2838'], ['Sample rate', '2.048 MS/s']].map(([k, v]) => (
                     <View key={k} style={styles.diagLine}>

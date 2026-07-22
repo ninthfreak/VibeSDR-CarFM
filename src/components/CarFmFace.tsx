@@ -67,6 +67,12 @@ export interface CarFmFaceProps {
   onSetTheme?: (t: CarFmTheme) => void;
   /** Immediate tuner reconnect attempt (tunerless sessions). */
   onRetryTuner?: () => void;
+  /** The built-in NWD tuner is the active source (drives hardware seek + honest
+   *  tuner-source detection in settings). */
+  nwdActive?: boolean;
+  /** Hardware seek (built-in tuner): when set, SEEK uses the tuner's own
+   *  next-station scan instead of the FCC-DB sweep. */
+  onHardwareSeek?: (dir: 1 | -1) => void;
   presets: CarFmPreset[];   // displayed order (user-arranged)
   onTuneHz: (hz: number) => void;
   onToggleSave: () => void;              // star: save/remove current frequency
@@ -237,7 +243,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const {
     freqHz, stationName, callsignHint, radioText, stereo, signalDb,
     rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
-    onSetAutostart, onSetTheme, onRetryTuner, presets,
+    onSetAutostart, onSetTheme, onRetryTuner, presets, nwdActive, onHardwareSeek,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
   } = props;
   const insets = useSafeAreaInsets();
@@ -337,6 +343,12 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // the logo grows to reclaim the freed space.
   const heroLogo = useStationLogo(callsign || undefined, mhz);
   const heroDisp = useStationDisplay(heroLogo.base);
+  // Station identity for the hero: RDS PS / PI-callsign when present, else the
+  // callsign resolved from the dial frequency via the FCC DB (heroLogo.base).
+  // Without this, a tuner that sends no RDS PS (e.g. the built-in NWD tuner)
+  // leaves the hero stuck on "Tuning…" forever.
+  const heroIdent = callsign || cleanCall(heroLogo.base ?? '');
+  const identResolving = !heroIdent;   // still looking up the callsign
 
   // Displayed-order presets in MHz for the band + saved checks.
   const items = useMemo<PresetItem[]>(
@@ -404,6 +416,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const seekLandDir = useRef<1 | -1 | 0>(0);
   const runSeek = useCallback((dir: 1 | -1) => {
     if (scanTimer.current) return;                     // one sweep at a time
+    // Built-in tuner: use ITS hardware seek — it finds the next real station
+    // regardless of GPS/DB. The landed frequency arrives via the tuner callback
+    // (freqHz), so there's no client-side sweep to animate here.
+    if (onHardwareSeek) { onHardwareSeek(dir); return; }
     const cur = mhzOf(freqHz);
     const fs = seekFreqs.current;
     let target: number;
@@ -435,7 +451,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         setScan({ dir, display: v });
       }
     }, SCAN_TICK_MS);
-  }, [freqHz, onTuneHz, stopScan]);
+  }, [freqHz, onTuneHz, stopScan, onHardwareSeek]);
 
   // ── Hero carousel prev/next SWAP FLIP (LOSSY-ELEMENTS #9) ──────────────────
   // Tuning to an adjacent preset shifts the whole strip one slot with a real
@@ -709,9 +725,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
               // Real logo REPLACES the big call sign; call sign is a small label beneath.
               <View style={styles.heroLogoCol}>
                 <HeroLogo uri={heroLogo.uri} height={heroLogoH} maxWidth={heroLogoMaxW} radius={L.s(16)} />
-                {heroDisp.showCall && !!callsign ? (
+                {heroDisp.showCall && !!heroIdent ? (
                   <Text numberOfLines={1} style={[styles.heroCallLabel, { fontSize: L.s(tall ? 22 : 26), color: pal.dim }]}>
-                    {callsign}
+                    {heroIdent}
                   </Text>
                 ) : null}
               </View>
@@ -722,10 +738,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 style={[
                   styles.call,
                   { fontSize: L.call, color: pal.text },
-                  !ps && { fontStyle: 'italic', color: pal.dim },
+                  identResolving && { fontStyle: 'italic', color: pal.dim },
                 ]}
               >
-                {callsign || 'Tuning…'}
+                {heroIdent || 'Tuning…'}
               </Text>
             )}
             {heroDisp.showFreq ? (
@@ -886,6 +902,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         visible={settingsOpen}
         pal={pal}
         tunerError={!!tunerError}
+        nwdActive={!!nwdActive}
         autostart={autostart ?? true}
         theme={theme ?? 'system'}
         onRetryTuner={onRetryTuner}
