@@ -44,6 +44,7 @@ import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
 import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdSetRds, nwdSetAudio, onNwd } from '../services/nwdRadio';
 import { diag } from '../services/diag';
+import { startMotion, stopMotion } from '../services/motion';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { localSessionGen, newLocalSession } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
@@ -3673,6 +3674,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     });
     return () => sub.remove();
   }, [carFm, onFmToggleSave, onFmMediaSeek]);
+
+  // ── Vehicle motion (GPS speed → is_moving) ───────────────────────────────────
+  // Wired and ready: features can gate on isMoving()/subscribeMotion(); the speed
+  // readout UI comes in a later design handoff. Low-rate GPS while the face is up.
+  useEffect(() => {
+    if (!carFm) return;
+    void startMotion();
+    return () => stopMotion();
+  }, [carFm]);
 
   // ── Built-in NWD/NOWADA tuner (Backend E) ────────────────────────────────────
   // On a tunerless carFm launch (no SDR dongle) — the normal case on a permanent
