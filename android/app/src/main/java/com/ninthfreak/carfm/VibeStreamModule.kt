@@ -303,6 +303,40 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.shareRecordingNative(path)
     }
 
+    /** Write text to the PUBLIC Downloads folder and return a human path. No SAF /
+     *  no picker Activity (so it can't crash on units without DocumentsUI), and
+     *  Downloads is a standard location a file manager can see + copy to USB.
+     *  API 29+ uses MediaStore; older uses the public Downloads dir directly. */
+    @ReactMethod
+    fun writeLog(text: String, promise: Promise) {
+        try {
+            val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+            val fileName = "carfm-tuner-log-$stamp.txt"
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                val resolver = reactContext.contentResolver
+                val values = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain")
+                    put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+                }
+                val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: throw java.io.IOException("MediaStore insert returned null")
+                resolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) }
+                    ?: throw java.io.IOException("openOutputStream returned null")
+                promise.resolve("Downloads/$fileName")
+            } else {
+                @Suppress("DEPRECATION")
+                val dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                dir.mkdirs()
+                val f = java.io.File(dir, fileName)
+                f.writeText(text)
+                promise.resolve(f.absolutePath)
+            }
+        } catch (e: Exception) {
+            promise.reject("write", e.message ?: "write failed", e)
+        }
+    }
+
     // ── GPS speed (drive / standstill detection) ─────────────────────────────
     // Low-rate GPS updates (~30s) → emit VibeSpeed { mps, hasSpeed }. JS
     // (services/motion.ts) derives is_moving + a display speed, filtering the
