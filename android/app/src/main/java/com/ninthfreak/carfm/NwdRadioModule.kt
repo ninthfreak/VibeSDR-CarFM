@@ -45,6 +45,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
 
     private var radio: RadioFeature? = null
     private var bound = false
+    private var registered = false
     private var connectPromise: Promise? = null
 
     // Self-calibrated on connect from getCurrentFrequency() (see the spike). MHz →
@@ -103,7 +104,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val r = RadioFeature.Stub.asInterface(binder)
             radio = r
-            try { r.registCallback(callback) } catch (e: Throwable) { Log.w(TAG, "registCallback failed", e) }
+            registered = try { r.registCallback(callback); true } catch (e: Throwable) { Log.w(TAG, "registCallback failed", e); false }
             // Self-calibrate units + band from the tuner's current reading.
             try {
                 val f: Frequency? = r.getCurrentFrequency()
@@ -196,6 +197,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     private fun currentStateMap(): WritableMap = Arguments.createMap().apply {
         putInt("band", fmBand.toInt())
         putInt("freqMult", freqMult)
+        putBoolean("registered", registered)
         try { radio?.getCurrentFrequency()?.let {
             putDouble("mhz", it.freq.toDouble() / freqMult); putString("ps", it.psName ?: "")
         } } catch (_: Throwable) {}

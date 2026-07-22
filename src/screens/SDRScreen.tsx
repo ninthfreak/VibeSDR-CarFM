@@ -3706,7 +3706,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setFmTunerError(false);
         nwdSetRds(true);
         nwdSetAudio(true);
-        diag(`NWD connected: band=${info.band} freqMult=${info.freqMult} mhz=${info.mhz ?? '?'} ps='${info.ps ?? ''}'; RDS on; audio-switch fired`);
+        diag(`NWD connected: registered=${info.registered} band=${info.band} freqMult=${info.freqMult} mhz=${info.mhz ?? '?'} ps='${info.ps ?? ''}'; RDS on`);
         if (typeof info.mhz === 'number' && info.mhz > 0) {
           setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(info.mhz! * 1e6) }));
           if (info.ps) liveStationRef.current = info.ps;

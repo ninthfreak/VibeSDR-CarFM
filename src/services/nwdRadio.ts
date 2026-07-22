@@ -20,11 +20,12 @@ type NwdNative = {
   seek(up: boolean): void;
   setRdsEnabled(on: boolean): void;
   setAudioEnabled(on: boolean): void;
+  requestAudioSource(): void;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 };
 
-export type NwdConnectInfo = { band: number; freqMult: number; mhz?: number; ps?: string };
+export type NwdConnectInfo = { band: number; freqMult: number; mhz?: number; ps?: string; registered?: boolean };
 
 const native: NwdNative | undefined =
   Platform.OS === 'android' ? (NativeModules.NwdRadio as NwdNative | undefined) : undefined;
@@ -54,6 +55,10 @@ export function nwdTune(mhz: number): Promise<number> {
 export function nwdSeek(up: boolean): void { native?.seek(up); }
 export function nwdSetRds(on: boolean): void { native?.setRdsEnabled(on); }
 export function nwdSetAudio(on: boolean): void { native?.setAudioEnabled(on); }
+/** Fire the MCU source-switch broadcasts (they launch the stock radio app) —
+ *  a deliberate test of whether becoming the radio "source" brings audio +
+ *  callbacks alive. Not called automatically. */
+export function nwdRequestAudioSource(): void { native?.requestAudioSource(); }
 
 // ── Events ───────────────────────────────────────────────────────────────────
 export type NwdEvents = {

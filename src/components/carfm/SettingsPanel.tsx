@@ -12,13 +12,12 @@ import {
   Alert, Modal, NativeModules, Pressable, ScrollView, StyleSheet, Text, View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as FileSystem from 'expo-file-system/legacy';
 
 import { BatteryBolt, SignalWaves, WarningTriangle } from './icons';
 import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 import { snapshotDate } from '../../services/stationDb';
 import { clearLogoCache } from '../../services/stationLogoCache';
-import { isNwdAvailable } from '../../services/nwdRadio';
+import { isNwdAvailable, nwdRequestAudioSource } from '../../services/nwdRadio';
 import { isDiagEnabled, setDiagEnabled, diagLines, diagText, clearDiag, subscribeDiag } from '../../services/diag';
 
 export type CarFmTheme = 'system' | 'light' | 'dark';
@@ -81,33 +80,19 @@ export default function SettingsPanel({
     setDiagOn((v) => { const nv = !v; setDiagEnabled(nv); return nv; });
   }, []);
 
-  // Export the log to a folder the user picks — Android's Storage Access
-  // Framework picker includes a connected USB drive, so this saves straight to it.
+  // Write the log via native (no file-picker Activity — the SAF picker crashed on
+  // units with no DocumentsUI). Lands in the app's external files dir; a file
+  // manager can copy it to USB. The on-screen log is always screenshot-able too.
   const saveLog = useCallback(async () => {
     const text = diagText();
     if (!text.trim()) { Alert.alert('Nothing to save', 'The tuner log is empty.'); return; }
-    // Some head units have no Files/DocumentsUI app, so the folder picker can't
-    // launch. Guard hard and fail with a message instead of crashing — and always
-    // point at the reliable fallback (screenshot the log).
-    const SAF = (FileSystem as { StorageAccessFramework?: {
-      requestDirectoryPermissionsAsync: () => Promise<{ granted: boolean; directoryUri: string }>;
-      createFileAsync: (dir: string, name: string, mime: string) => Promise<string>;
-    } }).StorageAccessFramework;
-    if (!SAF?.requestDirectoryPermissionsAsync) {
-      Alert.alert('Not available', 'File export isn’t available on this unit. Screenshot the log instead.');
-      return;
-    }
+    const mod = NativeModules.VibePowerModule as { writeLog?: (t: string) => Promise<string> } | undefined;
+    if (!mod?.writeLog) { Alert.alert('Not available', 'Screenshot the log instead.'); return; }
     try {
-      const perm = await SAF.requestDirectoryPermissionsAsync();
-      if (!perm?.granted) return;   // user cancelled the picker
-      const d = new Date();
-      const p = (n: number) => String(n).padStart(2, '0');
-      const name = `carfm-tuner-log-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-      const uri = await SAF.createFileAsync(perm.directoryUri, name, 'text/plain');
-      await FileSystem.writeAsStringAsync(uri, text, { encoding: FileSystem.EncodingType.UTF8 });
-      Alert.alert('Saved', `${name}.txt written to the folder you chose.`);
+      const path = await mod.writeLog(text);
+      Alert.alert('Log saved', `Written to:\n${path}\n\nOpen a file manager there to copy it to USB. (Or just screenshot the log.)`);
     } catch (e) {
-      Alert.alert('Couldn’t save', `The file picker failed on this unit — screenshot the log instead.\n\n${String(e)}`);
+      Alert.alert('Couldn’t save', `Screenshot the log instead.\n\n${String(e)}`);
     }
   }, []);
 
@@ -371,7 +356,12 @@ export default function SettingsPanel({
                     )}
                   </ScrollView>
                   <Pressable style={styles.clearRow} onPress={saveLog} accessibilityRole="button" accessibilityLabel="Save log to a file">
-                    <Text style={[styles.clearText, { color: pal.blue }]}>Save to file (USB…)</Text>
+                    <Text style={[styles.clearText, { color: pal.blue }]}>Save to file</Text>
+                    <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
+                  </Pressable>
+                  <View style={[styles.divider, { backgroundColor: pal.border }]} />
+                  <Pressable style={styles.clearRow} onPress={() => nwdRequestAudioSource()} accessibilityRole="button" accessibilityLabel="Test audio source switch">
+                    <Text style={[styles.clearText, { color: pal.blue }]}>Test audio source (launches stock app)</Text>
                     <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                   </Pressable>
                   <View style={[styles.divider, { backgroundColor: pal.border }]} />

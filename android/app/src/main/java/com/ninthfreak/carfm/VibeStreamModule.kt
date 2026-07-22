@@ -303,6 +303,23 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.shareRecordingNative(path)
     }
 
+    /** Write text to the app's external files dir and return the absolute path.
+     *  No SAF / no picker Activity — can't crash on units without DocumentsUI.
+     *  Path is under /storage/emulated/0/Android/data/<pkg>/files, reachable by a
+     *  file manager to copy onto USB. */
+    @ReactMethod
+    fun writeLog(text: String, promise: Promise) {
+        try {
+            val dir = reactContext.getExternalFilesDir(null) ?: reactContext.filesDir
+            val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+            val f = java.io.File(dir, "carfm-tuner-log-$stamp.txt")
+            f.writeText(text)
+            promise.resolve(f.absolutePath)
+        } catch (e: Exception) {
+            promise.reject("write", e.message ?: "write failed", e)
+        }
+    }
+
     // ── GPS speed (drive / standstill detection) ─────────────────────────────
     // Low-rate GPS updates (~30s) → emit VibeSpeed { mps, hasSpeed }. JS
     // (services/motion.ts) derives is_moving + a display speed, filtering the
