@@ -182,10 +182,10 @@ class Component extends DCLogic {
     ]);
 
     const backendDefs = [
-      { id:'auto',   name:'Auto (recommended)', kind:'Probe all sources at startup', available:true,  detected:null },
-      { id:'rtl',    name:'RTL-SDR',            kind:'USB software-defined radio',   available:true,  detected:!err },
-      { id:'si470x', name:'Si470x FM dongle',   kind:'USB hardware tuner',           available:false, detected:false },
-      { id:'rtltcp', name:'rtl_tcp',            kind:'Network stream (dev)',          available:true,  detected:false }
+      { id:'rtl',  name:'RTL-SDR',                  kind:'USB software-defined radio',    available:true,  detected:!err },
+      { id:'nwd',  name:'NWD / NOWADA built-in radio', kind:'Integrated head-unit FM tuner', available:true,  detected:true },
+      { id:'fyt',  name:'FYT / DuduOS built-in radio', kind:'Integrated head-unit FM tuner', available:false, detected:false },
+      { id:'auto', name:'Auto',                     kind:'Probe all sources',             available:true,  detected:null }
     ];
     const sel = this.state.backend;
     const backends = backendDefs.map(b => {

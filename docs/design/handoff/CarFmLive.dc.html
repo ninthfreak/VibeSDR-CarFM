@@ -20,7 +20,8 @@
       rt="{{ rt }}" stereo="{{ stereo }}" signal-db="{{ signalDb }}" segs="{{ segs }}"
       rds="{{ rds }}" tp="{{ tp }}" ta="{{ ta }}" af="{{ af }}" hd="{{ hd }}" pty="{{ pty }}"
       out-of-band="{{ outOfBand }}" scroll="{{ scroll }}" saved="{{ saved }}"
-      logo-bg="{{ logoBg }}" logo-fg="{{ logoFg }}" logo-shape="{{ logoShape }}"
+      logo-bg="{{ logoBg }}" logo-fg="{{ logoFg }}" logo-url="{{ logoUrl }}" logo-shape="{{ logoShape }}"
+      hero-show-call="{{ heroShowCall }}" hero-show-freq="{{ heroShowFreq }}"
       presets="{{ presets }}" seek-style="{{ seekStyle }}" reordering="{{ reordering }}"
       scanning="{{ scanning }}" scan-dir="{{ scanDir }}" tuner-error="{{ tunerError }}" nearby-line="{{ nearbyLine }}" nearby-fill="{{ nearbyFill }}" nearby-border="{{ nearbyBorder }}" nearby-glass="{{ nearbyGlass }}" nearby-border-color="{{ nearbyBorderColor }}" nearby-line-dark="{{ nearbyLineDark }}" nearby-fill-dark="{{ nearbyFillDark }}" nearby-glass-dark="{{ nearbyGlassDark }}" nearby-border-color-dark="{{ nearbyBorderColorDark }}"
       on-freq-tap="{{ openNumpad }}" on-tune-down="{{ tuneDown }}" on-tune-up="{{ tuneUp }}"
@@ -115,25 +116,25 @@ class Component extends DCLogic {
   constructor(props) {
     super(props);
     this.DB = {
-      '88.7':  { ps:'WERN', logo:'WPR', bg:'#0E6E6E', fg:'#FFFFFF', shape:'rounded', sig:4, pty:'Classical', tp:false, af:true,  ta:false, hd:1, rt:'Wisconsin Public Radio  ·  Beethoven: Symphony No. 7' },
+      '88.7':  { ps:'WERN', logo:'WPR', logoUrl:'logos/wern-wpr.png', bg:'#0E6E6E', fg:'#FFFFFF', shape:'rounded', sig:4, pty:'Classical', tp:false, af:true,  ta:false, hd:1, rt:'Wisconsin Public Radio  ·  Beethoven: Symphony No. 7' },
       '89.9':  { ps:'WORT', logo:'WORT', bg:'#6B3FA0', fg:'#FFFFFF', shape:'rounded', sig:4, pty:'Community', tp:false, af:false, ta:false, hd:0, rt:'WORT 89.9 FM  ·  Community radio for south-central Wisconsin' },
       '91.7':  { ps:'WSUM', logo:'WSUM', bg:'#B02A37', fg:'#FFFFFF', shape:'rounded', sig:3, pty:'College', tp:false, af:false, ta:false, hd:0, rt:'WSUM 91.7 — UW–Madison Student Radio' },
       '94.1':  { ps:'WJJO', logo:'JJO', bg:'#1C1F24', fg:'#E23B3B', shape:'rounded', sig:5, pty:'Rock', tp:false, af:false, ta:false, hd:0, rt:'94.1 WJJO — Rock — Metallica — Enter Sandman' },
       '98.1':  { ps:'WMGN', logo:'MAGIC', bg:'#C21E7A', fg:'#FFFFFF', shape:'rounded', sig:4, pty:'Adult Hits', tp:false, af:true, ta:false, hd:1, rt:'Magic 98 — Elton John — Your Song' },
       '100.5': { ps:'WMLI', logo:'STAR', bg:'#2E7D46', fg:'#FFFFFF', shape:'rounded', sig:3, pty:'Country', tp:true, af:false, ta:false, hd:0, rt:'Star Country 100.5 — Luke Combs — Fast Car' },
-      '101.5': { ps:'WIBA-FM', logo:'WIBA', bg:'#2B2F36', fg:'#FFC24D', shape:'rounded', sig:3, pty:'Classic Rock', tp:true, af:true, ta:true, hd:0, rt:'101.5 WIBA — Led Zeppelin — Black Dog' },
+      '101.5': { ps:'WIBA-FM', logo:'WIBA', logoUrl:'logos/wiba-1015.png', bg:'#2B2F36', fg:'#FFC24D', shape:'rounded', sig:3, pty:'Classic Rock', tp:true, af:true, ta:true, hd:0, rt:'101.5 WIBA — Led Zeppelin — Black Dog' },
       '102.1': { ps:'WQLF-FM', logo:'Q102', bg:'#1F6FEB', fg:'#FFFFFF', shape:'rounded', sig:2, pty:'Classic Rock', tp:false, af:false, ta:false, hd:0, rt:"The Big Rock Q102 — Rockford, IL — Tom Petty — Free Fallin'" },
       '104.1': { ps:'WZEE', logo:'Z104', bg:'#0EA5C4', fg:'#FFFFFF', shape:'rounded', sig:5, pty:'Top 40', tp:false, af:true, ta:false, hd:2, rt:'Z104 — Dua Lipa — Levitating' },
       '105.1': { ps:'WMHX', logo:'HOT', bg:'#E8590C', fg:'#FFFFFF', shape:'rounded', sig:4, pty:'Hot AC', tp:false, af:false, ta:false, hd:0, rt:'Hot 105.1 — Harry Styles — As It Was' },
-      '105.9': { ps:'WWHG-FM', logo:'HOG', bg:'#161616', fg:'#E2711D', shape:'rounded', sig:5, pty:'Rock', tp:false, af:false, ta:false, hd:0, rt:'Everything That Rocks — Foo Fighters — Everlong' }
+      '105.9': { ps:'WWHG-FM', logo:'HOG', logoUrl:'logos/wwhg-hog.png', bg:'#161616', fg:'#E2711D', shape:'rounded', sig:5, pty:'Rock', tp:false, af:false, ta:false, hd:0, rt:'Everything That Rocks — Foo Fighters — Everlong' }
     };
     this.nearby = [
       { freq:'104.1', callsign:'WZEE', service:'FM', city:'Madison, WI', genre:'Top 40', logo:'Z104', logoBg:'#0EA5C4', logoFg:'#FFFFFF', logoShape:'rounded', bars:5, distanceKm:5 },
       { freq:'94.1',  callsign:'WJJO', service:'FM', city:'Watertown, WI', genre:'Active Rock', logo:'JJO', logoBg:'#1C1F24', logoFg:'#E23B3B', logoShape:'rounded', bars:5, distanceKm:6 },
-      { freq:'105.9', callsign:'WWHG-FM', service:'FM', city:'Madison, WI', genre:'Rock', logo:'HOG', logoBg:'#161616', logoFg:'#E2711D', logoShape:'rounded', bars:5, distanceKm:7 },
+      { freq:'105.9', callsign:'WWHG-FM', service:'FM', city:'Madison, WI', genre:'Rock', logo:'HOG', logoUrl:'logos/wwhg-hog.png', logoBg:'#161616', logoFg:'#E2711D', logoShape:'rounded', bars:5, distanceKm:7 },
       { freq:'98.1',  callsign:'WMGN', service:'FM', city:'Madison, WI', genre:'Adult Contemporary', logo:'MAGIC', logoBg:'#C21E7A', logoFg:'#FFFFFF', logoShape:'rounded', bars:4, distanceKm:6 },
       { freq:'89.9',  callsign:'WORT', service:'FM', city:'Madison, WI', genre:'Community', logo:'WORT', logoBg:'#6B3FA0', logoFg:'#FFFFFF', logoShape:'rounded', bars:4, distanceKm:5 },
-      { freq:'88.7',  callsign:'WERN', service:'FM', city:'Madison, WI', genre:'Classical · WPR', logo:'WPR', logoBg:'#0E6E6E', logoFg:'#FFFFFF', logoShape:'rounded', bars:4, distanceKm:9 },
+      { freq:'88.7',  callsign:'WERN', service:'FM', city:'Madison, WI', genre:'Classical · WPR', logo:'WPR', logoUrl:'logos/wern-wpr.png', logoBg:'#0E6E6E', logoFg:'#FFFFFF', logoShape:'rounded', bars:4, distanceKm:9 },
       { freq:'102.1', callsign:'WQLF-FM', service:'FM', city:'Rockford, IL', genre:'Classic Rock', logo:'Q102', logoBg:'#1F6FEB', logoFg:'#FFFFFF', logoShape:'rounded', bars:1, distanceKm:112 },
       { freq:'105.1', callsign:'WMHX', service:'FM', city:'Waunakee, WI', genre:'Hot AC', logo:'HOT', logoBg:'#E8590C', logoFg:'#FFFFFF', logoShape:'rounded', bars:4, distanceKm:14 },
       { freq:'101.5', callsign:'WIBA-FM', service:'FM', city:'Madison, WI', genre:'Classic Rock', logo:'WIBA', logoBg:'#2B2F36', logoFg:'#FFC24D', logoShape:'rounded', bars:3, distanceKm:12 },
@@ -148,7 +149,7 @@ class Component extends DCLogic {
         { name:'WQLF-FM', freq:'102.1' },
         { name:'WWHG-FM', freq:'105.9' }
       ],
-      numpadOpen: false, pickerOpen: false, settingsOpen: false, logoSearchFor: null, npBuf: '', npError: false, reordering: false, logoNote: '', scale: 1, scanning: false, scanDir: 0, scanDisplay: '', themeChoice: 'system', autostart: true
+      numpadOpen: false, pickerOpen: false, settingsOpen: false, logoSearchFor: null, logoDisplay: {}, npBuf: '', npError: false, reordering: false, logoNote: '', scale: 1, scanning: false, scanDir: 0, scanDisplay: '', themeChoice: 'system', autostart: true
     };
   }
 
@@ -255,12 +256,15 @@ class Component extends DCLogic {
     this.setState({ logoSearchFor: freq, numpadOpen: false, pickerOpen: false, settingsOpen: false });
   };
   closeLogo = () => this.setState({ logoSearchFor: null });
-  confirmLogo = (url) => {
+  confirmLogo = (url, showCall, showFreq) => {
     const f = this.state.logoSearchFor;
     const info = this.DB[f];
     const name = info ? info.ps : ('FM ' + f);
     clearTimeout(this._logoT);
-    this.setState({ logoSearchFor: null, logoNote: 'Logo updated \u2014 ' + name });
+    const disp = Object.assign({}, this.state.logoDisplay);
+    disp[f] = { call: showCall !== false, freq: showFreq !== false };
+    if (url && info) info.logoUrl = url;
+    this.setState({ logoSearchFor: null, logoDisplay: disp, logoNote: 'Logo settings saved \u2014 ' + name });
     this._logoT = setTimeout(() => this.setState({ logoNote: '' }), 2200);
   };
   removePreset = (freq) => {
@@ -315,7 +319,7 @@ class Component extends DCLogic {
     const rt = info ? info.rt : '';
     const rating = info ? (info.sig || 3) : 0;
     const sig = info ? { seg: Math.max(1, Math.round(rating / 5 * 12)), db: -95 + rating * 8 } : { seg: 0, db: -110 };
-    const presets = s.presets.map(pp => { const di = this.DB[pp.freq]; return Object.assign({}, pp, { active: pp.freq === freq, logo: di ? di.logo : '', logoBg: di ? di.bg : '', logoFg: di ? di.fg : '' }); });
+    const presets = s.presets.map(pp => { const di = this.DB[pp.freq]; return Object.assign({}, pp, { active: pp.freq === freq, logo: di ? di.logo : '', logoUrl: di ? (di.logoUrl || '') : '', logoBg: di ? di.bg : '', logoFg: di ? di.fg : '' }); });
 
     const keyStyle = { width: 'calc((100% - 24px) / 3)', height: 64, borderRadius: 14, backgroundColor: t.raised, border: '1px solid ' + t.border, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, fontWeight: 700, color: t.text, cursor: 'pointer', boxSizing: 'border-box' };
     const npCompact = dims.h < 560;
@@ -334,6 +338,9 @@ class Component extends DCLogic {
       logoText: s.scanning ? '' : (info ? info.logo : ''),
       logoBg: s.scanning ? '' : (info ? info.bg : ''),
       logoFg: s.scanning ? '' : (info ? info.fg : ''),
+      logoUrl: s.scanning ? '' : (info ? (info.logoUrl || '') : ''),
+      heroShowCall: (s.logoDisplay[freq] || {}).call !== false,
+      heroShowFreq: (s.logoDisplay[freq] || {}).freq !== false,
       logoShape: info ? info.shape : '',
       rt: s.scanning ? '' : rt, stereo: !s.scanning && rating >= 3,
       rds: !s.scanning && !!info,
@@ -372,7 +379,7 @@ class Component extends DCLogic {
       tuneUp: this.tuneUp, tuneDown: this.tuneDown, prevPreset: this.prevPreset, nextPreset: this.nextPreset,
       startReorder: this.startReorder, doneReorder: this.doneReorder, reorderPresets: this.reorderPresets, editLogo: this.editLogo, removePreset: this.removePreset,
       logoSearchOpen: !!s.logoSearchFor, closeLogo: this.closeLogo, confirmLogo: this.confirmLogo,
-      logoStation: (() => { if (!s.logoSearchFor) return null; const di = this.DB[s.logoSearchFor]; const call = di ? di.ps : ('FM ' + s.logoSearchFor); return { name: call, callsign: call, freq: s.logoSearchFor, query: 'radio ' + s.logoSearchFor + ' ' + call.toLowerCase() + ' logo', logo: di ? di.logo : '', logoBg: di ? di.bg : '', logoFg: di ? di.fg : '' }; })(),
+      logoStation: (() => { if (!s.logoSearchFor) return null; const di = this.DB[s.logoSearchFor]; const call = di ? di.ps : ('FM ' + s.logoSearchFor); const dsp = (s.logoDisplay || {})[s.logoSearchFor] || {}; return { name: call, callsign: call, freq: s.logoSearchFor, query: 'radio ' + s.logoSearchFor + ' ' + call.toLowerCase() + ' logo', logo: di ? di.logo : '', logoBg: di ? di.bg : '', logoFg: di ? di.fg : '', logoUrl: di ? (di.logoUrl || '') : '', showCall: dsp.call !== false, showFreq: dsp.freq !== false }; })(),
       tuneTo: this.tuneTo, toggleSave: this.toggleSave, pickAndTune: this.pickAndTune, savePresetFreq: this.savePresetFreq,
       commitNumpad: this.commitNumpad, scanUp: this.scanUp, scanDown: this.scanDown,
 

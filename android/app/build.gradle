@@ -88,6 +88,9 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace 'com.ninthfreak.carfm'
+    // AGP 8 disables AIDL by default; the NWD built-in-tuner backend binds the
+    // vendor radio service over reconstructed .aidl (com.nwd.radio.service).
+    buildFeatures { aidl true }
     defaultConfig {
         applicationId 'com.ninthfreak.carfm'
         minSdkVersion rootProject.ext.minSdkVersion

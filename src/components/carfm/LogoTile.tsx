@@ -1,22 +1,24 @@
 /**
- * Station brand tile: the real logo from the stations DB when we have one,
- * else a colored monogram (design: "colored monogram tiles… real brand art
- * would replace these later"). Lookup is lazy and cached per callsign base.
+ * Station brand logo. A real image from the stations DB when we have one — rendered
+ * FIT (`object-fit: contain`): never cropped, never overflowing, centered in a
+ * fixed-geometry plate — else a colored monogram cube. Real logos are assigned only
+ * via the preset logo-search window (LogoSearchOverlay); on save it calls
+ * invalidateLogoTile(base) so every mounted tile re-reads the DB and swaps the art.
  *
- * Logos are assigned through the preset-reorder logo-search window (see
- * LogoSearchOverlay) — that is the one and only way. When it saves a logo,
- * it calls invalidateLogoTile(base) so every mounted tile for that station
- * re-reads the DB and swaps the monogram for the art.
+ * The surfaces (hero / preset tile / peek card) branch their WHOLE layout on whether
+ * a real logo exists, so the resolution lives in a shared `useStationLogo` hook.
  */
 import React, { useEffect, useState } from 'react';
 import { Image, Text, View } from 'react-native';
 
 import { getStationLogo, callsignForFreq } from '../../services/stationFinder';
+import { getStationPrefs } from '../../services/stationDb';
 import { callsignBase } from '../../services/piCallsign';
 import { brandColor, monogram, FONT_BOLD } from './tokens';
 
 const cache = new Map<string, string | null>();
 const listeners = new Set<() => void>();
+const dispListeners = new Set<() => void>();
 
 /** Extract a plausible callsign base ("WJJO-FM" / "94.1 WJJO" → "WJJO"). */
 export function callsignFrom(name?: string): string | null {
@@ -33,12 +35,12 @@ export function invalidateLogoTile(base?: string): void {
   listeners.forEach((l) => l());
 }
 
-export default function LogoTile({ name, freqMhz, size, radius }: {
-  name?: string;          // station name / callsign-ish string
-  freqMhz?: number;       // dial frequency — resolves the callsign when `name` isn't one
-  size: number;
-  radius?: number;
-}) {
+/** Resolve a station's callsign base + logo data-URI. Shared by LogoTile and the
+ *  surfaces that must branch their layout on `hasLogo` (hero replaces the call
+ *  sign with the logo; tiles/peek hide their text). */
+export function useStationLogo(name?: string, freqMhz?: number): {
+  base: string | null; uri: string | null; hasLogo: boolean;
+} {
   const nameBase = callsignFrom(name) ? callsignBase(callsignFrom(name)!) : null;
   const [base, setBase] = useState<string | null>(nameBase);
   const [uri, setUri] = useState<string | null>(nameBase ? cache.get(nameBase) ?? null : null);
@@ -70,14 +72,68 @@ export default function LogoTile({ name, freqMhz, size, radius }: {
     return () => { cancelled = true; };
   }, [base, tick]);
 
-  const r = radius ?? Math.round(size * 0.22);
-  const label = base ? monogram(base) : (name?.trim().slice(0, 4).toUpperCase() || '·');
+  return { base, uri, hasLogo: !!uri };
+}
+
+/** Notify every mounted hero that a station's Display Call Sign / Frequency
+ *  choices changed (called by the logo window on save). */
+export function invalidateStationDisplay(): void { dispListeners.forEach((l) => l()); }
+
+/** Per-station hero display flags (Display Call Sign / Display Frequency, §6.4).
+ *  Both default true; re-reads when invalidateStationDisplay() fires. */
+export function useStationDisplay(base: string | null): { showCall: boolean; showFreq: boolean } {
+  const [prefs, setPrefs] = useState<{ showCall: boolean; showFreq: boolean }>({ showCall: true, showFreq: true });
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const l = () => setTick((n) => n + 1);
+    dispListeners.add(l);
+    return () => { dispListeners.delete(l); };
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    if (!base) { setPrefs({ showCall: true, showFreq: true }); return; }
+    getStationPrefs(base).then((p) => { if (!cancelled) setPrefs(p); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [base, tick]);
+  return prefs;
+}
+
+export default function LogoTile({ name, freqMhz, size, w, h, radius, plateBg, showMonogram = true }: {
+  name?: string;          // station name / callsign-ish string
+  freqMhz?: number;       // dial frequency — resolves the callsign when `name` isn't one
+  size?: number;          // square box (back-compat) — or pass w/h for a non-square plate
+  w?: number;
+  h?: number;
+  radius?: number;
+  plateBg?: string;       // plate colour behind a real logo (default transparent; hero uses white)
+  showMonogram?: boolean; // false → render an empty box when no real logo (hero shows none)
+}) {
+  const { base, uri } = useStationLogo(name, freqMhz);
+  const boxW = w ?? size ?? 0;
+  const boxH = h ?? size ?? boxW;
+  const r = radius ?? Math.round((size ?? boxW) * 0.22);
+
+  // Real logo: FIT inside a fixed-geometry plate. The plate owns the size; the
+  // image is 100%×100% with contain INSIDE it — that separation is what prevents
+  // overflow for any aspect ratio (wide wordmark, square badge, tall lockup).
   if (uri) {
-    return <Image source={{ uri }} style={{ width: size, height: size, borderRadius: r }} resizeMode="cover" />;
+    return (
+      <View style={{
+        width: boxW, height: boxH, borderRadius: r,
+        backgroundColor: plateBg ?? 'transparent', overflow: 'hidden',
+        alignItems: 'center', justifyContent: 'center',
+      }}>
+        <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+      </View>
+    );
   }
+
+  // No real logo: monogram cube (or an empty box where the caller suppresses it).
+  if (!showMonogram) return <View style={{ width: boxW, height: boxH }} />;
+  const label = base ? monogram(base) : (name?.trim().slice(0, 4).toUpperCase() || '·');
   return (
     <View style={{
-      width: size, height: size, borderRadius: r,
+      width: boxW, height: boxH, borderRadius: r,
       backgroundColor: brandColor(base ?? label),
       alignItems: 'center', justifyContent: 'center',
     }}>
@@ -86,7 +142,7 @@ export default function LogoTile({ name, freqMhz, size, radius }: {
         numberOfLines={1}
         style={{
           color: '#FFFFFF', fontFamily: FONT_BOLD,
-          fontSize: Math.round(size * (label.length > 3 ? 0.26 : 0.34)),
+          fontSize: Math.round((size ?? Math.min(boxW, boxH)) * (label.length > 3 ? 0.26 : 0.34)),
         }}
       >
         {label}

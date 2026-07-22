@@ -80,6 +80,12 @@ export function brandColor(key: string): string {
   return BRAND_BGS[Math.abs(h) % BRAND_BGS.length];
 }
 
+/** Callsign shown as its core letters only: strip `-FM`/`-AM` and stray
+ *  hyphens/spaces (e.g. `WWHG-FM` → `WWHG`). Applied everywhere a call sign
+ *  is displayed (hero, tiles, peek, nearby) — matches the design prototype. */
+export const cleanCall = (s?: string): string =>
+  String(s || '').replace(/[\s-]*(fm|am)\b/ig, '').replace(/[-\s]+/g, '').trim();
+
 /** "WJJO-FM" -> "JJO" style short monogram for the tile face. */
 export function monogram(callsign: string): string {
   const base = callsign.toUpperCase().split('-')[0].trim();

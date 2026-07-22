@@ -36,7 +36,9 @@ const LOGO_DDL = `
     callsign_base TEXT PRIMARY KEY, img BLOB, mime TEXT,
     genre TEXT, homepage TEXT, source TEXT, fetched_at INTEGER);
   CREATE TABLE IF NOT EXISTS logo_wanted (
-    callsign_base TEXT PRIMARY KEY, marked_at INTEGER);`;
+    callsign_base TEXT PRIMARY KEY, marked_at INTEGER);
+  CREATE TABLE IF NOT EXISTS station_prefs (
+    callsign_base TEXT PRIMARY KEY, show_call INTEGER, show_freq INTEGER);`;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase | null> | null = null;
 
@@ -235,6 +237,32 @@ export async function saveLogo(
 /** Assign a logo by hand (sticky — auto sources won't overwrite it). */
 export async function setManualLogo(base: string, img: Uint8Array, mime: string): Promise<void> {
   await saveLogo(base, img, mime, null, null, 'manual');
+}
+
+// ── per-station hero display prefs (§6.4 Display Call Sign / Display Frequency) ──
+/** Whether to show the call sign / frequency on the HERO for a station. Both
+ *  default true; set from the logo window. Affects the hero card only. */
+export async function getStationPrefs(base: string): Promise<{ showCall: boolean; showFreq: boolean }> {
+  const dflt = { showCall: true, showFreq: true };
+  const d = await db();
+  if (!d || !base) return dflt;
+  try {
+    const r = await d.getFirstAsync<{ show_call: number | null; show_freq: number | null }>(
+      `SELECT show_call, show_freq FROM station_prefs WHERE callsign_base = ?`, [base.toUpperCase()]);
+    if (!r) return dflt;
+    return { showCall: r.show_call !== 0, showFreq: r.show_freq !== 0 };
+  } catch { return dflt; }
+}
+
+export async function setStationPrefs(base: string, showCall: boolean, showFreq: boolean): Promise<void> {
+  const d = await db();
+  if (!d || !base) return;
+  try {
+    await d.runAsync(
+      `INSERT INTO station_prefs(callsign_base,show_call,show_freq) VALUES (?,?,?)
+       ON CONFLICT(callsign_base) DO UPDATE SET show_call=excluded.show_call, show_freq=excluded.show_freq`,
+      [base.toUpperCase(), showCall ? 1 : 0, showFreq ? 1 : 0]);
+  } catch (e) { console.warn('[stationDb] setStationPrefs failed', e); }
 }
 
 /** The source that last set a station's stored logo, or null. */

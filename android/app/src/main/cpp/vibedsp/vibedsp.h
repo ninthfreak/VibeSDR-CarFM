@@ -324,9 +324,10 @@ public:
     void setCallbacks(const Callbacks& c) { cb_ = c; }
     void reset();
     void pushBit(int bit);            // one recovered data bit (post differential)
-    // Hardware-RDS backends (Si470x etc., tuner-backends addendum §1): deliver
-    // one already-synced block group (A..D + per-block validity) straight into
-    // the SAME parser — PS/RT/RT+/PTY/TA/AF all work identically.
+    // Hardware-RDS backends that deliver already-synced block groups (a chip or
+    // head-unit tuner that hands over A..D + per-block validity, rather than a raw
+    // bitstream): feed them straight into the SAME parser — PS/RT/RT+/PTY/TA/AF
+    // all work identically.
     void pushGroup(const uint16_t blocks[4], const bool ok[4]);
 
     // Exposed for the DSP layer / tests (encoder round-trip).

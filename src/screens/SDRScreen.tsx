@@ -3,7 +3,6 @@
  *
  * Hierarchy:
  *   SDRScreen
- *   ├── WaterfallView         (GPU Skia waterfall + spectrum, fills full screen)
  *   ├── ControlsBar           (drums, sig-frame, freq/mode pill, step, menu — absolute overlay)
  *   ├── MenuSheet             (slide-up panel)
  *   ├── StepPicker            (bottom-sheet step selector)
@@ -43,6 +42,8 @@ import { splashBridge }                 from '../../App';
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
+import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSetRds, nwdSetAudio, onNwd } from '../services/nwdRadio';
+import { diag } from '../services/diag';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { localSessionGen, newLocalSession } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
@@ -80,7 +81,6 @@ import { setDefaultInstance, getDefaultInstance,
 import { getFavourites, toggleFavourite }              from '../services/favourites';
 import { useTheme }                                     from '../contexts/ThemeContext';
 
-import WaterfallView   from '../components/WaterfallView';
 import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
@@ -201,6 +201,27 @@ const LOCAL_MODES: { id: string; label: string }[] = [
   // with USB as the final option (sits below LSB in the grid).
   { id: 'lsb', label: 'LSB' }, { id: 'usb', label: 'USB' },
 ];
+
+// The live-station snapshot that feeds the CarFM face (name/RadioText/RDS flags).
+type LiveStation = { name?: string; text?: string; rtArtist?: string; rtTitle?: string; tp?: boolean; ta?: boolean; pty?: number; af?: boolean; afMhz?: number[]; badge?: string; countryIso?: string; pi?: string };
+
+function sameNums(a?: number[], b?: number[]): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+// RDS RadioText arrives as several fragments/sec; many carry nothing the face
+// actually shows. Gate setLiveStation on a real change so identical ticks don't
+// re-render the (SVG-heavy) CarFM face for nothing. Compares every displayed
+// field; afMhz is the only non-primitive (element-wise).
+function liveStationEqual(a: LiveStation, b: LiveStation): boolean {
+  return a.name === b.name && a.text === b.text && a.rtArtist === b.rtArtist &&
+    a.rtTitle === b.rtTitle && a.tp === b.tp && a.ta === b.ta && a.pty === b.pty &&
+    a.af === b.af && a.badge === b.badge && a.countryIso === b.countryIso &&
+    a.pi === b.pi && sameNums(a.afMhz, b.afMhz);
+}
 
 export default function SDRScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName, password } = route.params;
@@ -586,7 +607,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [aircraft, setAircraft] = useState<Aircraft[]>([]);
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
-  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; rtArtist?: string; rtTitle?: string; tp?: boolean; ta?: boolean; pty?: number; af?: boolean; afMhz?: number[]; badge?: string; countryIso?: string; pi?: string }>({});
+  const [liveStation, setLiveStation] = useState<LiveStation>({});
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
   const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
@@ -596,14 +617,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   // CarFM: the FM-only face covers the full SDR UI when active. "Advanced" lets
   // the normal SDR UI (waterfall/decoders/all modes) back in without leaving.
   const carFm = !!route.params.carFm;
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const fmFaceActive = carFm && !advancedOpen;
+  // CarFM has no advanced-SDR escape hatch: the face IS the whole UI in a carFm
+  // session. (The stock SDR view still exists for non-carFm/dev launches — see
+  // the !fmFaceActive branch below — but nothing in CarFM can reach it.)
+  const fmFaceActive = carFm;
   // Ref mirror for the per-frame onSpectrum closure (avoids a stale capture): the
   // FM face is opaque and self-contained, so all waterfall/meter work is wasted
   // while it's up.
   const fmFaceActiveRef = useRef(fmFaceActive);
   fmFaceActiveRef.current = fmFaceActive;
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
+  // True while the head unit's built-in NWD tuner is driving the face (a
+  // tunerless carFm launch on an NWD/NOWADA unit). Routes tune commands to it.
+  const nwdActiveRef = useRef(false);
   // PI-derived station identity (addendum §6): RDS PI arrives in block 1 almost
   // immediately, so we can name the station from the bundled DB before PS text
   // assembles. A hint only — PS wins when present.
@@ -654,10 +680,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     bandwidthLow: -3000, bandwidthHigh: 3000,
     binCount: 1024, binBandwidth: 0, centerHz: 0, bwHz: 0,
   });
-  // Hot-path frame sink — WaterfallView registers its imperative frame handler
-  // here; spectrum frames bypass React state entirely (CPU audit 2026-06-11:
-  // setState per 10–20Hz frame re-rendered the whole tree ≈ a full core).
-  const wfFrameSink = useRef<((b: Float32Array, s: SDRStatus) => void) | null>(null);
   // Muted via media controls (AirPods squeeze → pause = mute) — native emits
   // VibeMuted so the UI can show a tap-to-unmute banner.
   const [isMuted, setIsMuted] = useState(false);
@@ -1989,7 +2011,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         // so a live station name shows uniformly regardless of source.
         liveStationRef.current = meta.stationName ?? '';
         liveBadgeRef.current = meta.badge;
-        setLiveStation({ name: meta.stationName, text: meta.text, rtArtist: meta.rtArtist, rtTitle: meta.rtTitle, tp: meta.tp, ta: meta.ta, pty: meta.pty, af: meta.af, afMhz: meta.afMhz, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi });
+        const nextLive: LiveStation = { name: meta.stationName, text: meta.text, rtArtist: meta.rtArtist, rtTitle: meta.rtTitle, tp: meta.tp, ta: meta.ta, pty: meta.pty, af: meta.af, afMhz: meta.afMhz, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi };
+        setLiveStation(prev => liveStationEqual(prev, nextLive) ? prev : nextLive);
         if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
@@ -2022,12 +2045,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           Math.abs(prev.binBandwidth - s.binBandwidth) < 1e-6
             ? prev : s);
         // The FM face is opaque and draws its own meter from the audio SNR, so the
-        // waterfall render + the per-frame bin math below are pure waste while it's
-        // up. Skip them (WaterfallView is unmounted then too — see the render).
+        // per-frame bin math below is pure waste while it's up. Skip it.
         if (fmFaceActiveRef.current) return;
-        // Waterfall/spectrum render imperatively — no React state per frame.
-        wfFrameSink.current?.(newBins, s);
-        // ── Derive signal level + SNR from bins ────────────────────────────
+        // ── Derive signal level + SNR from bins (advanced-view meter only) ──
         // Full data rate (~10Hz) — updates only re-render the two meter leaf
         // widgets via the bus, so there's no need to throttle anymore.
         // Find peak bin power in the current bandwidth window
@@ -2645,69 +2665,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       .catch(() => {});
   }, [baseUrl, instanceName, route.params.serverType]);
 
-  // ── Waterfall gestures ────────────────────────────────────────────────────
-
-  const onWfPanDelta = useCallback((dxPx: number) => {
-    const c = client.current; if (!c) return;
-    if (vfoLockedRef.current) return;                 // no free pan while locked
-    markInteract();
-    // Predicted view: pan() updates it synchronously, so successive deltas
-    // compound correctly. Re-basing on getStatus() made every delta in an RTT
-    // window re-apply from the same stale centre (rubber-banding).
-    const s = c.getView(); if (!s.bwHz || !s.centerHz) return;
-    const span = c.panSpan();
-    const target = s.centerHz + Math.round((dxPx / screenW) * s.bwHz);
-    // Silently clamp at the boundary walls (the visible walls show the limit;
-    // no toast — per Stuart, VTS pop-ups caused more trouble than they solved).
-    let clamped: number;
-    if (span.movable) {
-      // Local Fs window: span bounds the CENTRE directly (keeps the VFO inside
-      // the capture window; the VFO itself may leave the visible view).
-      clamped = Math.max(span.loHz, Math.min(span.hiHz, target));
-    } else {
-      // Hard walls (band edge / profile / rx range): keep the whole VIEW inside.
-      const half = s.bwHz / 2;
-      const loC = span.loHz + half, hiC = span.hiHz - half;
-      clamped = loC <= hiC ? Math.max(loC, Math.min(hiC, target))
-                           : Math.round((span.loHz + span.hiHz) / 2);
-    }
-    c.pan(clamped);
-  }, [screenW]);
-
-  // Same gesture-accumulator pattern as the BW drum (ladder snap-back).
-  const wfZoomAcc = useRef({ base: 0, f: 1, t: 0 });
-  const wfZoomBy = useCallback((factor: number) => {
-    const c = client.current; if (!c) return;
-    markInteract();
-    const s = c.getView(); if (!s.binBandwidth || !s.centerHz) return;
-    const a = wfZoomAcc.current;
-    const now = Date.now();
-    if (now - a.t > 400 || !a.base) { a.base = s.binBandwidth; a.f = 1; }
-    a.t = now;
-    a.f *= factor;
-    c.zoom(zoomAnchorHz(s), Math.max(0.5, a.base * a.f));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const onWfZoomDelta = useCallback((dyPx: number) => {
-    wfZoomBy(Math.pow(0.985, dyPx));
-  }, [wfZoomBy]);
-
-  const onWfPinchZoom = useCallback((scaleDelta: number) => {
-    wfZoomBy(1 / scaleDelta);
-  }, [wfZoomBy]);
-
-  const onWfTapTune = useCallback((hz: number) => {
-    const c = client.current; if (!c) return;
-    // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
-    // thing a VFO can do is drag you OFF the block and kill the decode.
-    if (isWholeProfileMode(String(c.getStatus().mode))) return;
-    markInteract();
-    const [loHz, hiHz] = c.caps.freqRange;
-    const clamped = Math.max(loHz, Math.min(hiHz, hz));
-    c.tune(clamped);
-    setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
-  }, []);
 
   // ── Mode / filter / tune ──────────────────────────────────────────────────
 
@@ -2876,6 +2833,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     // and reads back as the user's choice — even with no dongle connected.
     if (!c) {
       setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(hz) }));
+      // Built-in NWD tuner (no SDR client): drive the hardware tuner directly.
+      if (nwdActiveRef.current) nwdTune(Math.round(hz) / 1e6).catch(() => {});
       return;
     }
     const [loHz, hiHz] = c.caps.freqRange;
@@ -3442,6 +3401,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!fmFaceActive) return;
     const t = setInterval(() => {
+      // The built-in NWD tuner drives the meter from its own signal level (arg);
+      // don't overwrite it with the SDR-path audio SNR (which is stale/0 there).
+      if (nwdActiveRef.current) return;
       const v = audioSnrRef.current;
       setFmSignalDb(Number.isFinite(v) ? v : null);
     }, 500);
@@ -3708,6 +3670,59 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => sub.remove();
   }, [carFm, onFmToggleSave, onFmMediaSeek]);
 
+  // ── Built-in NWD/NOWADA tuner (Backend E) ────────────────────────────────────
+  // On a tunerless carFm launch (no SDR dongle) — the normal case on a permanent
+  // head-unit install — bind the unit's own FM tuner if it exposes the NWD radio
+  // service, and drive the face from IT instead of showing the tuner-error pill.
+  // Audio is analog + MCU-routed; PS/RadioText/PTY/TA/stereo arrive as native
+  // callback events. Tune commands route via onTuneHz's nwdActiveRef branch.
+  useEffect(() => {
+    if (!carFm || !route.params.tunerless) return;
+    let cancelled = false;
+    const subs: Array<() => void> = [];
+    (async () => {
+      const avail = await isNwdAvailable();
+      diag(`NWD available? ${avail}`);
+      if (!avail || cancelled) return;
+      try {
+        const info = await nwdConnect();
+        if (cancelled) { nwdDisconnect(); return; }
+        nwdActiveRef.current = true;
+        setFmTunerError(false);
+        nwdSetRds(true);
+        nwdSetAudio(true);
+        diag(`NWD connected: band=${info.band} freqMult=${info.freqMult} mhz=${info.mhz ?? '?'} ps='${info.ps ?? ''}'; RDS on; audio-switch fired`);
+        if (typeof info.mhz === 'number' && info.mhz > 0) {
+          setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(info.mhz! * 1e6) }));
+          if (info.ps) liveStationRef.current = info.ps;
+        }
+      } catch (e) { diag(`NWD connect FAILED: ${String(e)}`); return; }
+      if (cancelled) return;
+      // Decoded RDS + tuning state pushed from the service (Binder → JS events).
+      subs.push(onNwd('NwdRadioFrequency', (p) => {
+        liveStationRef.current = p.ps ?? '';
+        setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(p.mhz * 1e6) }));
+        setLiveStation((prev) => ({ ...prev, name: p.ps || undefined }));
+        // Signal: the tuner reports a relative level in `arg` (on-device: strong≈6,
+        // weak≈3). Map to an approximate dBFS so the face's waves + readout track
+        // it. Relative, not true dBFS — the ceiling still wants calibrating.
+        setFmSignalDb(-95 + Math.max(0, p.arg) * 6);
+        diag(`freq ${p.mhz.toFixed(1)} arg=${p.arg} PS='${p.ps}'`);
+      }));
+      subs.push(onNwd('NwdRadioRt', (p) => { setLiveStation((prev) => ({ ...prev, text: p.rt || undefined })); diag(`RT '${p.rt}'`); }));
+      subs.push(onNwd('NwdRadioStereo', (p) => { setFmStereo(p.on); diag(`stereo ${p.on}`); }));
+      subs.push(onNwd('NwdRadioPty', (p) => { setLiveStation((prev) => ({ ...prev, pty: p.pty })); diag(`PTY ${p.pty}`); }));
+      subs.push(onNwd('NwdRadioTa', (p) => { setLiveStation((prev) => ({ ...prev, ta: p.ta })); diag(`TA ${p.ta}`); }));
+    })();
+    return () => {
+      cancelled = true;
+      nwdActiveRef.current = false;
+      subs.forEach((u) => u());
+      nwdSetAudio(false);   // release the radio audio source before unbinding
+      nwdDisconnect();
+    };
+  }, [carFm, route.params.tunerless]);
+
   // TA: a real car radio breaks mute for traffic announcements. If TA rises
   // while muted, unmute for the announcement and restore the mute when it
   // ends. Only ever restores a mute THIS effect lifted.
@@ -3859,69 +3874,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     >
       <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />
 
-      {/* Waterfall — fills screen below the status bar / Dynamic Island so the
-          band plan strip is never hidden under the notch. NOT mounted while the
-          opaque FM face is up: it's fully hidden, and a full-screen Skia GPU
-          waterfall + 10Hz DSP behind it is the biggest perf drain on a weak unit. */}
-      {!fmFaceActive && (
-      <View style={{ marginTop: insets.top }}>
-      <WaterfallView
-        frameSink={wfFrameSink}
-        binCount={status.binCount}
-        centerHz={status.centerHz}
-        bwHz={status.bwHz}
-        tuneHz={status.frequency}
-        filterLow={status.bandwidthLow}
-        filterHigh={status.bandwidthHigh}
-        dbMin={dbMin}
-        dbMax={dbMax}
-        wfCoarse={wfCoarse}
-        colormap={colormap}
-        width={screenW}
-        height={screenH - insets.top}
-        // Block waterfall tune/pan/pinch in the bottom gap (home-indicator
-        // zone): the whole strip below the pill when controls show, else just
-        // the home bar. Preserves swipe-up-to-minimise + menu Modals.
-        bottomGuard={controlsHidden ? bottomInset : bottomInset + 8}
-        // The drawn band segments must follow the RECEIVER's region like every
-        // other consumer of the plan (0 = not yet known → keep the R1 default,
-        // since WaterfallView's filter would otherwise drop every regional band).
-        ituRegion={ituRegion || 1}
-        onPanDelta={onWfPanDelta}
-        onZoomDelta={onWfZoomDelta}
-        onTapTune={onWfTapTune}
-        onPinchZoom={onWfPinchZoom}
-        specShow={specShow}
-        autoContrast={autoContrast}
-        specSmoothing={specSmoothing}
-        specFloor={specFloor}
-        specPeakScale={specPeakScale}
-        peakHold={peakHold}
-        spatialSmooth={spatialSmooth}
-        smoothTune={smoothTune}
-        lastInteractAt={lastInteractRef}
-        wfBrightness={wfBrightness}
-        wfContrast={wfContrast}
-        wfSharpness={wfSharpness}
-        frameRate={frameRate}
-        needleColor={vfoNeedle}
-        needleIntensity={vfoIntensity}
-        needleFrost={vfoFrost}
-        bgImageUrl={bgImageUrl}
-        bgOpacity={bgOpacity / 10}
-        stationId={stationId}
-        specFrac={specFrac}
-        panLoHz={walls?.loHz}
-        panHiHz={walls?.hiHz}
-        showWalls={!!walls}
-        // RF-centre marker = the dongle/RF centre (derived to mirror the shim).
-        // Sits at the display centre until the dongle locks; then the view pans
-        // on across the captured band and the marker slides off to the side.
-        centerMarkerHz={localRf?.rf ?? status.centerHz}
-        showCenterMarker={isLocal && !vfoLocked}
-      />
-      </View>
-      )}
+      {/* SDR waterfall removed — not used by CarFM (strip item 17). The
+          appearance state (colormap/dbMin/…) is kept for the advanced-view
+          menu controls, which are now inert pending item 19. */}
 
       {/* Spec ratio overlay — floats above pill */}
       <SpecRatioOverlay
@@ -4632,36 +4587,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           onReorderPreset={onFmReorderPreset}
           onRemovePreset={onFmRemovePreset}
           onSaveStationPreset={onFmSaveStationPreset}
-          onOpenAdvanced={() => setAdvancedOpen(true)}
         />
-      ) : null}
-
-      {/* CarFM advanced view: a way back to the FM face (the full SDR UI shows) */}
-      {carFm && advancedOpen ? (
-        <Pressable
-          onPress={() => setAdvancedOpen(false)}
-          style={[styles.fmReturn, { top: insets.top + 8 }]}
-          accessibilityRole="button"
-          accessibilityLabel="Back to FM radio"
-        >
-          <Text style={styles.fmReturnText}>◂ FM</Text>
-        </Pressable>
       ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  fmReturn: {
-    position: 'absolute', left: 12, zIndex: 61,
-    backgroundColor: 'rgba(5,7,10,0.92)', borderWidth: 1,
-    borderColor: 'rgba(59,158,255,0.6)', borderRadius: 8,
-    paddingHorizontal: 14, paddingVertical: 9,
-  },
-  fmReturnText: {
-    color: '#3B9EFF', fontFamily: 'Atkinson Hyperlegible',
-    fontSize: 15, fontWeight: '800', letterSpacing: 1,
-  },
   rotateBanner: {
     position: 'absolute', alignSelf: 'center', zIndex: 55,
     backgroundColor: 'rgba(8,12,6,0.92)', borderWidth: 1,

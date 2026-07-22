@@ -5,12 +5,12 @@
  * save as a preset. Rows come pre-ranked best-signal-first (score order).
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { getNearbyStations, type NearbyResult } from '../../services/stationFinder';
 import type { NearbyStation } from '../../services/stationTypes';
 import { BackArrowIcon, SignalWaves, StarIcon } from './icons';
-import { FONT, FONT_BOLD, brandColor, monogram, type CarFmPalette } from './tokens';
+import { FONT, FONT_BOLD, cleanCall, type CarFmPalette } from './tokens';
 
 const HOLD_MS = 550;
 
@@ -75,19 +75,14 @@ function Row({ st, pal, saved, strength, m, onTune, onSave }: {
       accessibilityRole="button"
       accessibilityLabel={`${st.frequencyMhz.toFixed(1)} megahertz ${st.callsign}. Tap to tune, hold to save preset.`}
     >
-      {st.logoUri ? (
-        <Image source={{ uri: st.logoUri }} style={[styles.logo, { width: m.logo, height: m.logo, borderRadius: m.logoRadius }]} resizeMode="cover" />
-      ) : (
-        <View style={[styles.logo, { width: m.logo, height: m.logo, borderRadius: m.logoRadius, backgroundColor: brandColor(st.callsignBase), alignItems: 'center', justifyContent: 'center' }]}>
-          <Text allowFontScaling={false} style={[styles.logoText, { fontSize: m.logoFont }]}>{monogram(st.callsign)}</Text>
-        </View>
-      )}
+      {/* No logo column — Nearby is a text-baseline list (§6.2/§4.5): a small
+          square can't render detailed/wide logos legibly, and it's low-traffic. */}
       <View style={[styles.info, m.narrow && { flex: 1 }]}>
         <View style={[styles.line1, m.narrow && { gap: 6 }]}>
           <Text style={[styles.freq, { fontSize: m.freq, color: pal.text }]}>
             {st.frequencyMhz.toFixed(1)}
           </Text>
-          <Text numberOfLines={1} style={[styles.call, { fontSize: m.call, marginLeft: m.narrow ? 3 : 6, color: pal.text }]}>{st.callsign}</Text>
+          <Text numberOfLines={1} style={[styles.call, { fontSize: m.call, marginLeft: m.narrow ? 3 : 6, color: pal.text }]}>{cleanCall(st.callsign)}</Text>
           {st.service !== 'FM' ? (
             <View style={[styles.badge, { borderColor: pal.border }]}>
               <Text style={[styles.badgeText, { color: pal.dim }]}>{st.service}</Text>
