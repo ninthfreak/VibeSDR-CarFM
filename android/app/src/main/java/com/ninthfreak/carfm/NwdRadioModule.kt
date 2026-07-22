@@ -153,6 +153,29 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         try { radio?.seek(up) } catch (e: Throwable) { Log.w(TAG, "seek failed", e) }
     }
 
+    /** Read the tuner's CURRENT state via the synchronous getters. On-device the
+     *  push notify* callbacks don't reach us, but these getters do return live
+     *  values (proven by the connect-time seed), so JS polls this to drive the
+     *  face instead of waiting for callbacks that never come. */
+    @ReactMethod
+    fun poll(promise: Promise) {
+        val r = radio
+        if (r == null) { promise.resolve(null); return }
+        try {
+            val map = Arguments.createMap()
+            try {
+                r.getCurrentFrequency()?.let {
+                    map.putDouble("mhz", it.freq.toDouble() / freqMult)
+                    map.putString("ps", it.psName ?: "")
+                }
+            } catch (_: Throwable) {}
+            map.putBoolean("stereo", try { r.isStreroOn() } catch (_: Throwable) { false })
+            map.putString("rt", try { r.getRtMessage() ?: "" } catch (_: Throwable) { "" })
+            map.putInt("pty", try { r.getPTYType().toInt() } catch (_: Throwable) { -1 })
+            promise.resolve(map)
+        } catch (e: Throwable) { promise.resolve(null) }
+    }
+
     @ReactMethod
     fun setRdsEnabled(on: Boolean) {
         try { radio?.setRDSState(0.toByte(), on) } catch (e: Throwable) { Log.w(TAG, "setRDSState failed", e) }
