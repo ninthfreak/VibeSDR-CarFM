@@ -3706,7 +3706,16 @@ export default function SDRScreen({ route, navigation }: Props) {
         setFmTunerError(false);
         nwdSetRds(true);
         nwdSetAudio(true);
-        diag(`NWD connected: registered=${info.registered} band=${info.band} freqMult=${info.freqMult} mhz=${info.mhz ?? '?'} ps='${info.ps ?? ''}'; RDS on`);
+        diag(`NWD connected: registered=${info.registered} band=${info.band} freqMult=${info.freqMult} mhz=${info.mhz ?? '?'} ps='${info.ps ?? ''}' stereo=${info.stereo} rt='${info.rt ?? ''}' pty=${info.pty}; RDS on`);
+        // Seed the INITIAL tuner state — stereo/RT/PTY only push notify* on a
+        // CHANGE, so a stable station would otherwise leave the face at defaults.
+        if (typeof info.stereo === 'boolean') setFmStereo(info.stereo);
+        setLiveStation((prev) => ({
+          ...prev,
+          name: info.ps || prev.name,
+          text: info.rt || prev.text,
+          pty: (typeof info.pty === 'number' && info.pty >= 0) ? info.pty : prev.pty,
+        }));
         if (typeof info.mhz === 'number' && info.mhz > 0) {
           setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(info.mhz! * 1e6) }));
           if (info.ps) liveStationRef.current = info.ps;

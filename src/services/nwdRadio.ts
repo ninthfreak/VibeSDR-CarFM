@@ -25,7 +25,10 @@ type NwdNative = {
   removeListeners(count: number): void;
 };
 
-export type NwdConnectInfo = { band: number; freqMult: number; mhz?: number; ps?: string; registered?: boolean };
+export type NwdConnectInfo = {
+  band: number; freqMult: number; mhz?: number; ps?: string;
+  registered?: boolean; stereo?: boolean; rt?: string; pty?: number;
+};
 
 const native: NwdNative | undefined =
   Platform.OS === 'android' ? (NativeModules.NwdRadio as NwdNative | undefined) : undefined;
