@@ -90,7 +90,7 @@ export default function SettingsPanel({
     if (!mod?.writeLog) { Alert.alert('Not available', 'Screenshot the log instead.'); return; }
     try {
       const path = await mod.writeLog(text);
-      Alert.alert('Log saved', `Written to:\n${path}\n\nOpen a file manager there to copy it to USB. (Or just screenshot the log.)`);
+      Alert.alert('Log saved to Downloads', `${path}\n\nOpen your file manager → Downloads to copy it to USB. (Or just screenshot the log.)`);
     } catch (e) {
       Alert.alert('Couldn’t save', `Screenshot the log instead.\n\n${String(e)}`);
     }
