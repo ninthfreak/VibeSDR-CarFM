@@ -18,6 +18,7 @@ type NwdNative = {
   disconnect(): void;
   tune(mhz: number): Promise<number>;
   seek(up: boolean): void;
+  poll(): Promise<NwdPoll | null>;
   setRdsEnabled(on: boolean): void;
   setAudioEnabled(on: boolean): void;
   requestAudioSource(): void;
@@ -56,6 +57,13 @@ export function nwdTune(mhz: number): Promise<number> {
   return native.tune(mhz);
 }
 export function nwdSeek(up: boolean): void { native?.seek(up); }
+/** Current tuner state via the synchronous getters (the push callbacks don't
+ *  reach us on-device). Null when not connected. Never rejects. */
+export type NwdPoll = { mhz?: number; ps?: string; stereo?: boolean; rt?: string; pty?: number };
+export function nwdPoll(): Promise<NwdPoll | null> {
+  if (!native) return Promise.resolve(null);
+  return native.poll().catch(() => null);
+}
 export function nwdSetRds(on: boolean): void { native?.setRdsEnabled(on); }
 export function nwdSetAudio(on: boolean): void { native?.setAudioEnabled(on); }
 /** Fire the MCU source-switch broadcasts (they launch the stock radio app) —

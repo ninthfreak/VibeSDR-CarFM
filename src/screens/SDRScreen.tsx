@@ -42,7 +42,7 @@ import { splashBridge }                 from '../../App';
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
-import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdSetRds, nwdSetAudio, onNwd } from '../services/nwdRadio';
+import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, onNwd } from '../services/nwdRadio';
 import { diag } from '../services/diag';
 import { startMotion, stopMotion } from '../services/motion';
 import { KiwiAdapter } from '../services/KiwiAdapter';
@@ -3693,6 +3693,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!carFm || !route.params.tunerless) return;
     let cancelled = false;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
     const subs: Array<() => void> = [];
     (async () => {
       const avail = await isNwdAvailable();
@@ -3737,9 +3738,33 @@ export default function SDRScreen({ route, navigation }: Props) {
       subs.push(onNwd('NwdRadioStereo', (p) => { setFmStereo(p.on); diag(`stereo ${p.on}`); }));
       subs.push(onNwd('NwdRadioPty', (p) => { setLiveStation((prev) => ({ ...prev, pty: p.pty })); diag(`PTY ${p.pty}`); }));
       subs.push(onNwd('NwdRadioTa', (p) => { setLiveStation((prev) => ({ ...prev, ta: p.ta })); diag(`TA ${p.ta}`); }));
+      // Poll the getters (the push callbacks above don't reach us on-device, but
+      // the getters return live values). Drives stereo / freq / PS / RT / PTY.
+      let pollN = 0;
+      pollTimer = setInterval(async () => {
+        const p = await nwdPoll();
+        if (cancelled || !p) return;
+        if (typeof p.stereo === 'boolean') setFmStereo(p.stereo);
+        if (typeof p.mhz === 'number' && p.mhz > 0) {
+          setStatus((prev: SDRStatus) => Math.round(p.mhz! * 1e6) === prev.frequency ? prev : ({ ...prev, frequency: Math.round(p.mhz! * 1e6) }));
+        }
+        if (p.ps) liveStationRef.current = p.ps;
+        setLiveStation((prev) => {
+          const next = {
+            ...prev,
+            name: p.ps || prev.name,
+            text: p.rt || prev.text,
+            pty: (typeof p.pty === 'number' && p.pty >= 0) ? p.pty : prev.pty,
+          };
+          return liveStationEqual(prev, next) ? prev : next;
+        });
+        // Log the first few polls so the diagnostics show what the getters return.
+        if (pollN < 6) { pollN++; diag(`poll: mhz=${p.mhz ?? '?'} ps='${p.ps ?? ''}' stereo=${p.stereo} rt='${p.rt ?? ''}' pty=${p.pty}`); }
+      }, 1500);
     })();
     return () => {
       cancelled = true;
+      if (pollTimer) clearInterval(pollTimer);
       nwdActiveRef.current = false;
       setNwdActive(false);
       subs.forEach((u) => u());
