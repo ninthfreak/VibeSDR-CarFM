@@ -23,7 +23,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getNearbyStations, callsignForFreq } from '../services/stationFinder';
 import type { NearbyStation } from '../services/stationTypes';
-import { GearIcon, MagnifierTower, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
+import { GearIcon, GpsSatellite, MagnifierTower, MotionCar, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
+import { useMotion } from '../services/motion';
+import { useGpsFix } from '../services/gps';
 import LogoTile, { callsignFrom, useStationLogo, useStationDisplay } from './carfm/LogoTile';
 import LogoSearchOverlay, { type LogoSearchTarget } from './carfm/LogoSearchOverlay';
 import NearbyPicker from './carfm/NearbyPicker';
@@ -32,7 +34,7 @@ import PresetsBand, { type PresetItem } from './carfm/PresetsBand';
 import { callsignBase } from '../services/piCallsign';
 import SidePresetCard, { PEEK_OPACITY, PEEK_SCALE } from './carfm/SidePresetCard';
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
-import { cleanCall, DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT } from './carfm/tokens';
+import { cleanCall, DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT, type CarFmPalette } from './carfm/tokens';
 
 export interface CarFmPreset {
   name: string;
@@ -110,6 +112,45 @@ function waveStrength(db: number | null): number {
   if (db == null) return 0;
   const segs = Math.max(0, Math.min(12, Math.round((db + 95) * 0.3)));
   return Math.max(0, Math.min(4, Math.round(segs / 3)));
+}
+
+/**
+ * Driving-status icons (§4.6) — GPS lock + vehicle-in-motion, wide/landscape only.
+ * A tiny self-subscribing child so GPS/motion toggles re-render only these glyphs,
+ * not the whole face. GPS satellite is always present (blue on a fix; dim ~32% when
+ * not — the "disabled tell" look; the faint 1px emboss the design uses can't render
+ * on RN-svg, so the dim colour+opacity carries it). The car shows ONLY while moving,
+ * amber, slow-pulsing ~2.6s. Driven by the unified GPS engine (services/gps +
+ * services/motion).
+ */
+function DrivingStatusIcons({ pal }: { pal: CarFmPalette }) {
+  const { hasFix } = useGpsFix();
+  const { isMoving } = useMotion();
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!isMoving) return;
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(pulse, { toValue: 1, duration: 1300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 0, duration: 1300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => { loop.stop(); pulse.setValue(0); };
+  }, [isMoving, pulse]);
+  const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 0.4] });
+  const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.07] });
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+      {isMoving ? (
+        <Animated.View style={{ opacity, transform: [{ scale }], marginRight: -6 }} accessibilityLabel="Vehicle in motion">
+          <MotionCar size={34} color={pal.amber} />
+        </Animated.View>
+      ) : null}
+      <View style={{ opacity: hasFix ? 1 : 0.32, transform: [{ translateY: -4 }] }}
+            accessibilityLabel={hasFix ? 'GPS lock' : 'No GPS lock'}>
+        <GpsSatellite size={30} color={hasFix ? pal.blue : pal.text} />
+      </View>
+    </View>
+  );
 }
 
 // ── RadioText strip: static when short, 16s marquee when > 46 chars ──────────
@@ -342,7 +383,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // per-station Display Call Sign / Frequency flags hide those on the hero and
   // the logo grows to reclaim the freed space.
   const heroLogo = useStationLogo(callsign || undefined, mhz);
-  const heroDisp = useStationDisplay(heroLogo.base);
+  const heroDisp = useStationDisplay(heroLogo.base, heroLogo.hasLogo);
   // Station identity for the hero: RDS PS / PI-callsign when present, else the
   // callsign resolved from the dial frequency via the FCC DB (heroLogo.base).
   // The NWD tuner sends no RDS PS, so the name comes purely from that lookup,
@@ -643,14 +684,18 @@ export default function CarFmFace(props: CarFmFaceProps) {
             (design: it moves into the top bar) rides beneath it — becoming DONE
             while reordering, since the presets band no longer hosts it here. */}
         <View style={[styles.headerRight, tall && styles.zoneRight]}>
-          <Pressable
-            onPress={() => setSettingsOpen(true)}
-            hitSlop={2}
-            style={({ pressed }) => [styles.gearBtn, { borderColor: pal.border, backgroundColor: pal.raised }, pressed && { opacity: 0.55 }]}
-            accessibilityRole="button" accessibilityLabel="Settings"
-          >
-            <GearIcon size={24} color={pal.dim} />
-          </Pressable>
+          <View style={styles.headerTopRow}>
+            {/* Driving-status icons (§4.6): GPS lock + motion, wide/landscape only. */}
+            {!tall ? <DrivingStatusIcons pal={pal} /> : null}
+            <Pressable
+              onPress={() => setSettingsOpen(true)}
+              hitSlop={2}
+              style={({ pressed }) => [styles.gearBtn, { borderColor: pal.border, backgroundColor: pal.raised }, pressed && { opacity: 0.55 }]}
+              accessibilityRole="button" accessibilityLabel="Settings"
+            >
+              <GearIcon size={24} color={pal.dim} />
+            </Pressable>
+          </View>
           {tall ? (
             reordering ? (
               <Pressable
@@ -936,6 +981,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 14, flexShrink: 1 },
   headerRight: { alignItems: 'center', gap: 12, flexShrink: 0 },
+  headerTopRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   // Tall-track status zones (§4.1 v1.5.0): flexed sides center the wrap-content
   // middle column; the signal side and controls side each take weight 1.
   zoneSide: { flex: 1, minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 10 },

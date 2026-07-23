@@ -240,18 +240,19 @@ export async function setManualLogo(base: string, img: Uint8Array, mime: string)
 }
 
 // ── per-station hero display prefs (§6.4 Display Call Sign / Display Frequency) ──
-/** Whether to show the call sign / frequency on the HERO for a station. Both
- *  default true; set from the logo window. Affects the hero card only. */
-export async function getStationPrefs(base: string): Promise<{ showCall: boolean; showFreq: boolean }> {
-  const dflt = { showCall: true, showFreq: true };
+/** Whether to show the call sign / frequency on the HERO for a station, as the
+ *  user explicitly set it in the logo window — or `null` when unset. The default
+ *  is logo-dependent (v1.9.0: logo → both off, no logo → both on) and is applied
+ *  by the caller, which knows whether a logo exists. Affects the hero only. */
+export async function getStationPrefs(base: string): Promise<{ showCall: boolean; showFreq: boolean } | null> {
   const d = await db();
-  if (!d || !base) return dflt;
+  if (!d || !base) return null;
   try {
     const r = await d.getFirstAsync<{ show_call: number | null; show_freq: number | null }>(
       `SELECT show_call, show_freq FROM station_prefs WHERE callsign_base = ?`, [base.toUpperCase()]);
-    if (!r) return dflt;
+    if (!r) return null;
     return { showCall: r.show_call !== 0, showFreq: r.show_freq !== 0 };
-  } catch { return dflt; }
+  } catch { return null; }
 }
 
 export async function setStationPrefs(base: string, showCall: boolean, showFreq: boolean): Promise<void> {

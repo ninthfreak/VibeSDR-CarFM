@@ -14,11 +14,11 @@
  * transparent outward), which reads the same over the flat `bg`.
  */
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 
-import LogoTile, { useStationLogo } from './LogoTile';
-import { cleanCall, FONT, FONT_BOLD, type CarFmPalette } from './tokens';
+import { PresetPlate } from './LogoTile';
+import { type CarFmPalette } from './tokens';
 
 export const PEEK_SCALE = 0.88;
 export const PEEK_OPACITY = 0.6;
@@ -36,12 +36,10 @@ export default function SidePresetCard({
   onPress?: () => void;
 }) {
   const s = (v: number) => Math.round(v * k);
-  // A real logo gets a larger, borderless transparent plate (86%); the monogram
-  // fallback stays at 58%. Call sign shows beneath in both cases (§5).
-  const { hasLogo } = useStationLogo(name || undefined, freqMhz);
-  const logoBox = hasLogo
-    ? Math.min(Math.round(width * 0.86), s(170))
-    : Math.min(Math.round(width * 0.58), s(92));
+  // Peek cards use the EXACT same treatment as the bottom preset tiles (§5): a
+  // real logo image OR a wide colored call-sign box with the frequency beneath.
+  const plateW = Math.min(Math.round(width * 0.74), s(180));
+  const plateH = Math.round(plateW * 0.6);
   const gid = `sidefade-${side}`;
   // PREV (left card) fades on its RIGHT (inner) edge; NEXT fades on its LEFT.
   const x1 = side === 'left' ? '0' : '1';
@@ -57,8 +55,15 @@ export default function SidePresetCard({
       accessibilityRole={onPress ? 'button' : undefined}
       accessibilityLabel={side === 'left' ? `Previous preset ${name}` : `Next preset ${name}`}
     >
-      <LogoTile name={name || undefined} freqMhz={freqMhz} size={logoBox} radius={s(16)} />
-      <Text style={[styles.call, { fontSize: Math.max(12, s(15)), color: pal.text }]} numberOfLines={1}>{cleanCall(name) || 'FM'}</Text>
+      <PresetPlate
+        name={name || undefined}
+        freqMhz={freqMhz}
+        w={plateW}
+        h={plateH}
+        radius={s(14)}
+        pal={pal}
+        freqSize={Math.max(13, s(16))}
+      />
       {/* inner-edge fade */}
       <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
         <Defs>
@@ -77,8 +82,5 @@ const styles = StyleSheet.create({
   card: {
     aspectRatio: 1, maxWidth: 206, borderWidth: 1, borderRadius: 24, padding: 16,
     alignItems: 'center', justifyContent: 'center', gap: 12, flexShrink: 0,
-  },
-  call: {
-    fontFamily: FONT_BOLD, fontSize: 15, textAlign: 'center', maxWidth: '100%',
   },
 });

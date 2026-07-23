@@ -72,9 +72,17 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
     if (!visible || !target) return;
     let cancelled = false;
     setPhase('landing'); setResults([]); setSel(null); setSaving(false);
-    getStationLogo(target.base).then((u) => { if (!cancelled) setCurrentUri(u); }).catch(() => {});
-    getStationPrefs(target.base).then((p) => {
-      if (!cancelled) { setShowCall(p.showCall); setShowFreq(p.showFreq); }
+    // Resolve the logo first: the display-toggle defaults are logo-dependent
+    // (v1.9.0 — logo → both off / logo-only hero, no logo → both on). An explicit
+    // saved choice overrides that default.
+    getStationLogo(target.base).then((u) => {
+      if (cancelled) return;
+      setCurrentUri(u);
+      getStationPrefs(target.base).then((p) => {
+        if (cancelled) return;
+        const eff = p ?? (u ? { showCall: false, showFreq: false } : { showCall: true, showFreq: true });
+        setShowCall(eff.showCall); setShowFreq(eff.showFreq);
+      }).catch(() => {});
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [visible, target]);
