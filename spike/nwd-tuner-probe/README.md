@@ -1,9 +1,19 @@
 # NWD built-in FM tuner — proof-of-life probe
 
-A tiny throwaway Android app that binds your head unit's built-in FM tuner
-service (`com.nwd.radio.service`) and lets you tune + watch RDS + try to get
-audio out. **This is not the CarFM backend** — it exists only to confirm, on real
-hardware, the interface mapped in `docs/BUILTIN-TUNER-FINDINGS.md`.
+A throwaway Android app that binds your head unit's built-in FM tuner service
+(`com.nwd.radio.service`) and runs an **exhaustive, guided test** of it. **This is
+not the CarFM backend** — it exists only to answer, on real hardware, the open
+questions in `docs/BUILTIN-TUNER-FINDINGS.md` (chiefly: can we unlock RadioText by
+writing `mcu_current_source`, and does anything change when the stock app is the
+active source).
+
+**RUN FULL TEST** drives the whole thing: it auto-tunes 88.7 and 101.5, dumps
+every getter, runs the source-gate write experiment, and pauses to **ask you
+button questions** (how does it sound? did text appear?) or **give you a step to
+perform** (grant a permission, open the stock app) with a **Done** button. Your
+answers and the machine readings all land in one log saved to Downloads. Manual
+buttons (Connect / Tune / Seek / Dump / Source probe / Save log) remain for
+ad-hoc poking.
 
 The AIDL in `app/src/main/aidl/…` is a clean-room reconstruction of the service's
 interface (method order = the real transaction codes, Parcel layouts verified
@@ -45,45 +55,35 @@ The head unit does not have to be connected to your computer. Pick whichever fit
   `adb connect <unit-ip>:5555`): `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
   If your unit isn't networked/connected, ignore this.
 
-## Test sequence (on the unit)
+## Running the full test (on the unit)
 
-Launch **NWD Tuner Probe**, then, in order:
+Do it **parked**; no driving or GPS needed — pick a spot where a couple of
+stations come in. Then:
 
-1. **CONNECT** — should log `bindService(...) returned true` then `CONNECTED`.
-   - `false` / no `CONNECTED` = the service isn't bindable from a normal app
-     (would contradict the static finding — tell me).
-2. **READ STATE** (auto-runs on connect) — logs `getCurrentFrequency`,
-   `getRadioPoint`, `getRtMessage`. This reveals the **frequency units** and the
-   **band byte** (the app auto-detects both and fills the fields).
-3. **TUNE (MHz)** — type a strong local FM station in the MHz box, tap it. Watch
-   for a `cb FREQ … PS='…'` callback with the new frequency + station name.
-   - If the tune lands on the wrong frequency, the unit uses different units than
-     auto-detected — use **TUNE (raw)** and type the raw integer you saw in
-     `getCurrentFrequency` (± a bit) instead.
-4. **SEEK ▲ / ▼** — should step to the next station (callbacks update).
-5. Watch the log for **`cb RT '…'`** (RadioText) and **`cb PTY`** — that's RDS working.
-6. **AUDIO ON** — the experimental part. Fires the source-switch broadcasts +
-   `setRadioBackServiceOn(true)` + unmutes music. **Do you hear the station?**
+1. Launch **NWD Tuner Probe** → tap **▶ RUN FULL TEST**. It connects on its own.
+2. **First run only:** it will ask to write system settings. Tap **Done** to open
+   the grant screen, enable *"modify system settings"* for the probe, come back,
+   and **press RUN FULL TEST again**. (The permission sticks; later runs skip it.)
+3. From then on it runs unattended except for the prompts:
+   - **Questions** (buttons): "How does 88.7 sound? Clear / Weak / Silent",
+     "Did RadioText appear?", "Did audio play?" — just tap the honest answer; it's
+     recorded in the log next to the machine readings.
+   - **Steps** (Done button): the **stock-app comparison** — it asks you to open
+     the stock radio app, tune it to 88.7, wait ~15s, then come back and tap
+     **Done**. Leave the dialog up while you're in the stock app. This is the
+     decisive A/B: if RadioText shows up *only* when the stock app is the active
+     source, we know the gate is source-driven.
+4. When it finishes it **saves the log to Downloads** (`nwdprobe-<timestamp>.txt`).
+   Send me that file (or a screenshot).
 
-## What the outcomes mean
-
-- **CONNECT + tune + `cb FREQ`/`cb RT` all work:** control + RDS confirmed — the
-  high-confidence half. The backend's UI/tuning/station-info will work.
-- **AUDIO ON → you hear it:** full win; the whole backend is viable as-is.
-- **AUDIO ON → silence:** audio is likely gated to the stock app. Not fatal —
-  known fallbacks (keep the stock app dormant-but-alive to hold the audio route,
-  or find the exact source id). We'd chase that next.
-
-## What to send me back
-
-The **on-screen log** (or `adb logcat | grep -i nwdprobe`), especially:
-- the **READ STATE** lines (units + band + PS), and
-- whether **TUNE** changed the station, and
-- whether **AUDIO ON** produced sound.
-
-That tells us exactly which world we're in.
+The two answers I most want from it: does forcing `mcu_current_source=4` make
+**RadioText** appear (write test), and does RadioText appear when the **stock app**
+is active (A/B step). Together they tell us whether CarFM can get RadioText, and how.
 
 ## Safety
-It binds the *same* service the stock radio app uses and only tunes / toggles the
-audio source — all reversible, nothing persistent is written (it never calls
-`saveCurrentFrequency`). Close the app / tap AUDIO OFF to hand the radio back.
+It binds the *same* service the stock radio app uses. The only thing it writes is
+`mcu_current_source` in `Settings.System`, and it **restores the original value**
+after each ~12s hold. That's volatile source-selection state — a reboot fully
+resets it, and it never touches firmware, CAN, calibration, or presets
+(`saveCurrentFrequency` is never called). Worst realistic case is a brief
+source/audio mix-up cleared by switching source or restarting. Run it parked.
