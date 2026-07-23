@@ -125,6 +125,10 @@ type ListItem =
 export default function InstancePickerScreen({ navigation, route }: Props) {
   const [instances,   setInstances]     = useState<SDRInstance[]>([]);
   const [loading,     setLoading]       = useState(true);
+  // Android boots straight into the CarFM face; hold a plain dark splash until
+  // then so the old SDR server picker never flashes up. Cleared only if we end
+  // up NOT redirecting (non-Android, deep link, or noAutoConnect dev paths).
+  const [booting,     setBooting]       = useState(Platform.OS === 'android');
   const [error,       setError]         = useState<string | null>(null);
   const [customUrl,   setCustomUrl]     = useState('');
   const [connecting,  setConnecting]    = useState(false);
@@ -256,6 +260,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         });
         return;
       }
+
+      // Reached only when we did NOT redirect into CarFM (non-Android, deep link,
+      // noAutoConnect) — so reveal the picker instead of the boot splash.
+      if (!cancelled) setBooting(false);
 
       // A default instance still auto-connects straight through — unless a
       // carfm:// deep link is driving this launch (it owns the session and
@@ -803,7 +811,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   }, [instances, favourites, filter, sortMode, isFav]);
 
 
-  if (!modeReady) return <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A12' }} />;
+  if (!modeReady || booting) return <SafeAreaView style={{ flex: 1, backgroundColor: '#161E29' }} />;
 
   const renderItem = ({ item, index }: { item: ListItem; index: number }) => {
     // Section header before first non-favourite instance
