@@ -7,13 +7,24 @@ questions in `docs/BUILTIN-TUNER-FINDINGS.md` (chiefly: can we unlock RadioText 
 writing `mcu_current_source`, and does anything change when the stock app is the
 active source).
 
-**RUN FULL TEST** drives the whole thing: it auto-tunes 88.7 and 101.5, dumps
-every getter, runs the source-gate write experiment, and pauses to **ask you
-button questions** (how does it sound? did text appear?) or **give you a step to
-perform** (grant a permission, open the stock app) with a **Done** button. Your
-answers and the machine readings all land in one log saved to Downloads. Manual
-buttons (Connect / Tune / Seek / Dump / Source probe / Save log) remain for
-ad-hoc poking.
+**RUN FULL TEST** drives the whole thing (allow ~15 min): it auto-tunes 88.7 and
+101.5, dumps every getter, runs the source-gate write experiment, and pauses to
+**ask you button questions** (how does it sound? did text appear?) or **give you a
+step to perform** (grant a permission, open the stock app) with a **Done** button.
+Your answers and the machine readings all land in one log saved to Downloads.
+
+It also runs several deeper probes automatically:
+- **Raw `getCurrentFrequency` parcel dump** — hand-marshals the reply and reports
+  any bytes left over after our `{band, ps, freq}`. Leftover = **hidden fields our
+  AIDL truncates**; if they differ between a strong and weak station, that's a
+  signal reading we've been missing.
+- **`search()` full-scan** test (vs the stepping `seek()`), **`getprop`** dump,
+  and a **broadcast logger** for `com.nwd.action.*`.
+
+Manual buttons remain for ad-hoc poking: Connect / Tune / Seek / **Search** /
+**Near ON/OFF** / **INTRO** / Dump / Source probe / **getprop** / **Raw parcel** /
+**Latch FM src** + **Restore src** (hold source=FM indefinitely for slow RDS) /
+**sendRadioCommand a,b** (advanced — controlled MCU command).
 
 The AIDL in `app/src/main/aidl/…` is a clean-room reconstruction of the service's
 interface (method order = the real transaction codes, Parcel layouts verified

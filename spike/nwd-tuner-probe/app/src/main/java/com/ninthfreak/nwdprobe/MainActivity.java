@@ -2,20 +2,24 @@ package com.ninthfreak.nwdprobe;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.database.ContentObserver;
 import android.database.Cursor;
 import android.media.AudioManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.Parcel;
 import android.os.RemoteException;
 import android.provider.MediaStore;
 import android.provider.Settings;
@@ -58,10 +62,15 @@ public class MainActivity extends Activity {
     private static final String SRC_KEY = "mcu_current_source";
     private static final int SRC_FM = 4;
     private static final double[] TEST_FREQS = { 88.7, 101.5 };   // per request
+    // RadioFeature AIDL descriptor + getCurrentFrequency's transaction code
+    // (method #2 in declaration order → FIRST_CALL_TRANSACTION + 1) for the raw
+    // parcel dump that hunts for trailing fields our reconstruction truncates.
+    private static final String RF_DESCRIPTOR = "com.nwd.radio.service.RadioFeature";
+    private static final int TXN_GET_CURRENT_FREQ = IBinder.FIRST_CALL_TRANSACTION + 1;
 
     private RadioFeature radio;
     private TextView log;
-    private EditText mhzField, bandField;
+    private EditText mhzField, bandField, cmdA, cmdB;
     private int freqMult = 1000;
     private byte fmBand = 0;
 
@@ -69,6 +78,8 @@ public class MainActivity extends Activity {
     private final ArrayBlockingQueue<String> answer = new ArrayBlockingQueue<>(1);
     private volatile boolean testRunning = false;
     private ContentObserver sourceObserver;
+    private BroadcastReceiver nwdRx;
+    private int latchedOrig = Integer.MIN_VALUE;   // MIN = nothing latched
 
     // ── UI ────────────────────────────────────────────────────────────────────
     @Override
@@ -106,8 +117,36 @@ public class MainActivity extends Activity {
         LinearLayout srcRow = new LinearLayout(this);
         srcRow.setOrientation(LinearLayout.HORIZONTAL);
         srcRow.addView(weighted(btn("Source probe", v -> sourceSettingsDump())));
+        srcRow.addView(weighted(btn("getprop", v -> getpropDump())));
         srcRow.addView(weighted(btn("Save log", v -> saveLog())));
         root.addView(srcRow);
+
+        LinearLayout scanRow = new LinearLayout(this);
+        scanRow.setOrientation(LinearLayout.HORIZONTAL);
+        scanRow.addView(weighted(btn("Search ▼", v -> search(false))));
+        scanRow.addView(weighted(btn("Search ▲", v -> search(true))));
+        scanRow.addView(weighted(btn("Near ON", v -> nearOn(true))));
+        scanRow.addView(weighted(btn("Near OFF", v -> nearOn(false))));
+        scanRow.addView(weighted(btn("INTRO", v -> intro())));
+        root.addView(scanRow);
+
+        LinearLayout rawRow = new LinearLayout(this);
+        rawRow.setOrientation(LinearLayout.HORIZONTAL);
+        rawRow.addView(weighted(btn("Raw parcel", v -> rawFrequencyParcelDump())));
+        rawRow.addView(weighted(btn("Latch FM src", v -> latchFm())));
+        rawRow.addView(weighted(btn("Restore src", v -> restoreSource())));
+        root.addView(rawRow);
+
+        LinearLayout cmdRow = new LinearLayout(this);
+        cmdRow.setOrientation(LinearLayout.HORIZONTAL);
+        cmdRow.addView(label("cmd a"));
+        cmdA = new EditText(this); cmdA.setText("0"); cmdA.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        cmdRow.addView(cmdA);
+        cmdRow.addView(label("b"));
+        cmdB = new EditText(this); cmdB.setText("0"); cmdB.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        cmdRow.addView(cmdB);
+        cmdRow.addView(weighted(btn("sendRadioCommand", v -> sendCmd())));
+        root.addView(cmdRow);
 
         log = new TextView(this);
         log.setTextSize(11f);
@@ -136,6 +175,7 @@ public class MainActivity extends Activity {
             try { radio.registCallback(callback); line("registCallback OK"); }
             catch (RemoteException e) { line("registCallback FAILED: " + e); }
             startSourceObserver();
+            startBroadcastLogger();
         }
         @Override public void onServiceDisconnected(ComponentName name) { radio = null; line("DISCONNECTED"); }
     };
@@ -154,7 +194,9 @@ public class MainActivity extends Activity {
         if (radio == null) { line("could not connect — aborting"); testRunning = false; return; }
 
         dumpAll("baseline");
+        rawFrequencyParcelDump();   // hidden-field / truncation check
         sourceSettingsDump();
+        getpropDump();
 
         // Permission gate up front — avoids mid-test lifecycle dialogs.
         boolean canWrite = canWrite();
@@ -170,13 +212,25 @@ public class MainActivity extends Activity {
         }
 
         // PHASE 1 — passive per-station dump + ground truth
+        // The raw parcel per station is the key hidden-signal test: if the leftover
+        // bytes DIFFER between a strong and a weak station, that's a signal field.
         for (double mhz : TEST_FREQS) {
             line("\n-- station " + mhz + " (passive) --");
             tuneMhzTo(mhz); sleep(3000);
             dumpAll("tuned " + mhz);
+            rawFrequencyParcelDump();
             String sound = ask("Tuned to " + mhz + ". How does it sound?", "Clear", "Weak / static", "Silent");
             line("watching 8s for cb RT/PS on " + mhz + " (sound=" + sound + ")…"); sleep(8000);
         }
+
+        // PHASE 1b — search() (full scan) vs seek()
+        line("\n-- search() (full scan) test --");
+        tuneMhzTo(87.9); sleep(1500);
+        line("calling search(up) from 87.9 — watching where it lands…");
+        try { radio.search(true); } catch (Exception e) { line("search failed " + e); }
+        sleep(9000);
+        dumpAll("after search up");
+        ask("SEARCH (full scan) up from 87.9 — what happened?", "Stopped on a real station", "Swept without stopping", "Nothing / error");
 
         // PHASE 2 — RDS selector sweep
         line("\n-- RDS selector sweep --");
@@ -217,11 +271,12 @@ public class MainActivity extends Activity {
         catch (Exception e) { line("  putInt threw " + e); }
         int rb = readSource();
         line("  putInt(4)=" + wrote + " readback=" + rb + " stuck=" + (rb == SRC_FM));
-        line("  holding source=FM 12s — watching getRtMessage/isStreroOn + callbacks…");
-        for (int i = 0; i < 4; i++) {
-            sleep(3000);
-            try { line("    t+" + ((i + 1) * 3) + "s rt='" + radio.getRtMessage() + "' stereo=" + radio.isStreroOn()); }
+        line("  holding source=FM 25s — watching getRtMessage/isStreroOn + callbacks (RT can be slow)…");
+        for (int i = 0; i < 5; i++) {
+            sleep(5000);
+            try { line("    t+" + ((i + 1) * 5) + "s rt='" + radio.getRtMessage() + "' stereo=" + radio.isStreroOn()); }
             catch (Exception ignored) {}
+            if (i == 2) rawFrequencyParcelDump();   // re-check hidden fields while FM is the source
         }
         String r = ask("On " + mhz + " with source forced to FM — what happened?",
                 "RadioText / station text appeared", "Audio started", "Both", "Nothing");
@@ -282,6 +337,99 @@ public class MainActivity extends Activity {
         };
         try { getContentResolver().registerContentObserver(Settings.System.getUriFor(SRC_KEY), false, sourceObserver); line("source observer on"); }
         catch (Exception e) { line("observer reg failed " + e); sourceObserver = null; }
+    }
+
+    // ── New probes (added per request) ─────────────────────────────────────────
+    /** RAW getCurrentFrequency: hand-marshal the reply parcel and check for bytes
+     *  left over after our {band, psName, freq} — those are fields our AIDL
+     *  reconstruction TRUNCATES (a hidden RSSI would show here, and would differ
+     *  between a strong and a weak station). */
+    private void rawFrequencyParcelDump() {
+        if (radio == null) { line("not connected"); return; }
+        Parcel data = Parcel.obtain(), reply = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(RF_DESCRIPTOR);
+            radio.asBinder().transact(TXN_GET_CURRENT_FREQ, data, reply, 0);
+            reply.readException();
+            int present = reply.readInt();
+            if (present == 0) { line("  rawFreq: null result"); return; }
+            byte band = reply.readByte();
+            String ps = reply.readString();
+            int freq = reply.readInt();
+            int avail = reply.dataAvail();
+            line("  rawFreq: band=" + band + " ps='" + ps + "' freq=" + freq + " | LEFTOVER=" + avail + (avail > 0 ? " bytes  <-- HIDDEN FIELDS" : " (none)"));
+            StringBuilder extra = new StringBuilder();
+            while (reply.dataAvail() >= 4) extra.append("int:").append(reply.readInt()).append(' ');
+            while (reply.dataAvail() >= 1) extra.append("byte:").append((int) reply.readByte()).append(' ');
+            if (extra.length() > 0) line("    leftover -> " + extra);
+        } catch (Throwable e) { line("  rawFreq transact failed: " + e); }
+        finally { reply.recycle(); data.recycle(); }
+    }
+
+    /** Exhaustive system-property read (these units stash MCU/radio state here). */
+    private void getpropDump() {
+        line("---- getprop (radio/fm/mcu/tuner/source/antenna) ----");
+        try {
+            Process p = Runtime.getRuntime().exec("getprop");
+            java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()));
+            String ln; int n = 0;
+            while ((ln = r.readLine()) != null) {
+                if (ln.toLowerCase(Locale.US).matches(".*(radio|fm|mcu|tuner|source|antenna).*")) { line("  " + ln); n++; }
+            }
+            r.close();
+            line("  (" + n + " matching props)");
+        } catch (Throwable e) { line("  getprop failed: " + e); }
+    }
+
+    private void startBroadcastLogger() {
+        if (nwdRx != null) return;
+        nwdRx = new BroadcastReceiver() {
+            @Override public void onReceive(Context c, Intent i) {
+                StringBuilder ex = new StringBuilder();
+                Bundle b = i.getExtras();
+                if (b != null) for (String k : b.keySet()) ex.append(k).append('=').append(b.get(k)).append(' ');
+                line("BCAST " + i.getAction() + "  " + ex);
+            }
+        };
+        IntentFilter f = new IntentFilter();
+        for (String a : new String[]{
+                "com.nwd.action.ACTION_CHANGE_SOURCE", "com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE",
+                "com.nwd.action.ACTION_REQUEST_GOTO_CURRENT_SOURCE", "com.nwd.action.ACTION_SOURCE_CHANGED",
+                "com.nwd.action.MCU_STATE", "com.nwd.action.ACTION_RADIO", "com.nwd.radio.RDS" }) f.addAction(a);
+        try {
+            if (Build.VERSION.SDK_INT >= 34) registerReceiver(nwdRx, f, Context.RECEIVER_EXPORTED);
+            else registerReceiver(nwdRx, f);
+            line("broadcast logger on (" + f.countActions() + " actions)");
+        } catch (Throwable e) { line("broadcast reg failed " + e); nwdRx = null; }
+    }
+
+    private void search(boolean up) { if (radio == null) { line("not connected"); return; } try { radio.search(up); line("search(" + (up ? "up" : "down") + ") — full scan"); } catch (Exception e) { line("search FAILED: " + e); } }
+    private void nearOn(boolean on) { if (radio == null) { line("not connected"); return; } try { radio.setNearOn(on); line("setNearOn(" + on + ") isNearOn=" + radio.isNearOn()); } catch (Exception e) { line("setNearOn FAILED: " + e); } }
+    private void intro() { if (radio == null) { line("not connected"); return; } try { radio.INTRO(); line("INTRO() — intro scan"); } catch (Exception e) { line("INTRO FAILED: " + e); } }
+
+    private void sendCmd() {
+        if (radio == null) { line("not connected"); return; }
+        try {
+            byte a = (byte) Integer.parseInt(cmdA.getText().toString().trim());
+            byte b = (byte) Integer.parseInt(cmdB.getText().toString().trim());
+            radio.sendRadioCommand(a, b);
+            line("sendRadioCommand(" + a + ", " + b + ") sent — watch callbacks/getters for any effect");
+        } catch (Exception e) { line("sendRadioCommand FAILED: " + e); }
+    }
+
+    /** Latch source=FM indefinitely (no auto-restore) so slow RadioText has time
+     *  to accumulate; tap Restore src (or exit) to put it back. */
+    private void latchFm() {
+        if (!canWrite()) { line("no WRITE_SETTINGS — grant it first (full test opens the screen)"); return; }
+        if (latchedOrig == Integer.MIN_VALUE) latchedOrig = readSource();
+        try { Settings.System.putInt(getContentResolver(), SRC_KEY, SRC_FM); } catch (Exception e) { line("latch putInt " + e); }
+        line("LATCHED " + SRC_KEY + "=FM (orig " + latchedOrig + ", readback " + readSource() + "). Watch for RT; tap Restore src when done.");
+    }
+    private void restoreSource() {
+        if (latchedOrig == Integer.MIN_VALUE) { line("nothing latched"); return; }
+        try { Settings.System.putInt(getContentResolver(), SRC_KEY, latchedOrig); } catch (Exception ignored) {}
+        line("restored " + SRC_KEY + " to " + latchedOrig);
+        latchedOrig = Integer.MIN_VALUE;
     }
 
     // ── Interactive primitives (called only from the worker thread) ────────────
@@ -376,7 +524,9 @@ public class MainActivity extends Activity {
     private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density); }
 
     @Override protected void onDestroy() {
+        if (latchedOrig != Integer.MIN_VALUE) { try { Settings.System.putInt(getContentResolver(), SRC_KEY, latchedOrig); } catch (Exception ignored) {} }
         try { if (sourceObserver != null) getContentResolver().unregisterContentObserver(sourceObserver); } catch (Exception ignored) {}
+        try { if (nwdRx != null) unregisterReceiver(nwdRx); } catch (Exception ignored) {}
         try { if (radio != null) radio.unRegistCallback(callback); } catch (Exception ignored) {}
         try { unbindService(conn); } catch (Exception ignored) {}
         super.onDestroy();
