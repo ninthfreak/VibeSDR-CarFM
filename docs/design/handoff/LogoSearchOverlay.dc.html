@@ -47,13 +47,13 @@
           <div style="{{ optListStyle }}">
             <div style="{{ optRowStyle }}" onClick="{{ onToggleCall }}">
               <div style="{{ callBoxStyle }}">
-                <sc-if value="{{ showCall }}" hint-placeholder-val="{{ true }}">{{ checkIcon }}</sc-if>
+                <sc-if value="{{ showCall }}" hint-placeholder-val="{{ false }}">{{ checkIcon }}</sc-if>
               </div>
               <span style="{{ optLabelStyle }}">Display Call Sign</span>
             </div>
             <div style="{{ optRowStyle }}" onClick="{{ onToggleFreq }}">
               <div style="{{ freqBoxStyle }}">
-                <sc-if value="{{ showFreq }}" hint-placeholder-val="{{ true }}">{{ checkIcon }}</sc-if>
+                <sc-if value="{{ showFreq }}" hint-placeholder-val="{{ false }}">{{ checkIcon }}</sc-if>
               </div>
               <span style="{{ optLabelStyle }}">Display Frequency</span>
             </div>
@@ -135,7 +135,7 @@ class Component extends DCLogic {
   state = { sel: null, phase: 'landing', saving: false, showCall: null, showFreq: null };
   componentDidMount() {
     const stn = this.props.station || {};
-    this.setState({ showCall: stn.showCall !== false, showFreq: stn.showFreq !== false });
+    this.setState({ showCall: stn.showCall === true, showFreq: stn.showFreq === true });
   }
   componentWillUnmount() { clearTimeout(this._t); clearTimeout(this._st); }
   forced() { const d = this.props.demoState; return (d && d !== 'auto') ? d : null; }
@@ -151,8 +151,8 @@ class Component extends DCLogic {
   confirm = () => {
     const st = this.effState();
     if (this.state.saving) return;
-    const showCall = this.state.showCall !== false;
-    const showFreq = this.state.showFreq !== false;
+    const showCall = this.state.showCall === true;
+    const showFreq = this.state.showFreq === true;
     let image;
     if (st === 'landing') { image = (this.props.station || {}).logoUrl || ''; }
     else if (st === 'results' && this.state.sel != null) { const cell = this._cells && this._cells[this.state.sel]; image = cell ? cell.image : ''; }
@@ -189,8 +189,8 @@ class Component extends DCLogic {
     const isError = st === 'error';
     const saving = st === 'saving';
     const hasLogo = !!(stn.logoUrl && String(stn.logoUrl).trim());
-    const showCall = this.state.showCall == null ? (stn.showCall !== false) : this.state.showCall;
-    const showFreq = this.state.showFreq == null ? (stn.showFreq !== false) : this.state.showFreq;
+    const showCall = this.state.showCall == null ? (stn.showCall === true) : this.state.showCall;
+    const showFreq = this.state.showFreq == null ? (stn.showFreq === true) : this.state.showFreq;
     const optBox = (on) => ({ width:26, height:26, borderRadius:7, border: on ? ('2px solid ' + t.blue) : ('2px solid ' + t.border), backgroundColor: on ? t.blue : 'transparent', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 });
 
     // Candidate results: real ones if injected, otherwise four believable mock hits

@@ -1,6 +1,6 @@
 # DUDU OS FM Radio — Android implementation spec
 
-*Bundle v1.8.1 — 2026-07-21 (see `VERSION`).*
+*Bundle v1.9.0 — 2026-07-23 (see `VERSION`).*
 
 A complete build spec for the DUDU OS FM radio front-end on Android (Jetpack
 Compose primary; View/XML notes where helpful). It describes **intent, structure,
@@ -184,6 +184,9 @@ Three zones — **left** (signal), **center** (stereo + tells + genre), **right*
     unavailable and must not be shown. The settings gear (right cluster) stays
     visible; its TUNER section (§6.3) is where the driver recovers.
 - **Right cluster:**
+  - **Driving-status icons** (GPS lock + vehicle-in-motion) sit just left of the gear on
+    the **wide / landscape tracks only** — hidden entirely on the tall track (portrait / ⅓
+    slice). Spec in §4.6.
   - **Settings** gear button (44dp square, bordered, dim icon).
   - **Nearby-search** button — lives **here on the tall track**; on the wide
     track it sits in the preset band instead (§4.3). Icon spec in §7.
@@ -196,15 +199,18 @@ never inline with the station identity — it is not part of the logo/name cente
 
 The station row has **two forms**, decided by whether the tuned station has a real logo (§4.5):
 - **Real logo present:** the logo image REPLACES the big call-sign text — it sits centered in a
-  box sized to a generous share of the card (`ContentScale.Fit`, §4.5), and the **call sign
-  appears as a small label directly beneath the logo**. Frequency row unchanged below.
+  box sized to a generous share of the card (`ContentScale.Fit`, §4.5). The call sign and frequency
+  are **hidden by default** on a logo hero (§6.4), so the logo fills the card; each can be turned
+  back on per station, appearing as a small call-sign label beneath the logo and the amber frequency below.
 - **No real logo:** **no monogram tile is shown on the hero** — just the big **call sign** (largest
   text; italic-dim "Tuning…" / "Scanning…" when no PS name) and the frequency. The generated cube
   adds no value at hero size, so it is omitted here (it still appears on preset tiles/peek cards).
 
-The call sign and the frequency on the hero can each be **independently hidden** per station via
-the **Display Call Sign** / **Display Frequency** options in the logo window (§6.4) — those toggles
-affect the **hero only**, never the preset tiles, peek cards, or Nearby.
+The call sign and the frequency on the hero are each controlled **per station** by the **Display Call
+Sign** / **Display Frequency** options in the logo window (§6.4) — **both default OFF for a station that
+has a logo** (logo-only hero), each turnable on individually. These toggles affect the **hero only**,
+never the preset tiles, peek cards, or Nearby, and they exist only for stations with a real logo — a
+**no-logo** hero always shows its call sign + frequency.
 face — it appears **only in the tune numpad** (§6.1).
 
 - **Frequency** — largest element, amber, tabular figures (~52–60sp). Tap opens
@@ -230,11 +236,12 @@ face — it appears **only in the tune numpad** (§6.1).
   470–720dp) flanked by the prev/next **peek cards**.
 
 ### 4.3 Preset band (bottom)
-**Preset tiles** plus band controls. A tile shows **either** a real logo **or** (monogram + text):
+**Preset tiles** plus band controls. A tile shows **either** a real logo **or** a call-sign box:
 - **Real logo:** the image fills a **borderless, transparent** plate (§4.5, landscape-tolerant so
   wordmarks read); **frequency and call sign are hidden** — the logo carries the identity.
-- **No real logo:** the colored **monogram cube** + a text row of **frequency then call sign**
-  (call sign = 4 core letters, §4.2). Active tile shows the amber underline.
+- **No real logo:** a **wide colored box** in the **same landscape aspect as the real-logo plate**,
+  with the **4 core call letters centered inside it** (station-color fill), and the **frequency
+  beneath** the box — the call sign is inside the box, not repeated below. Active tile shows the amber underline.
 
 - **Wide (default):** a horizontal **scroll rail** of tiles with `‹ ›` page-nav
   buttons on each end, a thin drag scrollbar beneath, and the **nearby-search**
@@ -297,15 +304,16 @@ aspect ratio** (or bucket it: square / wide wordmark / tall lockup). The hero do
 to render (Fit handles it), but storing it lets small slots make fallback decisions without re-measuring.
 
 **Per-surface budget (this is how you get max coverage):**
-- **Hero — maximum room.** A real logo **replaces the big call sign**: box = a generous share of
-  the card, leaving room for the small call-sign label + frequency beneath; `Fit`. **When the call
-  sign and/or frequency are hidden** (per-station options, §6.4), the logo box **grows to reclaim
-  the freed vertical space** (one element hidden → larger, both hidden → largest), so the logo keeps
-  filling the card regardless of aspect. **No real logo →** show no monogram on the hero at all
-  (call sign + frequency only). Star always corner.
-- **Preset tiles & prev/next peek cards — aspect-tolerant.** Real logo → **borderless, transparent**
-  plate that the image fills; use a **non-square / landscape-ish** plate so wide wordmarks read.
-  Freq + call sign are **hidden** on a tile that shows a real logo. No logo → monogram cube + text.
+- **Hero — maximum room.** A real logo **replaces the big call sign**; `Fit`. Call sign + frequency
+  are **hidden by default** on a logo hero (§6.4), so the box is at its **largest** and the logo fills
+  the card regardless of aspect. Turning either back on shrinks the box to leave room for the small
+  call-sign label and/or the amber frequency beneath (one on → smaller, both on → smallest). **No real
+  logo →** show no monogram on the hero at all (call sign + frequency only). Star always corner.
+- **Preset tiles & prev/next peek cards — aspect-tolerant, and identical to each other.** Real logo →
+  **borderless, transparent** plate that the image fills; use a **non-square / landscape-ish** plate so
+  wide wordmarks read; freq + call sign are **hidden**. No logo → a **wide colored box in that same
+  landscape aspect with the 4 call letters inside it**, frequency **beneath** the box. The prev/next
+  peek cards use the **exact same treatment** as the bottom preset tiles.
 - **Nearby search — no logos.** A small fixed square on a text-baseline row cannot render a detailed
   or wide logo legibly, and Nearby is low-traffic, so **there is no logo column** — the row is
   freq · callsign · city/genre · signal · distance.
@@ -321,13 +329,31 @@ available, prefer the **lockup for the hero** and the **icon for small slots**.
 lockup — on every surface, light and dark. A roughly-square sample (like WERN) looks fine everywhere
 and **hides** the wide/tall failure modes, so it is not a sufficient test on its own.
 
+### 4.6 Driving-status icons (GPS lock + vehicle in motion)
+
+Two glance indicators in the status bar's **right cluster**, just left of the settings gear.
+**Wide / landscape tracks only — both are hidden entirely on the tall track (portrait / ⅓ slice).**
+
+- **GPS lock** — an **angled satellite** glyph (body tilted ~28°, small dish + two downward signal
+  arcs toward the ground). **Lit interactive-blue on a GPS fix; with no fix it is not greyed but
+  styled like a disabled tell (§4.1) — full text color at ~32% opacity with the same faint 1px
+  emboss.** Always present (it communicates lock state); sits a couple of px above the gear's top edge.
+- **Vehicle in motion** — a **car with three trailing motion lines**. **Rendered only while the app
+  detects motion — absent (not dimmed) when stopped.** It is **amber** (the fixed safety-color family,
+  like TA — never the blue accent) and **pulses slowly** (~2.6s opacity + slight-scale, gentler than
+  TA's ~1.1s). Centered on the gear's vertical center.
+
+Both are driven by real signals in the build (GPS fix state; motion/speed detection). In the prototype
+they are the `gpsLocked` and `inMotion` tweaks on `CarFmLive`.
+
 ---
 
 ## 5. Prev/Next peek cards
 
-Flanking the hero, the previous and next presets show as **smaller cards**. Each shows the
-station's **real logo image** when one exists (borderless, Fit — §4.5), otherwise the colored
-monogram cube, with the 4-letter call sign beneath.
+Flanking the hero, the previous and next presets show as **smaller cards** that use the **exact same
+treatment as the bottom preset tiles** (§4.3): the station's **real logo image** when one exists
+(borderless, Fit — §4.5), otherwise a **wide colored call-sign box** (4 letters inside) with the
+**frequency beneath**.
 (≈ scale 0.88, ≈ 60% opacity, outer edge softened by a fade gradient) that peek in
 from the sides and sit slightly behind the hero. Tapping one steps to that preset.
 They flank the hero on **both** tracks whenever a previous/next preset exists —
@@ -391,17 +417,14 @@ and a footer ("FCC data as of <snapshot date>").
 ### 6.3 Settings (`SettingsPanel`)
 A header ("Settings" + close ✕) over a scrolling body of grouped sections:
 
-- **TUNER** — connection status row (wave icon + "Connected …" or amber warning +
-  "Not connected"; **RETRY** when errored, **Details** to expand a diagnostics
-  panel: device, USB ID, sample rate). A **Tuner source** radio list: Auto
-  (recommended), RTL-SDR, Si470x FM dongle, rtl_tcp — each with a
-  detected/not-detected/unavailable badge; unavailable rows are disabled. A
-  **Start radio on boot** toggle.
-- **TUNER** — source picker (single-select), each row = name · kind · status badge:
-  **RTL-SDR** (USB software-defined radio; Detected / Not detected) ·
+- **TUNER** — a connection status row (wave icon + "Connected …" / amber "Not
+  connected"; **RETRY** when errored, **Details** expands a diagnostics panel: device,
+  USB ID, sample rate) above a **source picker** (single-select), each row = name · kind ·
+  status badge: **RTL-SDR** (USB software-defined radio; Detected / Not detected) ·
   **NWD / NOWADA built-in radio** (integrated head-unit FM tuner; Detected / Not detected) ·
   **FYT / DuduOS built-in radio** (integrated head-unit FM tuner; **Unavailable — greyed**) ·
-  **Auto** (probe all sources; no badge). `Auto` is the default selection.
+  **Auto** (probe all sources; no badge) — `Auto` is the default selection. A **Start radio
+  on boot** toggle.
 - **APPEARANCE** — **Theme** segmented control: SYSTEM / LIGHT / DARK.
 - **SYSTEM** — **Battery optimization** status (amber "Not exempt" with a **FIX**
   action, or blue "EXEMPT"); **Station logos** toggle with a "Clear downloaded
@@ -420,13 +443,14 @@ fetch.
 
 **It opens on a LANDING view, not a search:**
 - **Station has a logo:** shows the **current logo** (large, Fit) plus two option rows,
-  **Display Call Sign** and **Display Frequency** — both **checked by default** — and a
-  **"Search for a different logo"** button.
+  **Display Call Sign** and **Display Frequency** — both **unchecked by default** (logo-only
+  hero) — and a **"Search for a different logo"** button.
 - **No logo:** shows a **"No Logo Installed"** message + a **"Search for a logo"** button.
 
-**Display Call Sign / Display Frequency affect the HERO CARD ONLY**, saved per station: when
-unchecked, that element is hidden on the hero while that station is tuned. They do not change the
-preset tiles, peek cards, or Nearby. They persist with the station.
+**Display Call Sign / Display Frequency affect the HERO CARD ONLY**, saved per station, and **default
+OFF** — a freshly-assigned logo yields a logo-only hero; check either to bring back the small call-sign
+label and/or amber frequency. They do not change the preset tiles, peek cards, or Nearby. They persist
+with the station.
 
 **Search runs only when the Search button is pressed** (query built from the station; no query
 field, no submit).
@@ -506,6 +530,9 @@ reference geometry.
   station; small vertical fade on the readout per step.
 - **TA flag:** continuous amber scale-pulse (~1.1s) while a traffic announcement
   is active.
+- **Vehicle-in-motion icon:** slow amber pulse (~2.6s opacity + slight scale) while the
+  vehicle is in motion (§4.6) — gentler and slower than the TA pulse; the icon is absent
+  (not dimmed) when stopped.
 - **Marquee RadioText:** continuous horizontal ticker (~16s loop) for long text.
 
 Respect reduced-motion / driving-restriction settings if DUDU OS exposes them —

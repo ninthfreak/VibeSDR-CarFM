@@ -337,11 +337,26 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    // ── GPS speed (drive / standstill detection) ─────────────────────────────
-    // Low-rate GPS updates (~30s) → emit VibeSpeed { mps, hasSpeed }. JS
-    // (services/motion.ts) derives is_moving + a display speed, filtering the
-    // standstill / low-speed GPS noise. FINE location must be granted first.
-    private var speedListener: android.location.LocationListener? = null
+    // ── Unified GPS engine (one stream → speed + lock) ───────────────────────
+    // A SINGLE GPS session powers everything: one 1s location stream feeds the
+    // speed events (VibeSpeed) and tracks provider on/off, and one GnssStatus
+    // callback (~1Hz) drives lock detection (VibeGpsFix). JS acquires it through a
+    // ref-counted session (services/gpsSession.ts); services/motion.ts derive
+    // speed/is_moving and services/gps.ts derives the lock. One place controls the
+    // GPS rate. FINE location must be granted first (JS requests it).
+    private val GPS_INTERVAL_MS = 1_000L   // one deliberate rate for speed + engine
+    private var locationListener: android.location.LocationListener? = null
+    private var gnssCallback: android.location.GnssStatus.Callback? = null
+    private var gpsHasFix = false
+    private var gpsSatsUsed = 0
+    private var gpsSatsVisible = 0
+
+    private fun locationManager(): android.location.LocationManager? = try {
+        reactContext.getSystemService(android.content.Context.LOCATION_SERVICE) as? android.location.LocationManager
+    } catch (_: Throwable) { null }
+
+    private fun gpsProviderEnabled(): Boolean =
+        try { locationManager()?.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ?: false } catch (_: Throwable) { false }
 
     private fun emitSpeed(mps: Float, hasSpeed: Boolean) {
         try {
@@ -354,45 +369,95 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         } catch (_: Throwable) {}
     }
 
-    @ReactMethod
-    fun startSpeed() {
-        if (speedListener != null) return
+    private fun emitGpsFix() {
         try {
-            val lm = reactContext.getSystemService(android.content.Context.LOCATION_SERVICE)
-                as android.location.LocationManager
-            val listener = object : android.location.LocationListener {
-                override fun onLocationChanged(loc: android.location.Location) {
-                    emitSpeed(if (loc.hasSpeed()) loc.speed else -1f, loc.hasSpeed())
-                }
-                override fun onProviderEnabled(p: String) {}
-                override fun onProviderDisabled(p: String) {}
-                @Deprecated("legacy callback") override fun onStatusChanged(p: String?, s: Int, e: android.os.Bundle?) {}
-            }
-            speedListener = listener
-            try {
-                lm.requestLocationUpdates(
-                    android.location.LocationManager.GPS_PROVIDER, 30_000L, 0f, listener,
-                    android.os.Looper.getMainLooper(),
-                )
-            } catch (_: SecurityException) { speedListener = null; return }
-            // Seed immediately from the last known fix so JS gets a value at once.
-            try {
-                lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)?.let {
-                    emitSpeed(if (it.hasSpeed()) it.speed else -1f, it.hasSpeed())
-                }
-            } catch (_: SecurityException) {}
-        } catch (_: Exception) {}
+            val map = com.facebook.react.bridge.Arguments.createMap()
+            map.putBoolean("hasFix", gpsHasFix)
+            map.putBoolean("providerEnabled", gpsProviderEnabled())
+            map.putInt("satellitesUsed", gpsSatsUsed)
+            map.putInt("satellitesVisible", gpsSatsVisible)
+            reactContext.getJSModule(
+                com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java,
+            ).emit("VibeGpsFix", map)
+        } catch (_: Throwable) {}
     }
 
     @ReactMethod
-    fun stopSpeed() {
-        val l = speedListener ?: return
+    fun startGps() {
+        if (locationListener != null) return
+        val lm = locationManager() ?: return
+        // Lock detection via GnssStatus (~1Hz), API 24+.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            val cb = object : android.location.GnssStatus.Callback() {
+                override fun onStopped() { gpsHasFix = false; gpsSatsUsed = 0; emitGpsFix() }
+                override fun onFirstFix(ttffMillis: Int) { gpsHasFix = true; emitGpsFix() }
+                override fun onSatelliteStatusChanged(status: android.location.GnssStatus) {
+                    var used = 0
+                    val n = status.satelliteCount
+                    for (i in 0 until n) if (status.usedInFix(i)) used++
+                    val fix = used >= 4   // solid 3D fix; JS also gets the raw counts
+                    if (used != gpsSatsUsed || n != gpsSatsVisible || fix != gpsHasFix) {
+                        gpsSatsUsed = used; gpsSatsVisible = n; gpsHasFix = fix
+                        emitGpsFix()
+                    }
+                }
+            }
+            try { lm.registerGnssStatusCallback(cb, android.os.Handler(android.os.Looper.getMainLooper())); gnssCallback = cb }
+            catch (_: SecurityException) {}
+        }
+        // One location stream: feeds speed + provider on/off, and keeps GNSS hot.
+        val ll = object : android.location.LocationListener {
+            override fun onLocationChanged(loc: android.location.Location) {
+                emitSpeed(if (loc.hasSpeed()) loc.speed else -1f, loc.hasSpeed())
+            }
+            override fun onProviderEnabled(p: String) { emitGpsFix() }
+            override fun onProviderDisabled(p: String) { gpsHasFix = false; gpsSatsUsed = 0; emitGpsFix() }
+            @Deprecated("legacy callback") override fun onStatusChanged(p: String?, s: Int, e: android.os.Bundle?) {}
+        }
         try {
-            val lm = reactContext.getSystemService(android.content.Context.LOCATION_SERVICE)
-                as android.location.LocationManager
-            lm.removeUpdates(l)
-        } catch (_: Exception) {}
-        speedListener = null
+            lm.requestLocationUpdates(
+                android.location.LocationManager.GPS_PROVIDER, GPS_INTERVAL_MS, 0f, ll,
+                android.os.Looper.getMainLooper(),
+            )
+            locationListener = ll
+        } catch (_: SecurityException) { unregisterGnss(lm); return }
+        // Seed speed immediately from the last known fix.
+        try {
+            lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)?.let {
+                emitSpeed(if (it.hasSpeed()) it.speed else -1f, it.hasSpeed())
+            }
+        } catch (_: SecurityException) {}
+        emitGpsFix()   // initial lock state
+    }
+
+    @ReactMethod
+    fun stopGps() {
+        val lm = locationManager()
+        locationListener?.let { try { lm?.removeUpdates(it) } catch (_: Throwable) {} }
+        locationListener = null
+        unregisterGnss(lm)
+    }
+
+    private fun unregisterGnss(lm: android.location.LocationManager?) {
+        gnssCallback?.let {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                try { lm?.unregisterGnssStatusCallback(it) } catch (_: Throwable) {}
+            }
+        }
+        gnssCallback = null
+    }
+
+    /** One-shot current fix state (same shape as the VibeGpsFix event). */
+    @ReactMethod
+    fun getGpsFix(promise: com.facebook.react.bridge.Promise) {
+        try {
+            val map = com.facebook.react.bridge.Arguments.createMap()
+            map.putBoolean("hasFix", gpsHasFix)
+            map.putBoolean("providerEnabled", gpsProviderEnabled())
+            map.putInt("satellitesUsed", gpsSatsUsed)
+            map.putInt("satellitesVisible", gpsSatsVisible)
+            promise.resolve(map)
+        } catch (e: Throwable) { promise.reject("gpsfix", e) }
     }
 
     // NativeEventEmitter housekeeping (events arrive via RCTDeviceEventEmitter)

@@ -123,13 +123,8 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             initialStereo = try { r.isStreroOn() } catch (_: Throwable) { false }
             initialRt = try { r.getRtMessage() ?: "" } catch (_: Throwable) { "" }
             initialPty = try { r.getPTYType().toInt() } catch (_: Throwable) { -1 }
-            // RDS on. We don't know what each selector byte controls, and on-device
-            // only selector 1 reads back enabled while our setRDSState(0,true) never
-            // sticks — and no PS / RadioText ever arrives. So enable ALL of 0..3 as
-            // an experiment: one of them may be the PS/RadioText gate. The probe
-            // re-reads getRDSState(0..3) + rtMessage, so the next log shows whether
-            // this changed anything. Harmless if not (they're just RDS toggles).
-            for (sel in 0..3) { try { r.setRDSState(sel.toByte(), true) } catch (_: Throwable) {} }
+            // RDS on by default (selector byte 0 — same guess the spike confirmed works).
+            try { r.setRDSState(0.toByte(), true) } catch (_: Throwable) {}
             connectPromise?.resolve(currentStateMap())
             connectPromise = null
         }
@@ -183,10 +178,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun setRdsEnabled(on: Boolean) {
-        // Toggle all four selectors (see connect) — we don't know which gates PS/RT.
-        for (sel in 0..3) {
-            try { radio?.setRDSState(sel.toByte(), on) } catch (e: Throwable) { Log.w(TAG, "setRDSState($sel) failed", e) }
-        }
+        try { radio?.setRDSState(0.toByte(), on) } catch (e: Throwable) { Log.w(TAG, "setRDSState failed", e) }
     }
 
     /** One-shot diagnostic dump of EVERY readable getter the NWD RadioFeature

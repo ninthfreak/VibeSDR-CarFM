@@ -14,7 +14,7 @@ import { Image, Text, View } from 'react-native';
 import { getStationLogo, callsignForFreq } from '../../services/stationFinder';
 import { getStationPrefs } from '../../services/stationDb';
 import { callsignBase } from '../../services/piCallsign';
-import { brandColor, monogram, FONT_BOLD } from './tokens';
+import { brandColor, cleanCall, monogram, FONT_BOLD, type CarFmPalette } from './tokens';
 
 const cache = new Map<string, string | null>();
 const listeners = new Set<() => void>();
@@ -80,9 +80,13 @@ export function useStationLogo(name?: string, freqMhz?: number): {
 export function invalidateStationDisplay(): void { dispListeners.forEach((l) => l()); }
 
 /** Per-station hero display flags (Display Call Sign / Display Frequency, §6.4).
- *  Both default true; re-reads when invalidateStationDisplay() fires. */
-export function useStationDisplay(base: string | null): { showCall: boolean; showFreq: boolean } {
-  const [prefs, setPrefs] = useState<{ showCall: boolean; showFreq: boolean }>({ showCall: true, showFreq: true });
+ *  Default depends on whether the station has a real logo (v1.9.0): a logo hero
+ *  defaults BOTH OFF (logo-only), a no-logo hero defaults BOTH ON (call sign +
+ *  frequency). An explicit per-station choice from the logo window overrides the
+ *  default. Re-reads when invalidateStationDisplay() fires. */
+export function useStationDisplay(base: string | null, hasLogo: boolean): { showCall: boolean; showFreq: boolean } {
+  const dflt = hasLogo ? { showCall: false, showFreq: false } : { showCall: true, showFreq: true };
+  const [prefs, setPrefs] = useState<{ showCall: boolean; showFreq: boolean }>(dflt);
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const l = () => setTick((n) => n + 1);
@@ -91,11 +95,87 @@ export function useStationDisplay(base: string | null): { showCall: boolean; sho
   }, []);
   useEffect(() => {
     let cancelled = false;
-    if (!base) { setPrefs({ showCall: true, showFreq: true }); return; }
-    getStationPrefs(base).then((p) => { if (!cancelled) setPrefs(p); }).catch(() => {});
+    if (!base) { setPrefs(dflt); return; }
+    // getStationPrefs → null when the user hasn't set an explicit choice; fall
+    // back to the logo-dependent default in that case.
+    getStationPrefs(base).then((p) => { if (!cancelled) setPrefs(p ?? dflt); }).catch(() => {});
     return () => { cancelled = true; };
-  }, [base, tick]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [base, tick, hasLogo]);
   return prefs;
+}
+
+/** The 4-core-call-letter box (station-color fill, white letters) that stands in
+ *  for a real logo on preset tiles + peek cards when no logo exists (§4.3/§4.5).
+ *  A WIDE / landscape box in the same aspect as the real-logo plate; the caller
+ *  (PresetPlate) renders the frequency BENEATH it — never inside, never repeated. */
+export function CallSignBox({ label, colorKey, w, h, radius }: {
+  label: string; colorKey: string; w: number; h: number; radius: number;
+}) {
+  const letters = label || '·';
+  // Fit the (up to 4) letters inside the landscape box: bounded by height and by
+  // width/letter-count so 4 letters don't overflow a narrow box.
+  const fs = Math.max(11, Math.round(Math.min(h * 0.52, (w * 0.82) / Math.max(letters.length, 1) * 1.55)));
+  return (
+    <View style={{
+      width: w, height: h, borderRadius: radius, overflow: 'hidden',
+      backgroundColor: brandColor(colorKey), alignItems: 'center', justifyContent: 'center',
+    }}>
+      <Text
+        allowFontScaling={false}
+        numberOfLines={1}
+        style={{ color: '#FFFFFF', fontFamily: FONT_BOLD, fontSize: fs, letterSpacing: 0.5 }}
+      >
+        {letters}
+      </Text>
+    </View>
+  );
+}
+
+/** Shared preset/peek identity block (§4.3/§4.5/§5): a real logo image when one
+ *  exists (borderless, Fit — the logo carries the identity, no text) OR a wide
+ *  colored call-sign box with the frequency BENEATH it in full text color +
+ *  heavier weight. Preset tiles and prev/next peek cards render EXACTLY this. */
+export function PresetPlate({ name, freqMhz, w, h, radius, pal, freqSize }: {
+  name?: string;
+  freqMhz?: number;
+  w: number;              // plate width (landscape box / logo plate)
+  h: number;              // plate height
+  radius: number;
+  pal: CarFmPalette;
+  freqSize: number;       // frequency font size (rendered only in the no-logo case)
+}) {
+  const { base, uri } = useStationLogo(name, freqMhz);
+  if (uri) {
+    // Real logo: borderless transparent plate, Fit; no freq/callsign text.
+    return (
+      <View style={{
+        width: w, height: h, borderRadius: radius, overflow: 'hidden',
+        alignItems: 'center', justifyContent: 'center',
+      }}>
+        <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+      </View>
+    );
+  }
+  // No logo: call letters inside the box, frequency beneath it.
+  const label = base ? cleanCall(base) : (cleanCall(name).slice(0, 4) || name?.trim().slice(0, 4).toUpperCase() || '·');
+  return (
+    <View style={{ alignItems: 'center', gap: Math.max(3, Math.round(freqSize * 0.34)) }}>
+      <CallSignBox label={label} colorKey={base ?? label} w={w} h={h} radius={radius} />
+      {freqMhz != null ? (
+        <Text
+          allowFontScaling={false}
+          numberOfLines={1}
+          style={{
+            color: pal.text, fontFamily: FONT_BOLD, fontSize: freqSize,
+            fontVariant: ['tabular-nums'], letterSpacing: 0.3,
+          }}
+        >
+          {freqMhz.toFixed(1)}
+        </Text>
+      ) : null}
+    </View>
+  );
 }
 
 export default function LogoTile({ name, freqMhz, size, w, h, radius, plateBg, showMonogram = true }: {

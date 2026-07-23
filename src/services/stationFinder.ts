@@ -206,6 +206,34 @@ export async function callsignForFreq(freqMhz?: number): Promise<string | null> 
   return freqCallsignCache.map.get(Math.round(freqMhz * 10)) ?? null;
 }
 
+// ── estimated signal (DB + live GPS) ──────────────────────────────────────────
+/**
+ * Estimated signal for a dial frequency, as a dBFS-ish value the CarFM meter
+ * maps to bars (−95 ≈ empty, −55 ≈ full). It is NOT a live measurement — the
+ * built-in NWD tuner exposes no signal strength — so this is derived from the
+ * FCC dataset (ERP + station class + distance via receivabilityScore) using the
+ * CURRENT GPS fix. Returns null when there's no live fix or no station on this
+ * frequency; the meter then shows zero, greyed, to signal "no data" (never a
+ * fake reading). Deliberately not persisted like the callsign cache: a distance
+ * estimate from a stale location would be meaningless.
+ */
+export async function estimatedSignalDbForFreq(freqMhz?: number): Promise<number | null> {
+  if (freqMhz == null || !isFinite(freqMhz)) return null;
+  let stations: NearbyStation[];
+  try { ({ stations } = await getNearbyStations({ enrich: false })); }  // uses live GPS; [] if no fix
+  catch { return null; }
+  if (!stations.length) return null;
+  const k = Math.round(freqMhz * 10);
+  const best = stations
+    .filter((s) => s.service === 'FM' && Math.round(s.frequencyMhz * 10) === k)
+    .sort((a, b) => b.score - a.score)[0];   // best-receivability station on this channel
+  if (!best) return null;
+  // score is a relative dB proxy (~ −40 weak .. +10 strong); map into the meter's
+  // −95..−55 window so the grey "estimated" bars track likely receivability.
+  const frac = Math.max(0, Math.min(1, (best.score + 40) / 50));
+  return -95 + frac * 40;
+}
+
 // ── manual assignment + web image search (addendum §7, user addition) ─────────
 /**
  * Assign a logo to a station from an image URL (a web-search result or a pasted

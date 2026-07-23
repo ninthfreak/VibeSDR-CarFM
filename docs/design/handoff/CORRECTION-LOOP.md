@@ -73,8 +73,13 @@ reference at that surface.
    before anything cosmetic.
 2. **Overall composition** — is each zone (status row, hero, RadioText strip,
    preset carousel) in the right place and proportion?
-3. **The hero** — station logo tile, callsign, big amber frequency (no "MHz"
-   label), save star. Amber (`#C9760A` light / `#FFB833` dark) is fixed and never themed.
+3. **The hero** — the station logo (real image fills the card, or 4-letter callsign + no tile
+   when there is no logo), the small callsign/frequency only if turned on for that station, the
+   big amber frequency (no "MHz" label), save star in the corner. Amber (`#C9760A` light /
+   `#FFB833` dark) is fixed and never themed.
+3b. **Driving-status icons** (wide/landscape only) — the angled satellite (blue on lock, ~32%
+   emboss when no lock) and, when in motion, the amber pulsing car left of the settings gear;
+   both absent on the tall track.
 4. **Preset carousel** — active card highlight, peek cards on both sides with
    their fade (see `LOSSY-ELEMENTS.md`).
 5. **Overlays** — nearby picker (collapsed bucket row + two-row genres), numpad,

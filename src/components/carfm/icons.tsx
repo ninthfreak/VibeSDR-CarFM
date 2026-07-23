@@ -3,7 +3,7 @@
  * (all icons in the design are inline SVG; no external icon assets).
  */
 import React from 'react';
-import Svg, { Circle, Line, Path, Polygon, Rect } from 'react-native-svg';
+import Svg, { Circle, G, Line, Path, Polygon, Rect } from 'react-native-svg';
 
 /**
  * Three concentric broadcast waves around a dot; `strength` 0–4 controls how
@@ -248,6 +248,56 @@ export function BackspaceIcon({ size = 30, color }: { size?: number; color: stri
         stroke={color} strokeWidth="1.8" fill="none" strokeLinejoin="round" />
       <Line x1="11" y1="9.5" x2="16" y2="14.5" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
       <Line x1="16" y1="9.5" x2="11" y2="14.5" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+/**
+ * GPS-lock glyph (§4.6): an angled satellite — body tilted ~28°, two side panels,
+ * dish, and downward signal arcs. Exact port of RadioFace.dc.html `gps` SVG.
+ * `color` is blue on a fix, dim text colour when unlocked (opacity set by caller).
+ */
+export function GpsSatellite({ size = 30, color }: { size?: number; color: string }) {
+  const p = { stroke: color, strokeWidth: 1.5, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, fill: 'none' };
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <G transform="rotate(-28 12 12)">
+        <Rect x="0.5" y="9.9" width="7.3" height="4.2" rx="0.5" {...p} />
+        <Line x1="2.9" y1="9.9" x2="2.9" y2="14.1" {...p} />
+        <Line x1="5.3" y1="9.9" x2="5.3" y2="14.1" {...p} />
+        <Line x1="0.5" y1="12" x2="7.8" y2="12" {...p} />
+        <Rect x="16.2" y="9.9" width="7.3" height="4.2" rx="0.5" {...p} />
+        <Line x1="18.6" y1="9.9" x2="18.6" y2="14.1" {...p} />
+        <Line x1="21" y1="9.9" x2="21" y2="14.1" {...p} />
+        <Line x1="16.2" y1="12" x2="23.5" y2="12" {...p} />
+        <Path d="M7.8 12h1.3M14.9 12h1.3" {...p} />
+        <Rect x="9.1" y="8.3" width="5.8" height="7.4" rx="1" {...p} />
+        <Path d="M12 15.7v3.1" {...p} />
+        <Path d="M9.9 18.7a3 3 0 0 0 4.2 0" {...p} />
+        <Path d="M8.4 20.4a6 6 0 0 0 7.2 0" {...p} />
+      </G>
+    </Svg>
+  );
+}
+
+/**
+ * Vehicle-in-motion glyph (§4.6): a car with three trailing motion lines. Exact
+ * port of RadioFace.dc.html `motion` SVG. Amber; the slow pulse is applied by the
+ * caller (Animated wrapper).
+ */
+export function MotionCar({ size = 34, color }: { size?: number; color: string }) {
+  const p = { stroke: color, strokeWidth: 1.7, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, fill: 'none' };
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <G transform="translate(2.6 1) scale(0.82)">
+        <Path d="M19 17h2a1 1 0 0 0 1-1v-3c0-.9-.7-1.6-1.5-1.9L16 10l-1.9-2.4A2 2 0 0 0 12.5 7H6.2a2 2 0 0 0-1.8 1.1L2.7 11.6A3 3 0 0 0 2 13.5V16a1 1 0 0 0 1 1h1.5" {...p} />
+        <Circle cx="8" cy="17" r="2" {...p} />
+        <Circle cx="17" cy="17" r="2" {...p} />
+        <Path d="M10 17h5" {...p} />
+      </G>
+      <Line x1="0.5" y1="8.5" x2="3.6" y2="8.5" {...p} />
+      <Line x1="0" y1="12" x2="2.8" y2="12" {...p} />
+      <Line x1="1" y1="15.5" x2="3.4" y2="15.5" {...p} />
     </Svg>
   );
 }
