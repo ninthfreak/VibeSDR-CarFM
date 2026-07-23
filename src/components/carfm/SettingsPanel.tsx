@@ -17,8 +17,8 @@ import { BatteryBolt, SignalWaves, WarningTriangle } from './icons';
 import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 import { snapshotDate } from '../../services/stationDb';
 import { clearLogoCache } from '../../services/stationLogoCache';
-import { isNwdAvailable, nwdRequestAudioSource } from '../../services/nwdRadio';
-import { isDiagEnabled, setDiagEnabled, diagLines, diagText, clearDiag, subscribeDiag } from '../../services/diag';
+import { isNwdAvailable, nwdRequestAudioSource, nwdProbe } from '../../services/nwdRadio';
+import { diag, isDiagEnabled, setDiagEnabled, diagLines, diagText, clearDiag, subscribeDiag } from '../../services/diag';
 
 export type CarFmTheme = 'system' | 'light' | 'dark';
 
@@ -94,6 +94,16 @@ export default function SettingsPanel({
     } catch (e) {
       Alert.alert('Couldn’t save', `Screenshot the log instead.\n\n${String(e)}`);
     }
+  }, []);
+
+  // Manual RDS probe: dump every readable NWD getter into the tuner log on demand
+  // (for a stationary test — park on a strong station, tap this). Auto-probe also
+  // fires on its own a few seconds after tuning while diagnostics are on.
+  const runProbe = useCallback(async () => {
+    if (!isDiagEnabled()) setDiagEnabled(true);
+    diag('— manual probe —');
+    const dump = await nwdProbe();
+    for (const l of dump.split('\n')) if (l.trim()) diag(l);
   }, []);
 
   const Local = (NativeModules as any).VibeLocalSDR as
@@ -359,6 +369,15 @@ export default function SettingsPanel({
                     <Text style={[styles.clearText, { color: pal.blue }]}>Save to file</Text>
                     <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                   </Pressable>
+                  {nwdActive ? (
+                    <>
+                      <View style={[styles.divider, { backgroundColor: pal.border }]} />
+                      <Pressable style={styles.clearRow} onPress={runProbe} accessibilityRole="button" accessibilityLabel="Run RDS probe">
+                        <Text style={[styles.clearText, { color: pal.blue }]}>Run RDS probe (dumps every tuner getter)</Text>
+                        <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
+                      </Pressable>
+                    </>
+                  ) : null}
                   <View style={[styles.divider, { backgroundColor: pal.border }]} />
                   <Pressable style={styles.clearRow} onPress={() => nwdRequestAudioSource()} accessibilityRole="button" accessibilityLabel="Test audio source switch">
                     <Text style={[styles.clearText, { color: pal.blue }]}>Test audio source (launches stock app)</Text>

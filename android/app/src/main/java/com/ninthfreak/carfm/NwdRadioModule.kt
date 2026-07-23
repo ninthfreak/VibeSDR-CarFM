@@ -181,6 +181,49 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         try { radio?.setRDSState(0.toByte(), on) } catch (e: Throwable) { Log.w(TAG, "setRDSState failed", e) }
     }
 
+    /** One-shot diagnostic dump of EVERY readable getter the NWD RadioFeature
+     *  exposes. On-device the station name (PS) and RadioText never populate
+     *  through the usual paths (psName / getRtMessage / the callbacks), so this
+     *  hunts for where — if anywhere — they actually live on this firmware, and
+     *  captures the band plan (min/max/STEP — speaks to why seek moves 0.2 MHz),
+     *  the RDS-enable selectors, presets and radio/scan state. Purely read-only;
+     *  safe to call any time after connect. Returns a formatted multi-line string
+     *  that JS writes to the tuner diagnostics log. */
+    @ReactMethod
+    fun probe(promise: Promise) {
+        val r = radio ?: run { promise.reject("nc", "not connected"); return }
+        val sb = StringBuilder()
+        fun line(k: String, v: () -> Any?) {
+            sb.append("  ").append(k).append('=')
+            try { sb.append(v()) } catch (e: Throwable) { sb.append("ERR(").append(e.javaClass.simpleName).append(')') }
+            sb.append('\n')
+        }
+        sb.append("NWD PROBE (freqMult=$freqMult band=$fmBand)\n")
+        line("radioType") { r.getRadioType() }
+        line("radioState") { r.getRadioState().toInt() }
+        line("scanState") { r.getCurrentScanState() }
+        line("freq") { r.getCurrentFrequency()?.let { "band=${it.band} freq=${it.freq} ps='${it.psName ?: ""}'" } }
+        line("nearOn") { r.isNearOn() }
+        line("hasStereo") { r.isHasStrero() }
+        line("stereoOn") { r.isStreroOn() }
+        line("backServiceOn") { r.isRadioBackServiceOn() }
+        line("pty") { r.getPTYType().toInt() }
+        line("prefabPty") { r.getPrefabPTYType().toInt() }
+        line("rtMessage") { "'${r.getRtMessage() ?: ""}'" }
+        for (sel in 0..3) line("rdsState[$sel]") { r.getRDSState(sel) }
+        line("bandPlan") {
+            val arr = r.getRadioPoint()
+            if (arr == null) "null"
+            else arr.joinToString("; ", "[${arr.size}] ") { "max=${it.max} min=${it.min} step=${it.step}" }
+        }
+        line("presets") {
+            val arr = r.getPrefabFrequency()
+            if (arr == null) "null"
+            else arr.joinToString(",", "[${arr.size}] ") { "${it.freq}/${it.psName ?: ""}" }
+        }
+        promise.resolve(sb.toString())
+    }
+
     /** Keep the tuner's (analog, MCU-routed) audio alive + unmute music. Does NOT
      *  fire the source-switch broadcasts: on-device those launched the STOCK radio
      *  app over CarFM. Kept as a separate, opt-in call for later experimentation. */

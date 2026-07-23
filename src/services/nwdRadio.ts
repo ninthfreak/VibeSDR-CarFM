@@ -19,6 +19,7 @@ type NwdNative = {
   tune(mhz: number): Promise<number>;
   seek(up: boolean): void;
   poll(): Promise<NwdPoll | null>;
+  probe(): Promise<string>;
   setRdsEnabled(on: boolean): void;
   setAudioEnabled(on: boolean): void;
   requestAudioSource(): void;
@@ -63,6 +64,14 @@ export type NwdPoll = { mhz?: number; ps?: string; stereo?: boolean; rt?: string
 export function nwdPoll(): Promise<NwdPoll | null> {
   if (!native) return Promise.resolve(null);
   return native.poll().catch(() => null);
+}
+/** One-shot diagnostic dump of every readable NWD getter (station name, RadioText,
+ *  RDS-enable selectors, band plan incl. seek step, presets, radio/scan state) —
+ *  drives the settings "RDS probe" button. Multi-line string; never rejects to a
+ *  throw the UI must catch. Null-safe: returns a note if the module is absent. */
+export async function nwdProbe(): Promise<string> {
+  if (!native) return 'NWD radio module unavailable';
+  try { return await native.probe(); } catch (e) { return `probe failed: ${String(e)}`; }
 }
 export function nwdSetRds(on: boolean): void { native?.setRdsEnabled(on); }
 export function nwdSetAudio(on: boolean): void { native?.setAudioEnabled(on); }

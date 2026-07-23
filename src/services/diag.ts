@@ -11,7 +11,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const KEY = '@carfm/diag_enabled';
-const MAX = 400;
+// Big enough to hold a full drive's worth of change-gated tuner events (a short
+// driveway test used ~50 lines; a commute with seeks + stereo flapping can run
+// into the hundreds). Ring-buffered, kept in memory only while capturing.
+const MAX = 2000;
 const lines: string[] = [];
 const listeners = new Set<() => void>();
 let enabled = false;

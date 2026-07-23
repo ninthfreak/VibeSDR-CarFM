@@ -42,8 +42,8 @@ import { splashBridge }                 from '../../App';
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
-import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, onNwd } from '../services/nwdRadio';
-import { diag } from '../services/diag';
+import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, onNwd } from '../services/nwdRadio';
+import { diag, isDiagEnabled } from '../services/diag';
 import { startMotion, stopMotion } from '../services/motion';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { localSessionGen, newLocalSession } from '../services/localSession';
@@ -3694,6 +3694,25 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!carFm || !route.params.tunerless) return;
     let cancelled = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    // Auto-probe-on-park: a few seconds after the dial settles on a frequency,
+    // dump every readable NWD getter (station name, RadioText, RDS selectors,
+    // band plan, presets) once — so a drive log captures the FULL tuner state at
+    // each station without any interaction. Debounced (reset on every freq
+    // change) and de-duped per frequency; only runs while diagnostics are on.
+    let probeTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastProbedMhz = 0;
+    const scheduleProbe = (mhz: number) => {
+      if (!isDiagEnabled() || !(mhz > 0) || Math.abs(mhz - lastProbedMhz) < 0.05) return;
+      if (probeTimer) clearTimeout(probeTimer);
+      probeTimer = setTimeout(async () => {
+        if (cancelled) return;
+        lastProbedMhz = mhz;
+        const dump = await nwdProbe();
+        if (cancelled) return;
+        diag(`— probe @ ${mhz.toFixed(1)} —`);
+        for (const l of dump.split('\n')) if (l.trim()) diag(l);
+      }, 4000);
+    };
     const subs: Array<() => void> = [];
     (async () => {
       const avail = await isNwdAvailable();
@@ -3733,20 +3752,29 @@ export default function SDRScreen({ route, navigation }: Props) {
         // it. Relative, not true dBFS — the ceiling still wants calibrating.
         setFmSignalDb(-95 + Math.max(0, p.arg) * 6);
         diag(`freq ${p.mhz.toFixed(1)} arg=${p.arg} PS='${p.ps}'`);
+        scheduleProbe(p.mhz);
       }));
       subs.push(onNwd('NwdRadioRt', (p) => { setLiveStation((prev) => ({ ...prev, text: p.rt || undefined })); diag(`RT '${p.rt}'`); }));
       subs.push(onNwd('NwdRadioStereo', (p) => { setFmStereo(p.on); diag(`stereo ${p.on}`); }));
       subs.push(onNwd('NwdRadioPty', (p) => { setLiveStation((prev) => ({ ...prev, pty: p.pty })); diag(`PTY ${p.pty}`); }));
       subs.push(onNwd('NwdRadioTa', (p) => { setLiveStation((prev) => ({ ...prev, ta: p.ta })); diag(`TA ${p.ta}`); }));
-      // Poll the getters (the push callbacks above don't reach us on-device, but
-      // the getters return live values). Drives stereo / freq / PS / RT / PTY.
-      let pollN = 0;
+      // Poll the getters as a fallback. The NwdRadioFrequency + NwdRadioStereo push
+      // callbacks above DO reach us on-device (confirmed by driveway logs: freq/arg
+      // and stereo events arrive); RT / PTY / TA / PS have not been observed firing,
+      // and PS is empty in the freq callback too. The getters return live freq +
+      // stereo as well, so this backs up the callbacks. OPEN QUESTION under
+      // investigation: whether isStreroOn() is reliable — a stuck-STEREO indicator
+      // could be this poll asserting true (getter sticky) OR the callback itself.
+      // The change-gated log below records the getter's stereo over a whole drive so
+      // the next log disambiguates getter-vs-callback before we change any behavior.
+      let lastPollSig = '';
       pollTimer = setInterval(async () => {
         const p = await nwdPoll();
         if (cancelled || !p) return;
         if (typeof p.stereo === 'boolean') setFmStereo(p.stereo);
         if (typeof p.mhz === 'number' && p.mhz > 0) {
           setStatus((prev: SDRStatus) => Math.round(p.mhz! * 1e6) === prev.frequency ? prev : ({ ...prev, frequency: Math.round(p.mhz! * 1e6) }));
+          scheduleProbe(p.mhz);
         }
         if (p.ps) liveStationRef.current = p.ps;
         setLiveStation((prev) => {
@@ -3758,13 +3786,22 @@ export default function SDRScreen({ route, navigation }: Props) {
           };
           return liveStationEqual(prev, next) ? prev : next;
         });
-        // Log the first few polls so the diagnostics show what the getters return.
-        if (pollN < 6) { pollN++; diag(`poll: mhz=${p.mhz ?? '?'} ps='${p.ps ?? ''}' stereo=${p.stereo} rt='${p.rt ?? ''}' pty=${p.pty}`); }
+        // Log a poll line whenever the getters' reading CHANGES (not just the first
+        // few), so a full drive shows how isStreroOn()/getCurrentFrequency() behave
+        // over time — especially whether stereo sticks true on empty channels —
+        // alongside the callback `stereo`/`freq` lines. Change-gated: a parked
+        // station stays quiet, a flapping one records every flip.
+        const sig = `${p.mhz ?? '?'}|${p.ps ?? ''}|${p.stereo}|${p.rt ?? ''}|${p.pty}`;
+        if (sig !== lastPollSig) {
+          lastPollSig = sig;
+          diag(`poll: mhz=${p.mhz ?? '?'} ps='${p.ps ?? ''}' stereo=${p.stereo} rt='${p.rt ?? ''}' pty=${p.pty}`);
+        }
       }, 1500);
     })();
     return () => {
       cancelled = true;
       if (pollTimer) clearInterval(pollTimer);
+      if (probeTimer) clearTimeout(probeTimer);
       nwdActiveRef.current = false;
       setNwdActive(false);
       subs.forEach((u) => u());
