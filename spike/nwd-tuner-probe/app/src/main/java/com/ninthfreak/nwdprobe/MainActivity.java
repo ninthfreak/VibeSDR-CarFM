@@ -77,6 +77,7 @@ public class MainActivity extends Activity {
     private final StringBuilder logBuf = new StringBuilder();
     private final ArrayBlockingQueue<String> answer = new ArrayBlockingQueue<>(1);
     private volatile boolean testRunning = false;
+    private volatile boolean stockPolling = false;   // background RT poll during the stock-app step
     private ContentObserver sourceObserver;
     private BroadcastReceiver nwdRx;
     private int latchedOrig = Integer.MIN_VALUE;   // MIN = nothing latched
@@ -243,10 +244,22 @@ public class MainActivity extends Activity {
             sourceWriteTest(mhz);
         }
 
-        // PHASE 4 — stock-app A/B (needs you; the dialog stays up while you're away)
+        // PHASE 4 — stock-app A/B (needs you; the dialog stays up while you're away).
+        // Poll getRtMessage in the BACKGROUND during the window — the worker is
+        // blocked on the dialog, so without this we'd only catch RT if the push
+        // callback happened to fire, or if the source were still FM on return.
+        stockPolling = true;
+        new Thread(() -> {
+            while (stockPolling) {
+                try { line("    [stock-poll] source=" + readSource() + " rt='" + radio.getRtMessage() + "' stereo=" + radio.isStreroOn()); }
+                catch (Exception ignored) {}
+                sleep(3000);
+            }
+        }, "stock-poll").start();
         instruct("STOCK-APP COMPARISON.\n\nOpen the STOCK radio app, tune it to " + TEST_FREQS[0]
                + ", let it play ~15s so RDS locks, then come back here and tap Done.\n\n"
-               + "(This probe stays bound the whole time — we'll re-read the tuner with the stock app as the real source.)");
+               + "(This probe keeps reading the tuner the whole time — background lines are tagged [stock-poll]; watch for rt='…'.)");
+        stockPolling = false;
         dumpAll("stock-app active");
         String rtSeen = ask("With the stock app active, did this probe's log show any \"cb RT '…'\" lines (RadioText)?", "Yes", "No");
         line("stock-app RadioText seen: " + rtSeen);
@@ -282,6 +295,7 @@ public class MainActivity extends Activity {
                 "RadioText / station text appeared", "Audio started", "Both", "Nothing");
         line("  write-test result @ " + mhz + ": " + r);
         if (orig >= 0) { try { Settings.System.putInt(getContentResolver(), SRC_KEY, orig); } catch (Exception ignored) {} line("  restored " + SRC_KEY + " to " + orig); }
+        else line("  original was unreadable (-1) — not restoring; the MCU re-asserts the real source on its own");
     }
 
     private void dumpAll(String tag) {
@@ -524,6 +538,7 @@ public class MainActivity extends Activity {
     private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density); }
 
     @Override protected void onDestroy() {
+        stockPolling = false;
         if (latchedOrig != Integer.MIN_VALUE) { try { Settings.System.putInt(getContentResolver(), SRC_KEY, latchedOrig); } catch (Exception ignored) {} }
         try { if (sourceObserver != null) getContentResolver().unregisterContentObserver(sourceObserver); } catch (Exception ignored) {}
         try { if (nwdRx != null) unregisterReceiver(nwdRx); } catch (Exception ignored) {}
