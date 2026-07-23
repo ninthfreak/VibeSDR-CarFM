@@ -552,9 +552,13 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // stereo column is truly centered regardless of the side widths.
   const signalCluster = (
     <View style={[styles.signalPill, tall && styles.signalPillTall]}>
-      <SignalWaves size={L.signalIcon} strength={waveStrength(signalDb)} on={pal.amber} off={pal.meterEmpty} />
+      {/* NWD has no real signal metric — the bars are a DB+GPS *estimate*, so they
+          render grey (not amber) to signal "not live", and the dB number is
+          suppressed (we have no measured level). Zero + grey when there's no fix
+          or no dataset entry. RTL-SDR keeps the live amber meter + dB readout. */}
+      <SignalWaves size={L.signalIcon} strength={waveStrength(signalDb)} on={nwdActive ? pal.dim : pal.amber} off={pal.meterEmpty} />
       <Text style={[styles.signalText, { fontSize: L.signalDb, color: pal.dim }]}>
-        {signalDb == null ? '—' : `${Math.round(signalDb)} dB`}
+        {nwdActive ? 'EST' : signalDb == null ? '—' : `${Math.round(signalDb)} dB`}
       </Text>
     </View>
   );

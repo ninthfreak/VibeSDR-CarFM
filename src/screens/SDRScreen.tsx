@@ -125,7 +125,7 @@ import { fmNowPlaying } from '../services/nowPlaying';
 import { ptyLabel } from '../services/ptyLabels';
 import { getCarAutostart, setCarAutostart } from '../services/carMode';
 import CarFmFace, { type CarFmPreset } from '../components/CarFmFace';
-import { identifyByPi, initLogoService, consumeSharedLogo, getNearbyStations, callsignForFreq } from '../services/stationFinder';
+import { identifyByPi, initLogoService, consumeSharedLogo, getNearbyStations, callsignForFreq, estimatedSignalDbForFreq } from '../services/stationFinder';
 import type { StationIdentity } from '../services/stationTypes';
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation } from '../services/instancesApi';
@@ -3720,6 +3720,30 @@ export default function SDRScreen({ route, navigation }: Props) {
         } catch (e) { if (!cancelled) diag(`  callsign@${mhz.toFixed(1)}=error ${String(e)}`); }
       }, 4000);
     };
+    // Stereo debounce: the NwdRadioStereo callback is the TRUTH (it flaps with the
+    // real signal — confirmed on a fringe station), but the isStreroOn() getter is
+    // stuck true, so the poll must NOT drive stereo (it was stomping the callback
+    // back to STEREO every 1.5s). Hold a stereo value ~2s before applying it so a
+    // fringe station doesn't strobe the pill; a stable station still settles.
+    let stereoTimer: ReturnType<typeof setTimeout> | null = null;
+    const setStereoDebounced = (on: boolean) => {
+      if (stereoTimer) clearTimeout(stereoTimer);
+      stereoTimer = setTimeout(() => { if (!cancelled) setFmStereo(on); }, 2000);
+    };
+    // Estimated signal: this tuner reports NO signal level (arg is just the preset
+    // slot). So on a settled tune, estimate receivability from the FCC DB + live
+    // GPS; the face renders it GREY ("not live") and shows zero when there's no fix
+    // or no dataset entry. Debounced so seeks don't thrash it.
+    let signalTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleSignalEst = (mhz: number) => {
+      if (!(mhz > 0)) return;
+      setFmSignalDb(null);   // clear immediately → zero/grey until the estimate lands
+      if (signalTimer) clearTimeout(signalTimer);
+      signalTimer = setTimeout(async () => {
+        const db = await estimatedSignalDbForFreq(mhz);
+        if (!cancelled) setFmSignalDb(db);
+      }, 1200);
+    };
     const subs: Array<() => void> = [];
     (async () => {
       const avail = await isNwdAvailable();
@@ -3753,6 +3777,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (typeof info.mhz === 'number' && info.mhz > 0) {
           setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(info.mhz! * 1e6) }));
           if (info.ps) liveStationRef.current = info.ps;
+          scheduleSignalEst(info.mhz);   // seed the estimated meter for the boot station
         }
       } catch (e) { diag(`NWD connect FAILED: ${String(e)}`); return; }
       if (cancelled) return;
@@ -3761,31 +3786,27 @@ export default function SDRScreen({ route, navigation }: Props) {
         liveStationRef.current = p.ps ?? '';
         setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(p.mhz * 1e6) }));
         setLiveStation((prev) => ({ ...prev, name: p.ps || undefined }));
-        // Signal: the tuner reports a relative level in `arg` (on-device: strong≈6,
-        // weak≈3). Map to an approximate dBFS so the face's waves + readout track
-        // it. Relative, not true dBFS — the ceiling still wants calibrating.
-        setFmSignalDb(-95 + Math.max(0, p.arg) * 6);
+        // `arg` is the preset-slot index, NOT signal (confirmed on-device: it equals
+        // the frequency's position in the factory preset list, −1 otherwise). The
+        // tuner exposes no real signal level, so drive the meter from the DB+GPS
+        // estimate instead (grey/estimated on the face).
+        scheduleSignalEst(p.mhz);
         diag(`freq ${p.mhz.toFixed(1)} arg=${p.arg} PS='${p.ps}'`);
         scheduleProbe(p.mhz);
       }));
       subs.push(onNwd('NwdRadioRt', (p) => { setLiveStation((prev) => ({ ...prev, text: p.rt || undefined })); diag(`RT '${p.rt}'`); }));
-      subs.push(onNwd('NwdRadioStereo', (p) => { setFmStereo(p.on); diag(`stereo ${p.on}`); }));
+      subs.push(onNwd('NwdRadioStereo', (p) => { setStereoDebounced(p.on); diag(`stereo ${p.on}`); }));
       subs.push(onNwd('NwdRadioPty', (p) => { setLiveStation((prev) => ({ ...prev, pty: p.pty })); diag(`PTY ${p.pty}`); }));
       subs.push(onNwd('NwdRadioTa', (p) => { setLiveStation((prev) => ({ ...prev, ta: p.ta })); diag(`TA ${p.ta}`); }));
-      // Poll the getters as a fallback. The NwdRadioFrequency + NwdRadioStereo push
-      // callbacks above DO reach us on-device (confirmed by driveway logs: freq/arg
-      // and stereo events arrive); RT / PTY / TA / PS have not been observed firing,
-      // and PS is empty in the freq callback too. The getters return live freq +
-      // stereo as well, so this backs up the callbacks. OPEN QUESTION under
-      // investigation: whether isStreroOn() is reliable — a stuck-STEREO indicator
-      // could be this poll asserting true (getter sticky) OR the callback itself.
-      // The change-gated log below records the getter's stereo over a whole drive so
-      // the next log disambiguates getter-vs-callback before we change any behavior.
+      // Poll the getters as a freq fallback. RESOLVED: isStreroOn() is stuck true
+      // (reads true even on dead air), so the poll must NOT drive stereo — the
+      // NwdRadioStereo callback is the trustworthy source (see setStereoDebounced).
+      // The poll still backstops the frequency and logs the getters' readings
+      // (change-gated) so a drive log keeps a full trace.
       let lastPollSig = '';
       pollTimer = setInterval(async () => {
         const p = await nwdPoll();
         if (cancelled || !p) return;
-        if (typeof p.stereo === 'boolean') setFmStereo(p.stereo);
         if (typeof p.mhz === 'number' && p.mhz > 0) {
           setStatus((prev: SDRStatus) => Math.round(p.mhz! * 1e6) === prev.frequency ? prev : ({ ...prev, frequency: Math.round(p.mhz! * 1e6) }));
           scheduleProbe(p.mhz);
@@ -3816,6 +3837,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       cancelled = true;
       if (pollTimer) clearInterval(pollTimer);
       if (probeTimer) clearTimeout(probeTimer);
+      if (stereoTimer) clearTimeout(stereoTimer);
+      if (signalTimer) clearTimeout(signalTimer);
       nwdActiveRef.current = false;
       setNwdActive(false);
       subs.forEach((u) => u());
