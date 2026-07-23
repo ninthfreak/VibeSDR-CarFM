@@ -1,8 +1,8 @@
 // gps.ts — GPS fix / lock state for the CarFM GPS-lock indicator.
 //
-// The native side (VibeStreamModule.startGpsFix) watches GnssStatus and emits
-// `VibeGpsFix { hasFix, providerEnabled, satellitesUsed, satellitesVisible }` as
-// the lock changes (plus a low-rate GPS request to keep the engine powered). This
+// The shared GPS engine (VibeStreamModule.startGps, acquired via
+// services/gpsSession) watches GnssStatus and emits `VibeGpsFix { hasFix,
+// providerEnabled, satellitesUsed, satellitesVisible }` as the lock changes. This
 // module caches the latest state and exposes it as a boolean lock + counts.
 //
 // This is the DATA layer only — nothing draws it yet. The lock-indicator UI comes
@@ -10,7 +10,9 @@
 // Runs alongside services/motion.ts (both need FINE location + a live GPS engine).
 
 import { useEffect, useState } from 'react';
-import { NativeEventEmitter, NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
+
+import { acquireGps, releaseGps } from './gpsSession';
 
 export type GpsFix = {
   /** A solid fix (>= 4 satellites used). The headline "GPS lock" boolean. */
@@ -28,11 +30,8 @@ const listeners = new Set<(g: GpsFix) => void>();
 let started = false;
 let sub: { remove: () => void } | null = null;
 
-const native = Platform.OS === 'android'
-  ? (NativeModules.VibePowerModule as
-      { startGpsFix?: () => void; stopGpsFix?: () => void; getGpsFix?: () => Promise<GpsFix> } | undefined)
-  : undefined;
-const emitter = native ? new NativeEventEmitter(NativeModules.VibePowerModule) : null;
+const emitter = Platform.OS === 'android' && NativeModules.VibePowerModule
+  ? new NativeEventEmitter(NativeModules.VibePowerModule) : null;
 
 function apply(next: GpsFix): void {
   if (next.hasFix !== state.hasFix
@@ -44,33 +43,28 @@ function apply(next: GpsFix): void {
   }
 }
 
-/** Begin GPS-lock monitoring (idempotent). Requests FINE location first. */
+/** Begin GPS-lock monitoring (idempotent). Shares the one GPS engine (which also
+ *  requests FINE location); this just subscribes to the fix events. */
 export async function startGpsFix(): Promise<void> {
-  if (started || !native) return;
+  if (started || !emitter) return;
   started = true;
-  try {
-    if (Platform.OS === 'android') {
-      const g = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
-      if (g !== PermissionsAndroid.RESULTS.GRANTED) { started = false; return; }
-    }
-  } catch { started = false; return; }
-  sub = emitter?.addListener('VibeGpsFix', (e: Partial<GpsFix>) => {
+  sub = emitter.addListener('VibeGpsFix', (e: Partial<GpsFix>) => {
     apply({
       hasFix: !!e.hasFix,
       providerEnabled: !!e.providerEnabled,
       satellitesUsed: typeof e.satellitesUsed === 'number' ? e.satellitesUsed : 0,
       satellitesVisible: typeof e.satellitesVisible === 'number' ? e.satellitesVisible : 0,
     });
-  }) ?? null;
-  try { native.startGpsFix?.(); } catch { /* keep listener; native may retry */ }
+  });
+  await acquireGps();
 }
 
 export function stopGpsFix(): void {
   if (!started) return;
   started = false;
-  try { native?.stopGpsFix?.(); } catch { /* ignore */ }
   sub?.remove();
   sub = null;
+  releaseGps();
 }
 
 export function getGpsFix(): GpsFix { return state; }

@@ -1,9 +1,9 @@
 // motion.ts — vehicle speed + is-moving state from GPS.
 //
-// The native side (VibeStreamModule.startSpeed) emits low-rate GPS `VibeSpeed`
-// events (~every 30s — a car head unit's GPS is always powered, so this is
-// cheap and "once a minute is plenty" per the product ask). This module turns
-// those into a filtered speed + an `isMoving` boolean that features can gate on.
+// One shared GPS engine (VibeStreamModule.startGps, acquired via
+// services/gpsSession) emits `VibeSpeed` events at ~1 Hz — a car head unit's GPS
+// is always powered, so this is cheap. This module turns those into a filtered
+// speed + an `isMoving` boolean that features can gate on.
 //
 // Standstill / low-speed GPS noise is filtered out: below ~5 mph we report speed
 // 0 and isMoving=false, with a little hysteresis so it doesn't flap around the
@@ -11,7 +11,9 @@
 // readout UI arrives in a later design handoff.
 
 import { useEffect, useState } from 'react';
-import { NativeEventEmitter, NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
+
+import { acquireGps, releaseGps } from './gpsSession';
 
 const MS_TO_MPH = 2.2369362920544;
 const MOVING_ON_MPH = 5;   // at/above this we're moving (below = standstill noise)
@@ -24,10 +26,8 @@ const listeners = new Set<(m: Motion) => void>();
 let started = false;
 let sub: { remove: () => void } | null = null;
 
-const native = Platform.OS === 'android'
-  ? (NativeModules.VibePowerModule as { startSpeed?: () => void; stopSpeed?: () => void } | undefined)
-  : undefined;
-const emitter = native ? new NativeEventEmitter(NativeModules.VibePowerModule) : null;
+const emitter = Platform.OS === 'android' && NativeModules.VibePowerModule
+  ? new NativeEventEmitter(NativeModules.VibePowerModule) : null;
 
 function apply(mps: number, hasSpeed: boolean): void {
   const raw = hasSpeed && mps > 0 ? mps * MS_TO_MPH : 0;
@@ -40,28 +40,23 @@ function apply(mps: number, hasSpeed: boolean): void {
   }
 }
 
-/** Begin GPS speed monitoring (idempotent). Requests FINE location first. */
+/** Begin GPS speed monitoring (idempotent). Shares the one GPS engine (which also
+ *  requests FINE location); this just subscribes to the speed events. */
 export async function startMotion(): Promise<void> {
-  if (started || !native) return;
+  if (started || !emitter) return;
   started = true;
-  try {
-    if (Platform.OS === 'android') {
-      const g = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
-      if (g !== PermissionsAndroid.RESULTS.GRANTED) { started = false; return; }
-    }
-  } catch { started = false; return; }
-  sub = emitter?.addListener('VibeSpeed', (e: { mps?: number; hasSpeed?: boolean }) => {
+  sub = emitter.addListener('VibeSpeed', (e: { mps?: number; hasSpeed?: boolean }) => {
     apply(typeof e.mps === 'number' ? e.mps : -1, !!e.hasSpeed);
-  }) ?? null;
-  try { native.startSpeed?.(); } catch { /* keep listener; native may retry */ }
+  });
+  await acquireGps();
 }
 
 export function stopMotion(): void {
   if (!started) return;
   started = false;
-  try { native?.stopSpeed?.(); } catch { /* ignore */ }
   sub?.remove();
   sub = null;
+  releaseGps();
 }
 
 export function getMotion(): Motion { return state; }
