@@ -17,8 +17,7 @@ import { BatteryBolt, SignalWaves, WarningTriangle } from './icons';
 import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 import { snapshotDate } from '../../services/stationDb';
 import { clearLogoCache } from '../../services/stationLogoCache';
-import { isNwdAvailable, nwdRequestAudioSource, nwdProbe,
-         nwdSourceProbe, nwdCanWriteSettings, nwdRequestWriteSettings, nwdSourceWriteTest } from '../../services/nwdRadio';
+import { isNwdAvailable, nwdRequestAudioSource, nwdProbe } from '../../services/nwdRadio';
 import { diag, isDiagEnabled, setDiagEnabled, diagLines, diagText, clearDiag, subscribeDiag } from '../../services/diag';
 
 export type CarFmTheme = 'system' | 'light' | 'dark';
@@ -107,38 +106,6 @@ export default function SettingsPanel({
     for (const l of dump.split('\n')) if (l.trim()) diag(l);
   }, []);
 
-  // ── Source-gate experiment (mcu_current_source) ──────────────────────────────
-  const [canWriteSettings, setCanWriteSettings] = useState(false);
-  const runSourceProbe = useCallback(async () => {
-    if (!isDiagEnabled()) setDiagEnabled(true);
-    diag('— source probe —');
-    const dump = await nwdSourceProbe();
-    for (const l of dump.split('\n')) if (l.trim()) diag(l);
-    nwdCanWriteSettings().then(setCanWriteSettings).catch(() => {});
-    Alert.alert('Source probe done', 'Results written to the tuner log below.');
-  }, []);
-  const grantWrite = useCallback(() => {
-    nwdRequestWriteSettings();
-    Alert.alert('Grant write access',
-      'Enable “Allow modifying system settings” for CarFM on the screen that just opened, then come back and run the write test.');
-  }, []);
-  const runSourceWrite = useCallback(() => {
-    Alert.alert(
-      'Write source = FM?',
-      'This sets mcu_current_source=4 for ~8 seconds (to try to unlock RadioText), then restores it automatically. Low-risk and reversible; do it parked.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Run test', style: 'destructive', onPress: async () => {
-          if (!isDiagEnabled()) setDiagEnabled(true);
-          diag('— source WRITE test —');
-          const dump = await nwdSourceWriteTest();
-          for (const l of dump.split('\n')) if (l.trim()) diag(l);
-          Alert.alert('Write test started', 'Holding source=FM for 8s — watch the log for RT lines, then it auto-restores.');
-        } },
-      ],
-    );
-  }, []);
-
   const Local = (NativeModules as any).VibeLocalSDR as
     | { isIgnoringBatteryOptimizations?: () => Promise<boolean>; requestIgnoreBatteryOptimizations?: () => void }
     | undefined;
@@ -154,7 +121,6 @@ export default function SettingsPanel({
       try { const l = await AsyncStorage.getItem(LOGOS_KEY); if (!cancelled) setLogosOn(l === '1'); } catch {}
       try { const d = await snapshotDate(); if (!cancelled) setDataDate(d); } catch {}
       try { const n = await isNwdAvailable(); if (!cancelled) setNwdAvail(n); } catch { if (!cancelled) setNwdAvail(false); }
-      try { const w = await nwdCanWriteSettings(); if (!cancelled) setCanWriteSettings(w); } catch { if (!cancelled) setCanWriteSettings(false); }
       try {
         const ex = await Local?.isIgnoringBatteryOptimizations?.();
         if (!cancelled) setBatteryExempt(!!ex);
@@ -408,25 +374,6 @@ export default function SettingsPanel({
                       <View style={[styles.divider, { backgroundColor: pal.border }]} />
                       <Pressable style={styles.clearRow} onPress={runProbe} accessibilityRole="button" accessibilityLabel="Run RDS probe">
                         <Text style={[styles.clearText, { color: pal.blue }]}>Run RDS probe (dumps every tuner getter)</Text>
-                        <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
-                      </Pressable>
-                      <View style={[styles.divider, { backgroundColor: pal.border }]} />
-                      <Pressable style={styles.clearRow} onPress={runSourceProbe} accessibilityRole="button" accessibilityLabel="Source probe">
-                        <Text style={[styles.clearText, { color: pal.blue }]}>Source probe (dump MCU source settings)</Text>
-                        <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
-                      </Pressable>
-                      {!canWriteSettings ? (
-                        <>
-                          <View style={[styles.divider, { backgroundColor: pal.border }]} />
-                          <Pressable style={styles.clearRow} onPress={grantWrite} accessibilityRole="button" accessibilityLabel="Grant write access">
-                            <Text style={[styles.clearText, { color: pal.blue }]}>Grant write access (for the source test)</Text>
-                            <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
-                          </Pressable>
-                        </>
-                      ) : null}
-                      <View style={[styles.divider, { backgroundColor: pal.border }]} />
-                      <Pressable style={styles.clearRow} onPress={runSourceWrite} accessibilityRole="button" accessibilityLabel="Source write test">
-                        <Text style={[styles.clearText, { color: pal.blue }]}>Try source=FM write (8s, auto-restore)</Text>
                         <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                       </Pressable>
                     </>

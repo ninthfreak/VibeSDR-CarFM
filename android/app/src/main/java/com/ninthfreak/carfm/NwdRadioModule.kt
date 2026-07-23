@@ -46,7 +46,6 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     private var radio: RadioFeature? = null
     private var bound = false
     private var registered = false
-    private var sourceObserver: android.database.ContentObserver? = null
     private var initialStereo = false
     private var initialRt = ""
     private var initialPty = -1
@@ -124,13 +123,8 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             initialStereo = try { r.isStreroOn() } catch (_: Throwable) { false }
             initialRt = try { r.getRtMessage() ?: "" } catch (_: Throwable) { "" }
             initialPty = try { r.getPTYType().toInt() } catch (_: Throwable) { -1 }
-            // RDS on. We don't know what each selector byte controls, and on-device
-            // only selector 1 reads back enabled while our setRDSState(0,true) never
-            // sticks — and no PS / RadioText ever arrives. So enable ALL of 0..3 as
-            // an experiment: one of them may be the PS/RadioText gate. The probe
-            // re-reads getRDSState(0..3) + rtMessage, so the next log shows whether
-            // this changed anything. Harmless if not (they're just RDS toggles).
-            for (sel in 0..3) { try { r.setRDSState(sel.toByte(), true) } catch (_: Throwable) {} }
+            // RDS on by default (selector byte 0 — same guess the spike confirmed works).
+            try { r.setRDSState(0.toByte(), true) } catch (_: Throwable) {}
             connectPromise?.resolve(currentStateMap())
             connectPromise = null
         }
@@ -184,10 +178,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun setRdsEnabled(on: Boolean) {
-        // Toggle all four selectors (see connect) — we don't know which gates PS/RT.
-        for (sel in 0..3) {
-            try { radio?.setRDSState(sel.toByte(), on) } catch (e: Throwable) { Log.w(TAG, "setRDSState($sel) failed", e) }
-        }
+        try { radio?.setRDSState(0.toByte(), on) } catch (e: Throwable) { Log.w(TAG, "setRDSState failed", e) }
     }
 
     /** One-shot diagnostic dump of EVERY readable getter the NWD RadioFeature
@@ -254,110 +245,6 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_REQUEST_GOTO_CURRENT_SOURCE"))
     }
 
-    // ── Source-gate experiment (mcu_current_source in Settings.System) ───────────
-    // Decompile finding: the service only decodes RDS (PS/RadioText) while
-    // `mcu_current_source == 4` (FM) — it watches that Settings.System row with a
-    // ContentObserver and opens the tuner + enables RDS when it flips. So the whole
-    // RadioText wall may reduce to writing that one integer. These methods read /
-    // observe / (guardedly) write it. All are opt-in from the diagnostics panel.
-
-    private val SRC_KEY = "mcu_current_source"
-    private val SRC_FM = 4
-
-    /** Exhaustive read: dump every Settings.System row matching mcu/radio/source/
-     *  antenna/fm/rds, plus WRITE_SETTINGS status and the total row count. */
-    @ReactMethod
-    fun sourceProbe(promise: Promise) {
-        val cr = reactContext.contentResolver
-        val sb = StringBuilder("SOURCE PROBE\n")
-        val canWrite = try { android.provider.Settings.System.canWrite(reactContext) } catch (_: Throwable) { false }
-        sb.append("  WRITE_SETTINGS granted: $canWrite\n")
-        sb.append("  $SRC_KEY = ${readInt(SRC_KEY)}  (FM would be $SRC_FM)\n")
-        try {
-            val cur = cr.query(android.provider.Settings.System.CONTENT_URI, null, null, null, null)
-            if (cur != null) {
-                val ni = cur.getColumnIndex("name"); val vi = cur.getColumnIndex("value")
-                var total = 0
-                val rx = Regex("(?i)mcu|radio|source|antenna|\\bfm\\b|rds|tuner")
-                val matched = StringBuilder()
-                while (cur.moveToNext()) {
-                    total++
-                    val name = if (ni >= 0) cur.getString(ni) else null
-                    val value = if (vi >= 0) cur.getString(vi) else null
-                    if (name != null && rx.containsMatchIn(name)) matched.append("    $name = $value\n")
-                }
-                cur.close()
-                sb.append("  Settings.System rows: $total; matching:\n").append(matched)
-            } else sb.append("  Settings.System query returned null (not enumerable on this ROM)\n")
-        } catch (e: Throwable) { sb.append("  enumerate failed: ${e.message}\n") }
-        promise.resolve(sb.toString())
-    }
-
-    private fun readInt(key: String): Int =
-        try { android.provider.Settings.System.getInt(reactContext.contentResolver, key, -1) } catch (_: Throwable) { -1 }
-
-    @ReactMethod
-    fun canWriteSettings(promise: Promise) {
-        promise.resolve(try { android.provider.Settings.System.canWrite(reactContext) } catch (_: Throwable) { false })
-    }
-
-    /** Open the system "modify system settings" grant screen for this app. */
-    @ReactMethod
-    fun requestWriteSettings() {
-        try {
-            val i = Intent(android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS)
-                .setData(android.net.Uri.parse("package:${reactContext.packageName}"))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            (currentActivity ?: reactContext).startActivity(i)
-        } catch (e: Throwable) { Log.w(TAG, "requestWriteSettings failed", e) }
-    }
-
-    /** Watch mcu_current_source and emit NwdSourceChange on every change. */
-    @ReactMethod
-    fun startSourceObserver() {
-        if (sourceObserver != null) return
-        val cr = reactContext.contentResolver
-        val obs = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
-            override fun onChange(selfChange: Boolean) {
-                emit("NwdSourceChange", Arguments.createMap().apply { putInt("source", readInt(SRC_KEY)) })
-            }
-        }
-        sourceObserver = obs
-        try { cr.registerContentObserver(android.provider.Settings.System.getUriFor(SRC_KEY), false, obs) }
-        catch (e: Throwable) { Log.w(TAG, "registerContentObserver failed", e); sourceObserver = null }
-    }
-
-    @ReactMethod
-    fun stopSourceObserver() {
-        sourceObserver?.let { try { reactContext.contentResolver.unregisterContentObserver(it) } catch (_: Throwable) {} }
-        sourceObserver = null
-    }
-
-    /** Guarded write-and-restore: set mcu_current_source=4 (FM) so the service's
-     *  observer opens the tuner + enables RDS, hold ~8s (watch the log for RT
-     *  lines), then restore the original. Refuses without WRITE_SETTINGS. Returns a
-     *  step-by-step log; the restore fires via a delayed handler + NwdSourceWriteRestored. */
-    @ReactMethod
-    fun sourceWriteTest(promise: Promise) {
-        val cr = reactContext.contentResolver
-        val sb = StringBuilder("SOURCE WRITE TEST\n")
-        val canWrite = try { android.provider.Settings.System.canWrite(reactContext) } catch (_: Throwable) { false }
-        if (!canWrite) { sb.append("  BLOCKED: WRITE_SETTINGS not granted — tap 'Grant write access' first.\n"); promise.resolve(sb.toString()); return }
-        val orig = readInt(SRC_KEY)
-        sb.append("  original $SRC_KEY = $orig\n")
-        var wrote = false
-        try { wrote = android.provider.Settings.System.putInt(cr, SRC_KEY, SRC_FM) }
-        catch (e: Throwable) { sb.append("  putInt threw: ${e.message}\n") }
-        val readback = readInt(SRC_KEY)
-        sb.append("  putInt($SRC_FM) returned $wrote; readback = $readback (stuck=${readback == SRC_FM})\n")
-        sb.append("  holding 8s — watch for RT '…' lines — then restoring to $orig\n")
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            if (orig >= 0) try { android.provider.Settings.System.putInt(cr, SRC_KEY, orig) } catch (_: Throwable) {}
-            emit("NwdSourceWriteRestored", Arguments.createMap().apply { putInt("restored", orig); putInt("stuck", if (readback == SRC_FM) 1 else 0) })
-        }, 8000)
-        promise.resolve(sb.toString())
-    }
-
     // ── Callbacks → JS events ──────────────────────────────────────────────────
     private val callback = object : RadioCallback.Stub() {
         override fun notifyState(s: Byte) = emit("NwdRadioState", Arguments.createMap().apply { putInt("state", s.toInt()) })
@@ -406,7 +293,6 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun removeListeners(count: Int) {}
 
     override fun invalidate() {
-        stopSourceObserver()
         disconnect()
         super.invalidate()
     }
