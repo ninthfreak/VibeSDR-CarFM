@@ -1,6 +1,6 @@
 # Handoff: Android Car Head‑Unit — FM Radio Face
 
-**Bundle v1.8.1 — 2026-07-21.** Version is tracked in `VERSION`; check it matches
+**Bundle v1.9.0 — 2026-07-23.** Version is tracked in `VERSION`; check it matches
 your copy before building (stale downloads were the source of earlier drift).
 
 ## Overview
@@ -63,7 +63,9 @@ presets, and open Nearby search.
 **Layout** (vertical stack; reflows between the **wide** and **tall** tracks — see
 `ANDROID-IMPLEMENTATION.md` §4):
 1. **Status bar** — left: signal icon (concentric broadcast waves) + dB, STEREO/MONO pill, and a
-   tell strip (RDS / HD / TP·TA / AF flags), with PTY/genre; right: settings gear button.
+   tell strip (RDS / HD / TP·TA / AF flags), with PTY/genre; right: **driving-status icons** (GPS
+   lock + vehicle-in-motion, **wide/landscape only** — hidden on tall; §4.6) then the settings gear
+   button.
    Nearby-search sits here on the **tall** track (in the preset band on the wide track). No FM
    badge. **Wide/landscape:** signal + STEREO + tells + genre share the left cluster (inline).
    **Tall (portrait / ⅓ slice):** the STEREO pill is horizontally **centered**, with the tell
@@ -75,7 +77,8 @@ presets, and open Nearby search.
      model): a **real logo replaces the call sign** (call sign shown small beneath it); with **no
      real logo**, no monogram is drawn here — just the big **4-letter call sign** + frequency. The
      **RadioText strip** sits below the hero (marquee when text > 46 chars). The hero call sign and
-     frequency can each be hidden per station via the logo window options (§6.4 / surface 5).
+     frequency are controlled per station via the logo window options (§6.4 / surface 5) — **both
+     default OFF for a station with a logo** (logo-only hero); a no-logo station always shows them.
    - **Prev/Next peek cards** flank the hero: the previous and next presets rendered as smaller,
      ~0.88-scale, ~60%-opacity cards that peek in from the sides and sit slightly behind the hero;
      tapping one steps to that preset. Shown on **both** tracks whenever a prev/next preset exists,
@@ -87,7 +90,8 @@ presets, and open Nearby search.
    screen height, scrolling vertically.
 
 **Key components**
-- **Station logo tile:** 92×92, `border-radius:20` (or 46 if circle), station brand bg/fg, 34px 700.
+- **Station logo (hero):** a **real logo image** fills a generous share of the card (borderless,
+  `ContentScale.Fit`); with no real logo, no tile is drawn on the hero (call sign + frequency only). See §4.5.
 - **Call letters:** 66px, 700, `color:text` (italic `dim` when tuning/unknown), `letter-spacing:-1`.
   Shown as the **4 core letters only** — `-FM`/`-AM` + hyphens stripped (e.g. `WWHG-FM` → `WWHG`), everywhere.
 - **Frequency:** 60px, 700, `color:amber`, `font-variant-numeric:tabular-nums`, tap opens numpad.
@@ -95,8 +99,9 @@ presets, and open Nearby search.
   outline in `dim`.
 - **Preset tile:** width **148**, full height; `border-radius:16`, `bg:panel`,
   border `2px solid blue` when active else `1px solid border`. Shows **either** a real logo
-  (borderless, transparent, fills the tile — §4.5; **freq + call sign hidden**) **or** the colored
-  monogram cube + a text row of **frequency then 4-letter call sign**. Active tile shows a 26×3
+  (borderless, transparent, fills the tile — §4.5; **freq + call sign hidden**) **or** a **wide
+  colored call-sign box** (landscape aspect matching the logo plate, the **4 call letters inside it**
+  on a station-color fill) with the **frequency beneath the box**. Active tile shows a 26×3
   amber bar at bottom. Long‑press enters reorder mode.
 - **SEEK controls:** now inside the tap‑to‑tune / numpad window (in `CarFmLive.dc.html`), not on
   the main face. Scan icon = a vertical bar + chevron (down/up variants).
@@ -104,7 +109,8 @@ presets, and open Nearby search.
   flanking the hero — smaller (~0.88 scale, ~60% opacity) cards showing the prev and next presets,
   edge-softened with a fade gradient, peeking in from the sides and sitting slightly behind the
   hero; tap to step. Shown on both tracks (tucked tighter on tall). Build as real sibling
-  composables clipped by the screen edges.
+  composables clipped by the screen edges. They use the **same treatment as the preset tiles** (real-logo
+  image, or the colored call-sign box + frequency beneath).
 - **Custom scrollbar** (under the preset grid): 6px track (`bg:meterEmpty`, `radius:999`), thumb
   `rgba(128,134,144,0.6)`, width = viewport/scrollWidth, left = scroll fraction. **No arrows.**
   Track/thumb are draggable (pointer maps x → scrollLeft). Native scrollbar is hidden.
@@ -172,10 +178,10 @@ fits the narrow track with no horizontal scroll).
 
 - **Opens on a landing view**, not a search:
   - *Has a logo* → the current logo (large) + two option rows **Display Call Sign** and **Display
-    Frequency** (both ON by default) + a **"Search for a different logo"** button.
+    Frequency** (both **OFF by default** — logo-only hero) + a **"Search for a different logo"** button.
   - *No logo* → **"No Logo Installed"** + a **"Search for a logo"** button.
-- **Display Call Sign / Display Frequency** affect the **hero card only**, saved per station
-  (unchecked hides that element on the hero when tuned).
+- **Display Call Sign / Display Frequency** affect the **hero card only**, saved per station,
+  **default OFF** (check either to bring back the small call sign / amber frequency on the hero).
 - **Search** (button‑triggered) → **loading** → **results** (four candidates in a 2×2 grid; each cell =
   the candidate art on its own bg + `domain` and `w×h` caption) → **no‑results** / **error** (short
   message + **Search again**) → **saving**.
@@ -247,8 +253,9 @@ the numbers.
 - **Icons:** all custom, drawn inline as SVG (signal waves, magnifier/tower, star, chevrons).
   No external icon files. Recreate as vector drawables / SVG.
 - **Station brand logos:** **real image assets** (transparent or opaque), assigned via the logo
-  window (§6.4) and fitted per surface (§4.5); a colored **monogram tile** (call letters on brand
-  bg) is the fallback on preset tiles / peek cards when no real logo exists. Three sample logos ship
+  window (§6.4) and fitted per surface (§4.5); a colored **call-sign box** (4 call letters on a
+  brand-color fill, landscape aspect) is the fallback on preset tiles / peek cards when no real logo
+  exists. Three sample logos ship
   under `logos/` (WERN, WWHG, WIBA) exercising square and wide-wordmark aspects.
 - No other raster images are required by the design.
 
@@ -265,7 +272,8 @@ the numbers.
   needed).
 
 To view the prototype, open `CarFmLive.dc.html` in a browser. The exposed tweak controls are
-**aspect** (which surface to preview), **theme** (light/dark), and **tuner-error**. Nearby‑icon
+**aspect** (which surface to preview), **theme** (light/dark), **tuner-error**, **GPS locked**, and
+**In motion** (toggle the two driving-status icons, §4.6). Nearby‑icon
 colors and seek style are fixed style parameters in the prototype, not user‑facing controls.
 
 ## Screenshots

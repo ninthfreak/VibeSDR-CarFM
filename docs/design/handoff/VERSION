@@ -1,9 +1,45 @@
-1.8.1 — 2026-07-21
+1.9.0 — 2026-07-23
 
 Android Car FM Radio Face — design handoff bundle.
 
 Changelog
 ---------
+1.9.0 (2026-07-23)
+  - NEW: driving-status icons in the status bar's right cluster, just left of the
+    settings gear — WIDE / LANDSCAPE TRACKS ONLY (both hidden entirely on the tall
+    track: portrait / ⅓ slice). Live source (RadioFace/CarFmLive) re-synced; new
+    ANDROID §4.6 + §4.1 right-cluster note + §8 motion bullet + README surface 1 +
+    CORRECTION-LOOP step 3b.
+    - GPS lock: an angled satellite (body ~28°, dish + downward signal arcs). Lit
+      interactive-blue on a fix; with NO fix it is NOT greyed — styled like a disabled
+      tell (§4.1 tells): full text color at ~32% opacity + the same faint 1px emboss.
+      Always present (communicates lock state).
+    - Vehicle in motion: a car with trailing motion lines, AMBER (fixed safety-color
+      family, like TA — never the blue accent), pulsing SLOWLY (~2.6s, gentler than
+      TA's ~1.1s). Rendered ONLY while in motion — absent (not dimmed) when stopped.
+    - Prototype toggles: new `gpsLocked` and `inMotion` boolean tweaks on CarFmLive.
+  - CHANGED DEFAULT: the hero Display Call Sign / Display Frequency options (§6.4) now
+    default OFF for a station that HAS a logo → a logo-only hero by default (the logo
+    fills the card); either can be turned back on per station. No-logo stations are
+    unaffected (always show call sign + frequency). Reverses the 1.8.0 default.
+    §4.2/§4.5/§6.4 + README surface 1/5 updated.
+  - CHANGED: no-logo preset tiles AND prev/next peek cards restyled. The generated
+    monogram cube is replaced by a WIDE colored box in the SAME landscape aspect as the
+    real-logo plate, with the 4 call letters INSIDE the box and the frequency BENEATH it
+    (call sign no longer repeated below the box). Peek cards now use the EXACT same
+    treatment as the bottom preset tiles (real-logo image, or call-sign box + freq).
+    Preset/peek frequency darkened to full text color + heavier weight for glance-
+    legibility. §4.3/§4.5/§5 + README surface 1 updated.
+  - Settings §6.3: removed the stale Tuner-source list (Si470x FM dongle / rtl_tcp —
+    retired) and merged the two TUNER bullets into one describing the shipping set
+    (connection status + RETRY/Details, source picker RTL-SDR · NWD/NOWADA · FYT/DuduOS
+    · Auto, Start-radio-on-boot). Matches SettingsPanel + README surface 4.
+  - Reference-screenshot note (still true, now also covers the new elements): the
+    per-surface PNGs in screenshots/ predate 1.8 and show the OLD monogram cubes with
+    NO driving-status icons. Do NOT diff the real-logo hero, the no-logo call-sign
+    boxes, or the GPS/motion icons against those PNGs — they render live from
+    CarFmLive.dc.html; trust the live render + ANDROID §4.5/§4.6 over the stale stills.
+
 1.8.1 (2026-07-21)
   - Hero real-logo now GROWS to reclaim freed space when the per-station Display Call
     Sign / Display Frequency options (§6.4) are off: one element hidden → larger box,

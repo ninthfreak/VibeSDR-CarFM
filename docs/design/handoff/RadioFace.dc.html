@@ -17,6 +17,7 @@
 @keyframes carfm-scan-up { 0% { transform: translateY(14px); opacity: 0.25; } 100% { transform: translateY(0); opacity: 1; } }
 @keyframes carfm-scan-down { 0% { transform: translateY(-14px); opacity: 0.25; } 100% { transform: translateY(0); opacity: 1; } }
 @keyframes carfm-ta-pulse { 0%,100% { opacity:1; transform:scale(1.3); } 50% { opacity:0.5; transform:scale(1.45); } }
+@keyframes carfm-motion-flash { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.4; transform:scale(1.07); } }
 [data-preset-grid]::-webkit-scrollbar { display: none; }
 </style>
 </helmet>
@@ -82,11 +83,49 @@
       </div>
     </sc-if>
     <div style="{{ topRightColStyle }}">
+      <div style="{{ topRightRowStyle }}">
+      <sc-if value="{{ iconsRight }}" hint-placeholder-val="{{ true }}">
+      <sc-if value="{{ inMotion }}" hint-placeholder-val="{{ true }}">
+      <div style="{{ motionStyle }}" title="{{ motionTitle }}">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="{{ motionColor }}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <g transform="translate(2.6 1) scale(0.82)">
+            <path d="M19 17h2a1 1 0 0 0 1-1v-3c0-.9-.7-1.6-1.5-1.9L16 10l-1.9-2.4A2 2 0 0 0 12.5 7H6.2a2 2 0 0 0-1.8 1.1L2.7 11.6A3 3 0 0 0 2 13.5V16a1 1 0 0 0 1 1h1.5"></path>
+            <circle cx="8" cy="17" r="2"></circle>
+            <circle cx="17" cy="17" r="2"></circle>
+            <path d="M10 17h5"></path>
+          </g>
+          <line x1="0.5" y1="8.5" x2="3.6" y2="8.5"></line>
+          <line x1="0" y1="12" x2="2.8" y2="12"></line>
+          <line x1="1" y1="15.5" x2="3.4" y2="15.5"></line>
+        </svg>
+      </div>
+      </sc-if>
+      <div style="{{ gpsStyle }}" title="{{ gpsTitle }}">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="{{ gpsColor }}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <g transform="rotate(-28 12 12)">
+            <rect x="0.5" y="9.9" width="7.3" height="4.2" rx="0.5"></rect>
+            <line x1="2.9" y1="9.9" x2="2.9" y2="14.1"></line>
+            <line x1="5.3" y1="9.9" x2="5.3" y2="14.1"></line>
+            <line x1="0.5" y1="12" x2="7.8" y2="12"></line>
+            <rect x="16.2" y="9.9" width="7.3" height="4.2" rx="0.5"></rect>
+            <line x1="18.6" y1="9.9" x2="18.6" y2="14.1"></line>
+            <line x1="21" y1="9.9" x2="21" y2="14.1"></line>
+            <line x1="16.2" y1="12" x2="23.5" y2="12"></line>
+            <path d="M7.8 12h1.3M14.9 12h1.3"></path>
+            <rect x="9.1" y="8.3" width="5.8" height="7.4" rx="1"></rect>
+            <path d="M12 15.7v3.1"></path>
+            <path d="M9.9 18.7a3 3 0 0 0 4.2 0"></path>
+            <path d="M8.4 20.4a6 6 0 0 0 7.2 0"></path>
+          </g>
+        </svg>
+      </div>
+      </sc-if>
       <div style="{{ advStyle }}" onClick="{{ onSettings }}">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="{{ advIconColor }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3"></circle>
         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
       </svg>
+      </div>
       </div>
       <sc-if value="{{ nearbyInTopbar }}" hint-placeholder-val="{{ false }}">
         <div style="{{ nearbyTopStyle }}" onClick="{{ onNearby }}">
@@ -104,7 +143,7 @@
             <sc-if value="{{ prevCardHasLogo }}" hint-placeholder-val="{{ false }}"><img src="{{ prevCardLogoUrl }}" style="{{ sideLogoImgStyle }}" alt="" /></sc-if>
             <sc-if value="{{ prevCardNoLogo }}" hint-placeholder-val="{{ true }}">{{ prevCardLogo }}</sc-if>
           </div>
-          <span style="{{ sideCardCallStyle }}">{{ prevCardCall }}</span>
+          <sc-if value="{{ prevCardNoLogo }}" hint-placeholder-val="{{ true }}"><span style="{{ sideCardFreqStyle }}">{{ prevCardFreq }}</span></sc-if>
         </div>
       </sc-if>
       <div style="{{ heroMainStyle }}" ref="{{ heroCardRef }}">
@@ -143,7 +182,7 @@
             <sc-if value="{{ nextCardHasLogo }}" hint-placeholder-val="{{ false }}"><img src="{{ nextCardLogoUrl }}" style="{{ sideLogoImgStyle }}" alt="" /></sc-if>
             <sc-if value="{{ nextCardNoLogo }}" hint-placeholder-val="{{ true }}">{{ nextCardLogo }}</sc-if>
           </div>
-          <span style="{{ sideCardCallStyle }}">{{ nextCardCall }}</span>
+          <sc-if value="{{ nextCardNoLogo }}" hint-placeholder-val="{{ true }}"><span style="{{ sideCardFreqStyle }}">{{ nextCardFreq }}</span></sc-if>
         </div>
       </sc-if>
     </div>
@@ -178,7 +217,6 @@
               <sc-if value="{{ chip.noLogo }}" hint-placeholder-val="{{ true }}">
                 <div style="{{ chip.callRowStyle }}">
                   <span style="{{ chip.freqTextStyle }}">{{ chip.freqText }}</span>
-                  <span style="{{ chip.callStyle }}">{{ chip.callText }}</span>
                 </div>
               </sc-if>
               <sc-if value="{{ chip.active }}" hint-placeholder-val="{{ false }}">
@@ -466,6 +504,8 @@ class Component extends DCLogic {
     const scroll = bool(p.scroll);
     const saved = bool(p.saved);
     const scanning = bool(p.scanning);
+    const gpsLocked = (p.gpsLocked === undefined || p.gpsLocked === '') ? true : bool(p.gpsLocked);
+    const inMotion = (p.inMotion === undefined || p.inMotion === '') ? true : bool(p.inMotion);
     const heroShowCall = (p.heroShowCall === undefined || p.heroShowCall === '') ? true : bool(p.heroShowCall);
     const heroShowFreq = (p.heroShowFreq === undefined || p.heroShowFreq === '') ? true : bool(p.heroShowFreq);
     const tall = bool(p.tall);
@@ -614,16 +654,16 @@ class Component extends DCLogic {
       const w = big ? (landscape ? 134 : 150) : (landscape ? 106 : 118), lg = big ? (landscape ? 50 : 58) : (landscape ? 38 : 44), imgH = big ? (landscape ? 68 : 78) : (landscape ? 54 : 62), imgW = big ? (landscape ? 122 : 138) : (landscape ? 100 : 112), lr = big ? 15 : 12, lf = big ? (landscape ? 18 : 20) : (landscape ? 14 : 16), cf = big ? (landscape ? 16 : 18) : (landscape ? 13 : 15);
       return {
         active, reordering, dataFreq: pr.freq,
-        logoText: plogo || 'FM', logoUrl: plogoUrl, hasLogo: !!plogoUrl, noLogo: !plogoUrl,
+        logoText: cleanCall(call) || 'FM', logoUrl: plogoUrl, hasLogo: !!plogoUrl, noLogo: !plogoUrl,
         logoImgStyle: { width:'100%', height:'100%', objectFit:'contain', padding:0, boxSizing:'border-box' },
         callText: cleanCall(call) || ('FM ' + pr.freq),
         callRowStyle: { display:'flex', alignItems:'baseline', justifyContent:'center', gap:6, maxWidth:'100%', flexWrap:'nowrap', overflow:'hidden' },
         freqText: pr.freq,
         canLeft: idx > 0, canRight: idx < presets.length - 1,
         tileStyle: { position:'relative', width: (tall || twoRows) ? 'auto' : w, height: tall ? 128 : ((twoRows || big) ? '100%' : '80%'), alignSelf: (tall || twoRows || big) ? 'stretch' : 'center', borderRadius:16, cursor: reordering ? (dragging ? 'grabbing' : 'grab') : 'pointer', flexShrink:0, boxSizing:'border-box', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap: big ? 8 : 6, padding: big ? '12px 8px 16px' : '8px 6px 12px', backgroundColor: t.panel, border: active && !reordering ? ('2px solid ' + t.blue) : ('1px solid ' + t.border), animation: (reordering && !anyDrag) ? 'carfm-wiggle 0.42s ease-in-out infinite' : 'none', transition: dragging ? 'none' : (anyDrag ? 'transform .16s ease' : 'width .25s ease, height .25s ease'), transform: dragging ? ('translate(' + this.state.dragDX + 'px,' + this.state.dragDY + 'px) scale(1.06)') : (sh ? ('translate(' + sh.dx + 'px,' + sh.dy + 'px)') : 'none'), zIndex: dragging ? 30 : 'auto', boxShadow: dragging ? '0 18px 40px rgba(0,0,0,0.35)' : 'none', touchAction: reordering ? 'none' : 'auto' },
-        logoStyle: { width: plogoUrl ? '100%' : lg, maxWidth:'100%', height: plogoUrl ? 'auto' : lg, flex: plogoUrl ? '1 1 auto' : '0 0 auto', minHeight:0, borderRadius:lr, flexShrink:0, overflow:'hidden', backgroundColor: plogoUrl ? 'transparent' : (plogo ? (pbg || t.raised) : t.raised), border: plogoUrl ? 'none' : (plogo ? 'none' : ('1px solid ' + t.border)), display:'flex', alignItems:'center', justifyContent:'center', fontSize: big ? 20 : 16, fontWeight:700, letterSpacing:0.5, color: plogo ? (pfg || '#FFFFFF') : t.dim, transition:'width .25s ease, height .25s ease' },
+        logoStyle: { width:'100%', maxWidth:'100%', height:'auto', flex:'1 1 auto', minHeight:0, borderRadius:lr, flexShrink:0, overflow:'hidden', backgroundColor: plogoUrl ? 'transparent' : (pbg || t.raised), border: plogoUrl ? 'none' : (pbg ? 'none' : ('1px solid ' + t.border)), display:'flex', alignItems:'center', justifyContent:'center', fontSize: big ? 26 : 19, fontWeight:800, letterSpacing:0.5, color: plogoUrl ? t.text : (pfg || '#FFFFFF'), transition:'width .25s ease, height .25s ease' },
         callStyle: { fontSize:cf, fontWeight:700, color:t.text, lineHeight:1.12, maxWidth:'100%', textAlign:'center', whiteSpace:'nowrap' },
-        freqTextStyle: { fontSize:13, fontWeight:700, color:t.dim, letterSpacing:0.3, lineHeight:1, fontVariantNumeric:'tabular-nums' },
+        freqTextStyle: { fontSize:13, fontWeight:800, color:t.text, letterSpacing:0.3, lineHeight:1, fontVariantNumeric:'tabular-nums' },
         activeBarStyle: { position:'absolute', bottom:6, left:'50%', marginLeft:-13, width:26, height:3, borderRadius:2, backgroundColor: t.blue },
         logoEditStyle: { position:'absolute', top:-9, left:-9, width:28, height:28, borderRadius:14, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', backgroundColor: t.blue, color:'#FFFFFF', border:'2px solid ' + t.panel, touchAction:'none', lineHeight:1 },
         removeStyle: { position:'absolute', top:-9, right:-9, width:28, height:28, borderRadius:14, display:'flex', alignItems:'center', justifyContent:'center', fontSize:17, fontWeight:700, cursor:'pointer', backgroundColor: t.amber, color:'#FFFFFF', border:'2px solid ' + t.panel, lineHeight:1 },
@@ -645,8 +685,8 @@ class Component extends DCLogic {
       else { prevP = presets[(pIdx - 1 + presets.length) % presets.length]; nextP = presets[(pIdx + 1) % presets.length]; }
     }
     const sideLogoStyle = (pp) => (pp && pp.logoUrl)
-      ? { width:'86%', maxWidth:170, aspectRatio:'1 / 1', borderRadius:14, flexShrink:0, overflow:'hidden', backgroundColor:'transparent', display:'flex', alignItems:'center', justifyContent:'center' }
-      : { width:'58%', maxWidth:92, aspectRatio:'1 / 1', borderRadius:16, flexShrink:0, backgroundColor: pp && pp.logoBg ? pp.logoBg : t.raised, color: pp && pp.logoFg ? pp.logoFg : t.dim, border: pp && pp.logoBg ? 'none' : ('1px solid ' + t.border), display:'flex', alignItems:'center', justifyContent:'center', fontSize:24, fontWeight:700, letterSpacing:0.5 };
+      ? { width:'92%', maxWidth:184, aspectRatio:'16 / 10', borderRadius:12, flexShrink:0, overflow:'hidden', backgroundColor:'transparent', display:'flex', alignItems:'center', justifyContent:'center' }
+      : { width:'92%', maxWidth:184, aspectRatio:'16 / 10', borderRadius:12, flexShrink:0, backgroundColor: pp && pp.logoBg ? pp.logoBg : t.raised, color: pp && pp.logoFg ? pp.logoFg : '#FFFFFF', border: pp && pp.logoBg ? 'none' : ('1px solid ' + t.border), display:'flex', alignItems:'center', justifyContent:'center', fontSize:26, fontWeight:800, letterSpacing:0.5 };
     const sideLogoImgStyle = { width:'100%', height:'100%', objectFit:'contain', display:'block' };
     const sideCardBase = { position:'relative', zIndex:1, flexShrink:0, width:'20%', maxWidth:206, aspectRatio:'1 / 1', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, padding:16, boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:24, cursor:'pointer', opacity:0.6, transform:'scale(0.88)' };
 
@@ -654,8 +694,8 @@ class Component extends DCLogic {
       scroll, notScroll: !scroll, oob,
       showPresetNav: !tall,
       wideHero: presets.length > 0,
-      prevCardLogo: prevP ? (prevP.logo || 'FM') : '', prevCardCall: prevP ? (cleanCall(prevP.name) || ('FM ' + prevP.freq)) : '',
-      nextCardLogo: nextP ? (nextP.logo || 'FM') : '', nextCardCall: nextP ? (cleanCall(nextP.name) || ('FM ' + nextP.freq)) : '',
+      prevCardLogo: prevP ? (cleanCall(prevP.name) || 'FM') : '', prevCardCall: prevP ? (cleanCall(prevP.name) || ('FM ' + prevP.freq)) : '', prevCardFreq: prevP ? prevP.freq : '',
+      nextCardLogo: nextP ? (cleanCall(nextP.name) || 'FM') : '', nextCardCall: nextP ? (cleanCall(nextP.name) || ('FM ' + nextP.freq)) : '', nextCardFreq: nextP ? nextP.freq : '',
       prevCardHasLogo: !!(prevP && prevP.logoUrl), prevCardNoLogo: !(prevP && prevP.logoUrl), prevCardLogoUrl: prevP ? (prevP.logoUrl || '') : '',
       nextCardHasLogo: !!(nextP && nextP.logoUrl), nextCardNoLogo: !(nextP && nextP.logoUrl), nextCardLogoUrl: nextP ? (nextP.logoUrl || '') : '',
       sideLogoImgStyle,
@@ -663,6 +703,7 @@ class Component extends DCLogic {
       prevCardStyle: Object.assign({}, sideCardBase, { marginRight: tall ? -46 : -72, WebkitMaskImage:'linear-gradient(to right, #000 55%, rgba(0,0,0,0.1) 100%)', maskImage:'linear-gradient(to right, #000 55%, rgba(0,0,0,0.1) 100%)' }),
       nextCardStyle: Object.assign({}, sideCardBase, { marginLeft: tall ? -46 : -72, WebkitMaskImage:'linear-gradient(to left, #000 55%, rgba(0,0,0,0.1) 100%)', maskImage:'linear-gradient(to left, #000 55%, rgba(0,0,0,0.1) 100%)' }),
       sideCardCallStyle: { fontSize:15, fontWeight:700, color:t.text, textAlign:'center', maxWidth:'100%', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', lineHeight:1.1 },
+      sideCardFreqStyle: { fontSize:17, fontWeight:800, color:t.text, letterSpacing:0.3, textAlign:'center', lineHeight:1, fontVariantNumeric:'tabular-nums' },
       nearbyInTopbar: tall && !reordering, nearbyInBand: !tall && !reordering,
       freq: p.freq || '--', station: scanning ? 'Scanning…' : (cleanCall(ps) || 'Tuning…'), logoText: logo || 'FM',
       heroLogoUrl, heroRealLogo: !scanning && hasHeroLogo, heroNoLogo: scanning || !hasHeroLogo,
@@ -727,6 +768,12 @@ class Component extends DCLogic {
       topRightColStyle: { flex: tall ? '1 1 0' : '0 0 auto', display:'flex', flexDirection:'column', alignItems: tall ? 'flex-end' : 'center', gap: tall ? 14 : 0, flexShrink:0 },
       nearbyTopStyle: { cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
       advIconColor: t.dim,
+      gpsLocked: gpsLocked, gpsColor: gpsLocked ? t.blue : t.text, gpsTitle: gpsLocked ? 'GPS lock' : 'No GPS lock',
+      topRightRowStyle: { display:'flex', alignItems:'center', gap: tall ? 10 : 12 },
+      iconsRight: !tall,
+      gpsStyle: { display:'flex', alignItems:'center', justifyContent:'center', width:48, height:48, boxSizing:'border-box', transform: tall ? 'none' : 'translateY(-6px)', opacity: gpsLocked ? 1 : 0.32, filter: gpsLocked ? 'none' : ('drop-shadow(' + (dark ? '0 1px 0 rgba(255,255,255,0.10)' : '0 1px 0 rgba(255,255,255,0.9)') + ')') },
+      motionColor: t.amber, motionTitle: 'Vehicle in motion',
+      motionStyle: { display:'flex', alignItems:'center', justifyContent:'center', width:48, height:48, marginRight: tall ? 0 : -9, boxSizing:'border-box', transformOrigin:'center', animation:'carfm-motion-flash 2.6s ease-in-out infinite' },
 
       heroBandStyle: { flex: tall ? '1 1 auto' : 1, marginTop: tall ? 26 : 0, display:'flex', flexDirection:'column', justifyContent: 'flex-start', gap: tall ? 12 : (twoRows ? 8 : 16), minHeight:0 },
       heroRowStyle: { flex: tall ? '0 0 auto' : 1, marginTop: tall ? 'auto' : 0, position:'relative', display:'flex', flexDirection:'row', alignItems:'center', justifyContent:'center', gap:0, minHeight:0 },

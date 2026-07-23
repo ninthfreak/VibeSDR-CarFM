@@ -22,6 +22,7 @@
       out-of-band="{{ outOfBand }}" scroll="{{ scroll }}" saved="{{ saved }}"
       logo-bg="{{ logoBg }}" logo-fg="{{ logoFg }}" logo-url="{{ logoUrl }}" logo-shape="{{ logoShape }}"
       hero-show-call="{{ heroShowCall }}" hero-show-freq="{{ heroShowFreq }}"
+      gps-locked="{{ gpsLocked }}" in-motion="{{ inMotion }}"
       presets="{{ presets }}" seek-style="{{ seekStyle }}" reordering="{{ reordering }}"
       scanning="{{ scanning }}" scan-dir="{{ scanDir }}" tuner-error="{{ tunerError }}" nearby-line="{{ nearbyLine }}" nearby-fill="{{ nearbyFill }}" nearby-border="{{ nearbyBorder }}" nearby-glass="{{ nearbyGlass }}" nearby-border-color="{{ nearbyBorderColor }}" nearby-line-dark="{{ nearbyLineDark }}" nearby-fill-dark="{{ nearbyFillDark }}" nearby-glass-dark="{{ nearbyGlassDark }}" nearby-border-color-dark="{{ nearbyBorderColorDark }}"
       on-freq-tap="{{ openNumpad }}" on-tune-down="{{ tuneDown }}" on-tune-up="{{ tuneUp }}"
@@ -111,7 +112,7 @@
   </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props="{&quot;aspect&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Dudu7 full&quot;,&quot;Dudu7 ⅔ slice&quot;,&quot;Dudu7 ⅓ slice&quot;,&quot;Galaxy S landscape&quot;,&quot;Galaxy S portrait&quot;],&quot;default&quot;:&quot;Dudu7 full&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Layout&quot;},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light'|'dark'&quot;,&quot;section&quot;:&quot;Prototype&quot;},&quot;tunerError&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Prototype&quot;}}">
+<script type="text/x-dc" data-dc-script data-props="{&quot;aspect&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Dudu7 full&quot;,&quot;Dudu7 ⅔ slice&quot;,&quot;Dudu7 ⅓ slice&quot;,&quot;Galaxy S landscape&quot;,&quot;Galaxy S portrait&quot;],&quot;default&quot;:&quot;Dudu7 full&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Layout&quot;},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light'|'dark'&quot;,&quot;section&quot;:&quot;Prototype&quot;},&quot;tunerError&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Prototype&quot;},&quot;gpsLocked&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Prototype&quot;},&quot;inMotion&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Prototype&quot;}}">
 class Component extends DCLogic {
   constructor(props) {
     super(props);
@@ -149,7 +150,7 @@ class Component extends DCLogic {
         { name:'WQLF-FM', freq:'102.1' },
         { name:'WWHG-FM', freq:'105.9' }
       ],
-      numpadOpen: false, pickerOpen: false, settingsOpen: false, logoSearchFor: null, logoDisplay: {}, npBuf: '', npError: false, reordering: false, logoNote: '', scale: 1, scanning: false, scanDir: 0, scanDisplay: '', themeChoice: 'system', autostart: true
+      numpadOpen: false, pickerOpen: false, settingsOpen: false, logoSearchFor: null, logoDisplay: {}, npBuf: '', npError: false, reordering: false, logoNote: '', scale: 1, scanning: false, scanDir: 0, gpsLocked: true, inMotion: true, gpsLocked: true, scanDisplay: '', themeChoice: 'system', autostart: true
     };
   }
 
@@ -262,7 +263,7 @@ class Component extends DCLogic {
     const name = info ? info.ps : ('FM ' + f);
     clearTimeout(this._logoT);
     const disp = Object.assign({}, this.state.logoDisplay);
-    disp[f] = { call: showCall !== false, freq: showFreq !== false };
+    disp[f] = { call: showCall === true, freq: showFreq === true };
     if (url && info) info.logoUrl = url;
     this.setState({ logoSearchFor: null, logoDisplay: disp, logoNote: 'Logo settings saved \u2014 ' + name });
     this._logoT = setTimeout(() => this.setState({ logoNote: '' }), 2200);
@@ -333,14 +334,14 @@ class Component extends DCLogic {
 
     return {
       theme, freq: s.scanning ? s.scanDisplay : freq,
-      scanning: s.scanning, scanDir: s.scanDir,
+      scanning: s.scanning, scanDir: s.scanDir, gpsLocked: (this.props.gpsLocked === undefined) ? s.gpsLocked : (this.props.gpsLocked !== false && this.props.gpsLocked !== 'false'), inMotion: (this.props.inMotion === undefined) ? s.inMotion : (this.props.inMotion !== false && this.props.inMotion !== 'false'),
       ps: s.scanning ? '' : (info ? info.ps : ''),
       logoText: s.scanning ? '' : (info ? info.logo : ''),
       logoBg: s.scanning ? '' : (info ? info.bg : ''),
       logoFg: s.scanning ? '' : (info ? info.fg : ''),
       logoUrl: s.scanning ? '' : (info ? (info.logoUrl || '') : ''),
-      heroShowCall: (s.logoDisplay[freq] || {}).call !== false,
-      heroShowFreq: (s.logoDisplay[freq] || {}).freq !== false,
+      heroShowCall: (info && info.logoUrl) ? ((s.logoDisplay[freq] || {}).call === true) : true,
+      heroShowFreq: (info && info.logoUrl) ? ((s.logoDisplay[freq] || {}).freq === true) : true,
       logoShape: info ? info.shape : '',
       rt: s.scanning ? '' : rt, stereo: !s.scanning && rating >= 3,
       rds: !s.scanning && !!info,
@@ -379,7 +380,7 @@ class Component extends DCLogic {
       tuneUp: this.tuneUp, tuneDown: this.tuneDown, prevPreset: this.prevPreset, nextPreset: this.nextPreset,
       startReorder: this.startReorder, doneReorder: this.doneReorder, reorderPresets: this.reorderPresets, editLogo: this.editLogo, removePreset: this.removePreset,
       logoSearchOpen: !!s.logoSearchFor, closeLogo: this.closeLogo, confirmLogo: this.confirmLogo,
-      logoStation: (() => { if (!s.logoSearchFor) return null; const di = this.DB[s.logoSearchFor]; const call = di ? di.ps : ('FM ' + s.logoSearchFor); const dsp = (s.logoDisplay || {})[s.logoSearchFor] || {}; return { name: call, callsign: call, freq: s.logoSearchFor, query: 'radio ' + s.logoSearchFor + ' ' + call.toLowerCase() + ' logo', logo: di ? di.logo : '', logoBg: di ? di.bg : '', logoFg: di ? di.fg : '', logoUrl: di ? (di.logoUrl || '') : '', showCall: dsp.call !== false, showFreq: dsp.freq !== false }; })(),
+      logoStation: (() => { if (!s.logoSearchFor) return null; const di = this.DB[s.logoSearchFor]; const call = di ? di.ps : ('FM ' + s.logoSearchFor); const dsp = (s.logoDisplay || {})[s.logoSearchFor] || {}; return { name: call, callsign: call, freq: s.logoSearchFor, query: 'radio ' + s.logoSearchFor + ' ' + call.toLowerCase() + ' logo', logo: di ? di.logo : '', logoBg: di ? di.bg : '', logoFg: di ? di.fg : '', logoUrl: di ? (di.logoUrl || '') : '', showCall: dsp.call === true, showFreq: dsp.freq === true }; })(),
       tuneTo: this.tuneTo, toggleSave: this.toggleSave, pickAndTune: this.pickAndTune, savePresetFreq: this.savePresetFreq,
       commitNumpad: this.commitNumpad, scanUp: this.scanUp, scanDown: this.scanDown,
 
