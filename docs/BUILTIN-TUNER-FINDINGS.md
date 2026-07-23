@@ -264,3 +264,91 @@ first of a family. Candidate next backends, each a distinct interface:
 - XDA — firmware K2001_NWD_S212109 (sun8iw11p1): https://xdaforums.com/t/firmware-update-help-allwinner-t3-k2001_nwd_s212109-sun8iw11p1.4507007/
 - ivvlev/CarRadio — Allwinner T3 / TopWay `android.tw.john.*`: https://github.com/ivvlev/CarRadio
 - NavRadio+ (multi-vendor reference app): https://play.google.com/store/apps/details?id=com.navimods.radio
+
+---
+
+# Deep dive — 2026-07-23 (on-device logs + full decompile)
+
+Combines two things the earlier scouting pass did not have: **real drive logs**
+from the target unit, and a **decompile of both the stock app AND the service's
+internal managers** (not just the client-facing AIDL). This corrects a couple of
+earlier conclusions. Static analysis via androguard on `com.nwd.radio` (stock
+app) and `com.nwd.radio.service` (RadioService).
+
+## Chip / stack identity (new)
+- The FM tuner is **Spreadtrum / UNISOC** class: native JNI classes
+  `SprdFmNative` and an "arm" `RadioNative` in *both* APKs. The active manager on
+  this unit is **`ArmRadioManager`** (there are also `AWRadioManager` = Allwinner
+  and `SprdFMFeature`/`SprdRadioManager` variants the service can select).
+- Closer to a datasheet than we were: search UNISOC/Spreadtrum FM radio HAL
+  (`SprdFmNative`, `readRds`, `getLrText`, `readRdsBler`) for chip specifics.
+
+## The service's REAL native capability (service-internal)
+`RadioNative` (JNI, inside the service) exposes far more than the AIDL does:
+`readRssi()` (true signal), `readRds()` / **`readRdsBler()`** (raw RDS blocks +
+block-error rate), `getLrText()` (RadioText), `getPs()`, `stereoMono()` /
+`setStereoMono()`, `seek/tune/seeknew/tunenew`, `openDev()`. So the hardware CAN
+do real RSSI and raw RDS — this **corrects the earlier "no raw blocks" note**
+(they exist natively; they're just not surfaced over the AIDL).
+
+## What the AIDL actually exposes vs. what it doesn't
+- `RadioFeature$Stub.onTransact` never calls `readRssi` — **true signal strength
+  is NOT reachable over the AIDL we bind.** The stock app gets its meter value by
+  calling its *own* bundled `SprdFmNative.getRssi()` native method, which needs
+  the vendor `.so` + device access → **not reachable by an unprivileged 3rd-party
+  app.** ⇒ CarFM's DB+GPS *estimate* is the correct call; there is no clean live
+  signal to be had.
+- `notifyRtMessage` / PS / stereo callbacks ARE emitted to bound clients
+  (`RadioService.notifyCallBack`) — so RadioText *is* reachable in principle.
+
+## Why we never get PS / RadioText — the gate (KEY finding)
+The RDS decode loop is `ArmRadioManager$8::run` → `analyzeBuiltInRadioRds()`,
+which early-returns unless:
+
+```
+mbRdsEnable && (mbDeviceOpen || isRadioSource())
+```
+
+- **`isRadioSource()`** = content-provider setting **`mcu_current_source == 4`**
+  (4 = FM). The **MCU writes** this on a real audio-source switch; the service
+  only *reads* it, and nothing in the service writes it. So "RDS via being the
+  source" requires the actual MCU source switch — the same broadcast that, on
+  device, launches the stock app.
+- **`mbDeviceOpen`** = set by `openDevice()` → `RadioNative.openDev()`, called
+  from `SprdFMFeature.powerUp` / `InitFM` (the FM power-up sequence).
+
+⇒ As a *passive bound client* (not the source, device not powered up for us),
+`analyzeBuiltInRadioRds` early-returns every tick → PS/RT never populate and
+`getRtMessage()` stays `''`. **This is the wall, and it's a state gate, not a
+hardware limit.**
+
+## On-device empirical (drive logs 2026-07-21 … 07-23)
+- **`arg`** in `notifyCurrentFrequency` = **1-based FACTORY-preset slot index**
+  (`getPrefabFrequency()` order), `-1` if the freq isn't a factory preset.
+  Confirmed: 101.5→1, 92.1→2, 102.1→3, 105.9→4, 88.7→6; 104.1 (real, non-preset)
+  and all dead channels → −1. **NOT signal, NOT a lock indicator.**
+- **`isStreroOn()`** getter is **stuck `true`** (reads true even on dead air).
+  The **`notifyStereo` callback is the trustworthy source** — it flaps with the
+  real signal — but is intermittent (fires on change; silent on a stable signal).
+  CarFM now drives stereo from the debounced callback, not the poll.
+- **`radioState`** is a global flag (0 idle / 1 active-session), not per-channel;
+  useless as a lock metric. No per-channel lock metric exists at the AIDL level.
+- Enabling RDS selectors 0..3 (`setRDSState`): only 1 & 2 stick; still no text —
+  consistent with the source/device gate above, not a selector problem.
+
+## Levers still worth trying (for RadioText)
+Ranked; all need on-device testing:
+1. **Open the device without becoming the source** — find a client-reachable
+   call that triggers `openDevice()`/`InitFM` (→ `mbDeviceOpen=true`), which
+   unlocks `analyzeBuiltInRadioRds` even when `mcu_current_source != 4`. Best
+   case: RadioText with no stock-app hand-off.
+2. **Read `mcu_current_source`** (content provider) to *detect* when FM is the
+   live source, and only then expect RDS.
+3. **Write `mcu_current_source = 4`** — likely permission-gated and/or instantly
+   overwritten by the MCU (it owns the real routing), but cheap to test.
+- **Signal (RSSI) and raw RDS/BLER** are native-only (vendor `.so` + device
+  access) → out of reach without root; not worth chasing for a normal app.
+
+## Ethics/scope
+Interoperability RE of our own device's interface, read-only, local. Do not
+redistribute decompiled code, modified APKs, or firmware.
