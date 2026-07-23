@@ -45,6 +45,7 @@ import { createBackend } from '../services/UberSDRAdapter';
 import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, onNwd } from '../services/nwdRadio';
 import { diag, isDiagEnabled } from '../services/diag';
 import { startMotion, stopMotion } from '../services/motion';
+import { startGpsFix, stopGpsFix } from '../services/gps';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { localSessionGen, newLocalSession } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
@@ -3675,13 +3676,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => sub.remove();
   }, [carFm, onFmToggleSave, onFmMediaSeek]);
 
-  // ── Vehicle motion (GPS speed → is_moving) ───────────────────────────────────
-  // Wired and ready: features can gate on isMoving()/subscribeMotion(); the speed
-  // readout UI comes in a later design handoff. Low-rate GPS while the face is up.
+  // ── Vehicle motion (GPS speed → is_moving) + GPS lock state ──────────────────
+  // Both wired and ready as DATA only; the UI (speed readout, GPS-lock indicator)
+  // comes in a later design handoff. Features can gate on isMoving()/
+  // subscribeMotion() and hasGpsFix()/useGpsFix(). Low-rate GPS while the face is up.
   useEffect(() => {
     if (!carFm) return;
     void startMotion();
-    return () => stopMotion();
+    void startGpsFix();
+    return () => { stopMotion(); stopGpsFix(); };
   }, [carFm]);
 
   // ── Built-in NWD/NOWADA tuner (Backend E) ────────────────────────────────────
