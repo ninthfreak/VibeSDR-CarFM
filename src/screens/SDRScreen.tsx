@@ -3738,9 +3738,16 @@ export default function SDRScreen({ route, navigation }: Props) {
       subs.push(onNwd('NwdRadioStereo', (p) => { setFmStereo(p.on); diag(`stereo ${p.on}`); }));
       subs.push(onNwd('NwdRadioPty', (p) => { setLiveStation((prev) => ({ ...prev, pty: p.pty })); diag(`PTY ${p.pty}`); }));
       subs.push(onNwd('NwdRadioTa', (p) => { setLiveStation((prev) => ({ ...prev, ta: p.ta })); diag(`TA ${p.ta}`); }));
-      // Poll the getters (the push callbacks above don't reach us on-device, but
-      // the getters return live values). Drives stereo / freq / PS / RT / PTY.
-      let pollN = 0;
+      // Poll the getters as a fallback. The NwdRadioFrequency + NwdRadioStereo push
+      // callbacks above DO reach us on-device (confirmed by driveway logs: freq/arg
+      // and stereo events arrive); RT / PTY / TA / PS have not been observed firing,
+      // and PS is empty in the freq callback too. The getters return live freq +
+      // stereo as well, so this backs up the callbacks. OPEN QUESTION under
+      // investigation: whether isStreroOn() is reliable — a stuck-STEREO indicator
+      // could be this poll asserting true (getter sticky) OR the callback itself.
+      // The change-gated log below records the getter's stereo over a whole drive so
+      // the next log disambiguates getter-vs-callback before we change any behavior.
+      let lastPollSig = '';
       pollTimer = setInterval(async () => {
         const p = await nwdPoll();
         if (cancelled || !p) return;
@@ -3758,8 +3765,16 @@ export default function SDRScreen({ route, navigation }: Props) {
           };
           return liveStationEqual(prev, next) ? prev : next;
         });
-        // Log the first few polls so the diagnostics show what the getters return.
-        if (pollN < 6) { pollN++; diag(`poll: mhz=${p.mhz ?? '?'} ps='${p.ps ?? ''}' stereo=${p.stereo} rt='${p.rt ?? ''}' pty=${p.pty}`); }
+        // Log a poll line whenever the getters' reading CHANGES (not just the first
+        // few), so a full drive shows how isStreroOn()/getCurrentFrequency() behave
+        // over time — especially whether stereo sticks true on empty channels —
+        // alongside the callback `stereo`/`freq` lines. Change-gated: a parked
+        // station stays quiet, a flapping one records every flip.
+        const sig = `${p.mhz ?? '?'}|${p.ps ?? ''}|${p.stereo}|${p.rt ?? ''}|${p.pty}`;
+        if (sig !== lastPollSig) {
+          lastPollSig = sig;
+          diag(`poll: mhz=${p.mhz ?? '?'} ps='${p.ps ?? ''}' stereo=${p.stereo} rt='${p.rt ?? ''}' pty=${p.pty}`);
+        }
       }, 1500);
     })();
     return () => {
