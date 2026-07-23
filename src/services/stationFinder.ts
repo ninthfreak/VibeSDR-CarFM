@@ -143,24 +143,64 @@ export async function getStationDataDate(): Promise<string | null> {
 // was captured — NOT the callsign. So station identity (logo key, logo-search
 // query) must resolve the callsign from the dial frequency against the bundled
 // FCC dataset. Cached briefly since it's hit once per visible tile.
+//
+// The dataset lookup is GEO-gated (getNearbyStations needs a GPS fix to know
+// which 105.9 you mean). On a head unit that rarely gets a lock — esp. a cold
+// start in a garage — that returns nothing and every station reads "Tuning…".
+// So we also LEARN every freq→callsign we resolve into a persistent cache: one
+// good lock (e.g. while driving) fills it for the whole local band, and later
+// no-lock starts resolve names straight from it. Region-agnostic by frequency
+// (fine for a car that lives in one area); a fresh lock overwrites entries, so
+// it self-heals if you ever drive to a different market.
 let freqCallsignCache: { at: number; map: Map<number, string> } | null = null;
 const FREQ_CACHE_MS = 60 * 1000;
+const FREQ_PERSIST_KEY = '@carfm/freq_callsign_v1';
+let freqPersist: Map<number, string> | null = null;
 
-/** Resolve the closest FM station's callsign base for a dial frequency, or null
- *  (no GPS / not in the dataset). Nearest by distance when several share a freq. */
+async function loadFreqPersist(): Promise<Map<number, string>> {
+  if (freqPersist) return freqPersist;
+  try {
+    const raw = await AsyncStorage.getItem(FREQ_PERSIST_KEY);
+    const obj = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    freqPersist = new Map(Object.entries(obj).map(([k, v]) => [Number(k), v]));
+  } catch { freqPersist = new Map(); }
+  return freqPersist;
+}
+
+async function saveFreqPersist(map: Map<number, string>): Promise<void> {
+  try {
+    const obj: Record<string, string> = {};
+    map.forEach((v, k) => { obj[String(k)] = v; });
+    await AsyncStorage.setItem(FREQ_PERSIST_KEY, JSON.stringify(obj));
+  } catch { /* best-effort */ }
+}
+
+/** Resolve the closest FM station's callsign base for a dial frequency, or null.
+ *  Prefers a live GPS-located lookup (and caches what it finds); falls back to
+ *  the learned persistent cache when there's no lock. Null only when neither the
+ *  live dataset nor the cache knows this frequency. */
 export async function callsignForFreq(freqMhz?: number): Promise<string | null> {
   if (freqMhz == null || !isFinite(freqMhz)) return null;
   if (!freqCallsignCache || Date.now() - freqCallsignCache.at > FREQ_CACHE_MS) {
     try {
       const { stations } = await getNearbyStations({ enrich: false });
-      const map = new Map<number, string>();
+      const fresh = new Map<number, string>();
       stations
         .filter((s) => s.service === 'FM')
         .sort((a, b) => a.distanceKm - b.distanceKm)
-        .forEach((s) => { const k = Math.round(s.frequencyMhz * 10); if (!map.has(k)) map.set(k, s.callsignBase); });
-      freqCallsignCache = { at: Date.now(), map };
+        .forEach((s) => { const k = Math.round(s.frequencyMhz * 10); if (!fresh.has(k)) fresh.set(k, s.callsignBase); });
+      if (fresh.size > 0) {
+        // GPS gave us real data — learn it and serve the merged view.
+        const persist = await loadFreqPersist();
+        fresh.forEach((v, k) => persist.set(k, v));
+        void saveFreqPersist(persist);
+        freqCallsignCache = { at: Date.now(), map: new Map(persist) };
+      } else {
+        // No lock / nothing nearby — fall back to what we've learned before.
+        freqCallsignCache = { at: Date.now(), map: await loadFreqPersist() };
+      }
     } catch {
-      freqCallsignCache = { at: Date.now(), map: new Map() };
+      freqCallsignCache = { at: Date.now(), map: await loadFreqPersist() };
     }
   }
   return freqCallsignCache.map.get(Math.round(freqMhz * 10)) ?? null;

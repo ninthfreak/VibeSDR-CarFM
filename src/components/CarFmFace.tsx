@@ -345,10 +345,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const heroDisp = useStationDisplay(heroLogo.base);
   // Station identity for the hero: RDS PS / PI-callsign when present, else the
   // callsign resolved from the dial frequency via the FCC DB (heroLogo.base).
-  // Without this, a tuner that sends no RDS PS (e.g. the built-in NWD tuner)
-  // leaves the hero stuck on "Tuning…" forever.
+  // The NWD tuner sends no RDS PS, so the name comes purely from that lookup,
+  // which needs a GPS location. When it can't resolve (no lock yet), the hero
+  // shows the frequency as its identity — NEVER an inaccurate "Tuning…".
   const heroIdent = callsign || cleanCall(heroLogo.base ?? '');
-  const identResolving = !heroIdent;   // still looking up the callsign
 
   // Displayed-order presets in MHz for the band + saved checks.
   const items = useMemo<PresetItem[]>(
@@ -731,20 +731,20 @@ export default function CarFmFace(props: CarFmFaceProps) {
                   </Text>
                 ) : null}
               </View>
-            ) : (
+            ) : heroIdent ? (
               // No real logo: big call sign, NO monogram tile on the hero.
               <Text
                 numberOfLines={1}
-                style={[
-                  styles.call,
-                  { fontSize: L.call, color: pal.text },
-                  identResolving && { fontStyle: 'italic', color: pal.dim },
-                ]}
+                style={[styles.call, { fontSize: L.call, color: pal.text }]}
               >
-                {heroIdent || 'Tuning…'}
+                {heroIdent}
               </Text>
-            )}
-            {heroDisp.showFreq ? (
+            ) : null /* No callsign resolved (NWD with no GPS lock yet): show
+                        nothing here and let the frequency below stand as the
+                        identity — never the inaccurate "Tuning…". */}
+            {/* Always show the frequency when there's no name, even if the user
+                turned the freq line off — otherwise the hero would be blank. */}
+            {(heroDisp.showFreq || !heroIdent) ? (
               <Pressable
                 onPress={() => setNumpadOpen(true)}
                 accessibilityRole="button"

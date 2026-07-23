@@ -125,7 +125,7 @@ import { fmNowPlaying } from '../services/nowPlaying';
 import { ptyLabel } from '../services/ptyLabels';
 import { getCarAutostart, setCarAutostart } from '../services/carMode';
 import CarFmFace, { type CarFmPreset } from '../components/CarFmFace';
-import { identifyByPi, initLogoService, consumeSharedLogo, getNearbyStations } from '../services/stationFinder';
+import { identifyByPi, initLogoService, consumeSharedLogo, getNearbyStations, callsignForFreq } from '../services/stationFinder';
 import type { StationIdentity } from '../services/stationTypes';
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation } from '../services/instancesApi';
@@ -3711,6 +3711,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (cancelled) return;
         diag(`— probe @ ${mhz.toFixed(1)} —`);
         for (const l of dump.split('\n')) if (l.trim()) diag(l);
+        // Does the name lookup actually resolve for this station? null here while
+        // the audio is fine = the "Tuning…" bug is the FCC lookup (location), not
+        // the tuner.
+        try {
+          const cs = await callsignForFreq(mhz);
+          if (!cancelled) diag(`  callsign@${mhz.toFixed(1)}=${cs ?? 'null'}`);
+        } catch (e) { if (!cancelled) diag(`  callsign@${mhz.toFixed(1)}=error ${String(e)}`); }
       }, 4000);
     };
     const subs: Array<() => void> = [];
@@ -3727,6 +3734,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         nwdSetRds(true);
         nwdSetAudio(true);
         diag(`NWD connected: registered=${info.registered} band=${info.band} freqMult=${info.freqMult} mhz=${info.mhz ?? '?'} ps='${info.ps ?? ''}' stereo=${info.stereo} rt='${info.rt ?? ''}' pty=${info.pty}; RDS on`);
+        // Station names come from the FCC-DB callsign lookup, which needs GPS
+        // location — if that's null on the head unit, every station shows
+        // "Tuning…". Log the location once so the next log confirms whether this
+        // is why (null → no GPS/permission), not a data-wiring guess.
+        getUserLocation()
+          .then((loc) => diag(`location: ${loc ? `${loc.lat},${loc.lon}` : 'null (no GPS fix / permission denied) → names cannot resolve'}`))
+          .catch((e) => diag(`location: error ${String(e)}`));
         // Seed the INITIAL tuner state — stereo/RT/PTY only push notify* on a
         // CHANGE, so a stable station would otherwise leave the face at defaults.
         if (typeof info.stereo === 'boolean') setFmStereo(info.stereo);
