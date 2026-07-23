@@ -20,6 +20,12 @@ type NwdNative = {
   seek(up: boolean): void;
   poll(): Promise<NwdPoll | null>;
   probe(): Promise<string>;
+  sourceProbe(): Promise<string>;
+  canWriteSettings(): Promise<boolean>;
+  requestWriteSettings(): void;
+  startSourceObserver(): void;
+  stopSourceObserver(): void;
+  sourceWriteTest(): Promise<string>;
   setRdsEnabled(on: boolean): void;
   setAudioEnabled(on: boolean): void;
   requestAudioSource(): void;
@@ -73,6 +79,29 @@ export async function nwdProbe(): Promise<string> {
   if (!native) return 'NWD radio module unavailable';
   try { return await native.probe(); } catch (e) { return `probe failed: ${String(e)}`; }
 }
+// ── Source-gate (mcu_current_source) experiment ────────────────────────────────
+/** Exhaustive dump of Settings.System rows relevant to the source/RDS gate, plus
+ *  WRITE_SETTINGS status. Never rejects. */
+export async function nwdSourceProbe(): Promise<string> {
+  if (!native) return 'NWD radio module unavailable';
+  try { return await native.sourceProbe(); } catch (e) { return `sourceProbe failed: ${String(e)}`; }
+}
+/** True if the app holds WRITE_SETTINGS (needed to write mcu_current_source). */
+export async function nwdCanWriteSettings(): Promise<boolean> {
+  if (!native) return false;
+  try { return await native.canWriteSettings(); } catch { return false; }
+}
+/** Open the system "modify system settings" grant screen for this app. */
+export function nwdRequestWriteSettings(): void { native?.requestWriteSettings(); }
+export function nwdStartSourceObserver(): void { native?.startSourceObserver(); }
+export function nwdStopSourceObserver(): void { native?.stopSourceObserver(); }
+/** Guarded write-and-restore of mcu_current_source=4 (FM) to try to open the RDS
+ *  gate without the stock app. Returns a step log; restore fires ~8s later. */
+export async function nwdSourceWriteTest(): Promise<string> {
+  if (!native) return 'NWD radio module unavailable';
+  try { return await native.sourceWriteTest(); } catch (e) { return `sourceWriteTest failed: ${String(e)}`; }
+}
+
 export function nwdSetRds(on: boolean): void { native?.setRdsEnabled(on); }
 export function nwdSetAudio(on: boolean): void { native?.setAudioEnabled(on); }
 /** Fire the MCU source-switch broadcasts (they launch the stock radio app) —
@@ -89,6 +118,8 @@ export type NwdEvents = {
   NwdRadioTa: { ta: boolean };
   NwdRadioScanState: { state: number };
   NwdRadioState: { state: number };
+  NwdSourceChange: { source: number };
+  NwdSourceWriteRestored: { restored: number; stuck: number };
   NwdRadioDisconnected: Record<string, never>;
 };
 

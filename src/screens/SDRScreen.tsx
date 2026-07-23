@@ -42,7 +42,7 @@ import { splashBridge }                 from '../../App';
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
-import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, onNwd } from '../services/nwdRadio';
+import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartSourceObserver, nwdStopSourceObserver, onNwd } from '../services/nwdRadio';
 import { diag, isDiagEnabled } from '../services/diag';
 import { startMotion, stopMotion } from '../services/motion';
 import { KiwiAdapter } from '../services/KiwiAdapter';
@@ -3798,6 +3798,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       subs.push(onNwd('NwdRadioStereo', (p) => { setStereoDebounced(p.on); diag(`stereo ${p.on}`); }));
       subs.push(onNwd('NwdRadioPty', (p) => { setLiveStation((prev) => ({ ...prev, pty: p.pty })); diag(`PTY ${p.pty}`); }));
       subs.push(onNwd('NwdRadioTa', (p) => { setLiveStation((prev) => ({ ...prev, ta: p.ta })); diag(`TA ${p.ta}`); }));
+      // Watch mcu_current_source (the RDS-decode gate: 4 = FM). Auto-logged so a
+      // drive log shows exactly when the unit makes FM the active source — which is
+      // when PS/RadioText should start arriving.
+      subs.push(onNwd('NwdSourceChange', (p) => { diag(`source change: mcu_current_source=${p.source}${p.source === 4 ? ' (FM)' : ''}`); }));
+      subs.push(onNwd('NwdSourceWriteRestored', (p) => { diag(`source write restored to ${p.restored} (stuck was ${p.stuck ? 'yes' : 'no'})`); }));
+      nwdStartSourceObserver();
       // Poll the getters as a freq fallback. RESOLVED: isStreroOn() is stuck true
       // (reads true even on dead air), so the poll must NOT drive stereo — the
       // NwdRadioStereo callback is the trustworthy source (see setStereoDebounced).
@@ -3839,6 +3845,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (probeTimer) clearTimeout(probeTimer);
       if (stereoTimer) clearTimeout(stereoTimer);
       if (signalTimer) clearTimeout(signalTimer);
+      nwdStopSourceObserver();
       nwdActiveRef.current = false;
       setNwdActive(false);
       subs.forEach((u) => u());
