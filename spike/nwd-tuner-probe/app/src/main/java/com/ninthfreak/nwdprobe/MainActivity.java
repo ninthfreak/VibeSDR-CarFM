@@ -48,32 +48,23 @@ import java.util.Locale;
 import java.util.concurrent.ArrayBlockingQueue;
 
 /**
- * NWD built-in FM tuner — STANDALONE-AUDIO probe (heavily instrumented).
+ * NWD built-in FM tuner — standalone-radio probe (heavily instrumented).
  *
- * ONE question: can FM audio be brought up WITHOUT launching the stock radio app?
+ * ONE big button, RUN ALL TESTS, runs three phases back to back as a guided
+ * stream, with on-screen state reminders + yes/no questions (inline buttons):
+ *   PHASE 1  standalone audio bring-up (can FM play with the stock app closed?)
+ *   PHASE 2  tune · seek · RDS (station control, real seek, RadioText dwell)
+ *   PHASE 3  overwrite the head unit's FM1/FM2/FM3 presets from the app side
+ *            (ONE-WAY app→unit; nothing is ever read back into an app store)
+ * Everything else (individual tests + manual controls) is under "Advanced".
  *
- * From decompiling com.nwd.radio.service (Spreadtrum path):
- *   SprdRadioManager$1.onReceive — no permission / no caller check — on:
- *     • com.nwd.action.ACTION_APP_IN_OUT   extra_app_id(int) ==8 -> SprdFMFeature.InitFM()
- *     • com.nwd.ACTION_MEDIA_PLAY          extra_app_id(int) ==8 -> InitFM() (else ExitFm)
- *     • com.nwd.action.ACTION_CHANGE_SOURCE extra_source_id(byte)==4 -> FM (else ExitFm)
- *     • com.nwd.android.ACTION_EXIT_ARM_FM_RAIDO -> ExitFm()
- *   InitFM (guards: skip if already POWER_UP / BT call / power-downing) ->
- *     openDevice + powerUpFm -> powerUp: requestAudioFocus -> native powerUp ->
- *     updateRdsEnableState (RDS on) + enableFmAudio + setForceUse(speaker) + unmute@+1800ms.
- *   setCurrentFrequency ignores a tune to the freq it's already on (freq!=cur guard);
- *     tuneStation from POWER_DOWN runs powerUp+playFrequency (audio).
- * (Writing mcu_current_source directly is a DEAD END — system perm + MCU re-asserts.)
- *
- * RUN AUDIO TEST climbs a ladder, stopping at the first rung that makes sound, and
- * asks ONE yes/no per rung via inline buttons. Around every rung it captures a lot
- * of machine data so a "No" is still diagnosable:
- *   - the service's OWN logcat trail (InitFM / powerUp = / requestAudioFocus / setForceUse …)
- *   - a per-second time-series of tuner + audio state through the wait
- *   - AudioManager snapshot (music active / volume / route)
- *   - a full baseline dump + hidden-parcel-field hunt + getprop + was-service-already-running
- *   - an end-of-run summary table
- * Everything lands in one log saved to Downloads.
+ * Key facts from decompiling com.nwd.radio.service (AllWinner path):
+ *   • ACTION_APP_IN_OUT extra_app_id=8 -> AWFMFeature.InitFM() -> powerUp + route.
+ *   • search(up) is the REAL seek-to-station; seek(up) is a single manual step;
+ *     the scan is gated on POWER_UP (so power FM up first).
+ *   • presets: mPrefFrequency[bank][0..5]; bank 0/1/2 = FM1/FM2/FM3 (18 FM slots);
+ *     saveCurrentFrequency(slot 0-5) writes the current station into the cur bank.
+ *   • notifyCurrentFrequency(band, freq, ps, arg): band = bank, arg = 1-6 slot.
  *
  * Throwaway RE harness, NOT the CarFM backend. AIDL is a clean-room reconstruction.
  */
@@ -120,18 +111,12 @@ public class MainActivity extends Activity {
         int pad = dp(10);
         root.setPadding(pad, pad, pad, pad);
 
-        Button full = btn("▶  RUN AUDIO TEST (standalone bring-up)", v -> runAudioTest());
-        full.setTextSize(16f);
-        root.addView(full);
+        // The one button.
+        Button runAllBtn = btn("▶  RUN ALL TESTS", v -> runAll());
+        runAllBtn.setTextSize(18f);
+        root.addView(runAllBtn);
 
-        Button rf = btn("▶  RUN RADIO FUNCTIONS (tune · seek · RDS)", v -> runRadioFunc());
-        rf.setTextSize(15f);
-        root.addView(rf);
-
-        Button wp = btn("▶  OVERWRITE BUILT-IN PRESETS (app → unit)", v -> runWritePresets());
-        wp.setTextSize(15f);
-        root.addView(wp);
-
+        // Inline prompt panel — every on-screen instruction / question appears here.
         promptPanel = new LinearLayout(this);
         promptPanel.setOrientation(LinearLayout.VERTICAL);
         promptPanel.setBackgroundColor(0xFF203040);
@@ -150,7 +135,22 @@ public class MainActivity extends Activity {
         promptPanel.setVisibility(View.GONE);
         root.addView(promptPanel);
 
-        root.addView(btn("Connect (bind service)", v -> wakeAndBind()));
+        // Everything else lives under a collapsed "Advanced" section.
+        final LinearLayout advanced = new LinearLayout(this);
+        advanced.setOrientation(LinearLayout.VERTICAL);
+        advanced.setVisibility(View.GONE);
+        final Button advToggle = btn("Advanced ▾  (individual tests + manual controls)", null);
+        advToggle.setOnClickListener(v -> {
+            boolean show = advanced.getVisibility() != View.VISIBLE;
+            advanced.setVisibility(show ? View.VISIBLE : View.GONE);
+            advToggle.setText(show ? "Advanced ▴" : "Advanced ▾  (individual tests + manual controls)");
+        });
+        root.addView(advToggle);
+
+        advanced.addView(btn("▶ Audio test only", v -> runAudioTest()));
+        advanced.addView(btn("▶ Radio functions only (tune · seek · RDS)", v -> runRadioFunc()));
+        advanced.addView(btn("▶ Overwrite presets only", v -> runWritePresets()));
+        advanced.addView(btn("Connect (bind service)", v -> wakeAndBind()));
 
         LinearLayout tuneRow = new LinearLayout(this);
         tuneRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -160,7 +160,7 @@ public class MainActivity extends Activity {
         bandField.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
         tuneRow.addView(label("MHz")); tuneRow.addView(mhzField);
         tuneRow.addView(label("band")); tuneRow.addView(bandField);
-        root.addView(tuneRow);
+        advanced.addView(tuneRow);
 
         LinearLayout manual = new LinearLayout(this);
         manual.setOrientation(LinearLayout.HORIZONTAL);
@@ -169,7 +169,7 @@ public class MainActivity extends Activity {
         manual.addView(weighted(btn("Rich dump", v -> new Thread(() -> richDump("manual")).start())));
         manual.addView(weighted(btn("logcat", v -> new Thread(() -> captureLogcat("manual")).start())));
         manual.addView(weighted(btn("Save log", v -> saveLog())));
-        root.addView(manual);
+        advanced.addView(manual);
 
         LinearLayout bcRow = new LinearLayout(this);
         bcRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -177,7 +177,9 @@ public class MainActivity extends Activity {
         bcRow.addView(weighted(btn("MEDIA_PLAY 8", v -> sendMediaPlay(8))));
         bcRow.addView(weighted(btn("REQ SRC 4", v -> sendRequestSource((byte) 4))));
         bcRow.addView(weighted(btn("EXIT FM", v -> sendExitFm())));
-        root.addView(bcRow);
+        advanced.addView(bcRow);
+
+        root.addView(advanced);
 
         log = new TextView(this);
         log.setTextSize(11f);
@@ -188,7 +190,7 @@ public class MainActivity extends Activity {
         root.addView(sv);
 
         setContentView(root);
-        line("Ready. Volume UP, nothing else playing, stock radio app CLOSED, then tap RUN AUDIO TEST.");
+        line("Ready. Stock radio app CLOSED, CarFM NOT running, volume UP, nothing else playing — then tap RUN ALL TESTS.");
     }
 
     // ── Service wake + binding ─────────────────────────────────────────────────
@@ -202,8 +204,7 @@ public class MainActivity extends Activity {
     }
 
     /** Was the radio service ALREADY running before we touched it? Bind with NO
-     *  auto-create: it only connects if the process is already up. Distinguishes
-     *  "resident from boot" (broadcasts land) from "we had to create it". */
+     *  auto-create: it only connects if the process is already up. */
     private boolean preflightAlreadyRunning() {
         preConnected = false;
         boolean ok = false;
@@ -234,46 +235,89 @@ public class MainActivity extends Activity {
         @Override public void onServiceDisconnected(ComponentName name) { radio = null; line("DISCONNECTED"); }
     };
 
-    // ── The audio bring-up ladder ──────────────────────────────────────────────
-    private void runAudioTest() {
+    // ── Test runners ────────────────────────────────────────────────────────────
+    private void runAll()         { startWorker("nwd-all", this::runAllBody); }
+    private void runAudioTest()   { runSolo("STANDALONE AUDIO", () -> phaseAudio()); }
+    private void runRadioFunc()   { runSolo("RADIO FUNCTIONS", this::phaseRadioFunc); }
+    private void runWritePresets(){ runSolo("OVERWRITE PRESETS", this::phaseWritePresets); }
+
+    private void startWorker(String name, Runnable body) {
         if (testRunning) { line("test already running"); return; }
         testRunning = true;
-        new Thread(this::audioTestBody, "nwd-audiotest").start();
+        new Thread(body, name).start();
     }
 
-    private void audioTestBody() {
-        line("\n==== STANDALONE AUDIO BRING-UP TEST ====");
-        prompt("This tests whether FM audio can start WITHOUT the stock radio app.\n\n"
-             + "• Turn the volume UP.\n"
-             + "• Make sure NOTHING else is playing (Bluetooth, music apps).\n"
-             + "• Do NOT open the stock radio app.\n\n"
-             + "Tap Start.", "Start");
+    /** Advanced-section single-phase runner: bind + baseline + one phase + save. */
+    private void runSolo(String tag, Runnable phase) {
+        startWorker("nwd-solo", () -> {
+            line("\n==== " + tag + " (solo) ====");
+            if (connectAndBaseline()) phase.run();
+            saveLog(); line("==== DONE ===="); testRunning = false;
+        });
+    }
 
+    /** The full guided run: three phases back to back on one shared bind. */
+    private void runAllBody() {
+        line("\n==== FULL PROBE RUN (all tests) ====");
+        prompt("FULL PROBE RUN — expected state BEFORE starting:\n\n"
+             + "• Stock radio app CLOSED.\n"
+             + "• CarFM NOT running.\n"
+             + "• Volume UP; nothing else playing (no Bluetooth audio, no music app).\n\n"
+             + "Runs 3 phases back to back (~4-5 min): standalone audio → tune/seek/RDS → "
+             + "overwrite presets. Follow the on-screen prompts.\n\nTap Start.", "Start");
+        if (!connectAndBaseline()) { saveLog(); testRunning = false; return; }
+        dumpAllBanks();   // current preset lists up front
+
+        String worked = phaseAudio();
+        phaseRadioFunc();
+        phaseWritePresets();
+
+        String c = prompt("All phases done. Turn the tuner audio back off?", "Stop FM", "Leave it playing");
+        if ("Stop FM".equals(c)) sendExitFm();
+
+        line("\n==== FULL RUN SUMMARY ====");
+        line("audio winning rung : " + (worked != null ? worked : "NONE"));
+        line("logcat readable    : " + logcatReadable);
+        line("\n" + summary);
+        saveLog();
+        line("==== FULL RUN DONE ====");
+        testRunning = false;
+    }
+
+    // ── Shared setup ────────────────────────────────────────────────────────────
+    private boolean connectAndBaseline() {
         boolean wasRunning = preflightAlreadyRunning();
         wakeAndBind();
         for (int i = 0; radio == null && i < 16; i++) sleep(500);
         line("service bound = " + (radio != null) + "; was already running = " + wasRunning);
-
+        if (radio == null) { line("NOT BOUND — is the head unit's radio service running? aborting"); return false; }
         richDump("baseline");
         getpropDump();
-        int origSrc = readSource();
-        sendStopQqMusic(); sleep(600); audioSnap("after STOP_QQ_MUSIC");
+        return true;
+    }
 
+    private void ensurePowered() {
+        line("ensuring FM powered (ACTION_APP_IN_OUT app_id=8)…");
+        sendAppInOut(8); sleep(3500); calibrate();
+    }
+
+    // ── PHASE 1: standalone audio bring-up ladder ───────────────────────────────
+    private String phaseAudio() {
+        prompt("PHASE 1 — STANDALONE AUDIO.\n\nConfirms FM audio can start with the stock radio app CLOSED. "
+             + "It tries a few triggers and asks 'is audio playing?' after each.\n\nTap Continue.", "Continue");
+        sendStopQqMusic(); sleep(600); audioSnap("after STOP_QQ_MUSIC");
         String worked = null;
 
-        // RUNG 1 — the stock app's own FM audio trigger.
         {
             String before = stateLine();
             line("\n-- RUNG 1: ACTION_APP_IN_OUT extra_app_id=8  →  service InitFM() --");
             sendAppInOut(8);
-            watch("RUNG1", 5000, 1000);      // captures mute(t0) → unmute(~1.8s) → powerUp
+            watch("RUNG1", 5000, 1000);
             captureLogcat("RUNG1"); audioSnap("after RUNG1");
             boolean y = audioYes("RUNG 1");
             rungLog("RUNG 1 — ACTION_APP_IN_OUT app_id=8", before, stateLine(), y);
             if (y) worked = "RUNG 1 — ACTION_APP_IN_OUT app_id=8";
         }
-
-        // RUNG 2 — same InitFM via the other action.
         if (worked == null) {
             String before = stateLine();
             line("\n-- RUNG 2: ACTION_MEDIA_PLAY extra_app_id=8  →  service InitFM() --");
@@ -284,12 +328,9 @@ public class MainActivity extends Activity {
             rungLog("RUNG 2 — ACTION_MEDIA_PLAY app_id=8", before, stateLine(), y);
             if (y) worked = "RUNG 2 — ACTION_MEDIA_PLAY app_id=8";
         }
-
-        // RUNG 3 — tune via AIDL (Sprd tuneStation → powerUp). setCurrentFrequency
-        // ignores a tune to the current freq, so nudge off-target first if needed.
         if (worked == null) {
             String before = stateLine();
-            line("\n-- RUNG 3: setCurrentFrequency (Sprd tune→powerUp) --");
+            line("\n-- RUNG 3: setCurrentFrequency (tune→powerUp) --");
             if (radio == null) line("  (not bound — skipping)");
             else {
                 double cur = currentMhz();
@@ -305,8 +346,6 @@ public class MainActivity extends Activity {
             rungLog("RUNG 3 — setCurrentFrequency powerUp", before, stateLine(), y);
             if (y) worked = "RUNG 3 — setCurrentFrequency powerUp";
         }
-
-        // RUNG 4 — ask the MCU to physically switch the head-unit source to FM.
         if (worked == null) {
             line("\n-- RUNG 4: ACTION_REQUEST_CHANGE_SOURCE (physical source switch) --");
             prompt("RUNG 4 will ask the head unit to switch its WHOLE audio source to Radio "
@@ -324,8 +363,6 @@ public class MainActivity extends Activity {
             rungLog("RUNG 4 — ACTION_REQUEST_CHANGE_SOURCE", before, stateLine(), y);
             if (y) worked = "RUNG 4 — ACTION_REQUEST_CHANGE_SOURCE";
         }
-
-        // RUNG 5 — public-API long shot (vendor FM URI through MediaPlayer).
         if (worked == null) {
             String before = stateLine();
             line("\n-- RUNG 5: MediaPlayer THIRDPARTY://MEDIAPLAYER_PLAYERTYPE_FM (long shot) --");
@@ -335,27 +372,10 @@ public class MainActivity extends Activity {
             rungLog("RUNG 5 — vendor MediaPlayer URI", before, stateLine(), y);
             if (y) worked = "RUNG 5 — vendor MediaPlayer URI";
         }
-
-        line("\n==== RESULT: " + (worked != null ? "AUDIO via " + worked : "NO rung produced audio") + " ====");
-        // Full final dump — the raw parcel here runs while FM is LIVE, so hidden
-        // per-station fields (RSSI/stereo/lock) would be populated if they exist.
-        richDump("final");
-
-        String c = prompt("Test done. Turn the tuner audio back off?", "Stop FM", "Leave it playing");
-        if ("Stop FM".equals(c)) {
-            sendExitFm();
-            if (origSrc >= 0 && readSource() != origSrc) { sendRequestSource((byte) origSrc); line("requested source back to " + origSrc); }
-        }
-
-        line("\n==== SUMMARY ====");
-        line("service already running at start : " + wasRunning);
-        line("logcat readable (saw svc logs)  : " + logcatReadable);
-        line("winning rung                    : " + (worked != null ? worked : "NONE"));
-        line("\n" + summary);
-
-        saveLog();
-        line("==== DONE ====");
-        testRunning = false;
+        line("\n== PHASE 1 RESULT: " + (worked != null ? "AUDIO via " + worked : "NO rung produced audio") + " ==");
+        richDump("audio-final");
+        // Intentionally leave FM playing for phase 2 (don't stop here).
+        return worked;
     }
 
     private boolean audioYes(String rung) {
@@ -369,73 +389,41 @@ public class MainActivity extends Activity {
                .append("   USER  : ").append(yes ? "AUDIO YES" : "no").append("\n\n");
     }
 
-    // ── Radio-functions test: tune · seek · RDS (run after audio is up) ─────────
-    // On this AllWinner unit the AIDL is named counter-intuitively:
-    //   search(up) -> seekStationAsync -> startScanThread : the REAL seek-to-station
-    //   seek(up)   -> tuneStationAsync                    : a single manual STEP
-    // The scan is gated on mPowerStatus==POWER_UP, so we power FM up first.
-    private void runRadioFunc() {
-        if (testRunning) { line("test already running"); return; }
-        testRunning = true;
-        new Thread(this::radioFuncBody, "nwd-radiofunc").start();
-    }
-
-    private void radioFuncBody() {
-        line("\n==== RADIO FUNCTIONS TEST (tune · seek · RDS) ====");
-        prompt("Tests tuning, seek/scan and RadioText while FM plays standalone.\n\n"
-             + "• It WILL move between stations.\n"
-             + "• Set the MHz box above to the station you want to test (a strong one that carries\n"
-             + "  RadioText is best), THEN tap Start.", "Start");
+    // ── PHASE 2: tune · seek · RDS ──────────────────────────────────────────────
+    private void phaseRadioFunc() {
+        prompt("PHASE 2 — TUNE · SEEK · RDS.\n\nFM should be playing. It will tune, seek up/down, and watch "
+             + "30s for RadioText. Default station is " + STRONG_MHZ + "; to use another (ideally one that "
+             + "carries RadioText), set the MHz box under Advanced first.\n\nTap Continue.", "Continue");
         latchMhzField();
-        wakeAndBind();
-        for (int i = 0; radio == null && i < 16; i++) sleep(500);
-        if (radio == null) { line("not bound — aborting"); testRunning = false; return; }
+        ensurePowered();
 
-        // Seek/scan only runs when the tuner is POWER_UP — ensure that first.
-        line("ensuring FM powered (ACTION_APP_IN_OUT app_id=8)…");
-        sendAppInOut(8); sleep(3500);
-        calibrate();
-        richDump("radiofunc baseline");
-        dumpAllBanks();   // FM1/FM2/FM3 (+AM) preset lists — see how AMS filled them
-
-        // A — tune to a chosen station (prove we can pick the station standalone).
         line("\n-- A: tune to " + uiMhz + " (setCurrentFrequency) --");
         tuneMhzTo(uiMhz); watch("TUNE", 5000, 1000); captureLogcat("TUNE");
         prompt("A) Tuned to " + uiMhz + ". Is THAT station playing now?", "Yes", "No / wrong station");
 
-        // B — search(up): the real hardware seek-to-next-station.
-        line("\n-- B: search(up) = hardware SEEK to next station (the real seek) --");
+        line("\n-- B: search(up) = hardware SEEK to next station --");
         try { radio.search(true); line("called search(true)"); } catch (Exception e) { line("search failed " + e); }
         watch("SEEKUP", 9000, 1000); captureLogcat("SEEKUP");
         prompt("B) SEEK up — what happened?", "Stopped on a NEW station", "Only stepped once", "Nothing");
 
-        // C — search(down).
         line("\n-- C: search(down) = seek to next station downward --");
         try { radio.search(false); line("called search(false)"); } catch (Exception e) { line("search failed " + e); }
         watch("SEEKDN", 9000, 1000); captureLogcat("SEEKDN");
         prompt("C) SEEK down — what happened?", "Stopped on a NEW station", "Only stepped once", "Nothing");
 
-        // D — seek(up): the single manual step, for contrast.
-        line("\n-- D: seek(up) = single manual STEP (not a station seek) --");
+        line("\n-- D: seek(up) = single manual STEP --");
         try { radio.seek(true); line("called seek(true)"); } catch (Exception e) { line("seek failed " + e); }
         watch("STEP", 4000, 1000); captureLogcat("STEP");
         prompt("D) STEP up — what happened?", "Moved one small step", "Seeked to a station", "Nothing");
 
-        // E — RDS dwell: sit on the current station and watch for RadioText / PS.
-        line("\n-- E: RDS dwell 30s on the current station (watch rt='…' / PS) --");
-        line("  (no text? set the MHz box to a station you KNOW carries RadioText, tap Tune, run again)");
-        dwell("RDS", 30);
-        captureLogcat("RDS");
-        prompt("E) In those 30s, did any RadioText or station name appear (log rt='…'/PS, or on screen)?",
+        line("\n-- E: RDS dwell 30s (watch rt='…' / PS) --");
+        dwell("RDS", 30); captureLogcat("RDS");
+        prompt("E) In those 30s, did any RadioText / station name appear (log rt='…'/PS, or on screen)?",
                 "Yes, text appeared", "No text");
-
-        richDump("radiofunc final");
-        saveLog();
-        line("==== RADIO FUNCTIONS DONE ====");
-        testRunning = false;
+        richDump("radiofunc-final");
     }
 
-    // ── Overwrite the built-in preset banks from the "app" side (ONE-WAY: app→unit) ──
+    // ── PHASE 3: overwrite built-in presets (ONE-WAY app→unit) ──────────────────
     // Demo list standing in for CarFM's presets: 18 ascending frequencies, so a
     // sequential fill (FM1[0..5], FM2[0..5], FM3[0..5]) steps low→high on the wheel.
     private static final double[] TEST_PRESETS = {
@@ -444,27 +432,14 @@ public class MainActivity extends Activity {
         103.9, 104.7, 105.5, 106.3, 107.1, 107.9 // FM3
     };
 
-    private void runWritePresets() {
-        if (testRunning) { line("test already running"); return; }
-        testRunning = true;
-        new Thread(this::writePresetsBody, "nwd-writepresets").start();
-    }
-
-    private void writePresetsBody() {
-        line("\n==== OVERWRITE BUILT-IN PRESETS (app → unit) ====");
-        String go = prompt("This OVERWRITES the head unit's built-in FM presets (FM1/FM2/FM3) with an "
-                + "ascending test list. Your current built-in presets WILL be replaced. Continue?",
-                "Overwrite", "Cancel");
-        if (!"Overwrite".equals(go)) { line("cancelled"); testRunning = false; return; }
-
-        wakeAndBind();
-        for (int i = 0; radio == null && i < 16; i++) sleep(500);
-        if (radio == null) { line("not bound — aborting"); testRunning = false; return; }
-        line("ensuring FM powered (ACTION_APP_IN_OUT app_id=8)…");
-        sendAppInOut(8); sleep(3500); calibrate();
+    private void phaseWritePresets() {
+        String go = prompt("PHASE 3 — OVERWRITE BUILT-IN PRESETS (app → unit).\n\nREPLACES the head unit's "
+             + "FM1/FM2/FM3 presets with an ascending test list (one-way; nothing is read back into any app). "
+             + "Your current built-in presets WILL be replaced.\n\nContinue?", "Overwrite", "Skip");
+        if (!"Overwrite".equals(go)) { line("overwrite skipped"); return; }
+        ensurePowered();
 
         line("\n-- BEFORE --"); dumpAllBanks();
-
         int n = Math.min(TEST_PRESETS.length, 18);
         line("\n-- writing " + n + " presets (FM1/FM2/FM3, 6 each) via saveCurrentFrequency --");
         for (int i = 0; i < n; i++) {
@@ -478,13 +453,9 @@ public class MainActivity extends Activity {
             catch (Exception e) { line("  saveCurrentFrequency(" + slot + ") FAILED: " + e); }
             sleep(600);
         }
-
         line("\n-- AFTER --"); dumpAllBanks();
         prompt("Check the head unit's FM1/FM2/FM3 lists — do they now show the ascending test stations?",
                 "Yes, overwritten", "No / partial");
-        saveLog();
-        line("==== OVERWRITE DONE ====");
-        testRunning = false;
     }
 
     private int currentBand() {
@@ -515,9 +486,8 @@ public class MainActivity extends Activity {
     }
 
     /** Dump every preset bank. getPrefabFrequency() returns only the CURRENT bank's
-     *  6 slots, so cycle changeBand() and read each (FM1/FM2/FM3/AM…). NOTE:
-     *  changeBand retunes to each bank's last station as it goes; it wraps back
-     *  after a full cycle. Ascending values in a bank = auto-stored by AMS. */
+     *  6 slots, so cycle changeBand() and read each (FM1/FM2/FM3/AM…). changeBand
+     *  retunes to each bank's last station; it wraps back after a full cycle. */
     private void dumpAllBanks() {
         if (radio == null) { line("dumpAllBanks: not bound"); return; }
         line("---- ALL PRESET BANKS (cycling changeBand) ----");
@@ -538,7 +508,7 @@ public class MainActivity extends Activity {
                 line(sb.toString());
             } catch (Exception e) { line("  bank read err " + e); }
             try { radio.changeBand(); } catch (Exception e) { line("  changeBand err " + e); }
-            sleep(1500);
+            sleep(1600);
         }
         line("  (cycled through all banks; ascending values in a bank = AMS auto-store)");
     }
@@ -557,7 +527,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ── Bring-up broadcasts (exact actions/extras from SprdRadioManager$1) ──────
+    // ── Bring-up broadcasts (exact actions/extras from the service receiver) ─────
     private void sendAppInOut(int appId) {
         Intent i = new Intent("com.nwd.action.ACTION_APP_IN_OUT");
         i.putExtra("extra_app_id", appId);
@@ -632,7 +602,7 @@ public class MainActivity extends Activity {
         if (radio == null) { line("  (not bound)"); }
         else {
             try { line("  radioType=" + radio.getRadioType() + " state=" + radio.getRadioState() + " scan=" + radio.getCurrentScanState()); } catch (Exception e) { line("  err " + e); }
-            try { Frequency f = radio.getCurrentFrequency(); if (f != null) line("  freq raw=" + f.freq + " (" + (f.freq / (double) freqMult) + " MHz) band=" + f.band + " PS='" + f.psName + "'"); } catch (Exception e) { line("  freq err " + e); }
+            try { Frequency f = radio.getCurrentFrequency(); if (f != null) line("  freq raw=" + f.freq + " (" + (f.freq / (double) freqMult) + " MHz) band=" + f.band + "(" + bankName(f.band) + ") PS='" + f.psName + "'"); } catch (Exception e) { line("  freq err " + e); }
             try { line("  stereoOn=" + radio.isStreroOn() + " hasStereo=" + radio.isHasStrero() + " nearOn=" + radio.isNearOn() + " backSvc=" + radio.isRadioBackServiceOn()); } catch (Exception e) { line("  err " + e); }
             try { line("  pty=" + radio.getPTYType() + " prefabPty=" + radio.getPrefabPTYType() + " rt='" + radio.getRtMessage() + "'"); } catch (Exception e) { line("  err " + e); }
             StringBuilder rds = new StringBuilder();
@@ -645,9 +615,7 @@ public class MainActivity extends Activity {
         rawFrequencyParcelDump();
     }
 
-    /** RAW getCurrentFrequency reply: report bytes left over after {band, ps, freq}
-     *  — those are fields our AIDL reconstruction truncates (a hidden RSSI/stereo/
-     *  lock would show here, and would differ between a strong and a weak station). */
+    /** RAW getCurrentFrequency reply: report bytes left over after {band, ps, freq}. */
     private void rawFrequencyParcelDump() {
         if (radio == null) return;
         Parcel data = Parcel.obtain(), reply = Parcel.obtain();
@@ -670,9 +638,7 @@ public class MainActivity extends Activity {
         finally { reply.recycle(); data.recycle(); }
     }
 
-    /** Dump the last of the system log, filtered to the service's own FM/audio trail.
-     *  Only works if this app can read others' logs (root / READ_LOGS / permissive
-     *  ROM) — otherwise reports "unreadable", which is itself a datum. */
+    /** Dump the last of the system log, filtered to the service's own FM/audio trail. */
     private void captureLogcat(String tag) {
         try {
             Process p = new ProcessBuilder("logcat", "-d", "-v", "time", "-t", "600").redirectErrorStream(true).start();
@@ -686,9 +652,10 @@ public class MainActivity extends Activity {
                         || low.contains("audiofocus") || low.contains("setforceuse") || low.contains("forceuse")
                         || low.contains("mpowerstatus") || low.contains("unmute") || low.contains("mutestream")
                         || low.contains("opendev") || low.contains("opendevice") || low.contains("enablefmaudio")
-                        || low.contains("sprdfm") || low.contains("sprdradio") || low.contains("fmfeature")
-                        || low.contains("changesource") || low.contains("initfm")) {
-                    if (hit++ < 100) line("  LOGCAT[" + tag + "]| " + ln);
+                        || low.contains("awfmfeature") || low.contains("awradio") || low.contains("sprdfm")
+                        || low.contains("sprdradio") || low.contains("fmfeature") || low.contains("changesource")
+                        || low.contains("scanwhole") || low.contains("strength") || low.contains("prefab")) {
+                    if (hit++ < 120) line("  LOGCAT[" + tag + "]| " + ln);
                 }
             }
             r.close(); p.destroy();

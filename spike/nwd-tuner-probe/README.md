@@ -16,8 +16,12 @@ service starts it in response to broadcasts the stock app fires *on itself*, wit
 **no permission or caller check**. So a third-party app doesn't need audio
 permissions; it just needs to send the same broadcast to the running service.
 
-**▶ RUN AUDIO TEST** climbs a ladder of bring-up attempts and stops at the first
-one that produces sound, asking you a single yes/no per rung:
+There is **one button, ▶ RUN ALL TESTS**, that runs three phases back to back as a
+guided stream, with on-screen state reminders and a yes/no per step. Everything
+else (the individual tests + manual controls) is tucked under **Advanced**.
+
+**Phase 1 — standalone audio.** Climbs a ladder of bring-up attempts and stops at
+the first that produces sound, asking a single yes/no per rung:
 
 1. `com.nwd.action.ACTION_APP_IN_OUT` with `extra_app_id=8` → service `InitFM()` — the stock app's own trigger.
 2. `com.nwd.ACTION_MEDIA_PLAY` with `extra_app_id=8` → the same `InitFM()` path.
@@ -35,10 +39,12 @@ the probe logs `getRtMessage`/callbacks throughout, so we'd catch that too.
 > it's exactly what made the previous probe fail. This one triggers the service
 > instead of fighting the setting.
 
-Questions are answered with **inline buttons in the app's own screen** (the old
-version used a dialog that could lock up). Manual buttons remain for ad-hoc use:
-**Connect**, **Tune**, **Rich dump**, **logcat**, and one-tap **APP_IN_OUT 8 /
-MEDIA_PLAY 8 / REQ SRC 4 / EXIT FM**.
+Questions are answered with **inline buttons in the app's own screen** (a dialog
+would lock up). Under **Advanced** are the three phases as individual buttons plus
+manual controls: **Connect**, the **MHz/band** box, **Tune**, **Dump banks**,
+**Rich dump**, **logcat**, **Save log**, and one-tap **APP_IN_OUT 8 / MEDIA_PLAY 8
+/ REQ SRC 4 / EXIT FM**. (To use a specific RadioText station in phase 2, set the
+MHz box under Advanced before starting.)
 
 So a *No* is still diagnosable, each rung is heavily instrumented (all read-only):
 - the service's **own log trail** (`InitFM` / `powerUp = true` / `requestAudioFocus,result` / `setForceUseSpeaker` …) via `logcat` — only if the ROM lets an app read others' logs (root / permissive); it reports "unreadable" otherwise, which is itself useful.
@@ -91,20 +97,21 @@ The head unit does not have to be connected to your computer. Pick whichever fit
 
 ## Running the test (on the unit)
 
-Do it **parked**. Then:
+Do it **parked**. Expected state before you start: **stock radio app closed, CarFM
+not running, volume up, nothing else playing** (no Bluetooth audio / music app).
+Then:
 
-1. **Turn the volume up**, and make sure the **stock radio app is closed**.
-2. Launch **NWD Tuner Probe** → tap **▶ RUN AUDIO TEST**. It binds the service on
-   its own. No permission grant is needed.
-3. After each rung it asks, with buttons: **"is FM audio playing through the
-   speakers now?" → YES — audio! / No.** Answer honestly; it climbs to the next
-   rung only on *No*, and stops as soon as you say *Yes*.
-   - Rung 4 first warns you (with an **OK** button) that it will switch the whole
-     unit's source to Radio — that one is more intrusive, like pressing *Radio* on
-     the head unit.
-4. At the end it reports which rung (if any) produced audio, then offers **Stop FM
-   / Leave it playing**, and **saves the log to Downloads** (`nwdprobe-<timestamp>.txt`).
-   Send me that file (or a screenshot).
+1. Launch **NWD Tuner Probe** → tap **▶ RUN ALL TESTS**. It re-states the expected
+   state on screen, then binds the service and runs the three phases back to back
+   (~4–5 min). No permission grant needed.
+2. Follow the on-screen prompts. Each phase reminds you what it's doing; answer the
+   yes/no buttons honestly (audio playing? did seek stop on a station? etc.). The
+   more intrusive steps (source switch, preset overwrite) ask for a confirm first.
+3. At the end it offers **Stop FM / Leave it playing** and **saves the log to
+   Downloads** (`nwdprobe-<timestamp>.txt`). Send me that file (or a screenshot).
+
+(Individual phases can be run alone from **Advanced** if you want to repeat just
+one — e.g. the RDS dwell against a specific station set in the MHz box.)
 
 The answer I most want: **which rung, if any, makes sound come out with the stock
 app closed.** That tells us whether CarFM can drive its own audio, and how.
