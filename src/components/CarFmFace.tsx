@@ -151,8 +151,13 @@ function DrivingStatusIcons({ pal }: { pal: CarFmPalette }) {
           <MotionCar size={34} color={pal.amber} />
         </Animated.View>
       ) : null}
-      <View style={{ opacity: hasFix ? 1 : 0.32, transform: [{ translateY: -4 }] }}
-            accessibilityLabel={hasFix ? 'GPS lock' : 'No GPS lock'}>
+      {/* §4.6: no fix → full text color at 32% + the same faint 1px light emboss. */}
+      <View
+        style={[
+          { opacity: hasFix ? 1 : 0.32, transform: [{ translateY: -4 }] },
+          !hasFix && ({ filter: [{ dropShadow: { offsetX: 0, offsetY: 1, standardDeviation: 0, color: pal === DARK ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.9)' } }] } as any),
+        ]}
+        accessibilityLabel={hasFix ? 'GPS lock' : 'No GPS lock'}>
         <GpsSatellite size={30} color={hasFix ? pal.blue : pal.text} />
       </View>
     </View>
@@ -308,7 +313,7 @@ function HeroLogo({ uri, height, maxWidth, radius }: {
 // The header's little status letters ("tells"): lit when true, ghosted when
 // not. HD is never lit — an RTL-SDR pipeline doesn't decode IBOC — but the
 // slot stays so the strip reads the same as a factory head unit's.
-function Tell({ label, on, pulse, pal, fontSize = 11 }: { label: string; on: boolean; pulse?: boolean; pal: { text: string; amber: string }; fontSize?: number }) {
+function Tell({ label, on, pulse, pal, fontSize = 11, dark = false, off = false }: { label: string; on: boolean; pulse?: boolean; pal: { text: string; amber: string }; fontSize?: number; dark?: boolean; off?: boolean }) {
   const op = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     if (!pulse) { op.setValue(1); return; }
@@ -319,8 +324,16 @@ function Tell({ label, on, pulse, pal, fontSize = 11 }: { label: string; on: boo
     loop.start();
     return () => loop.stop();
   }, [pulse, op]);
+  // §4.1 tell emboss: an active/pulsing tell casts a soft dark drop; a dim tell gets
+  // a faint 1px light emboss (engraved look). §4.7 removes all of it when the audio
+  // priority is released (the flat "dead" state).
+  const shadow = off
+    ? { textShadowColor: 'transparent', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 0 }
+    : (pulse || on)
+      ? { textShadowColor: 'rgba(0,0,0,0.30)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 }
+      : { textShadowColor: dark ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.9)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 0 };
   return (
-    <Animated.Text style={[styles.tell, { fontSize, color: pulse ? pal.amber : pal.text, opacity: pulse ? op : (on ? 1 : 0.32) }]}>
+    <Animated.Text style={[styles.tell, { fontSize, color: pulse ? pal.amber : pal.text, opacity: pulse ? op : (on ? 1 : 0.32) }, shadow]}>
       {label}
     </Animated.Text>
   );
@@ -346,6 +359,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const GS: any = off ? { filter: [{ grayscale: 1 }] } : null;
   const heroVeilColor = dark ? 'rgba(0,0,0,0.42)' : 'rgba(72,82,96,0.26)';
   const screenVeilColor = dark ? 'rgba(0,0,0,0.50)' : 'rgba(24,32,46,0.34)';
+  // PTY genre 1px emboss (§4.1). RN Text supports one shadow, so the design's
+  // two-part emboss is approximated by its dominant edge. (PTY is hidden when off.)
+  const ptyShadow = { textShadowColor: dark ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.95)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 0 };
 
   // A car radio's display never sleeps mid-drive: keep the screen awake for as
   // long as the face is mounted (released automatically on unmount).
@@ -677,10 +693,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
         {so ? <StereoWave color={pal.blue} w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
       </View>
       <View style={styles.tellStrip}>
-        <Tell label="RDS" on={!off && !!rdsOk} pal={pal} fontSize={L.tellFont} />
-        <Tell label="HD" on={false} pal={pal} fontSize={L.tellFont} />
-        {ta && !off ? <Tell label="TA" on pulse pal={pal} fontSize={L.tellFont} /> : <Tell label="TP" on={!off && !!tp} pal={pal} fontSize={L.tellFont} />}
-        <Tell label="AF" on={!off && !!af} pal={pal} fontSize={L.tellFont} />
+        <Tell label="RDS" on={!off && !!rdsOk} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />
+        <Tell label="HD" on={false} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />
+        {ta && !off ? <Tell label="TA" on pulse pal={pal} fontSize={L.tellFont} dark={dark} off={off} /> : <Tell label="TP" on={!off && !!tp} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />}
+        <Tell label="AF" on={!off && !!af} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />
       </View>
     </View>
   );
@@ -722,7 +738,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             <View style={styles.zoneCenter}>
               {stereoCluster}
               {ptyText && !off ? (
-                <Text numberOfLines={1} style={[styles.ptyCentered, { fontSize: L.ptyFont, color: pal.dim }]}>{ptyText}</Text>
+                <Text numberOfLines={1} style={[styles.ptyCentered, { fontSize: L.ptyFont, color: pal.dim }, ptyShadow]}>{ptyText}</Text>
               ) : null}
             </View>
           </>
@@ -733,7 +749,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             {stereoCluster}
             {ptyText && !off ? (
               <View style={[styles.ptyWrap, { maxWidth: 200 }]}>
-                <Text numberOfLines={1} style={[styles.ptyText, { fontSize: L.ptyFont, color: pal.dim }]}>{ptyText}</Text>
+                <Text numberOfLines={1} style={[styles.ptyText, { fontSize: L.ptyFont, color: pal.dim }, ptyShadow]}>{ptyText}</Text>
               </View>
             ) : null}
             {oobEl}
