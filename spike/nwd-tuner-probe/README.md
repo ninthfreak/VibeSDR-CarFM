@@ -109,6 +109,17 @@ Do it **parked**. Then:
 The answer I most want: **which rung, if any, makes sound come out with the stock
 app closed.** That tells us whether CarFM can drive its own audio, and how.
 
+### RUN RADIO FUNCTIONS (tune · seek · RDS)
+
+A second button, to run **after** audio is up (it powers FM up first anyway). It
+proves the rest of a real radio: **tune** to a station you pick (set the MHz box
+first), **seek** with the actual hardware station-seek, and a **30s RadioText
+dwell**. Note the AIDL is named backwards on this AllWinner unit — `search()` is
+the real seek-to-next-station (scans and stops), `seek()` is a single manual step
+— and the seek is gated on the tuner being powered, which is why it did nothing
+before we could power FM up ourselves. For the RDS dwell, point the MHz box at a
+station you *know* carries RadioText.
+
 ## Safety
 It binds the *same* service the stock radio app uses and sends the *same*
 broadcasts the stock app sends. It does **not** write any system setting, touch

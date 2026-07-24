@@ -95,6 +95,7 @@ public class MainActivity extends Activity {
     private int freqMult = 1000;
     private byte fmBand = 0;
     private MediaPlayer vendorMp;
+    private volatile double uiMhz = STRONG_MHZ;   // target latched from the MHz box (UI thread)
 
     private LinearLayout promptPanel;
     private TextView promptText;
@@ -122,6 +123,10 @@ public class MainActivity extends Activity {
         Button full = btn("▶  RUN AUDIO TEST (standalone bring-up)", v -> runAudioTest());
         full.setTextSize(16f);
         root.addView(full);
+
+        Button rf = btn("▶  RUN RADIO FUNCTIONS (tune · seek · RDS)", v -> runRadioFunc());
+        rf.setTextSize(15f);
+        root.addView(rf);
 
         promptPanel = new LinearLayout(this);
         promptPanel.setOrientation(LinearLayout.VERTICAL);
@@ -357,6 +362,91 @@ public class MainActivity extends Activity {
                .append("   before: ").append(before).append('\n')
                .append("   after : ").append(after).append('\n')
                .append("   USER  : ").append(yes ? "AUDIO YES" : "no").append("\n\n");
+    }
+
+    // ── Radio-functions test: tune · seek · RDS (run after audio is up) ─────────
+    // On this AllWinner unit the AIDL is named counter-intuitively:
+    //   search(up) -> seekStationAsync -> startScanThread : the REAL seek-to-station
+    //   seek(up)   -> tuneStationAsync                    : a single manual STEP
+    // The scan is gated on mPowerStatus==POWER_UP, so we power FM up first.
+    private void runRadioFunc() {
+        if (testRunning) { line("test already running"); return; }
+        testRunning = true;
+        new Thread(this::radioFuncBody, "nwd-radiofunc").start();
+    }
+
+    private void radioFuncBody() {
+        line("\n==== RADIO FUNCTIONS TEST (tune · seek · RDS) ====");
+        prompt("Tests tuning, seek/scan and RadioText while FM plays standalone.\n\n"
+             + "• It WILL move between stations.\n"
+             + "• Set the MHz box above to the station you want to test (a strong one that carries\n"
+             + "  RadioText is best), THEN tap Start.", "Start");
+        latchMhzField();
+        wakeAndBind();
+        for (int i = 0; radio == null && i < 16; i++) sleep(500);
+        if (radio == null) { line("not bound — aborting"); testRunning = false; return; }
+
+        // Seek/scan only runs when the tuner is POWER_UP — ensure that first.
+        line("ensuring FM powered (ACTION_APP_IN_OUT app_id=8)…");
+        sendAppInOut(8); sleep(3500);
+        calibrate();
+        richDump("radiofunc baseline");
+
+        // A — tune to a chosen station (prove we can pick the station standalone).
+        line("\n-- A: tune to " + uiMhz + " (setCurrentFrequency) --");
+        tuneMhzTo(uiMhz); watch("TUNE", 5000, 1000); captureLogcat("TUNE");
+        prompt("A) Tuned to " + uiMhz + ". Is THAT station playing now?", "Yes", "No / wrong station");
+
+        // B — search(up): the real hardware seek-to-next-station.
+        line("\n-- B: search(up) = hardware SEEK to next station (the real seek) --");
+        try { radio.search(true); line("called search(true)"); } catch (Exception e) { line("search failed " + e); }
+        watch("SEEKUP", 9000, 1000); captureLogcat("SEEKUP");
+        prompt("B) SEEK up — what happened?", "Stopped on a NEW station", "Only stepped once", "Nothing");
+
+        // C — search(down).
+        line("\n-- C: search(down) = seek to next station downward --");
+        try { radio.search(false); line("called search(false)"); } catch (Exception e) { line("search failed " + e); }
+        watch("SEEKDN", 9000, 1000); captureLogcat("SEEKDN");
+        prompt("C) SEEK down — what happened?", "Stopped on a NEW station", "Only stepped once", "Nothing");
+
+        // D — seek(up): the single manual step, for contrast.
+        line("\n-- D: seek(up) = single manual STEP (not a station seek) --");
+        try { radio.seek(true); line("called seek(true)"); } catch (Exception e) { line("seek failed " + e); }
+        watch("STEP", 4000, 1000); captureLogcat("STEP");
+        prompt("D) STEP up — what happened?", "Moved one small step", "Seeked to a station", "Nothing");
+
+        // E — RDS dwell: sit on the current station and watch for RadioText / PS.
+        line("\n-- E: RDS dwell 30s on the current station (watch rt='…' / PS) --");
+        line("  (no text? set the MHz box to a station you KNOW carries RadioText, tap Tune, run again)");
+        dwell("RDS", 30);
+        captureLogcat("RDS");
+        prompt("E) In those 30s, did any RadioText or station name appear (log rt='…'/PS, or on screen)?",
+                "Yes, text appeared", "No text");
+
+        richDump("radiofunc final");
+        saveLog();
+        line("==== RADIO FUNCTIONS DONE ====");
+        testRunning = false;
+    }
+
+    /** Read the MHz box on the UI thread (view access must not be off-thread). */
+    private void latchMhzField() {
+        runOnUiThread(() -> { try { uiMhz = Double.parseDouble(mhzField.getText().toString().trim()); } catch (Exception ignored) {} });
+        sleep(150);
+    }
+
+    /** Sit on the current station for `seconds`, logging freq / PS / RadioText every 3s. */
+    private void dwell(String tag, int seconds) {
+        for (int i = 0; i < seconds; i += 3) {
+            sleep(3000);
+            StringBuilder s = new StringBuilder("  [" + tag + "] t+" + (i + 3) + "s");
+            if (radio != null) {
+                try { Frequency f = radio.getCurrentFrequency(); if (f != null) s.append(" freq=").append(f.freq / (double) freqMult).append(" PS='").append(f.psName).append('\''); } catch (Exception ignored) {}
+                try { s.append(" rt='").append(radio.getRtMessage()).append('\''); } catch (Exception ignored) {}
+                try { s.append(" pty=").append(radio.getPTYType()); } catch (Exception ignored) {}
+            }
+            line(s.toString());
+        }
     }
 
     // ── Bring-up broadcasts (exact actions/extras from SprdRadioManager$1) ──────
