@@ -150,6 +150,7 @@ public class MainActivity extends Activity {
         advanced.addView(btn("▶ Audio test only", v -> runAudioTest()));
         advanced.addView(btn("▶ Radio functions only (tune · seek · RDS)", v -> runRadioFunc()));
         advanced.addView(btn("▶ Overwrite presets only", v -> runWritePresets()));
+        advanced.addView(btn("▶ Reclaim-after-loss test", v -> runReclaim()));
         advanced.addView(btn("Connect (bind service)", v -> wakeAndBind()));
 
         LinearLayout tuneRow = new LinearLayout(this);
@@ -240,6 +241,7 @@ public class MainActivity extends Activity {
     private void runAudioTest()   { runSolo("STANDALONE AUDIO", () -> phaseAudio()); }
     private void runRadioFunc()   { runSolo("RADIO FUNCTIONS", this::phaseRadioFunc); }
     private void runWritePresets(){ runSolo("OVERWRITE PRESETS", this::phaseWritePresets); }
+    private void runReclaim()     { runSolo("RECLAIM AFTER LOSS", this::phaseReclaim); }
 
     private void startWorker(String name, Runnable body) {
         if (testRunning) { line("test already running"); return; }
@@ -456,6 +458,38 @@ public class MainActivity extends Activity {
         line("\n-- AFTER --"); dumpAllBanks();
         prompt("Check the head unit's FM1/FM2/FM3 lists — do they now show the ascending test stations?",
                 "Yes, overwritten", "No / partial");
+    }
+
+    // ── Reclaim-after-loss: can CarFM get audio BACK after another source takes over? ──
+    // Mirrors the observed case: audio died when the stock app closed, and CarFM
+    // tuning produced no sound. Compares tune-only reclaim (expected to fail) vs the
+    // source-claim broadcast (expected to work — the fix CarFM needs).
+    private void phaseReclaim() {
+        prompt("RECLAIM-AFTER-LOSS.\n\nTests whether audio can be brought BACK after another source "
+             + "(stock radio / Bluetooth) takes over — the case where audio died when the stock app "
+             + "closed and CarFM tuning made no sound.\n\nTap Continue.", "Continue");
+        latchMhzField();
+        ensurePowered();
+        audioSnap("reclaim: after claim");
+        prompt("FM audio should be playing now (we just claimed the source). Is it?", "Yes", "No");
+
+        prompt("Now MAKE ANOTHER SOURCE TAKE OVER, then let the FM audio STOP:\n\n"
+             + "• Open the STOCK radio app, let it play ~10s, then CLOSE it\n"
+             + "  (or switch to Bluetooth / AUX and back).\n\n"
+             + "When the FM audio has stopped, tap Done.", "Done");
+        richDump("reclaim: after source loss");
+        prompt("Is the audio currently STOPPED (silent)?", "Yes, silent", "No, still playing");
+
+        // Attempt A — tune only (no source claim). Expected to FAIL (matches your report).
+        line("\n-- reclaim A: tune only (no source claim) --");
+        tuneMhzTo(uiMhz); watch("RECLAIM-TUNE", 5000, 1000); captureLogcat("RECLAIM-TUNE");
+        prompt("A) After tuning ALONE (no source claim) — did audio come back?", "Yes", "No");
+
+        // Attempt B — ACTION_APP_IN_OUT app_id=8 (claim the source). Expected to WORK.
+        line("\n-- reclaim B: ACTION_APP_IN_OUT app_id=8 (claim the FM source) --");
+        sendAppInOut(8); watch("RECLAIM-CLAIM", 5000, 1000); captureLogcat("RECLAIM-CLAIM");
+        prompt("B) After the source-claim broadcast — did audio come back?", "Yes", "No");
+        richDump("reclaim: final");
     }
 
     private int currentBand() {
