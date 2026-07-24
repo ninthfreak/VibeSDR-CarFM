@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <!-- Best-effort: lets the probe capture the radio service's OWN log trail
+         (InitFM / powerUp / setForceUse …). Signature|privileged on stock Android
+         (silently not granted), but many head-unit ROMs are permissive and grant it. -->
+    <uses-permission android:name="android.permission.READ_LOGS"/>
 
     <!-- Android 11+ package visibility: needed to bind the radio service by package -->
     <queries>
