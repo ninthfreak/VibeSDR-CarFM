@@ -1,6 +1,6 @@
 # Handoff: Android Car Head‑Unit — FM Radio Face
 
-**Bundle v1.9.0 — 2026-07-23.** Version is tracked in `VERSION`; check it matches
+**Bundle v1.10.0 — 2026-07-24.** Version is tracked in `VERSION`; check it matches
 your copy before building (stale downloads were the source of earlier drift).
 
 ## Overview
@@ -73,7 +73,8 @@ presets, and open Nearby search.
    **stacked below the icon** in the left zone.
 2. **Hero band** — the tuned station, centered:
    - **Center hero card:** the station identity + frequency (amber, **no "MHz" label**), with the
-     **save star pinned to the top-right corner**. Identity has two forms (see §4.5 for the logo
+     **save star pinned to the top-right corner** and a **power-symbol button in the top-left
+     corner** (mirrors the star) that claims/releases audio priority (§4.7). Identity has two forms (see §4.5 for the logo
      model): a **real logo replaces the call sign** (call sign shown small beneath it); with **no
      real logo**, no monogram is drawn here — just the big **4-letter call sign** + frequency. The
      **RadioText strip** sits below the hero (marquee when text > 46 chars). The hero call sign and
@@ -97,6 +98,11 @@ presets, and open Nearby search.
 - **Frequency:** 60px, 700, `color:amber`, `font-variant-numeric:tabular-nums`, tap opens numpad.
 - **Star save button:** 56×56, `border-radius:16`; filled amber star when the freq is saved, else
   outline in `dim`.
+- **Power (audio-priority) button:** 52×52, `border-radius:16`, hero top-left, mirrors the star.
+  Power-symbol glyph (open ring + top stem). Active = dim outline; **released = solid amber
+  (`#FFAE1A`) + white glyph + pulsing ring (~1.8s)**, and the whole face goes grayscale/flat
+  except this button. Claims/releases audio priority — not a mute. Full off-state spec in
+  `ANDROID-IMPLEMENTATION.md` §4.7.
 - **Preset tile:** width **148**, full height; `border-radius:16`, `bg:panel`,
   border `2px solid blue` when active else `1px solid border`. Shows **either** a real logo
   (borderless, transparent, fills the tile — §4.5; **freq + call sign hidden**) **or** a **wide
@@ -212,6 +218,10 @@ fits the narrow track with no horizontal scroll).
   - **PREV/NEXT** step through presets **in their displayed order** (wrapping), not by frequency.
   - Selecting a preset **auto‑scrolls** the strip to bring the active tile into view (centered).
 - **Star:** toggles the current frequency in/out of presets (persisted).
+- **Power / audio priority:** hero top-left power button toggles audio priority — `release` hands
+  the shared audio bus to another source, `claim` takes it back. When released the face goes
+  grayscale + flat and the button pulses amber; the **preset-change hero animation is disabled**
+  (instant swaps) while released. Not a mute. See `ANDROID-IMPLEMENTATION.md` §4.7.
 - **Nearby picker:** tap row = tune; hold 550ms = save preset. Rows already saved show the amber
   star. "Best signal first" ordering.
 - **Numpad:** digit entry with validation; TUNE commits.

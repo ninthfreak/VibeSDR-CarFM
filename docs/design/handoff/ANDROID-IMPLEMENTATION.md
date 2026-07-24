@@ -1,6 +1,6 @@
 # DUDU OS FM Radio — Android implementation spec
 
-*Bundle v1.9.0 — 2026-07-23 (see `VERSION`).*
+*Bundle v1.10.0 — 2026-07-24 (see `VERSION`).*
 
 A complete build spec for the DUDU OS FM radio front-end on Android (Jetpack
 Compose primary; View/XML notes where helpful). It describes **intent, structure,
@@ -346,6 +346,36 @@ Two glance indicators in the status bar's **right cluster**, just left of the se
 Both are driven by real signals in the build (GPS fix state; motion/speed detection). In the prototype
 they are the `gpsLocked` and `inMotion` tweaks on `CarFmLive`.
 
+### 4.7 Audio-priority (on/off) control
+
+DUDU OS shares one audio bus across sources; the FM app either **holds audio priority** or
+**releases it** to another source. A **power-symbol button** in the hero card's **top-left
+corner** — mirroring the ★ save button top-right — toggles this. Glyph is the universal power
+mark (open ring broken by a top stem). **This is NOT a mute** (audio isn't silenced in place);
+it claims or releases the tuner's priority on the shared bus.
+
+- **Active (has priority):** the normal face. Button is a **dim outline**, no fill.
+- **Inactive (released):** the button turns **solid amber (`#FFAE1A`) with a white glyph and
+  pulses** (an expanding amber ring, ~1.8s) to draw the eye back, and the **whole face goes flat
+  and "dead":**
+  - **Grayscale** — the entire face desaturates, EXCEPT the power button, which is the one
+    element that keeps color.
+  - **Depth removed** — the hero card drop shadow, the RDS/HD/TP/AF tell emboss, and all text
+    shadows drop to none (flat, lifeless).
+  - **Veils** — a **light gray veil** over the hero card and a **darker veil** over the rest of
+    the screen; the prev/next peek cards dim further (opacity ~0.28).
+  - **Indicators to their off states** — signal icon shows **no bars**, dB reads `--`, the
+    **STEREO/MONO pill is empty** (outline with no text), RDS/HD/TP/AF all dim, PTY is hidden,
+    and the **RadioText strip is fully invisible**.
+- **Callbacks:** `claim` (inactive → take priority) and `release` (active → give it up). In the
+  prototype: an `audioActive` boolean on `CarFmLive`; the button fires `onClaimAudio` /
+  `onReleaseAudio`.
+- **Prototype-only implementation note (does NOT port literally):** the grayscale is applied to a
+  **static ancestor** of the hero + peek cards, and the power button is rendered **outside** that
+  grayscaled subtree so it stays colored — a workaround for a browser GPU-compositing quirk. On
+  Android, just desaturate the face content and draw the button in full color above it.
+- Preset-change animation is **disabled while inactive** — see §8.
+
 ---
 
 ## 5. Prev/Next peek cards
@@ -515,6 +545,10 @@ reference geometry.
   **This is the one animation most likely to be skipped — build it from the exact
   FLIP procedure (capture bounds → tune → morph, two easings, resolve to the 0.88
   peek base) in LOSSY-ELEMENTS.md #9. Verify against a screen recording, not a still.**
+- **Audio-off:** while audio priority is **released** (§4.7) the preset-change hero animation is
+  **disabled** — preset changes swap **instantly** (no morph, no fade). This reinforces the flat
+  "dead" feel and avoids animating a desaturated face (it also sidesteps a compositor issue in the
+  prototype). Re-enables automatically when priority is reclaimed.
 - **Preset reorder (drag):** the picked-up tile lifts (scale 1.06 + shadow,
   `touch-action:none`) and tracks the pointer. The other tiles **slide apart to open a
   gap** at the insertion slot (transform-only, ~160ms ease; the wiggle is frozen for
@@ -549,6 +583,9 @@ signal). Persist `freq` + `presets` (DataStore/prefs).
 - **Band:** 87.5–108.0 MHz, 0.1 step, wraps at the ends.
 - **Seek/scan:** jump to the next/previous station with signal.
 - **Save (★):** toggle the current station in/out of presets.
+- **Audio priority:** `audioActive` (has priority / released). `release` hands the shared audio
+  bus to another source; `claim` takes it back. The released state is **visual-only in the
+  prototype** (not persisted) — full off-state visuals in §4.7.
 - **Reorder / remove / change logo:** via long-press reorder mode (drag to reorder,
   ✕ to remove, logo-search badge to open the logo-search window §6.4).
 - Prototype station metadata is a fixed demo DB (Madison, WI market); the real
@@ -561,6 +598,9 @@ signal). Persist `freq` + `presets` (DataStore/prefs).
 - Frequency readout **always amber**, both themes, never re-themed. (No "MHz" unit
   label on the face — FM is always MHz; the label appears only in the tune numpad.)
 - **TA** must be visually loud (pulse) — traffic announcements override.
+- **Audio-off must be unmistakable:** when audio priority is released the whole face desaturates
+  and flattens, and the power button is the **sole colored, pulsing** element (§4.7), so the
+  released state is glanceable at speed.
 - **No scale-to-fit.** Real responsive dp/sp layout that reflows per surface
   (§0) — never a fixed canvas uniformly scaled to the screen.
 - Hit targets **≥ 48dp** in real dp (not a scaled-down canvas); honor font-scale
