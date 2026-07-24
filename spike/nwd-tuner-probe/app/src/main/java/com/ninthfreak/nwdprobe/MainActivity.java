@@ -86,7 +86,6 @@ public class MainActivity extends Activity {
     private int freqMult = 1000;
     private byte fmBand = 0;
     private MediaPlayer vendorMp;
-    private volatile double uiMhz = STRONG_MHZ;   // target latched from the MHz box (UI thread)
 
     private LinearLayout promptPanel;
     private TextView promptText;
@@ -393,57 +392,68 @@ public class MainActivity extends Activity {
 
     // ── PHASE 2: tune · seek · RDS ──────────────────────────────────────────────
     private void phaseRadioFunc() {
-        prompt("PHASE 2 — TUNE · SEEK · RDS.\n\nFM should be playing. It will tune, seek up/down, and watch "
-             + "30s for RadioText. Default station is " + STRONG_MHZ + "; to use another (ideally one that "
-             + "carries RadioText), set the MHz box under Advanced first.\n\nTap Continue.", "Continue");
-        latchMhzField();
+        prompt("PHASE 2 — TUNE · SEEK · RDS.\n\nFM should be playing. It tunes to WIBA 101.5 and WERN 88.7 "
+             + "(confirming you hear each), checks BOTH for RadioText, then tests seek.\n\nTap Continue.", "Continue");
         ensurePowered();
 
-        line("\n-- A: tune to " + uiMhz + " (setCurrentFrequency) --");
-        tuneMhzTo(uiMhz); watch("TUNE", 5000, 1000); captureLogcat("TUNE");
-        prompt("A) Tuned to " + uiMhz + ". Is THAT station playing now?", "Yes", "No / wrong station");
+        // WIBA 101.5 — tune, confirm you hear it, dwell 30s for RadioText.
+        tuneConfirm(101.5, "WIBA", "TUNE-WIBA");
+        line("\n-- RDS dwell 30s on WIBA 101.5 --");
+        dwell("RDS-WIBA", 30); captureLogcat("RDS-WIBA");
+        prompt("WIBA 101.5 — did any RadioText / station name appear (log rt='…'/PS, or on screen)?",
+                "Yes, text appeared", "No text");
 
-        line("\n-- B: search(up) = hardware SEEK to next station --");
+        // WERN 88.7 — tune, confirm, dwell 30s for RadioText.
+        tuneConfirm(88.7, "WERN", "TUNE-WERN");
+        line("\n-- RDS dwell 30s on WERN 88.7 --");
+        dwell("RDS-WERN", 30); captureLogcat("RDS-WERN");
+        prompt("WERN 88.7 — did any RadioText / station name appear (log rt='…'/PS, or on screen)?",
+                "Yes, text appeared", "No text");
+
+        // Seek tests move the station around, so run them last.
+        line("\n-- search(up) = hardware SEEK to next station --");
         try { radio.search(true); line("called search(true)"); } catch (Exception e) { line("search failed " + e); }
         watch("SEEKUP", 9000, 1000); captureLogcat("SEEKUP");
-        prompt("B) SEEK up — what happened?", "Stopped on a NEW station", "Only stepped once", "Nothing");
+        prompt("SEEK up — what happened?", "Stopped on a NEW station", "Only stepped once", "Nothing");
 
-        line("\n-- C: search(down) = seek to next station downward --");
+        line("\n-- search(down) = seek to next station downward --");
         try { radio.search(false); line("called search(false)"); } catch (Exception e) { line("search failed " + e); }
         watch("SEEKDN", 9000, 1000); captureLogcat("SEEKDN");
-        prompt("C) SEEK down — what happened?", "Stopped on a NEW station", "Only stepped once", "Nothing");
+        prompt("SEEK down — what happened?", "Stopped on a NEW station", "Only stepped once", "Nothing");
 
-        line("\n-- D: seek(up) = single manual STEP --");
+        line("\n-- seek(up) = single manual STEP --");
         try { radio.seek(true); line("called seek(true)"); } catch (Exception e) { line("seek failed " + e); }
         watch("STEP", 4000, 1000); captureLogcat("STEP");
-        prompt("D) STEP up — what happened?", "Moved one small step", "Seeked to a station", "Nothing");
-
-        line("\n-- E: RDS dwell 30s (watch rt='…' / PS) --");
-        dwell("RDS", 30); captureLogcat("RDS");
-        prompt("E) In those 30s, did any RadioText / station name appear (log rt='…'/PS, or on screen)?",
-                "Yes, text appeared", "No text");
+        prompt("STEP up — what happened?", "Moved one small step", "Seeked to a station", "Nothing");
         richDump("radiofunc-final");
     }
 
+    /** Tune to a named station and ask the user to confirm they're hearing it. */
+    private void tuneConfirm(double mhz, String call, String tag) {
+        line("\n-- tune to " + call + " " + mhz + " --");
+        tuneMhzTo(mhz); watch(tag, 5000, 1000); captureLogcat(tag);
+        prompt("Tuned to " + call + " " + mhz + ". Are you hearing " + call + " (" + mhz + ")?",
+                "Yes, correct station", "No / wrong / silent");
+    }
+
     // ── PHASE 3: overwrite built-in presets (ONE-WAY app→unit) ──────────────────
-    // Demo list standing in for CarFM's presets: 18 ascending frequencies, so a
-    // sequential fill (FM1[0..5], FM2[0..5], FM3[0..5]) steps low→high on the wheel.
+    // The user's real preset list (their order). 8 stations → FM1 slots 1-6 + FM2
+    // slots 1-2; FM3 and later FM2 slots keep their prior contents.
     private static final double[] TEST_PRESETS = {
-        88.1, 89.5, 90.7, 91.9, 93.3, 94.5,      // FM1
-        96.1, 97.3, 98.9, 100.3, 101.5, 102.7,   // FM2
-        103.9, 104.7, 105.5, 106.3, 107.1, 107.9 // FM3
+        101.5, 88.7, 105.9, 102.1, 104.1, 92.1,  // FM1
+        94.9, 98.1                               // FM2 (slots 1-2)
     };
 
     private void phaseWritePresets() {
         String go = prompt("PHASE 3 — OVERWRITE BUILT-IN PRESETS (app → unit).\n\nREPLACES the head unit's "
-             + "FM1/FM2/FM3 presets with an ascending test list (one-way; nothing is read back into any app). "
+             + "FM presets with the app's 8-station list (one-way; nothing is read back into any app). "
              + "Your current built-in presets WILL be replaced.\n\nContinue?", "Overwrite", "Skip");
         if (!"Overwrite".equals(go)) { line("overwrite skipped"); return; }
         ensurePowered();
 
         line("\n-- BEFORE --"); dumpAllBanks();
         int n = Math.min(TEST_PRESETS.length, 18);
-        line("\n-- writing " + n + " presets (FM1/FM2/FM3, 6 each) via saveCurrentFrequency --");
+        line("\n-- writing " + n + " presets across FM1/FM2/FM3 (6 per bank) via saveCurrentFrequency --");
         for (int i = 0; i < n; i++) {
             int band = i / 6, slot = i % 6;
             if (slot == 0) {
@@ -468,7 +478,6 @@ public class MainActivity extends Activity {
         prompt("RECLAIM-AFTER-LOSS.\n\nTests whether audio can be brought BACK after another source "
              + "(stock radio / Bluetooth) takes over — the case where audio died when the stock app "
              + "closed and CarFM tuning made no sound.\n\nTap Continue.", "Continue");
-        latchMhzField();
         ensurePowered();
         audioSnap("reclaim: after claim");
         prompt("FM audio should be playing now (we just claimed the source). Is it?", "Yes", "No");
@@ -482,7 +491,7 @@ public class MainActivity extends Activity {
 
         // Attempt A — tune only (no source claim). Expected to FAIL (matches your report).
         line("\n-- reclaim A: tune only (no source claim) --");
-        tuneMhzTo(uiMhz); watch("RECLAIM-TUNE", 5000, 1000); captureLogcat("RECLAIM-TUNE");
+        tuneMhzTo(101.5); watch("RECLAIM-TUNE", 5000, 1000); captureLogcat("RECLAIM-TUNE");
         prompt("A) After tuning ALONE (no source claim) — did audio come back?", "Yes", "No");
 
         // Attempt B — ACTION_APP_IN_OUT app_id=8 (claim the source). Expected to WORK.
@@ -505,12 +514,6 @@ public class MainActivity extends Activity {
             sleep(1600);
         }
         return currentBand() == target;
-    }
-
-    /** Read the MHz box on the UI thread (view access must not be off-thread). */
-    private void latchMhzField() {
-        runOnUiThread(() -> { try { uiMhz = Double.parseDouble(mhzField.getText().toString().trim()); } catch (Exception ignored) {} });
-        sleep(150);
     }
 
     /** FM1=0, FM2=1, FM3=2, then AM banks. arg is 1-6 WITHIN this bank; the bank is

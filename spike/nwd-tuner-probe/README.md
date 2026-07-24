@@ -110,33 +110,33 @@ Then:
 3. At the end it offers **Stop FM / Leave it playing** and **saves the log to
    Downloads** (`nwdprobe-<timestamp>.txt`). Send me that file (or a screenshot).
 
-(Individual phases can be run alone from **Advanced** if you want to repeat just
-one — e.g. the RDS dwell against a specific station set in the MHz box.)
+(Individual phases can be run alone from **Advanced** — including a
+**Reclaim-after-loss** test that guides you through losing the source to another
+app and recovering it.)
 
 The answer I most want: **which rung, if any, makes sound come out with the stock
 app closed.** That tells us whether CarFM can drive its own audio, and how.
 
 ### RUN RADIO FUNCTIONS (tune · seek · RDS)
 
-A second button, to run **after** audio is up (it powers FM up first anyway). It
-proves the rest of a real radio: **tune** to a station you pick (set the MHz box
-first), **seek** with the actual hardware station-seek, and a **30s RadioText
-dwell**. Note the AIDL is named backwards on this AllWinner unit — `search()` is
-the real seek-to-next-station (scans and stops), `seek()` is a single manual step
-— and the seek is gated on the tuner being powered, which is why it did nothing
-before we could power FM up ourselves. For the RDS dwell, point the MHz box at a
-station you *know* carries RadioText.
+Runs **after** audio is up (it powers FM up first anyway). It proves the rest of a
+real radio: **tunes to WIBA 101.5 and WERN 88.7** (asking you to confirm you hear
+each), gives each a **30s RadioText dwell**, then **seeks** with the actual
+hardware station-seek. Note the AIDL is named backwards on this AllWinner unit —
+`search()` is the real seek-to-next-station (scans and stops), `seek()` is a single
+manual step — and the seek is gated on the tuner being powered, which is why it did
+nothing before we could power FM up ourselves.
 
 ### OVERWRITE BUILT-IN PRESETS (app → unit)
 
-A third button, testing **one-way sync from the app INTO the head unit's preset
-banks** (never the reverse). It writes an ascending 18-station demo list into
-FM1/FM2/FM3 (6 each) by, for each slot: switching to the bank (`changeBand`),
-tuning to the frequency, and calling `saveCurrentFrequency(slot)` (0–5, zero-based,
-writes the current station into `mPrefFrequency[bank][slot]`). It dumps all banks
-before and after so you can confirm the overwrite. Capacity is 18 FM presets
-(`CleanFMPreFreData` clears exactly 3 banks × 6). **It replaces the built-in
-presets** — that's the point, and confirmed intended.
+Testing **one-way sync from the app INTO the head unit's preset banks** (never the
+reverse). It writes the app's 8-station list into FM1 (6) + FM2 (2) by, for each
+slot: switching to the bank (`changeBand`), tuning to the frequency, and calling
+`saveCurrentFrequency(slot)` (0–5, zero-based, writes the current station into
+`mPrefFrequency[bank][slot]`). It dumps all banks before and after so you can
+confirm the overwrite. Capacity is 18 FM presets (`CleanFMPreFreData` clears
+exactly 3 banks × 6). **It replaces the built-in presets** — that's the point, and
+confirmed intended.
 
 ## Safety
 It binds the *same* service the stock radio app uses and sends the *same*
