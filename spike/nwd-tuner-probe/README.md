@@ -37,9 +37,18 @@ the probe logs `getRtMessage`/callbacks throughout, so we'd catch that too.
 
 Questions are answered with **inline buttons in the app's own screen** (the old
 version used a dialog that could lock up). Manual buttons remain for ad-hoc use:
-**Connect**, **Tune**, **Dump**, and one-tap **APP_IN_OUT 8 / MEDIA_PLAY 8 /
-REQ SRC 4 / EXIT FM**. Everything — machine readings and your answers — lands in
-one log saved to Downloads.
+**Connect**, **Tune**, **Rich dump**, **logcat**, and one-tap **APP_IN_OUT 8 /
+MEDIA_PLAY 8 / REQ SRC 4 / EXIT FM**.
+
+So a *No* is still diagnosable, each rung is heavily instrumented (all read-only):
+- the service's **own log trail** (`InitFM` / `powerUp = true` / `requestAudioFocus,result` / `setForceUseSpeaker` …) via `logcat` — only if the ROM lets an app read others' logs (root / permissive); it reports "unreadable" otherwise, which is itself useful.
+- a **per-second time-series** of tuner + audio state through each wait;
+- an **AudioManager** snapshot (music active / volume / route);
+- a **baseline dump** (every getter, presets, band plan, RDS states, `getprop`) and a **hidden-parcel-field hunt** on `getCurrentFrequency` (RSSI/stereo we may be truncating);
+- **was the service already running** before we bound it;
+- an end-of-run **summary table**.
+
+Everything — machine readings and your answers — lands in one log saved to Downloads.
 
 The AIDL in `app/src/main/aidl/…` is a clean-room reconstruction of the service's
 interface (method order = the real transaction codes). No decompiled vendor code

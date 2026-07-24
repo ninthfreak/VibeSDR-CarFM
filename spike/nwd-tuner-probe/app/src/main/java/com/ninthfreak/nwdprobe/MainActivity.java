@@ -4,20 +4,25 @@ import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.database.ContentObserver;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.media.AudioManager;
 import android.media.MediaPlayer;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.Parcel;
 import android.os.RemoteException;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.text.method.ScrollingMovementMethod;
 import android.view.View;
@@ -26,17 +31,16 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import android.content.ContentValues;
-import android.net.Uri;
-import android.provider.MediaStore;
 
 import com.nwd.radio.service.RadioCallback;
 import com.nwd.radio.service.RadioFeature;
 import com.nwd.radio.service.data.Frequency;
 import com.nwd.radio.service.data.RadioPoint;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -44,26 +48,32 @@ import java.util.Locale;
 import java.util.concurrent.ArrayBlockingQueue;
 
 /**
- * NWD built-in FM tuner — STANDALONE-AUDIO probe.
+ * NWD built-in FM tuner — STANDALONE-AUDIO probe (heavily instrumented).
  *
  * ONE question: can FM audio be brought up WITHOUT launching the stock radio app?
  *
- * From decompiling com.nwd.radio.service (Spreadtrum path, SprdRadioManager$1):
- * the audio routing (openDevice + audio focus + AudioSystem.setForceUse +
- * setNwdStreamMute unmute) all runs INSIDE the service. A bound/running service
- * starts it in response to broadcasts the stock app fires on itself — with NO
- * permission or caller check on the receiver:
- *   • com.nwd.action.ACTION_APP_IN_OUT   extra_app_id (int)  == 8  -> InitFM()
- *   • com.nwd.ACTION_MEDIA_PLAY          extra_app_id (int)  == 8  -> InitFM()
- *   • com.nwd.action.ACTION_CHANGE_SOURCE extra_source_id(byte)==4 -> (FM)
- *   • com.nwd.android.ACTION_EXIT_ARM_FM_RAIDO                     -> ExitFm()
- * (Writing mcu_current_source directly — what the old probe did — is a DEAD END:
- * it needs system perms and the MCU re-asserts it. Not tested here.)
+ * From decompiling com.nwd.radio.service (Spreadtrum path):
+ *   SprdRadioManager$1.onReceive — no permission / no caller check — on:
+ *     • com.nwd.action.ACTION_APP_IN_OUT   extra_app_id(int) ==8 -> SprdFMFeature.InitFM()
+ *     • com.nwd.ACTION_MEDIA_PLAY          extra_app_id(int) ==8 -> InitFM() (else ExitFm)
+ *     • com.nwd.action.ACTION_CHANGE_SOURCE extra_source_id(byte)==4 -> FM (else ExitFm)
+ *     • com.nwd.android.ACTION_EXIT_ARM_FM_RAIDO -> ExitFm()
+ *   InitFM (guards: skip if already POWER_UP / BT call / power-downing) ->
+ *     openDevice + powerUpFm -> powerUp: requestAudioFocus -> native powerUp ->
+ *     updateRdsEnableState (RDS on) + enableFmAudio + setForceUse(speaker) + unmute@+1800ms.
+ *   setCurrentFrequency ignores a tune to the freq it's already on (freq!=cur guard);
+ *     tuneStation from POWER_DOWN runs powerUp+playFrequency (audio).
+ * (Writing mcu_current_source directly is a DEAD END — system perm + MCU re-asserts.)
  *
- * "RUN AUDIO TEST" climbs a ladder of bring-up attempts, stopping at the first
- * one that produces sound. It asks you ONE thing per rung — "is audio playing?" —
- * via INLINE BUTTONS in this screen (not a dialog; dialogs here previously locked
- * up). All machine state + your answers land in one log saved to Downloads.
+ * RUN AUDIO TEST climbs a ladder, stopping at the first rung that makes sound, and
+ * asks ONE yes/no per rung via inline buttons. Around every rung it captures a lot
+ * of machine data so a "No" is still diagnosable:
+ *   - the service's OWN logcat trail (InitFM / powerUp = / requestAudioFocus / setForceUse …)
+ *   - a per-second time-series of tuner + audio state through the wait
+ *   - AudioManager snapshot (music active / volume / route)
+ *   - a full baseline dump + hidden-parcel-field hunt + getprop + was-service-already-running
+ *   - an end-of-run summary table
+ * Everything lands in one log saved to Downloads.
  *
  * Throwaway RE harness, NOT the CarFM backend. AIDL is a clean-room reconstruction.
  */
@@ -74,24 +84,28 @@ public class MainActivity extends Activity {
     private static final String BIND_ACTION = "com.nwd.radio.service.ACTION_RADIO_SERVICE";
     private static final String SRC_KEY = "mcu_current_source";
     private static final double STRONG_MHZ = 101.5;   // user reports this comes in best
+    private static final String RF_DESCRIPTOR = "com.nwd.radio.service.RadioFeature";
+    // getCurrentFrequency is AIDL method #2 -> FIRST_CALL_TRANSACTION + 1 (for the raw dump).
+    private static final int TXN_GET_CURRENT_FREQ = IBinder.FIRST_CALL_TRANSACTION + 1;
 
-    private RadioFeature radio;
+    private volatile RadioFeature radio;   // set on main thread, read from the worker
+    private AudioManager am;
     private TextView log;
     private EditText mhzField, bandField;
     private int freqMult = 1000;
     private byte fmBand = 0;
     private MediaPlayer vendorMp;
 
-    // Inline prompt panel (replaces AlertDialogs, which locked up when a message
-    // and a list were set together). Real buttons in the activity's own view —
-    // no window token, survives pause/resume.
     private LinearLayout promptPanel;
     private TextView promptText;
     private LinearLayout promptButtons;
 
     private final StringBuilder logBuf = new StringBuilder();
+    private final StringBuilder summary = new StringBuilder();
     private final ArrayBlockingQueue<String> answer = new ArrayBlockingQueue<>(1);
     private volatile boolean testRunning = false;
+    private volatile boolean logcatReadable = false;
+    private volatile boolean preConnected = false;
     private ContentObserver sourceObserver;
     private BroadcastReceiver nwdRx;
 
@@ -99,6 +113,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        am = (AudioManager) getSystemService(AUDIO_SERVICE);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         int pad = dp(10);
@@ -108,7 +123,6 @@ public class MainActivity extends Activity {
         full.setTextSize(16f);
         root.addView(full);
 
-        // Inline prompt panel — hidden until a question/instruction is posted.
         promptPanel = new LinearLayout(this);
         promptPanel.setOrientation(LinearLayout.VERTICAL);
         promptPanel.setBackgroundColor(0xFF203040);
@@ -127,7 +141,6 @@ public class MainActivity extends Activity {
         promptPanel.setVisibility(View.GONE);
         root.addView(promptPanel);
 
-        // Manual controls (ad-hoc; the scripted test doesn't need them).
         root.addView(btn("Connect (bind service)", v -> wakeAndBind()));
 
         LinearLayout tuneRow = new LinearLayout(this);
@@ -143,11 +156,11 @@ public class MainActivity extends Activity {
         LinearLayout manual = new LinearLayout(this);
         manual.setOrientation(LinearLayout.HORIZONTAL);
         manual.addView(weighted(btn("Tune", v -> tuneMhz())));
-        manual.addView(weighted(btn("Dump", v -> snap("manual"))));
+        manual.addView(weighted(btn("Rich dump", v -> new Thread(() -> richDump("manual")).start())));
+        manual.addView(weighted(btn("logcat", v -> new Thread(() -> captureLogcat("manual")).start())));
         manual.addView(weighted(btn("Save log", v -> saveLog())));
         root.addView(manual);
 
-        // Manual broadcast rungs (fire any bring-up trigger by hand).
         LinearLayout bcRow = new LinearLayout(this);
         bcRow.setOrientation(LinearLayout.HORIZONTAL);
         bcRow.addView(weighted(btn("APP_IN_OUT 8", v -> sendAppInOut(8))));
@@ -165,21 +178,38 @@ public class MainActivity extends Activity {
         root.addView(sv);
 
         setContentView(root);
-        line("Ready. Volume UP, stock radio app CLOSED, then tap RUN AUDIO TEST.");
+        line("Ready. Volume UP, nothing else playing, stock radio app CLOSED, then tap RUN AUDIO TEST.");
     }
 
     // ── Service wake + binding ─────────────────────────────────────────────────
-    /** Wake (startService) AND bind the radio service by explicit component. The
-     *  bring-up receivers are registered dynamically, so the process MUST be alive
-     *  for a broadcast to land — binding with AUTO_CREATE guarantees that. */
     private void wakeAndBind() {
         Intent i = new Intent(BIND_ACTION).setComponent(new ComponentName(SERVICE_PKG, SERVICE_CLS));
-        try { startService(i); } catch (Exception e) { line("startService threw " + e + " (may need explicit action only)"); }
+        try { startService(i); } catch (Exception e) { line("startService threw " + e); }
         try {
             boolean ok = bindService(new Intent(BIND_ACTION).setPackage(SERVICE_PKG), conn, Context.BIND_AUTO_CREATE);
             line("bindService=" + ok + (ok ? "" : "  <-- FALSE = not bindable (service may still be running for broadcasts)"));
         } catch (Exception e) { line("bindService threw " + e); }
     }
+
+    /** Was the radio service ALREADY running before we touched it? Bind with NO
+     *  auto-create: it only connects if the process is already up. Distinguishes
+     *  "resident from boot" (broadcasts land) from "we had to create it". */
+    private boolean preflightAlreadyRunning() {
+        preConnected = false;
+        boolean ok = false;
+        try { ok = bindService(new Intent(BIND_ACTION).setPackage(SERVICE_PKG), preConn, 0); }
+        catch (Exception e) { line("preflight bind threw " + e); }
+        for (int i = 0; !preConnected && i < 6; i++) sleep(300);   // ~1.8s
+        boolean running = preConnected;
+        try { if (ok) unbindService(preConn); } catch (Exception ignored) {}
+        line("preflight: service already running = " + running + " (noCreate bind=" + ok + ")");
+        return running;
+    }
+
+    private final ServiceConnection preConn = new ServiceConnection() {
+        @Override public void onServiceConnected(ComponentName n, IBinder b) { preConnected = true; }
+        @Override public void onServiceDisconnected(ComponentName n) {}
+    };
 
     private final ServiceConnection conn = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder binder) {
@@ -205,38 +235,65 @@ public class MainActivity extends Activity {
         line("\n==== STANDALONE AUDIO BRING-UP TEST ====");
         prompt("This tests whether FM audio can start WITHOUT the stock radio app.\n\n"
              + "• Turn the volume UP.\n"
-             + "• Do NOT open the stock radio app during this test.\n\n"
+             + "• Make sure NOTHING else is playing (Bluetooth, music apps).\n"
+             + "• Do NOT open the stock radio app.\n\n"
              + "Tap Start.", "Start");
 
+        boolean wasRunning = preflightAlreadyRunning();
         wakeAndBind();
-        for (int i = 0; radio == null && i < 12; i++) sleep(500);
-        line("service bound = " + (radio != null) + " (broadcasts can still work if the service is running from boot)");
-        snap("baseline");
+        for (int i = 0; radio == null && i < 16; i++) sleep(500);
+        line("service bound = " + (radio != null) + "; was already running = " + wasRunning);
+
+        richDump("baseline");
+        getpropDump();
         int origSrc = readSource();
-        sendStopQqMusic(); sleep(500);
+        sendStopQqMusic(); sleep(600); audioSnap("after STOP_QQ_MUSIC");
 
         String worked = null;
 
         // RUNG 1 — the stock app's own FM audio trigger.
-        line("\n-- RUNG 1: ACTION_APP_IN_OUT extra_app_id=8  →  service InitFM() --");
-        sendAppInOut(8);
-        line("waiting 4s (service mutes, unmutes ~1800ms, then powers up FM)…");
-        sleep(4000); snap("after RUNG1");
-        if (audioYes("RUNG 1")) worked = "RUNG 1 — ACTION_APP_IN_OUT app_id=8";
+        {
+            String before = stateLine();
+            line("\n-- RUNG 1: ACTION_APP_IN_OUT extra_app_id=8  →  service InitFM() --");
+            sendAppInOut(8);
+            watch("RUNG1", 5000, 1000);      // captures mute(t0) → unmute(~1.8s) → powerUp
+            captureLogcat("RUNG1"); audioSnap("after RUNG1");
+            boolean y = audioYes("RUNG 1");
+            rungLog("RUNG 1 — ACTION_APP_IN_OUT app_id=8", before, stateLine(), y);
+            if (y) worked = "RUNG 1 — ACTION_APP_IN_OUT app_id=8";
+        }
 
         // RUNG 2 — same InitFM via the other action.
         if (worked == null) {
+            String before = stateLine();
             line("\n-- RUNG 2: ACTION_MEDIA_PLAY extra_app_id=8  →  service InitFM() --");
-            sendMediaPlay(8); sleep(4000); snap("after RUNG2");
-            if (audioYes("RUNG 2")) worked = "RUNG 2 — ACTION_MEDIA_PLAY app_id=8";
+            sendMediaPlay(8);
+            watch("RUNG2", 5000, 1000);
+            captureLogcat("RUNG2"); audioSnap("after RUNG2");
+            boolean y = audioYes("RUNG 2");
+            rungLog("RUNG 2 — ACTION_MEDIA_PLAY app_id=8", before, stateLine(), y);
+            if (y) worked = "RUNG 2 — ACTION_MEDIA_PLAY app_id=8";
         }
 
-        // RUNG 3 — tune via AIDL (Sprd tuneStation → powerUp brings audio on its own).
+        // RUNG 3 — tune via AIDL (Sprd tuneStation → powerUp). setCurrentFrequency
+        // ignores a tune to the current freq, so nudge off-target first if needed.
         if (worked == null) {
-            line("\n-- RUNG 3: bind + setCurrentFrequency " + STRONG_MHZ + " (Sprd tune→powerUp) --");
+            String before = stateLine();
+            line("\n-- RUNG 3: setCurrentFrequency (Sprd tune→powerUp) --");
             if (radio == null) line("  (not bound — skipping)");
-            else { tuneMhzTo(STRONG_MHZ); sleep(4000); snap("after RUNG3"); }
-            if (radio != null && audioYes("RUNG 3")) worked = "RUNG 3 — setCurrentFrequency powerUp";
+            else {
+                double cur = currentMhz();
+                if (cur > 0 && Math.abs(cur - STRONG_MHZ) < 0.05) {
+                    line("  already on " + STRONG_MHZ + "; nudging to " + (STRONG_MHZ - 0.2) + " first so the tune isn't ignored");
+                    tuneMhzTo(STRONG_MHZ - 0.2); sleep(2000);
+                }
+                tuneMhzTo(STRONG_MHZ);
+                watch("RUNG3", 5000, 1000);
+                captureLogcat("RUNG3"); audioSnap("after RUNG3");
+            }
+            boolean y = radio != null && audioYes("RUNG 3");
+            rungLog("RUNG 3 — setCurrentFrequency powerUp", before, stateLine(), y);
+            if (y) worked = "RUNG 3 — setCurrentFrequency powerUp";
         }
 
         // RUNG 4 — ask the MCU to physically switch the head-unit source to FM.
@@ -244,44 +301,62 @@ public class MainActivity extends Activity {
             line("\n-- RUNG 4: ACTION_REQUEST_CHANGE_SOURCE (physical source switch) --");
             prompt("RUNG 4 will ask the head unit to switch its WHOLE audio source to Radio "
                  + "— like pressing 'Radio' on the unit. Tap OK to send.", "OK");
-            sendRequestSource((byte) 4); sleep(4000); snap("after RUNG4 src=4");
-            boolean yes = audioYes("RUNG 4 (source→4)");
-            if (!yes) {
+            String before = stateLine();
+            sendRequestSource((byte) 4);
+            watch("RUNG4a", 5000, 1000); captureLogcat("RUNG4a"); audioSnap("after RUNG4 src=4");
+            boolean y = audioYes("RUNG 4 (source→4)");
+            if (!y) {
                 line("  retrying with extra_source_id=8…");
-                sendRequestSource((byte) 8); sleep(4000); snap("after RUNG4 src=8");
-                yes = audioYes("RUNG 4 (source→8)");
+                sendRequestSource((byte) 8);
+                watch("RUNG4b", 5000, 1000); captureLogcat("RUNG4b"); audioSnap("after RUNG4 src=8");
+                y = audioYes("RUNG 4 (source→8)");
             }
-            if (yes) worked = "RUNG 4 — ACTION_REQUEST_CHANGE_SOURCE";
+            rungLog("RUNG 4 — ACTION_REQUEST_CHANGE_SOURCE", before, stateLine(), y);
+            if (y) worked = "RUNG 4 — ACTION_REQUEST_CHANGE_SOURCE";
         }
 
         // RUNG 5 — public-API long shot (vendor FM URI through MediaPlayer).
         if (worked == null) {
+            String before = stateLine();
             line("\n-- RUNG 5: MediaPlayer THIRDPARTY://MEDIAPLAYER_PLAYERTYPE_FM (long shot) --");
-            tryVendorMediaPlayer(); sleep(3000); snap("after RUNG5");
-            if (audioYes("RUNG 5")) worked = "RUNG 5 — vendor MediaPlayer URI";
+            tryVendorMediaPlayer();
+            watch("RUNG5", 4000, 1000); captureLogcat("RUNG5"); audioSnap("after RUNG5");
+            boolean y = audioYes("RUNG 5");
+            rungLog("RUNG 5 — vendor MediaPlayer URI", before, stateLine(), y);
+            if (y) worked = "RUNG 5 — vendor MediaPlayer URI";
         }
 
         line("\n==== RESULT: " + (worked != null ? "AUDIO via " + worked : "NO rung produced audio") + " ====");
-        snap("final");
-        line("mcu_current_source now = " + readSource() + "  (4 = FM is the active source)");
-        // Bonus: if forcing FM as the source also unlocked RadioText, capture it.
-        try { line("RDS check: rt='" + radio.getRtMessage() + "' stereo=" + radio.isStreroOn()); } catch (Exception ignored) {}
+        // Full final dump — the raw parcel here runs while FM is LIVE, so hidden
+        // per-station fields (RSSI/stereo/lock) would be populated if they exist.
+        richDump("final");
 
-        // Cleanup — offer to turn the tuner back off / restore the source.
         String c = prompt("Test done. Turn the tuner audio back off?", "Stop FM", "Leave it playing");
         if ("Stop FM".equals(c)) {
             sendExitFm();
             if (origSrc >= 0 && readSource() != origSrc) { sendRequestSource((byte) origSrc); line("requested source back to " + origSrc); }
         }
 
+        line("\n==== SUMMARY ====");
+        line("service already running at start : " + wasRunning);
+        line("logcat readable (saw svc logs)  : " + logcatReadable);
+        line("winning rung                    : " + (worked != null ? worked : "NONE"));
+        line("\n" + summary);
+
         saveLog();
         line("==== DONE ====");
         testRunning = false;
     }
 
-    /** One audio yes/no via the inline buttons; true iff the user says audio plays. */
     private boolean audioYes(String rung) {
         return prompt(rung + ": is FM audio playing through the speakers now?", "YES — audio!", "No").startsWith("YES");
+    }
+
+    private void rungLog(String name, String before, String after, boolean yes) {
+        summary.append(name).append('\n')
+               .append("   before: ").append(before).append('\n')
+               .append("   after : ").append(after).append('\n')
+               .append("   USER  : ").append(yes ? "AUDIO YES" : "no").append("\n\n");
     }
 
     // ── Bring-up broadcasts (exact actions/extras from SprdRadioManager$1) ──────
@@ -312,7 +387,7 @@ public class MainActivity extends Activity {
         try {
             if (vendorMp != null) { try { vendorMp.release(); } catch (Exception ignored) {} vendorMp = null; }
             vendorMp = new MediaPlayer();
-            vendorMp.setAudioStreamType(android.media.AudioManager.STREAM_MUSIC);
+            vendorMp.setAudioStreamType(AudioManager.STREAM_MUSIC);
             vendorMp.setDataSource("THIRDPARTY://MEDIAPLAYER_PLAYERTYPE_FM");
             vendorMp.prepare();
             vendorMp.start();
@@ -320,7 +395,124 @@ public class MainActivity extends Activity {
         } catch (Throwable e) { line("vendor MediaPlayer failed (expected on most units): " + e); }
     }
 
-    // ── State snapshot / calibration ───────────────────────────────────────────
+    // ── Data capture ───────────────────────────────────────────────────────────
+    /** Per-second state samples across a wait — catches the mute→unmute→powerUp arc. */
+    private void watch(String tag, int totalMs, int stepMs) {
+        int elapsed = 0;
+        while (elapsed < totalMs) { sleep(stepMs); elapsed += stepMs; line("  [" + tag + "] t+" + elapsed + "ms " + stateLine()); }
+    }
+
+    /** Compact one-line tuner + audio state for before/after + time-series. */
+    private String stateLine() {
+        StringBuilder s = new StringBuilder();
+        if (radio != null) {
+            try { s.append("st=").append(radio.getRadioState()); } catch (Exception e) { s.append("st=err"); }
+            try { s.append(" stereo=").append(radio.isStreroOn()); } catch (Exception ignored) {}
+            try { String rt = radio.getRtMessage(); s.append(" rt='").append(rt == null ? "" : rt).append('\''); } catch (Exception ignored) {}
+        } else s.append("(not bound)");
+        s.append(" src=").append(readSource());
+        if (am != null) {
+            try { s.append(" music=").append(am.isMusicActive()); } catch (Exception ignored) {}
+            try { s.append(" vol=").append(am.getStreamVolume(AudioManager.STREAM_MUSIC)); } catch (Exception ignored) {}
+        }
+        return s.toString();
+    }
+
+    private void audioSnap(String tag) {
+        if (am == null) { line("AUDIO[" + tag + "] (no AudioManager)"); return; }
+        StringBuilder s = new StringBuilder("AUDIO[" + tag + "]");
+        try { s.append(" musicActive=").append(am.isMusicActive()); } catch (Exception ignored) {}
+        try { s.append(" musicVol=").append(am.getStreamVolume(AudioManager.STREAM_MUSIC)).append('/').append(am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)); } catch (Exception ignored) {}
+        try { s.append(" mode=").append(am.getMode()); } catch (Exception ignored) {}
+        try { s.append(" a2dp=").append(am.isBluetoothA2dpOn()).append(" wired=").append(am.isWiredHeadsetOn()).append(" spk=").append(am.isSpeakerphoneOn()); } catch (Exception ignored) {}
+        line(s.toString());
+    }
+
+    /** Full getter sweep + audio snapshot + hidden-parcel-field hunt. */
+    private void richDump(String tag) {
+        line("---- RICH DUMP: " + tag + " ----");
+        if (radio == null) { line("  (not bound)"); }
+        else {
+            try { line("  radioType=" + radio.getRadioType() + " state=" + radio.getRadioState() + " scan=" + radio.getCurrentScanState()); } catch (Exception e) { line("  err " + e); }
+            try { Frequency f = radio.getCurrentFrequency(); if (f != null) line("  freq raw=" + f.freq + " (" + (f.freq / (double) freqMult) + " MHz) band=" + f.band + " PS='" + f.psName + "'"); } catch (Exception e) { line("  freq err " + e); }
+            try { line("  stereoOn=" + radio.isStreroOn() + " hasStereo=" + radio.isHasStrero() + " nearOn=" + radio.isNearOn() + " backSvc=" + radio.isRadioBackServiceOn()); } catch (Exception e) { line("  err " + e); }
+            try { line("  pty=" + radio.getPTYType() + " prefabPty=" + radio.getPrefabPTYType() + " rt='" + radio.getRtMessage() + "'"); } catch (Exception e) { line("  err " + e); }
+            StringBuilder rds = new StringBuilder();
+            for (int s = 0; s < 4; s++) { try { rds.append(s).append('=').append(radio.getRDSState(s)).append(' '); } catch (Exception e) { rds.append(s).append("=err "); } }
+            line("  rdsState " + rds);
+            try { RadioPoint[] pts = radio.getRadioPoint(); if (pts != null) { StringBuilder sb = new StringBuilder(); for (RadioPoint p : pts) sb.append(p).append("; "); line("  bandPlan " + sb); } } catch (Exception e) { line("  bandplan err " + e); }
+            try { Frequency[] pf = radio.getPrefabFrequency(); if (pf != null) { StringBuilder sb = new StringBuilder("[" + pf.length + "] "); for (Frequency p : pf) sb.append(p.freq).append('/').append(p.psName).append(','); line("  presets " + sb); } } catch (Exception e) { line("  presets err " + e); }
+        }
+        audioSnap(tag);
+        rawFrequencyParcelDump();
+    }
+
+    /** RAW getCurrentFrequency reply: report bytes left over after {band, ps, freq}
+     *  — those are fields our AIDL reconstruction truncates (a hidden RSSI/stereo/
+     *  lock would show here, and would differ between a strong and a weak station). */
+    private void rawFrequencyParcelDump() {
+        if (radio == null) return;
+        Parcel data = Parcel.obtain(), reply = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(RF_DESCRIPTOR);
+            radio.asBinder().transact(TXN_GET_CURRENT_FREQ, data, reply, 0);
+            reply.readException();
+            int present = reply.readInt();
+            if (present == 0) { line("  rawParcel: null result"); return; }
+            byte band = reply.readByte();
+            String ps = reply.readString();
+            int freq = reply.readInt();
+            int avail = reply.dataAvail();
+            line("  rawParcel: band=" + band + " ps='" + ps + "' freq=" + freq + " | LEFTOVER=" + avail + (avail > 0 ? " bytes  <-- HIDDEN FIELDS" : " (none)"));
+            StringBuilder extra = new StringBuilder();
+            while (reply.dataAvail() >= 4) extra.append("int:").append(reply.readInt()).append(' ');
+            while (reply.dataAvail() >= 1) extra.append("byte:").append((int) reply.readByte()).append(' ');
+            if (extra.length() > 0) line("    leftover -> " + extra);
+        } catch (Throwable e) { line("  rawParcel transact failed: " + e); }
+        finally { reply.recycle(); data.recycle(); }
+    }
+
+    /** Dump the last of the system log, filtered to the service's own FM/audio trail.
+     *  Only works if this app can read others' logs (root / READ_LOGS / permissive
+     *  ROM) — otherwise reports "unreadable", which is itself a datum. */
+    private void captureLogcat(String tag) {
+        try {
+            Process p = new ProcessBuilder("logcat", "-d", "-v", "time", "-t", "600").redirectErrorStream(true).start();
+            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String ln; int n = 0, hit = 0;
+            while ((ln = r.readLine()) != null) {
+                n++;
+                String low = ln.toLowerCase(Locale.US);
+                if (low.contains("nwdprobe")) continue;   // skip our own lines (avoid feedback)
+                if (low.contains("initfm") || low.contains("powerup") || low.contains("power up")
+                        || low.contains("audiofocus") || low.contains("setforceuse") || low.contains("forceuse")
+                        || low.contains("mpowerstatus") || low.contains("unmute") || low.contains("mutestream")
+                        || low.contains("opendev") || low.contains("opendevice") || low.contains("enablefmaudio")
+                        || low.contains("sprdfm") || low.contains("sprdradio") || low.contains("fmfeature")
+                        || low.contains("changesource") || low.contains("initfm")) {
+                    if (hit++ < 100) line("  LOGCAT[" + tag + "]| " + ln);
+                }
+            }
+            r.close(); p.destroy();
+            if (hit > 0) logcatReadable = true;
+            line("  (logcat " + tag + ": " + (n == 0 ? "empty/unreadable — need root/READ_LOGS" : hit + " service hits of " + n + " lines") + ")");
+        } catch (Throwable e) { line("  logcat capture failed (" + tag + "): " + e); }
+    }
+
+    private void getpropDump() {
+        line("---- getprop (radio/fm/mcu/tuner/source/antenna) ----");
+        try {
+            Process p = Runtime.getRuntime().exec("getprop");
+            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String ln; int n = 0;
+            while ((ln = r.readLine()) != null) {
+                if (ln.toLowerCase(Locale.US).matches(".*(radio|fm|mcu|tuner|source|antenna).*")) { line("  " + ln); n++; }
+            }
+            r.close();
+            line("  (" + n + " matching props)");
+        } catch (Throwable e) { line("  getprop failed: " + e); }
+    }
+
     private void calibrate() {
         if (radio == null) return;
         try {
@@ -330,16 +522,11 @@ public class MainActivity extends Activity {
         } catch (Exception e) { line("calibrate err " + e); }
     }
 
-    private void snap(String tag) {
-        StringBuilder s = new StringBuilder("SNAP[" + tag + "] src=" + readSource());
-        if (radio != null) {
-            try { s.append(" state=" + radio.getRadioState()); } catch (Exception e) { s.append(" state=err"); }
-            try { Frequency f = radio.getCurrentFrequency(); if (f != null) s.append(" freq=" + f.freq + " PS='" + f.psName + "'"); } catch (Exception e) { s.append(" freq=err"); }
-            try { s.append(" stereo=" + radio.isStreroOn()); } catch (Exception ignored) {}
-            try { s.append(" rt='" + radio.getRtMessage() + "'"); } catch (Exception ignored) {}
-            try { s.append(" backSvc=" + radio.isRadioBackServiceOn()); } catch (Exception ignored) {}
-        } else s.append(" (not bound)");
-        line(s.toString());
+    private double currentMhz() {
+        if (radio == null) return -1;
+        try { Frequency f = radio.getCurrentFrequency(); if (f != null && f.freq > 0) return f.freq / (double) freqMult; }
+        catch (Exception ignored) {}
+        return -1;
     }
 
     private int readSource() { try { return Settings.System.getInt(getContentResolver(), SRC_KEY, -1); } catch (Exception e) { return -1; } }
@@ -367,8 +554,9 @@ public class MainActivity extends Activity {
         for (String a : new String[]{
                 "com.nwd.action.ACTION_APP_IN_OUT", "com.nwd.ACTION_MEDIA_PLAY",
                 "com.nwd.action.ACTION_CHANGE_SOURCE", "com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE",
-                "com.nwd.action.ACTION_MCU_STATE_CHANGE", "com.nwd.android.ACTION_EXIT_ARM_FM_RAIDO",
-                "com.nwd.radio.RDS" }) f.addAction(a);
+                "com.nwd.action.ACTION_SOURCE_CHANGED", "com.nwd.action.ACTION_MCU_STATE_CHANGE",
+                "com.nwd.action.ACTION_MCU_POWER_OFF", "com.nwd.android.ACTION_EXIT_ARM_FM_RAIDO",
+                "com.nwd.action.ACTION_VOLUME_STATE_CHANGE", "com.nwd.radio.RDS" }) f.addAction(a);
         try {
             if (Build.VERSION.SDK_INT >= 34) registerReceiver(nwdRx, f, Context.RECEIVER_EXPORTED);
             else registerReceiver(nwdRx, f);
@@ -377,9 +565,6 @@ public class MainActivity extends Activity {
     }
 
     // ── Inline prompt primitive (called from the worker thread) ─────────────────
-    /** Post a question with one button per option; block the worker until tapped.
-     *  Buttons live in the activity's own view, so this survives leaving/returning
-     *  to the app and never window-leaks. */
     private String prompt(String text, String... options) {
         line("Q: " + text.replace('\n', ' '));
         answer.clear();
