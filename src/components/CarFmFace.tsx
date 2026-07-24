@@ -23,7 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getNearbyStations, callsignForFreq } from '../services/stationFinder';
 import type { NearbyStation } from '../services/stationTypes';
-import { GearIcon, GpsSatellite, MagnifierTower, MotionCar, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
+import { GearIcon, GpsSatellite, MagnifierTower, MotionCar, PowerIcon, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
 import { useMotion } from '../services/motion';
 import { useGpsFix } from '../services/gps';
 import LogoTile, { callsignFrom, useStationLogo, useStationDisplay } from './carfm/LogoTile';
@@ -81,6 +81,12 @@ export interface CarFmFaceProps {
   onReorderPreset: (order: number[]) => void;   // new order as original indices
   onRemovePreset: (index: number) => void;
   onSaveStationPreset: (name: string, freqMhz: number) => void;  // nearby hold
+  /** Whether this app holds FM audio priority on the shared bus (§4.7). Default
+   *  true. NOT a mute — false means priority is released to another source and the
+   *  face goes flat/grayscale. */
+  audioActive?: boolean;
+  onClaimAudio?: () => void;     // inactive → take priority (power button)
+  onReleaseAudio?: () => void;   // active → give it up
 }
 
 const CHANNEL_HZ = 100_000;             // 0.1 MHz — the design's tune/seek step
@@ -149,6 +155,46 @@ function DrivingStatusIcons({ pal }: { pal: CarFmPalette }) {
             accessibilityLabel={hasFix ? 'GPS lock' : 'No GPS lock'}>
         <GpsSatellite size={30} color={hasFix ? pal.blue : pal.text} />
       </View>
+    </View>
+  );
+}
+
+/** Audio-priority (claim/release) power button, §4.7 — mirrors the ★ top-right.
+ *  Drawn in full colour ABOVE the grayscaled face: a dim outline when active; solid
+ *  amber + white glyph + a slow (~1.8s) expanding pulse ring when priority is
+ *  released, to draw the eye back. NOT a mute. */
+function PowerButton({ off, size, radius, pal, onClaim, onRelease, style }: {
+  off: boolean; size: number; radius: number; pal: CarFmPalette;
+  onClaim?: () => void; onRelease?: () => void; style?: any;
+}) {
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!off) { pulse.setValue(0); return; }
+    const loop = Animated.loop(Animated.timing(pulse, { toValue: 1, duration: 1800, easing: Easing.out(Easing.ease), useNativeDriver: true }));
+    loop.start();
+    return () => loop.stop();
+  }, [off, pulse]);
+  const ringScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.9] });
+  const ringOpacity = pulse.interpolate({ inputRange: [0, 0.7, 1], outputRange: [0.5, 0, 0] });
+  return (
+    <View style={[{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }, style]} pointerEvents="box-none">
+      {off ? (
+        <Animated.View pointerEvents="none" style={{ position: 'absolute', width: size, height: size, borderRadius: radius, backgroundColor: '#FFAE1A', opacity: ringOpacity, transform: [{ scale: ringScale }] }} />
+      ) : null}
+      <Pressable
+        onPress={() => (off ? onClaim?.() : onRelease?.())}
+        style={({ pressed }) => [{
+          width: size, height: size, borderRadius: radius,
+          alignItems: 'center', justifyContent: 'center',
+          backgroundColor: off ? '#FFAE1A' : 'transparent',
+          borderWidth: 1, borderColor: off ? 'transparent' : pal.border,
+        }, pressed && { opacity: 0.6 }]}
+        accessibilityRole="button"
+        accessibilityState={{ selected: !off }}
+        accessibilityLabel={off ? 'Claim FM audio priority' : 'Release FM audio priority'}
+      >
+        <PowerIcon size={Math.round(size * 0.58)} color={off ? '#FFFFFF' : pal.dim} />
+      </Pressable>
     </View>
   );
 }
@@ -286,10 +332,20 @@ export default function CarFmFace(props: CarFmFaceProps) {
     rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
     onSetAutostart, onSetTheme, onRetryTuner, presets, nwdActive, onHardwareSeek,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
+    audioActive, onClaimAudio, onReleaseAudio,
   } = props;
   const insets = useSafeAreaInsets();
   const scheme = useColorScheme();
   const pal = (theme === 'light' || (theme !== 'dark' && scheme === 'light')) ? LIGHT : DARK;
+  const dark = pal === DARK;
+  // Audio priority released (§4.7): the whole face goes flat/grayscale + "dead".
+  // `off` gates the grayscale filter, veils, depth removal and indicator off-states.
+  const off = audioActive === false;
+  // RN filter grayscale (New Architecture) — applied to each face region's content;
+  // the power button is drawn in full color ABOVE it (design's Android guidance).
+  const GS: any = off ? { filter: [{ grayscale: 1 }] } : null;
+  const heroVeilColor = dark ? 'rgba(0,0,0,0.42)' : 'rgba(72,82,96,0.26)';
+  const screenVeilColor = dark ? 'rgba(0,0,0,0.50)' : 'rgba(24,32,46,0.34)';
 
   // A car radio's display never sleeps mid-drive: keep the screen awake for as
   // long as the face is mounted (released automatically on unmount).
@@ -574,11 +630,11 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // hero-swap FLIP first (it captures resting geometry), then tune.
   const stepPreset = useCallback((dir: 1 | -1) => {
     if (items.length === 0) return;
-    startFlip(dir);
+    if (!off) startFlip(dir);   // §4.7/§8: instant swaps (no hero animation) while audio is released
     const i = activeIndex >= 0 ? activeIndex : (dir > 0 ? -1 : 0);
     const n = ((i + dir) % items.length + items.length) % items.length;
     onTuneHz(Math.round(items[n].frequencyMhz * 1e6));
-  }, [items, activeIndex, onTuneHz, startFlip]);
+  }, [items, activeIndex, onTuneHz, startFlip, off]);
 
   const onNearbyTune = useCallback((st: NearbyStation) => {
     onTuneHz(Math.round(st.frequencyMhz * 1e6));
@@ -597,31 +653,34 @@ export default function CarFmFace(props: CarFmFaceProps) {
           render grey (not amber) to signal "not live", and the dB number is
           suppressed (we have no measured level). Zero + grey when there's no fix
           or no dataset entry. RTL-SDR keeps the live amber meter + dB readout. */}
-      <SignalWaves size={L.signalIcon} strength={waveStrength(signalDb)} on={nwdActive ? pal.dim : pal.amber} off={pal.meterEmpty} />
+      <SignalWaves size={L.signalIcon} strength={off ? 0 : waveStrength(signalDb)} on={nwdActive ? pal.dim : pal.amber} off={pal.meterEmpty} />
       <Text style={[styles.signalText, { fontSize: L.signalDb, color: pal.dim }]}>
-        {nwdActive ? 'EST' : signalDb == null ? '—' : `${Math.round(signalDb)} dB`}
+        {off ? '--' : nwdActive ? 'EST' : signalDb == null ? '—' : `${Math.round(signalDb)} dB`}
       </Text>
     </View>
   );
+  // §4.7 off: the STEREO/MONO pill goes EMPTY (outline, no waves, no text) and all
+  // tells drop to their dim/off state.
+  const so = stereo && !off;
   const stereoCluster = (
     <View style={styles.stereoCol}>
       <View style={[styles.stereoRow, {
         minHeight: L.stereoH, paddingHorizontal: L.stereoPadH, borderRadius: L.stereoRadius,
         minWidth: L.stereoMinW, borderWidth: 1.5,
-        borderColor: stereo ? pal.blue : pal.border,
-        backgroundColor: stereo ? pal.blueFill : 'transparent',
+        borderColor: so ? pal.blue : pal.border,
+        backgroundColor: so ? pal.blueFill : 'transparent',
       }]}>
-        {stereo ? <StereoWave color={pal.blue} flip w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
-        <Text style={[styles.stereoText, { fontSize: L.stereoFont, color: stereo ? pal.blue : pal.dim }]}>
-          {stereo ? 'STEREO' : 'MONO'}
+        {so ? <StereoWave color={pal.blue} flip w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
+        <Text style={[styles.stereoText, { fontSize: L.stereoFont, color: so ? pal.blue : pal.dim }]}>
+          {off ? '' : stereo ? 'STEREO' : 'MONO'}
         </Text>
-        {stereo ? <StereoWave color={pal.blue} w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
+        {so ? <StereoWave color={pal.blue} w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
       </View>
       <View style={styles.tellStrip}>
-        <Tell label="RDS" on={!!rdsOk} pal={pal} fontSize={L.tellFont} />
+        <Tell label="RDS" on={!off && !!rdsOk} pal={pal} fontSize={L.tellFont} />
         <Tell label="HD" on={false} pal={pal} fontSize={L.tellFont} />
-        {ta ? <Tell label="TA" on pulse pal={pal} fontSize={L.tellFont} /> : <Tell label="TP" on={!!tp} pal={pal} fontSize={L.tellFont} />}
-        <Tell label="AF" on={!!af} pal={pal} fontSize={L.tellFont} />
+        {ta && !off ? <Tell label="TA" on pulse pal={pal} fontSize={L.tellFont} /> : <Tell label="TP" on={!off && !!tp} pal={pal} fontSize={L.tellFont} />}
+        <Tell label="AF" on={!off && !!af} pal={pal} fontSize={L.tellFont} />
       </View>
     </View>
   );
@@ -644,7 +703,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
           Tuner error is a hard either/or with the status cluster: with no tuner
           session there is no signal/RDS/stereo/genre to read, so the whole
           cluster is replaced by the one fault pill (design addendum). */}
-      <View style={styles.header}>
+      <View style={[styles.header, GS]}>
         {tunerError ? (
         <View style={[styles.tunerErrPill, { borderColor: pal.amber, backgroundColor: pal.amberFill }]}>
           <WarningTriangle size={26} color={pal.amber} />
@@ -662,7 +721,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             </View>
             <View style={styles.zoneCenter}>
               {stereoCluster}
-              {ptyText ? (
+              {ptyText && !off ? (
                 <Text numberOfLines={1} style={[styles.ptyCentered, { fontSize: L.ptyFont, color: pal.dim }]}>{ptyText}</Text>
               ) : null}
             </View>
@@ -672,7 +731,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
           <View style={styles.headerLeft}>
             {signalCluster}
             {stereoCluster}
-            {ptyText ? (
+            {ptyText && !off ? (
               <View style={[styles.ptyWrap, { maxWidth: 200 }]}>
                 <Text numberOfLines={1} style={[styles.ptyText, { fontSize: L.ptyFont, color: pal.dim }]}>{ptyText}</Text>
               </View>
@@ -749,6 +808,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 backgroundColor: saved ? pal.blueFill : 'transparent',
                 borderWidth: 1, borderColor: saved ? 'transparent' : pal.border,
               },
+              GS,   // grayscales with the rest of the face when audio is released
               pressed && { opacity: 0.55 },
             ]}
             accessibilityRole="button"
@@ -757,6 +817,19 @@ export default function CarFmFace(props: CarFmFaceProps) {
           >
             <StarIcon size={L.s(30)} filled={saved} color={pal.amber} outline={pal.dim} />
           </Pressable>
+        );
+        // §4.7 power button — mirrors the ★, TOP-LEFT, drawn in full colour above the
+        // grayscaled hero content. Claims/releases FM audio priority (NOT a mute).
+        const heroPower = (
+          <PowerButton
+            off={off}
+            size={L.star}
+            radius={L.s(16)}
+            pal={pal}
+            onClaim={onClaimAudio}
+            onRelease={onReleaseAudio}
+            style={{ position: 'absolute', zIndex: 7, top: L.s(tall ? 16 : 18), left: L.s(tall ? 16 : 18) }}
+          />
         );
         const heroCenter = scan ? (
           <View style={styles.scanWrap}>
@@ -823,7 +896,8 @@ export default function CarFmFace(props: CarFmFaceProps) {
               style={[
                 { marginRight: side === 'left' ? overlap : 0, marginLeft: side === 'right' ? overlap : 0 },
                 { transform: isLanding ? flip!.landTransform : [{ scale: PEEK_SCALE }] },
-                { opacity: isEntering ? flip!.enterOpacity : PEEK_OPACITY },
+                { opacity: isEntering ? flip!.enterOpacity : (off ? 0.28 : PEEK_OPACITY) },   // §4.7: peeks dim further when dead
+                GS,
               ]}
             >
               <SidePresetCard name={preset.name} freqMhz={preset.frequencyMhz} pal={pal} side={side} width={peekW} k={k} onPress={onPress} />
@@ -841,11 +915,17 @@ export default function CarFmFace(props: CarFmFaceProps) {
                   width: tall ? tallHeroW : L.heroCardW, backgroundColor: pal.panel, borderColor: pal.border,
                   paddingVertical: L.s(tall ? 30 : 24), paddingHorizontal: L.s(tall ? 26 : 30), gap: L.s(14),
                 },
+                off && styles.heroCardFlat,   // §4.7: drop the depth shadow when dead
                 flip ? { transform: flip.centerTransform } : null,
               ]}
             >
-              {heroCenter}
+              {/* Grayscaled content (§4.7); the power button is drawn in colour above it. */}
+              <View style={[styles.heroContent, { gap: L.s(14) }, GS]}>
+                {heroCenter}
+              </View>
               {!scan ? heroStar : null}
+              {off ? <View pointerEvents="none" style={[StyleSheet.absoluteFill, { borderRadius: 28, backgroundColor: heroVeilColor }]} /> : null}
+              {!scan ? heroPower : null}
             </Animated.View>
             {nextP ? renderPeek('right', nextP, () => stepPreset(1)) : null}
             {flip ? (
@@ -869,7 +949,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         // column of [heroRow, rtZone]) — NOT inside the hero card. Keeping it out
         // of the card matches the compact hero + full-width RT bar in the refs.
         const rtBand = (
-          <View style={[styles.rtZone, { height: L.rtZoneH }, tall && { marginTop: 'auto', marginBottom: 'auto' }]}>
+          <View style={[styles.rtZone, { height: L.rtZoneH }, tall && { marginTop: 'auto', marginBottom: 'auto' }, off && { opacity: 0 }]}>
             <RadioTextStrip
               text={rt}
               height={L.rtHeight}
@@ -880,15 +960,22 @@ export default function CarFmFace(props: CarFmFaceProps) {
           </View>
         );
         return (
-          <View style={tall ? styles.heroBandTall : styles.heroBand}>
+          <View style={[tall ? styles.heroBandTall : styles.heroBand, off && { zIndex: 6 }]}>
             {heroRow}
             {rtBand}
           </View>
         );
       })()}
 
+      {/* §4.7 screen veil — darker veil over the rest of the face; the hero band
+          (zIndex 6) rises above it and carries its own lighter veil. */}
+      {off ? (
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: screenVeilColor, zIndex: 5 }]} />
+      ) : null}
+
       {/* ── Presets band ── (grows to fill in the tall track; NEARBY + nav move to
           the top bar there, so they're suppressed in-band) */}
+      <View style={GS}>
       <PresetsBand
         pal={pal}
         presets={items}
@@ -925,6 +1012,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
           })();
         }}
       />
+      </View>
       </View>
 
       {/* ── Modals ── (device-level, capped to the surface per §6) */}
@@ -1025,6 +1113,10 @@ const styles = StyleSheet.create({
     elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 22, shadowOffset: { width: 0, height: 14 },
   },
   heroCardZ: { zIndex: 3 },
+  // §4.7: the hero content (everything except the colored power button) lives in
+  // this stretch-fill wrapper so the grayscale filter can be applied to it alone.
+  heroContent: { alignSelf: 'stretch', flexGrow: 1, flexShrink: 1, alignItems: 'center', justifyContent: 'center' },
+  heroCardFlat: { elevation: 0, shadowOpacity: 0 },
   // Snapshot of the far peek leaving the strip during a hero swap; fades in place
   // over its old slot while the landing peek slides in (design fadeClone).
   cloneOverlay: { position: 'absolute', zIndex: 4, alignItems: 'center', justifyContent: 'center' },

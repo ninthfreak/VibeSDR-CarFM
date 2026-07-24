@@ -3536,6 +3536,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   // CarFM settings: theme override + boot autostart, persisted.
   const [fmTheme, setFmTheme] = useState<'system' | 'light' | 'dark'>('system');
   const [fmAutostart, setFmAutostart] = useState(true);
+  // §4.7 audio-priority (claim/release) on the hero power button. Visual state for
+  // now; the real native claim (ACTION_APP_IN_OUT app_id=8) / release (ExitFm)
+  // hooks in with task #14 once the probe verifies it on-device.
+  const [fmAudioActive, setFmAudioActive] = useState(true);
+  const onFmClaimAudio = useCallback(() => { setFmAudioActive(true); }, []);
+  const onFmReleaseAudio = useCallback(() => { setFmAudioActive(false); }, []);
   useEffect(() => {
     if (!carFm) return;
     AsyncStorage.getItem('@carfm/theme_v1')
@@ -4716,6 +4722,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           onReorderPreset={onFmReorderPreset}
           onRemovePreset={onFmRemovePreset}
           onSaveStationPreset={onFmSaveStationPreset}
+          audioActive={fmAudioActive}
+          onClaimAudio={onFmClaimAudio}
+          onReleaseAudio={onFmReleaseAudio}
         />
       ) : null}
     </View>
