@@ -29,6 +29,7 @@
       on-preset-hold="{{ startReorder }}" on-reorder="{{ reorderPresets }}" on-preset-logo="{{ editLogo }}" on-preset-remove="{{ removePreset }}" on-done-reorder="{{ doneReorder }}"
       on-scan-down="{{ scanDown }}" on-scan-up="{{ scanUp }}" on-prev-preset="{{ prevPreset }}" on-next-preset="{{ nextPreset }}"
       on-nearby="{{ openPicker }}" on-settings="{{ openSettings }}" on-save="{{ toggleSave }}" on-preset-tap="{{ tuneTo }}"
+      audio-active="{{ audioActive }}" on-claim-audio="{{ claimAudio }}" on-release-audio="{{ releaseAudio }}"
       tall="{{ tall }}" two-rows="{{ twoRows }}" landscape="{{ landscape }}"
       style="width:100%;height:100%;" hint-size="100%,100%"></dc-import>
 
@@ -150,7 +151,7 @@ class Component extends DCLogic {
         { name:'WQLF-FM', freq:'102.1' },
         { name:'WWHG-FM', freq:'105.9' }
       ],
-      numpadOpen: false, pickerOpen: false, settingsOpen: false, logoSearchFor: null, logoDisplay: {}, npBuf: '', npError: false, reordering: false, logoNote: '', scale: 1, scanning: false, scanDir: 0, gpsLocked: true, inMotion: true, gpsLocked: true, scanDisplay: '', themeChoice: 'system', autostart: true
+      numpadOpen: false, pickerOpen: false, settingsOpen: false, logoSearchFor: null, logoDisplay: {}, npBuf: '', npError: false, reordering: false, logoNote: '', scale: 1, scanning: false, scanDir: 0, gpsLocked: true, inMotion: true, gpsLocked: true, scanDisplay: '', themeChoice: 'system', autostart: true, audioActive: true
     };
   }
 
@@ -281,6 +282,8 @@ class Component extends DCLogic {
   setThemeChoice = (v) => this.setState({ themeChoice: v });
   setAutostart = (on) => this.setState({ autostart: on });
   retryTuner = () => {};
+  claimAudio = () => this.setState({ audioActive: true });
+  releaseAudio = () => this.setState({ audioActive: false });
   openAdvanced = () => this.setState({ settingsOpen: false });
   noop = () => {};
 
@@ -377,6 +380,7 @@ class Component extends DCLogic {
       openNumpad: this.openNumpad, openPicker: this.openPicker, openSettings: this.openSettings, closeAll: this.closeAll, cancelNumpad: this.cancelNumpad, noop: this.noop,
       themeChoice: s.themeChoice, autostart: s.autostart,
       setThemeChoice: this.setThemeChoice, setAutostart: this.setAutostart, retryTuner: this.retryTuner, openAdvanced: this.openAdvanced,
+      audioActive: s.audioActive, claimAudio: this.claimAudio, releaseAudio: this.releaseAudio,
       tuneUp: this.tuneUp, tuneDown: this.tuneDown, prevPreset: this.prevPreset, nextPreset: this.nextPreset,
       startReorder: this.startReorder, doneReorder: this.doneReorder, reorderPresets: this.reorderPresets, editLogo: this.editLogo, removePreset: this.removePreset,
       logoSearchOpen: !!s.logoSearchFor, closeLogo: this.closeLogo, confirmLogo: this.confirmLogo,

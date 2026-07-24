@@ -18,6 +18,7 @@
 @keyframes carfm-scan-down { 0% { transform: translateY(-14px); opacity: 0.25; } 100% { transform: translateY(0); opacity: 1; } }
 @keyframes carfm-ta-pulse { 0%,100% { opacity:1; transform:scale(1.3); } 50% { opacity:0.5; transform:scale(1.45); } }
 @keyframes carfm-motion-flash { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.4; transform:scale(1.07); } }
+@keyframes carfm-power-pulse { 0% { transform:scale(1); box-shadow:0 0 0 0 rgba(255,160,30,0.55); } 70% { transform:scale(1.07); box-shadow:0 0 0 15px rgba(255,160,30,0); } 100% { transform:scale(1); box-shadow:0 0 0 0 rgba(255,160,30,0); } }
 [data-preset-grid]::-webkit-scrollbar { display: none; }
 </style>
 </helmet>
@@ -35,7 +36,7 @@
         <div style="{{ okClusterStyle }}">
       <div style="{{ signalWrapStyle }}">
         {{ signalIcon }}
-        <span style="{{ signalDbStyle }}">{{ dbText }}</span>
+        <span style="{{ signalDbStyle }}"><span style="{{ dbNumStyle }}">{{ dbNum }}</span> dB</span>
       </div>
       <sc-if value="{{ stereoInline }}" hint-placeholder-val="{{ true }}">
         <div style="{{ topRowStyle }}">
@@ -135,7 +136,10 @@
     </div>
   </div>
 
-  <div style="{{ heroBandStyle }}">
+  <div style="{{ heroBandStyle }}" ref="{{ heroBandRef }}">
+    <sc-if value="{{ notScanning }}" hint-placeholder-val="{{ true }}">
+      <div style="{{ audioBtnStyle }}" onClick="{{ onAudioToggle }}">{{ audioIcon }}</div>
+    </sc-if>
     <div style="{{ heroRowStyle }}">
       <sc-if value="{{ wideHero }}" hint-placeholder-val="{{ false }}">
         <div style="{{ prevCardStyle }}" onClick="{{ navPrev }}" ref="{{ prevCardRef }}">
@@ -174,6 +178,9 @@
         </sc-if>
         <sc-if value="{{ oob }}" hint-placeholder-val="{{ false }}">
           <div style="{{ capStyle }}">{{ capText }}</div>
+        </sc-if>
+        <sc-if value="{{ off }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ heroVeilStyle }}"></div>
         </sc-if>
       </div>
       <sc-if value="{{ wideHero }}" hint-placeholder-val="{{ false }}">
@@ -253,12 +260,17 @@
     </sc-if>
   </div>
 
+  <sc-if value="{{ off }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ screenVeilStyle }}"></div>
+  </sc-if>
+
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1024,&quot;height&quot;:600},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light'|'dark'&quot;},&quot;freq&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;101.1&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;ps&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;BBC R2&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;logoText&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;R2&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;rt&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Now playing: Fleetwood Mac — Dreams&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;stereo&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;rds&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;tp&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;ta&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;af&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;hd&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:0,&quot;min&quot;:0,&quot;max&quot;:3,&quot;tsType&quot;:&quot;number&quot;},&quot;pty&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Rock&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;signalDb&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:-58,&quot;min&quot;:-120,&quot;max&quot;:0,&quot;unit&quot;:&quot;dB&quot;,&quot;tsType&quot;:&quot;number&quot;},&quot;segs&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:10,&quot;min&quot;:0,&quot;max&quot;:12,&quot;tsType&quot;:&quot;number&quot;},&quot;outOfBand&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;scroll&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;saved&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;reordering&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;nearbyLine&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#111111&quot;,&quot;options&quot;:[&quot;#111111&quot;,&quot;#FFFFFF&quot;,&quot;#1B74E4&quot;,&quot;#0E7C4A&quot;,&quot;#B0402A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyFill&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#1B74E4&quot;,&quot;options&quot;:[&quot;#1B74E4&quot;,&quot;#FFFFFF&quot;,&quot;#111111&quot;,&quot;#E9EEF5&quot;,&quot;#0E7C4A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyGlass&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#FFFFFF29&quot;,&quot;options&quot;:[&quot;#FFFFFF29&quot;,&quot;#FFFFFF&quot;,&quot;#DCE7F5&quot;,&quot;#111111&quot;,&quot;#1B74E4&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyBorder&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyBorderColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#111111&quot;,&quot;options&quot;:[&quot;#111111&quot;,&quot;#FFFFFF&quot;,&quot;#D5DAE1&quot;,&quot;#1B74E4&quot;,&quot;#0E7C4A&quot;,&quot;#B0402A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyLineDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#E9EEF4&quot;,&quot;options&quot;:[&quot;#E9EEF4&quot;,&quot;#FFFFFF&quot;,&quot;#4A9EFF&quot;,&quot;#7FD6A0&quot;,&quot;#E6A24A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyFillDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#212B38&quot;,&quot;options&quot;:[&quot;#212B38&quot;,&quot;#161E29&quot;,&quot;#2A3644&quot;,&quot;#0E2A52&quot;,&quot;#FFFFFF&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyGlassDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#2A3644&quot;,&quot;options&quot;:[&quot;#2A3644&quot;,&quot;#212B38&quot;,&quot;#0E2A52&quot;,&quot;#000000&quot;,&quot;#E9EEF4&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyBorderColorDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#3A4655&quot;,&quot;options&quot;:[&quot;#3A4655&quot;,&quot;#FFFFFF&quot;,&quot;#4A9EFF&quot;,&quot;#7FD6A0&quot;,&quot;#E6A24A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;seekStyle&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;seekbar&quot;,&quot;chevrons&quot;,&quot;ffwd&quot;,&quot;skip&quot;],&quot;default&quot;:&quot;seekbar&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;presets&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{name:string;freq:string;active?:boolean}[]&quot;}}">
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1024,&quot;height&quot;:600},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light'|'dark'&quot;},&quot;freq&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;101.1&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;ps&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;BBC R2&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;logoText&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;R2&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;rt&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Now playing: Fleetwood Mac — Dreams&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;audioActive&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;stereo&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;rds&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;tp&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;ta&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;af&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;hd&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:0,&quot;min&quot;:0,&quot;max&quot;:3,&quot;tsType&quot;:&quot;number&quot;},&quot;pty&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Rock&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;signalDb&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:-58,&quot;min&quot;:-120,&quot;max&quot;:0,&quot;unit&quot;:&quot;dB&quot;,&quot;tsType&quot;:&quot;number&quot;},&quot;segs&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:10,&quot;min&quot;:0,&quot;max&quot;:12,&quot;tsType&quot;:&quot;number&quot;},&quot;outOfBand&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;scroll&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;saved&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;reordering&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;nearbyLine&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#111111&quot;,&quot;options&quot;:[&quot;#111111&quot;,&quot;#FFFFFF&quot;,&quot;#1B74E4&quot;,&quot;#0E7C4A&quot;,&quot;#B0402A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyFill&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#1B74E4&quot;,&quot;options&quot;:[&quot;#1B74E4&quot;,&quot;#FFFFFF&quot;,&quot;#111111&quot;,&quot;#E9EEF5&quot;,&quot;#0E7C4A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyGlass&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#FFFFFF29&quot;,&quot;options&quot;:[&quot;#FFFFFF29&quot;,&quot;#FFFFFF&quot;,&quot;#DCE7F5&quot;,&quot;#111111&quot;,&quot;#1B74E4&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyBorder&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyBorderColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#111111&quot;,&quot;options&quot;:[&quot;#111111&quot;,&quot;#FFFFFF&quot;,&quot;#D5DAE1&quot;,&quot;#1B74E4&quot;,&quot;#0E7C4A&quot;,&quot;#B0402A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon&quot;},&quot;nearbyLineDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#E9EEF4&quot;,&quot;options&quot;:[&quot;#E9EEF4&quot;,&quot;#FFFFFF&quot;,&quot;#4A9EFF&quot;,&quot;#7FD6A0&quot;,&quot;#E6A24A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyFillDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#212B38&quot;,&quot;options&quot;:[&quot;#212B38&quot;,&quot;#161E29&quot;,&quot;#2A3644&quot;,&quot;#0E2A52&quot;,&quot;#FFFFFF&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyGlassDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#2A3644&quot;,&quot;options&quot;:[&quot;#2A3644&quot;,&quot;#212B38&quot;,&quot;#0E2A52&quot;,&quot;#000000&quot;,&quot;#E9EEF4&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;nearbyBorderColorDark&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#3A4655&quot;,&quot;options&quot;:[&quot;#3A4655&quot;,&quot;#FFFFFF&quot;,&quot;#4A9EFF&quot;,&quot;#7FD6A0&quot;,&quot;#E6A24A&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Nearby icon (dark)&quot;},&quot;seekStyle&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;seekbar&quot;,&quot;chevrons&quot;,&quot;ffwd&quot;,&quot;skip&quot;],&quot;default&quot;:&quot;seekbar&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;presets&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{name:string;freq:string;active?:boolean}[]&quot;}}">
 class Component extends DCLogic {
-  state = { canPrev: false, canNext: false, thumbW: 0.3, thumbL: 0, showBar: false, dragFreq: null, dragDX: 0, dragDY: 0, shifts: {} };
+  state = { canPrev: false, canNext: false, thumbW: 0.3, thumbL: 0, showBar: false, dragFreq: null, dragDX: 0, dragDY: 0, shifts: {}, btnPos: null };
   gridRef = React.createRef();
+  heroBandRef = React.createRef();
   trackRef = React.createRef();
   heroCardRef = React.createRef();
   prevCardRef = React.createRef();
@@ -279,6 +291,8 @@ class Component extends DCLogic {
     return clone;
   }
   snapHero(dir) {
+    const aa = this.props.audioActive;
+    if (aa === false || aa === 'false' || aa === 0 || aa === '0') return; // no card animation while audio is off
     const el = this.heroCardRef.current; if (!el || !el.parentElement) return;
     const dropEl = dir > 0 ? this.prevCardRef.current : this.nextCardRef.current; // far card that fades away
     const fadeClone = this.cloneOver(dropEl);
@@ -390,7 +404,17 @@ class Component extends DCLogic {
     });
   };
   componentWillUnmount() { window.removeEventListener('resize', this.updateScroll); clearTimeout(this._hold); clearTimeout(this._settleT); clearTimeout(this._clickT); }
+  measureBtn = () => {
+    const h = this.heroCardRef.current, b = this.heroBandRef.current;
+    if (!h || !b) return;
+    let el = h, x = 0, y = 0;
+    while (el && el !== b) { x += el.offsetLeft; y += el.offsetTop; el = el.offsetParent; }
+    if (el !== b) return;
+    const w = h.offsetWidth, c = this.state.btnPos;
+    if (!c || c.x !== x || c.y !== y || c.w !== w) this.setState({ btnPos: { x, y, w } });
+  };
   updateScroll = () => {
+    this.measureBtn();
     const el = this.gridRef.current;
     if (!el) return;
     const canPrev = el.scrollLeft > 4;
@@ -493,6 +517,10 @@ class Component extends DCLogic {
     const font = '"Atkinson Hyperlegible", system-ui, sans-serif';
 
     const stereo = bool(p.stereo);
+    const audioActive = (p.audioActive === undefined || p.audioActive === '') ? true : bool(p.audioActive);
+    const off = !audioActive;
+    const gs = off ? 'grayscale(1)' : 'none';
+    const bp = this.state.btnPos;
     const rds = bool(p.rds);
     const tp = bool(p.tp);
     const af = bool(p.af);
@@ -515,7 +543,7 @@ class Component extends DCLogic {
     const ps = (p.ps || '').trim();
     const rtRaw = (p.rt || '').trim();
     const segs = Math.max(0, Math.min(12, Number(p.segs) || 0));
-    const db = (p.signalDb === undefined || p.signalDb === null || p.signalDb === '') ? '--' : String(p.signalDb);
+    const db = off ? '--' : ((p.signalDb === undefined || p.signalDb === null || p.signalDb === '') ? '--' : String(p.signalDb));
     const presets = Array.isArray(p.presets) ? p.presets : [];
     const logo = (p.logoText || '').trim();
     const heroLogoUrl = (p.logoUrl || '').trim();
@@ -530,7 +558,7 @@ class Component extends DCLogic {
       style: { flex:1, height:'100%', borderRadius:3, backgroundColor: i < segs ? t.amber : t.meterEmpty }
     }));
 
-    const sigLvl = Math.max(0, Math.min(4, Math.round(segs / 3)));
+    const sigLvl = off ? 0 : Math.max(0, Math.min(4, Math.round(segs / 3)));
     const arc = (d, on) => React.createElement('path', { key:d, d, fill:'none', stroke: on ? t.amber : t.meterEmpty, strokeWidth:2.2, strokeLinecap:'round' });
     const signalIcon = React.createElement('svg', { width: tall ? 46 : 33, height: tall ? 30 : 22, viewBox:'0 0 34 24' }, [
       React.createElement('circle', { key:'dot', cx:15, cy:12, r:2.6, fill: sigLvl >= 1 ? t.amber : t.meterEmpty }),
@@ -545,6 +573,10 @@ class Component extends DCLogic {
     const starIcon = React.createElement('svg', { width:34, height:34, viewBox:'0 0 24 24' },
       React.createElement('path', { d:'M12 17.3 L18.2 21 16.5 13.9 22 9.2 14.8 8.6 12 2 9.2 8.6 2 9.2 7.5 13.9 5.8 21 Z', fill: saved ? t.amber : 'none', stroke: saved ? t.amber : t.dim, strokeWidth:1.7, strokeLinejoin:'round' })
     );
+    const audioIcon = React.createElement('svg', { width:32, height:32, viewBox:'0 0 24 24', fill:'none', stroke: off ? '#FFFFFF' : t.dim, strokeWidth:2, strokeLinecap:'round', strokeLinejoin:'round' }, [
+      React.createElement('path', { key:'arc', d:'M18.36 6.64a9 9 0 1 1-12.73 0' }),
+      React.createElement('line', { key:'stem', x1:12, y1:3, x2:12, y2:12 })
+    ]);
     const towerAt = (cx, cy, k) => {
       k = k || 1;
       const topY = cy - 3.6 * k, baseY = cy + 5.6 * k, topH = 1.1 * k, baseH = 3.7 * k;
@@ -688,7 +720,7 @@ class Component extends DCLogic {
       ? { width:'92%', maxWidth:184, aspectRatio:'16 / 10', borderRadius:12, flexShrink:0, overflow:'hidden', backgroundColor:'transparent', display:'flex', alignItems:'center', justifyContent:'center' }
       : { width:'92%', maxWidth:184, aspectRatio:'16 / 10', borderRadius:12, flexShrink:0, backgroundColor: pp && pp.logoBg ? pp.logoBg : t.raised, color: pp && pp.logoFg ? pp.logoFg : '#FFFFFF', border: pp && pp.logoBg ? 'none' : ('1px solid ' + t.border), display:'flex', alignItems:'center', justifyContent:'center', fontSize:26, fontWeight:800, letterSpacing:0.5 };
     const sideLogoImgStyle = { width:'100%', height:'100%', objectFit:'contain', display:'block' };
-    const sideCardBase = { position:'relative', zIndex:1, flexShrink:0, width:'20%', maxWidth:206, aspectRatio:'1 / 1', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, padding:16, boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:24, cursor:'pointer', opacity:0.6, transform:'scale(0.88)' };
+    const sideCardBase = { position:'relative', zIndex:1, flexShrink:0, width:'20%', maxWidth:206, aspectRatio:'1 / 1', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, padding:16, boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:24, cursor:'pointer', opacity: off ? 0.28 : 0.6, transform:'scale(0.88)' };
 
     return {
       scroll, notScroll: !scroll, oob,
@@ -712,17 +744,22 @@ class Component extends DCLogic {
       heroLogoImgStyle: { height: (function(){ var hidden=(heroShowCall?0:1)+(heroShowFreq?0:1); var base=tall?90:(landscape?98:118); var big=tall?126:(landscape?140:168); var max=tall?156:(landscape?176:210); return hidden===0?base:(hidden===1?big:max); })(), width:'auto', maxWidth:'100%', objectFit:'contain', display:'block' },
       heroCallStyle: { fontSize: tall ? 22 : (landscape ? 20 : 26), fontWeight:700, color:t.dim, letterSpacing:0.5, lineHeight:1, textAlign:'center' },
       heroStarStyle: { position:'absolute', top: tall ? 16 : 18, right: tall ? 16 : 18, zIndex:4, width:52, height:52, borderRadius:16, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', backgroundColor: saved ? t.blueFill : 'transparent', border:'1px solid ' + (saved ? 'transparent' : t.border) },
+      audioIcon, onAudioToggle: () => audioActive ? (p.onReleaseAudio && p.onReleaseAudio()) : (p.onClaimAudio && p.onClaimAudio()),
+      audioBtnStyle: { position:'absolute', zIndex:7, top: (bp ? bp.y : 0) + (tall ? 16 : 18), left: (bp ? bp.x : 0) + (tall ? 16 : 18), visibility: bp ? 'visible' : 'hidden', width:52, height:52, borderRadius:16, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', transformOrigin:'center', backgroundColor: off ? '#FFAE1A' : 'transparent', border:'1px solid ' + (off ? 'transparent' : t.border), animation: off ? 'carfm-power-pulse 1.8s ease-out infinite' : 'none' },
+      off,
+      heroVeilStyle: { position:'absolute', inset:0, borderRadius:28, backgroundColor: dark ? 'rgba(0,0,0,0.42)' : 'rgba(72,82,96,0.26)', zIndex:3, pointerEvents:'none' },
+      screenVeilStyle: { position:'absolute', inset:0, backgroundColor: dark ? 'rgba(0,0,0,0.50)' : 'rgba(24,32,46,0.34)', zIndex:2, pointerEvents:'none' },
       scanning, notScanning: !scanning,
       heroShowCall, heroShowFreq, heroTextVisible: scanning || heroShowCall,
       onFreqTap: p.onFreqTap, onTuneDown: p.onTuneDown, onTuneUp: p.onTuneUp, onNearby: p.onNearby, onSettings: p.onSettings, onSave: p.onSave, onScanDown: p.onScanDown, onScanUp: p.onScanUp, onPrevPreset: p.onPrevPreset, onNextPreset: p.onNextPreset,
-      heroCardRef: this.heroCardRef, prevCardRef: this.prevCardRef, nextCardRef: this.nextCardRef, navPrev: this.navPrev, navNext: this.navNext,
+      heroCardRef: this.heroCardRef, heroBandRef: this.heroBandRef, prevCardRef: this.prevCardRef, nextCardRef: this.nextCardRef, navPrev: this.navPrev, navNext: this.navNext,
       reordering, notReordering: !reordering, onDoneReorder: p.onDoneReorder,
       gridRef: this.gridRef, onGridScroll: this.updateScroll,
       scrollPrev: () => this.scrollGrid(-1), scrollNext: () => this.scrollGrid(1), trackRef: this.trackRef, onBarDown: this.onBarDown,
       canPrev: this.state.canPrev, canNext: this.state.canNext,
-      stereoGlyph: stereo ? '◎' : '○', stereoText: stereo ? 'STEREO' : 'MONO',
-      stereoWaveL: stereo ? (() => { const P = ['M4 9 Q9 15 4 21','M9 6 Q15 15 9 24','M14 3 Q21 15 14 27']; return React.createElement('svg', { width: tall?28:20, height: tall?40:28, viewBox:'0 0 24 30', fill:'none', stroke:t.blue, strokeWidth:2, strokeLinecap:'round', style:{ transform:'scaleX(-1)', flexShrink:0 } }, P.map((d,i)=>React.createElement('path',{key:i,d}))); })() : React.createElement('span', { style:{ width: tall?28:20, height: tall?40:28, flexShrink:0, display:'inline-block' } }),
-      stereoWaveR: stereo ? (() => { const P = ['M4 9 Q9 15 4 21','M9 6 Q15 15 9 24','M14 3 Q21 15 14 27']; return React.createElement('svg', { width: tall?28:20, height: tall?40:28, viewBox:'0 0 24 30', fill:'none', stroke:t.blue, strokeWidth:2, strokeLinecap:'round', style:{ flexShrink:0 } }, P.map((d,i)=>React.createElement('path',{key:i,d}))); })() : React.createElement('span', { style:{ width: tall?28:20, height: tall?40:28, flexShrink:0, display:'inline-block' } }),
+      stereoGlyph: stereo ? '◎' : '○', stereoText: off ? '' : (stereo ? 'STEREO' : 'MONO'),
+      stereoWaveL: (stereo && !off) ? (() => { const P = ['M4 9 Q9 15 4 21','M9 6 Q15 15 9 24','M14 3 Q21 15 14 27']; return React.createElement('svg', { width: tall?28:20, height: tall?40:28, viewBox:'0 0 24 30', fill:'none', stroke:t.blue, strokeWidth:2, strokeLinecap:'round', style:{ transform:'scaleX(-1)', flexShrink:0 } }, P.map((d,i)=>React.createElement('path',{key:i,d}))); })() : React.createElement('span', { style:{ width: tall?28:20, height: tall?40:28, flexShrink:0, display:'inline-block' } }),
+      stereoWaveR: (stereo && !off) ? (() => { const P = ['M4 9 Q9 15 4 21','M9 6 Q15 15 9 24','M14 3 Q21 15 14 27']; return React.createElement('svg', { width: tall?28:20, height: tall?40:28, viewBox:'0 0 24 30', fill:'none', stroke:t.blue, strokeWidth:2, strokeLinecap:'round', style:{ flexShrink:0 } }, P.map((d,i)=>React.createElement('path',{key:i,d}))); })() : React.createElement('span', { style:{ width: tall?28:20, height: tall?40:28, flexShrink:0, display:'inline-block' } }),
       tunerError, tunerOk: !tunerError,
       stereoCentered: !tunerError && tall, stereoInline: !tunerError && !tall,
       tunerErrIcon: React.createElement('svg', { width:26, height:26, viewBox:'0 0 24 24', fill:'none', stroke:t.amber, strokeWidth:2, strokeLinecap:'round', strokeLinejoin:'round', style:{ flexShrink:0 } }, [
@@ -734,38 +771,41 @@ class Component extends DCLogic {
       okClusterStyle: tall
         ? { display:'flex', flexDirection:'row', flexWrap:'wrap', alignItems:'center', columnGap:18, rowGap:10 }
         : { display:'flex', flexDirection:'row', alignItems:'flex-start', gap:14 },
-      hasPty: !!pty, ptyText: pty, ptyInline: !!pty && !tall, ptyCentered: !!pty && tall,
+      hasPty: !!pty, ptyText: pty, ptyInline: !!pty && !tall && !off, ptyCentered: !!pty && tall && !off,
       ptyCenteredStyle: { display:'flex', justifyContent:'center', textAlign:'center', color:t.dim, fontSize:19, fontWeight:700, letterSpacing:0.5, maxWidth:'100%' },
-      tells: [
+      tells: (off
+        ? [ { label:'RDS', on:false }, { label:'HD', on:false }, { label:'TP', on:false }, { label:'AF', on:false } ]
+        : [
         { label:'RDS', on:rds }, { label: hd > 1 ? ('HD'+hd) : 'HD', on: hd > 0 },
         (ta ? { label:'TA', pulse:true } : { label:'TP', on:tp }), { label:'AF', on:af }
-      ].map(x => x.pulse
-        ? { label:x.label, style: { fontSize: tall ? 14 : 11, fontWeight:700, letterSpacing:1, lineHeight:1, color:t.amber, transformOrigin:'center', textShadow:'0 1px 2px rgba(0,0,0,0.30)', animation:'carfm-ta-pulse 1.1s ease-in-out infinite' } }
-        : { label:x.label, style: { fontSize: tall ? 14 : 11, fontWeight:700, letterSpacing:1, lineHeight:1, color:t.text, opacity: x.on ? 1 : 0.32, textShadow: x.on ? '0 1px 2px rgba(0,0,0,0.30)' : (dark ? '0 1px 0 rgba(255,255,255,0.10)' : '0 1px 0 rgba(255,255,255,0.9)'), transform: x.on ? 'translateY(-0.5px)' : 'none', transition:'opacity .2s, color .2s, text-shadow .2s, transform .2s' } }),
+      ]).map(x => x.pulse
+        ? { label:x.label, style: { fontSize: tall ? 14 : 11, fontWeight:700, letterSpacing:1, lineHeight:1, display:'inline-block', minWidth: tall ? 34 : 26, textAlign:'center', color:t.amber, transformOrigin:'center', textShadow: off ? 'none' : '0 1px 2px rgba(0,0,0,0.30)', animation:'carfm-ta-pulse 1.1s ease-in-out infinite' } }
+        : { label:x.label, style: { fontSize: tall ? 14 : 11, fontWeight:700, letterSpacing:1, lineHeight:1, display:'inline-block', minWidth: tall ? 34 : 26, textAlign:'center', color:t.text, opacity: x.on ? 1 : 0.32, textShadow: off ? 'none' : (x.on ? '0 1px 2px rgba(0,0,0,0.30)' : (dark ? '0 1px 0 rgba(255,255,255,0.10)' : '0 1px 0 rgba(255,255,255,0.9)')), transform: x.on ? 'translateY(-0.5px)' : 'none', transition:'opacity .2s, color .2s, text-shadow .2s, transform .2s' } }),
       scanDownIcon: ICONS[seekStyle].down, scanUpIcon: ICONS[seekStyle].up,
-      dbText: db + ' dB',
+      dbText: db + ' dB', dbNum: db,
       capText: oob ? '⚠  OUTSIDE 87.5 – 108.0 BAND' : '',
       rtText: rtRaw || 'Waiting for RadioText…',
       segArr, signalIcon, starIcon, nearbyIcon, chips, hasChips: chips.length > 0, noChips: chips.length === 0,
 
-      containerStyle: { width:'100%', height:'100%', backgroundColor:t.bg, color:t.text, fontFamily:font, display:'flex', flexDirection:'column', padding: tall ? '14px 16px' : '18px 24px', gap: tall ? 10 : 12, boxSizing:'border-box', overflow:'hidden' },
+      containerStyle: { position:'relative', width:'100%', height:'100%', backgroundColor:t.bg, color:t.text, fontFamily:font, display:'flex', flexDirection:'column', padding: tall ? '14px 16px' : '18px 24px', gap: tall ? 10 : 12, boxSizing:'border-box', overflow:'hidden' },
 
       topbarStyle: { display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12, flexShrink:0 },
-      leftClusterStyle: { flex: tall ? '1 1 0' : '0 1 auto', minWidth:0, display:'flex', flexDirection:'row', flexWrap: tall ? 'wrap' : 'nowrap', alignItems:'flex-start', gap: tall ? 10 : 14, minHeight: tall ? 0 : 69 },
+      leftClusterStyle: { filter: gs, flex: tall ? '1 1 0' : '0 1 auto', minWidth:0, display:'flex', flexDirection:'row', flexWrap: tall ? 'wrap' : 'nowrap', alignItems:'flex-start', gap: tall ? 10 : 14, minHeight: tall ? 0 : 69 },
       stereoColStyle: { flexShrink:0, display:'flex', flexDirection:'column', alignItems:'center', gap:5 },
       topRowStyle: { display:'flex', alignItems:'flex-start', gap:14 },
       signalWrapStyle: { display:'flex', flexDirection: tall ? 'column' : 'row', alignItems:'center', justifyContent:'center', gap: tall ? 2 : 9, height: tall ? 'auto' : 36 },
       signalBarsStyle: { display:'flex', alignItems:'flex-end', gap:3, height:20 },
-      signalDbStyle: { fontSize: tall ? 19 : 15, fontWeight:700, color:t.dim, fontVariantNumeric:'tabular-nums' },
+      signalDbStyle: { fontSize: tall ? 19 : 15, fontWeight:700, color:t.dim, fontVariantNumeric:'tabular-nums', minWidth: tall ? 66 : 52, textAlign: tall ? 'center' : 'left' },
+      dbNumStyle: { display:'inline-block', minWidth: tall ? 44 : 34, textAlign:'right', fontVariantNumeric:'tabular-nums' },
       fmStyle: pill({ height:36, padding:'0 12px', border:'1px solid ' + t.amber, color:t.amber, letterSpacing:2 }),
-      ptyStyle: { display:'flex', alignItems:'center', flexBasis: tall ? '100%' : 'auto', height:36, color:t.dim, fontSize: tall ? 19 : 15, fontWeight:700, letterSpacing:0.5, maxWidth: tall ? 'none' : 200, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', textShadow: dark ? '0 1px 0 rgba(0,0,0,0.5), 0 -1px 0 rgba(255,255,255,0.06)' : '0 1px 0 rgba(255,255,255,0.95), 0 -1px 1px rgba(0,0,0,0.12)', boxSizing:'border-box' },
+      ptyStyle: { display:'flex', alignItems:'center', flexBasis: tall ? '100%' : 'auto', height:36, color:t.dim, fontSize: tall ? 19 : 15, fontWeight:700, letterSpacing:0.5, maxWidth: tall ? 'none' : 200, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', textShadow: off ? 'none' : (dark ? '0 1px 0 rgba(0,0,0,0.5), 0 -1px 0 rgba(255,255,255,0.06)' : '0 1px 0 rgba(255,255,255,0.95), 0 -1px 1px rgba(0,0,0,0.12)'), boxSizing:'border-box' },
       tellStripStyle: { display:'inline-flex', alignItems:'center', justifyContent:'center', gap: tall ? 14 : 10, height: tall ? 34 : 28, boxSizing:'border-box' },
-      stereoStyle: pill({ gap:9, justifyContent:'center', minWidth: tall ? 196 : 158, border:'1.5px solid ' + (stereo ? t.blue : t.border), backgroundColor: stereo ? t.blueFill : 'transparent', color: stereo ? t.blue : t.dim }),
+      stereoStyle: pill({ gap:9, justifyContent:'center', minWidth: tall ? 196 : 158, border:'1.5px solid ' + ((stereo && !off) ? t.blue : t.border), backgroundColor: (stereo && !off) ? t.blueFill : 'transparent', color: (stereo && !off) ? t.blue : t.dim }),
       stereoGlyphStyle: { fontSize:19, lineHeight:1 },
       oobStyle: pill({ border:'1.5px solid ' + t.amber, color:t.amber }),
       oobGlyphStyle: { fontSize:16, lineHeight:1 },
       advStyle: { display:'flex', alignItems:'center', justifyContent:'center', width:44, height:44, padding:0, borderRadius:12, border:'1px solid ' + t.border, color:t.dim, cursor:'pointer', boxSizing:'border-box', flexShrink:0 },
-      topRightColStyle: { flex: tall ? '1 1 0' : '0 0 auto', display:'flex', flexDirection:'column', alignItems: tall ? 'flex-end' : 'center', gap: tall ? 14 : 0, flexShrink:0 },
+      topRightColStyle: { filter: gs, flex: tall ? '1 1 0' : '0 0 auto', display:'flex', flexDirection:'column', alignItems: tall ? 'flex-end' : 'center', gap: tall ? 14 : 0, flexShrink:0 },
       nearbyTopStyle: { cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
       advIconColor: t.dim,
       gpsLocked: gpsLocked, gpsColor: gpsLocked ? t.blue : t.text, gpsTitle: gpsLocked ? 'GPS lock' : 'No GPS lock',
@@ -775,8 +815,8 @@ class Component extends DCLogic {
       motionColor: t.amber, motionTitle: 'Vehicle in motion',
       motionStyle: { display:'flex', alignItems:'center', justifyContent:'center', width:48, height:48, marginRight: tall ? 0 : -9, boxSizing:'border-box', transformOrigin:'center', animation:'carfm-motion-flash 2.6s ease-in-out infinite' },
 
-      heroBandStyle: { flex: tall ? '1 1 auto' : 1, marginTop: tall ? 26 : 0, display:'flex', flexDirection:'column', justifyContent: 'flex-start', gap: tall ? 12 : (twoRows ? 8 : 16), minHeight:0 },
-      heroRowStyle: { flex: tall ? '0 0 auto' : 1, marginTop: tall ? 'auto' : 0, position:'relative', display:'flex', flexDirection:'row', alignItems:'center', justifyContent:'center', gap:0, minHeight:0 },
+      heroBandStyle: { position:'relative', zIndex:4, flex: tall ? '1 1 auto' : 1, marginTop: tall ? 26 : 0, display:'flex', flexDirection:'column', justifyContent: 'flex-start', gap: tall ? 12 : (twoRows ? 8 : 16), minHeight:0 },
+      heroRowStyle: { filter: gs, flex: tall ? '0 0 auto' : 1, marginTop: tall ? 'auto' : 0, position:'relative', display:'flex', flexDirection:'row', alignItems:'center', justifyContent:'center', gap:0, minHeight:0 },
       sideBtnStyle: { width:'100%', flex:'2.8 1 0', minHeight:0, flexShrink:0, backgroundColor:t.raised, border:'1px solid ' + t.border, borderRadius:18, cursor:'pointer', display:'flex', flexDirection:'column', gap:8, alignItems:'center', justifyContent:'center', boxSizing:'border-box' },
       presetStepIconStyle: { fontSize:44, fontWeight:700, color:t.text, lineHeight:1 },
       sideIconStyle: { fontSize:38, fontWeight:700, color:t.text, lineHeight:1 },
@@ -784,8 +824,8 @@ class Component extends DCLogic {
       sideSubStyle: { fontSize:12, fontWeight:700, letterSpacing:1.5, color:t.dim },
       heroStyle: { flex:1, display:'flex', flexDirection:'column', alignItems:'stretch', justifyContent:'flex-start', gap:0, minHeight:0 },
       heroMainStyle: tall
-        ? { position:'relative', zIndex:3, flex:'0 0 auto', width:'82%', maxWidth:560, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16, padding:'30px 26px', boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:28, boxShadow: dark ? '0 20px 44px rgba(0,0,0,0.5)' : '0 20px 44px rgba(20,30,45,0.16)' }
-        : { position:'relative', zIndex:3, flex:'0 0 auto', width:'clamp(470px, 62%, 720px)', height:'98%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:14, padding:'42px 30px', boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:28, boxShadow: dark ? '0 20px 44px rgba(0,0,0,0.5)' : '0 20px 44px rgba(20,30,45,0.16)' },
+        ? { position:'relative', zIndex:3, flex:'0 0 auto', width:'82%', maxWidth:560, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16, padding:'30px 26px', boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:28, boxShadow: off ? 'none' : (dark ? '0 20px 44px rgba(0,0,0,0.5)' : '0 20px 44px rgba(20,30,45,0.16)') }
+        : { position:'relative', zIndex:3, flex:'0 0 auto', width:'clamp(470px, 62%, 720px)', height:'98%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:14, padding:'42px 30px', boxSizing:'border-box', backgroundColor:t.panel, border:'1px solid '+t.border, borderRadius:28, boxShadow: off ? 'none' : (dark ? '0 20px 44px rgba(0,0,0,0.5)' : '0 20px 44px rgba(20,30,45,0.16)') },
       freqRowStyle: { display:'flex', alignItems:'baseline', gap:9, cursor:'pointer' },
       freqStyle: { fontSize: tall ? 58 : (landscape ? 48 : 60), lineHeight:0.95, fontWeight:700, color:t.amber, letterSpacing:-1, fontVariantNumeric:'tabular-nums' },
       scanArrowStyle: { fontSize:34, fontWeight:700, color:t.blue, lineHeight:1 },
@@ -797,7 +837,7 @@ class Component extends DCLogic {
         ? { width: tall ? 80 : (landscape ? 70 : 92), height: tall ? 80 : (landscape ? 70 : 92), borderRadius: circle ? (tall ? 40 : 46) : 20, flexShrink:0, backgroundColor:logoBg, display:'flex', alignItems:'center', justifyContent:'center', fontSize: tall ? 28 : (landscape ? 26 : 34), fontWeight:700, letterSpacing:0.5, color: logoFg || '#FFFFFF' }
         : { width: tall ? 80 : (landscape ? 70 : 92), height: tall ? 80 : (landscape ? 70 : 92), borderRadius:20, flexShrink:0, backgroundColor:t.raised, border:'1px solid ' + t.border, display:'flex', alignItems:'center', justifyContent:'center', fontSize: tall ? 28 : (landscape ? 26 : 32), fontWeight:700, letterSpacing:0.5, color: logo ? t.blue : t.dim },
       rtZoneStyle: { flexShrink:0, marginTop: tall ? 'auto' : 0, marginBottom: tall ? 'auto' : 0, height: tall ? 60 : (landscape ? 50 : (twoRows ? 56 : 76)), display:'flex', alignItems:'center', justifyContent:'center' },
-      rtStripStyle: { alignSelf:'center', width:'100%', maxWidth:880, height:64, padding:'0 28px', boxSizing:'border-box', display:'flex', alignItems:'center', justifyContent: scroll ? 'flex-start' : 'center', overflow:'hidden', borderRadius:16, backgroundColor:t.raised, border:'1px solid ' + t.border },
+      rtStripStyle: { opacity: off ? 0 : 1, alignSelf:'center', width:'100%', maxWidth:880, height:64, padding:'0 28px', boxSizing:'border-box', display:'flex', alignItems:'center', justifyContent: scroll ? 'flex-start' : 'center', overflow:'hidden', borderRadius:16, backgroundColor:t.raised, border:'1px solid ' + t.border },
       rtMarqueeStyle: { display:'flex', gap:100, whiteSpace:'nowrap', animation:'carfm-ticker 16s linear infinite' },
       rtItemStyle: { fontSize: landscape ? 26 : 30, fontWeight:400, whiteSpace:'nowrap', color: rtRaw ? t.text : t.dim, fontStyle: rtRaw ? 'normal' : 'italic' },
 
@@ -818,7 +858,7 @@ class Component extends DCLogic {
       nearbyDiscStyle: { width: tall ? 74 : 92, height: tall ? 74 : 92, borderRadius:'50%', backgroundColor:nearbyFill, border: nearbyBorder ? ('2.5px solid '+nearbyBorderColor) : 'none', boxSizing:'border-box', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
       nearbyLabelStyle: { fontSize:15, fontWeight:700, letterSpacing:1.5, color:t.blue },
       nearbyGlyphStyle: { fontSize:30, lineHeight:1 },
-      presetsBandStyle: { display:'flex', alignItems:'stretch', gap:12, flex: '0 0 auto', height: tall ? 'auto' : (twoRows ? 250 : (landscape ? 104 : 140)), maxHeight: tall ? '46%' : 'none', minHeight:0, flexShrink:0 },
+      presetsBandStyle: { filter: gs, display:'flex', alignItems:'stretch', gap:12, flex: '0 0 auto', height: tall ? 'auto' : (twoRows ? 250 : (landscape ? 104 : 140)), maxHeight: tall ? '46%' : 'none', minHeight:0, flexShrink:0 },
       prevNavStyle: { width:56, flexShrink:0, backgroundColor:t.raised, border:'1px solid ' + t.border, borderRadius:14, cursor: this.state.canPrev ? 'pointer' : 'default', opacity: this.state.canPrev ? 1 : 0.35, display:'flex', alignItems:'center', justifyContent:'center', boxSizing:'border-box' },
       nextNavStyle: { width:56, flexShrink:0, backgroundColor:t.raised, border:'1px solid ' + t.border, borderRadius:14, cursor: this.state.canNext ? 'pointer' : 'default', opacity: this.state.canNext ? 1 : 0.35, display:'flex', alignItems:'center', justifyContent:'center', boxSizing:'border-box' },
       doneStyle: { height:'100%', flexShrink:0, padding:'0 26px', borderRadius:16, cursor:'pointer', border:'none', backgroundColor:t.blue, color:'#FFFFFF', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:10, fontSize:15, fontWeight:700, letterSpacing:1.5 },

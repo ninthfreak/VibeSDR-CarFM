@@ -301,3 +301,14 @@ export function MotionCar({ size = 34, color }: { size?: number; color: string }
     </Svg>
   );
 }
+
+/** Universal power symbol (open ring broken by a top stem) — the audio-priority
+ *  (claim/release) control on the hero, §4.7. */
+export function PowerIcon({ size = 30, color }: { size?: number; color: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M18.36 6.64a9 9 0 1 1-12.73 0" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+      <Line x1="12" y1="3" x2="12" y2="12" stroke={color} strokeWidth={2} strokeLinecap="round" />
+    </Svg>
+  );
+}
