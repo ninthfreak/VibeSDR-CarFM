@@ -232,10 +232,20 @@ public class MainActivity extends Activity {
         }
 
         // RUNG 3 — tune via AIDL (Sprd tuneStation → powerUp brings audio on its own).
+        // The service's setCurrentFrequency IGNORES a tune to the freq it's already on
+        // (freq != current guard), so if it's already parked on the target the tune is
+        // a no-op and never powers up. Force a real change first when that's the case.
         if (worked == null) {
-            line("\n-- RUNG 3: bind + setCurrentFrequency " + STRONG_MHZ + " (Sprd tune→powerUp) --");
+            line("\n-- RUNG 3: bind + setCurrentFrequency (Sprd tune→powerUp) --");
             if (radio == null) line("  (not bound — skipping)");
-            else { tuneMhzTo(STRONG_MHZ); sleep(4000); snap("after RUNG3"); }
+            else {
+                double cur = currentMhz();
+                if (cur > 0 && Math.abs(cur - STRONG_MHZ) < 0.05) {
+                    line("  already on " + STRONG_MHZ + "; nudging to " + (STRONG_MHZ - 0.2) + " first so the tune isn't ignored");
+                    tuneMhzTo(STRONG_MHZ - 0.2); sleep(2000);
+                }
+                tuneMhzTo(STRONG_MHZ); sleep(4000); snap("after RUNG3");
+            }
             if (radio != null && audioYes("RUNG 3")) worked = "RUNG 3 — setCurrentFrequency powerUp";
         }
 
@@ -340,6 +350,14 @@ public class MainActivity extends Activity {
             try { s.append(" backSvc=" + radio.isRadioBackServiceOn()); } catch (Exception ignored) {}
         } else s.append(" (not bound)");
         line(s.toString());
+    }
+
+    /** Current tuned frequency in MHz, or -1 if unavailable (uses the calibrated multiplier). */
+    private double currentMhz() {
+        if (radio == null) return -1;
+        try { Frequency f = radio.getCurrentFrequency(); if (f != null && f.freq > 0) return f.freq / (double) freqMult; }
+        catch (Exception ignored) {}
+        return -1;
     }
 
     private int readSource() { try { return Settings.System.getInt(getContentResolver(), SRC_KEY, -1); } catch (Exception e) { return -1; } }
