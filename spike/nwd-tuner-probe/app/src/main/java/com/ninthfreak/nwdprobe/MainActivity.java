@@ -1,27 +1,23 @@
 package com.ninthfreak.nwdprobe;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
-import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.database.ContentObserver;
-import android.database.Cursor;
-import android.media.AudioManager;
-import android.net.Uri;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
-import android.os.Parcel;
 import android.os.RemoteException;
-import android.provider.MediaStore;
 import android.provider.Settings;
 import android.text.method.ScrollingMovementMethod;
 import android.view.View;
@@ -30,6 +26,9 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.content.ContentValues;
+import android.net.Uri;
+import android.provider.MediaStore;
 
 import com.nwd.radio.service.RadioCallback;
 import com.nwd.radio.service.RadioFeature;
@@ -45,42 +44,56 @@ import java.util.Locale;
 import java.util.concurrent.ArrayBlockingQueue;
 
 /**
- * NWD built-in FM tuner — EXHAUSTIVE INTERACTIVE probe.
+ * NWD built-in FM tuner — STANDALONE-AUDIO probe.
  *
- * "RUN FULL TEST" drives a scripted, self-tuning sequence over the target
- * stations and the source-gate write experiment, pausing to ASK you ground-truth
- * questions (buttons) or INSTRUCT you to do something it can't (open the stock
- * app, grant a permission) and wait for you to confirm. Everything — machine
- * readings and your answers — lands in one timestamped log saved to Downloads.
+ * ONE question: can FM audio be brought up WITHOUT launching the stock radio app?
+ *
+ * From decompiling com.nwd.radio.service (Spreadtrum path, SprdRadioManager$1):
+ * the audio routing (openDevice + audio focus + AudioSystem.setForceUse +
+ * setNwdStreamMute unmute) all runs INSIDE the service. A bound/running service
+ * starts it in response to broadcasts the stock app fires on itself — with NO
+ * permission or caller check on the receiver:
+ *   • com.nwd.action.ACTION_APP_IN_OUT   extra_app_id (int)  == 8  -> InitFM()
+ *   • com.nwd.ACTION_MEDIA_PLAY          extra_app_id (int)  == 8  -> InitFM()
+ *   • com.nwd.action.ACTION_CHANGE_SOURCE extra_source_id(byte)==4 -> (FM)
+ *   • com.nwd.android.ACTION_EXIT_ARM_FM_RAIDO                     -> ExitFm()
+ * (Writing mcu_current_source directly — what the old probe did — is a DEAD END:
+ * it needs system perms and the MCU re-asserts it. Not tested here.)
+ *
+ * "RUN AUDIO TEST" climbs a ladder of bring-up attempts, stopping at the first
+ * one that produces sound. It asks you ONE thing per rung — "is audio playing?" —
+ * via INLINE BUTTONS in this screen (not a dialog; dialogs here previously locked
+ * up). All machine state + your answers land in one log saved to Downloads.
  *
  * Throwaway RE harness, NOT the CarFM backend. AIDL is a clean-room reconstruction.
  */
 public class MainActivity extends Activity {
 
-    private static final String BIND_ACTION = "com.nwd.radio.service.ACTION_RADIO_SERVICE";
     private static final String SERVICE_PKG = "com.nwd.radio.service";
+    private static final String SERVICE_CLS = "com.nwd.radio.service.RadioService";
+    private static final String BIND_ACTION = "com.nwd.radio.service.ACTION_RADIO_SERVICE";
     private static final String SRC_KEY = "mcu_current_source";
-    private static final int SRC_FM = 4;
-    private static final double[] TEST_FREQS = { 88.7, 101.5 };   // per request
-    // RadioFeature AIDL descriptor + getCurrentFrequency's transaction code
-    // (method #2 in declaration order → FIRST_CALL_TRANSACTION + 1) for the raw
-    // parcel dump that hunts for trailing fields our reconstruction truncates.
-    private static final String RF_DESCRIPTOR = "com.nwd.radio.service.RadioFeature";
-    private static final int TXN_GET_CURRENT_FREQ = IBinder.FIRST_CALL_TRANSACTION + 1;
+    private static final double STRONG_MHZ = 101.5;   // user reports this comes in best
 
     private RadioFeature radio;
     private TextView log;
-    private EditText mhzField, bandField, cmdA, cmdB;
+    private EditText mhzField, bandField;
     private int freqMult = 1000;
     private byte fmBand = 0;
+    private MediaPlayer vendorMp;
+
+    // Inline prompt panel (replaces AlertDialogs, which locked up when a message
+    // and a list were set together). Real buttons in the activity's own view —
+    // no window token, survives pause/resume.
+    private LinearLayout promptPanel;
+    private TextView promptText;
+    private LinearLayout promptButtons;
 
     private final StringBuilder logBuf = new StringBuilder();
     private final ArrayBlockingQueue<String> answer = new ArrayBlockingQueue<>(1);
     private volatile boolean testRunning = false;
-    private volatile boolean stockPolling = false;   // background RT poll during the stock-app step
     private ContentObserver sourceObserver;
     private BroadcastReceiver nwdRx;
-    private int latchedOrig = Integer.MIN_VALUE;   // MIN = nothing latched
 
     // ── UI ────────────────────────────────────────────────────────────────────
     @Override
@@ -91,15 +104,35 @@ public class MainActivity extends Activity {
         int pad = dp(10);
         root.setPadding(pad, pad, pad, pad);
 
-        Button full = btn("▶  RUN FULL TEST (auto + guided)", v -> runFullTest());
+        Button full = btn("▶  RUN AUDIO TEST (standalone bring-up)", v -> runAudioTest());
         full.setTextSize(16f);
         root.addView(full);
 
-        root.addView(btn("Connect", v -> connect()));
+        // Inline prompt panel — hidden until a question/instruction is posted.
+        promptPanel = new LinearLayout(this);
+        promptPanel.setOrientation(LinearLayout.VERTICAL);
+        promptPanel.setBackgroundColor(0xFF203040);
+        int pp = dp(12);
+        promptPanel.setPadding(pp, pp, pp, pp);
+        promptText = new TextView(this);
+        promptText.setTextSize(16f);
+        promptText.setTextColor(Color.WHITE);
+        promptButtons = new LinearLayout(this);
+        promptButtons.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams btnRowLp = new LinearLayout.LayoutParams(-1, -2);
+        btnRowLp.topMargin = dp(8);
+        promptButtons.setLayoutParams(btnRowLp);
+        promptPanel.addView(promptText);
+        promptPanel.addView(promptButtons);
+        promptPanel.setVisibility(View.GONE);
+        root.addView(promptPanel);
+
+        // Manual controls (ad-hoc; the scripted test doesn't need them).
+        root.addView(btn("Connect (bind service)", v -> wakeAndBind()));
 
         LinearLayout tuneRow = new LinearLayout(this);
         tuneRow.setOrientation(LinearLayout.HORIZONTAL);
-        mhzField = new EditText(this); mhzField.setText("88.7");
+        mhzField = new EditText(this); mhzField.setText(String.valueOf(STRONG_MHZ));
         mhzField.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 2f));
         bandField = new EditText(this); bandField.setText("0");
         bandField.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
@@ -110,63 +143,42 @@ public class MainActivity extends Activity {
         LinearLayout manual = new LinearLayout(this);
         manual.setOrientation(LinearLayout.HORIZONTAL);
         manual.addView(weighted(btn("Tune", v -> tuneMhz())));
-        manual.addView(weighted(btn("Seek ▼", v -> seek(false))));
-        manual.addView(weighted(btn("Seek ▲", v -> seek(true))));
-        manual.addView(weighted(btn("Dump", v -> dumpAll("manual"))));
+        manual.addView(weighted(btn("Dump", v -> snap("manual"))));
+        manual.addView(weighted(btn("Save log", v -> saveLog())));
         root.addView(manual);
 
-        LinearLayout srcRow = new LinearLayout(this);
-        srcRow.setOrientation(LinearLayout.HORIZONTAL);
-        srcRow.addView(weighted(btn("Source probe", v -> sourceSettingsDump())));
-        srcRow.addView(weighted(btn("getprop", v -> getpropDump())));
-        srcRow.addView(weighted(btn("Save log", v -> saveLog())));
-        root.addView(srcRow);
-
-        LinearLayout scanRow = new LinearLayout(this);
-        scanRow.setOrientation(LinearLayout.HORIZONTAL);
-        scanRow.addView(weighted(btn("Search ▼", v -> search(false))));
-        scanRow.addView(weighted(btn("Search ▲", v -> search(true))));
-        scanRow.addView(weighted(btn("Near ON", v -> nearOn(true))));
-        scanRow.addView(weighted(btn("Near OFF", v -> nearOn(false))));
-        scanRow.addView(weighted(btn("INTRO", v -> intro())));
-        root.addView(scanRow);
-
-        LinearLayout rawRow = new LinearLayout(this);
-        rawRow.setOrientation(LinearLayout.HORIZONTAL);
-        rawRow.addView(weighted(btn("Raw parcel", v -> rawFrequencyParcelDump())));
-        rawRow.addView(weighted(btn("Latch FM src", v -> latchFm())));
-        rawRow.addView(weighted(btn("Restore src", v -> restoreSource())));
-        root.addView(rawRow);
-
-        LinearLayout cmdRow = new LinearLayout(this);
-        cmdRow.setOrientation(LinearLayout.HORIZONTAL);
-        cmdRow.addView(label("cmd a"));
-        cmdA = new EditText(this); cmdA.setText("0"); cmdA.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
-        cmdRow.addView(cmdA);
-        cmdRow.addView(label("b"));
-        cmdB = new EditText(this); cmdB.setText("0"); cmdB.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
-        cmdRow.addView(cmdB);
-        cmdRow.addView(weighted(btn("sendRadioCommand", v -> sendCmd())));
-        root.addView(cmdRow);
+        // Manual broadcast rungs (fire any bring-up trigger by hand).
+        LinearLayout bcRow = new LinearLayout(this);
+        bcRow.setOrientation(LinearLayout.HORIZONTAL);
+        bcRow.addView(weighted(btn("APP_IN_OUT 8", v -> sendAppInOut(8))));
+        bcRow.addView(weighted(btn("MEDIA_PLAY 8", v -> sendMediaPlay(8))));
+        bcRow.addView(weighted(btn("REQ SRC 4", v -> sendRequestSource((byte) 4))));
+        bcRow.addView(weighted(btn("EXIT FM", v -> sendExitFm())));
+        root.addView(bcRow);
 
         log = new TextView(this);
         log.setTextSize(11f);
         log.setMovementMethod(new ScrollingMovementMethod());
-        log.setTypeface(android.graphics.Typeface.MONOSPACE);
+        log.setTypeface(Typeface.MONOSPACE);
         ScrollView sv = new ScrollView(this);
         sv.addView(log);
         root.addView(sv);
 
         setContentView(root);
-        line("Ready. Park on a station, then tap RUN FULL TEST. Answer the prompts.");
+        line("Ready. Volume UP, stock radio app CLOSED, then tap RUN AUDIO TEST.");
     }
 
-    // ── Binding ─────────────────────────────────────────────────────────────
-    private void connect() {
-        if (radio != null) { line("already connected"); return; }
-        Intent i = new Intent(BIND_ACTION).setPackage(SERVICE_PKG);
-        boolean ok = bindService(i, conn, Context.BIND_AUTO_CREATE);
-        line("bindService returned " + ok + (ok ? "" : "  <-- FALSE = not bindable"));
+    // ── Service wake + binding ─────────────────────────────────────────────────
+    /** Wake (startService) AND bind the radio service by explicit component. The
+     *  bring-up receivers are registered dynamically, so the process MUST be alive
+     *  for a broadcast to land — binding with AUTO_CREATE guarantees that. */
+    private void wakeAndBind() {
+        Intent i = new Intent(BIND_ACTION).setComponent(new ComponentName(SERVICE_PKG, SERVICE_CLS));
+        try { startService(i); } catch (Exception e) { line("startService threw " + e + " (may need explicit action only)"); }
+        try {
+            boolean ok = bindService(new Intent(BIND_ACTION).setPackage(SERVICE_PKG), conn, Context.BIND_AUTO_CREATE);
+            line("bindService=" + ok + (ok ? "" : "  <-- FALSE = not bindable (service may still be running for broadcasts)"));
+        } catch (Exception e) { line("bindService threw " + e); }
     }
 
     private final ServiceConnection conn = new ServiceConnection() {
@@ -177,172 +189,160 @@ public class MainActivity extends Activity {
             catch (RemoteException e) { line("registCallback FAILED: " + e); }
             startSourceObserver();
             startBroadcastLogger();
+            calibrate();
         }
         @Override public void onServiceDisconnected(ComponentName name) { radio = null; line("DISCONNECTED"); }
     };
 
-    // ── The full interactive test ─────────────────────────────────────────────
-    private void runFullTest() {
+    // ── The audio bring-up ladder ──────────────────────────────────────────────
+    private void runAudioTest() {
         if (testRunning) { line("test already running"); return; }
         testRunning = true;
-        new Thread(this::fullTestBody, "nwd-fulltest").start();
+        new Thread(this::audioTestBody, "nwd-audiotest").start();
     }
 
-    private void fullTestBody() {
-        line("\n==== FULL TEST START ====");
-        if (radio == null) { runOnUiThread(this::connect); }
+    private void audioTestBody() {
+        line("\n==== STANDALONE AUDIO BRING-UP TEST ====");
+        prompt("This tests whether FM audio can start WITHOUT the stock radio app.\n\n"
+             + "• Turn the volume UP.\n"
+             + "• Do NOT open the stock radio app during this test.\n\n"
+             + "Tap Start.", "Start");
+
+        wakeAndBind();
         for (int i = 0; radio == null && i < 12; i++) sleep(500);
-        if (radio == null) { line("could not connect — aborting"); testRunning = false; return; }
+        line("service bound = " + (radio != null) + " (broadcasts can still work if the service is running from boot)");
+        snap("baseline");
+        int origSrc = readSource();
+        sendStopQqMusic(); sleep(500);
 
-        dumpAll("baseline");
-        rawFrequencyParcelDump();   // hidden-field / truncation check
-        sourceSettingsDump();
-        getpropDump();
+        String worked = null;
 
-        // Permission gate up front — avoids mid-test lifecycle dialogs.
-        boolean canWrite = canWrite();
-        if (!canWrite) {
-            instruct("This test writes one system setting (mcu_current_source) to try to unlock RadioText.\n\n"
-                   + "Tap Done to open the grant screen, enable \"modify system settings\" for NWD Tuner Probe, "
-                   + "then come back and press RUN FULL TEST again.");
-            openGrantScreen();
-            line("Grant the permission, then press RUN FULL TEST again. (Saving what we have so far.)");
-            saveLog();
-            testRunning = false;
-            return;
+        // RUNG 1 — the stock app's own FM audio trigger.
+        line("\n-- RUNG 1: ACTION_APP_IN_OUT extra_app_id=8  →  service InitFM() --");
+        sendAppInOut(8);
+        line("waiting 4s (service mutes, unmutes ~1800ms, then powers up FM)…");
+        sleep(4000); snap("after RUNG1");
+        if (audioYes("RUNG 1")) worked = "RUNG 1 — ACTION_APP_IN_OUT app_id=8";
+
+        // RUNG 2 — same InitFM via the other action.
+        if (worked == null) {
+            line("\n-- RUNG 2: ACTION_MEDIA_PLAY extra_app_id=8  →  service InitFM() --");
+            sendMediaPlay(8); sleep(4000); snap("after RUNG2");
+            if (audioYes("RUNG 2")) worked = "RUNG 2 — ACTION_MEDIA_PLAY app_id=8";
         }
 
-        // PHASE 1 — passive per-station dump + ground truth
-        // The raw parcel per station is the key hidden-signal test: if the leftover
-        // bytes DIFFER between a strong and a weak station, that's a signal field.
-        for (double mhz : TEST_FREQS) {
-            line("\n-- station " + mhz + " (passive) --");
-            tuneMhzTo(mhz); sleep(3000);
-            dumpAll("tuned " + mhz);
-            rawFrequencyParcelDump();
-            String sound = ask("Tuned to " + mhz + ". How does it sound?", "Clear", "Weak / static", "Silent");
-            line("watching 8s for cb RT/PS on " + mhz + " (sound=" + sound + ")…"); sleep(8000);
+        // RUNG 3 — tune via AIDL (Sprd tuneStation → powerUp brings audio on its own).
+        if (worked == null) {
+            line("\n-- RUNG 3: bind + setCurrentFrequency " + STRONG_MHZ + " (Sprd tune→powerUp) --");
+            if (radio == null) line("  (not bound — skipping)");
+            else { tuneMhzTo(STRONG_MHZ); sleep(4000); snap("after RUNG3"); }
+            if (radio != null && audioYes("RUNG 3")) worked = "RUNG 3 — setCurrentFrequency powerUp";
         }
 
-        // PHASE 1b — search() (full scan) vs seek()
-        line("\n-- search() (full scan) test --");
-        tuneMhzTo(87.9); sleep(1500);
-        line("calling search(up) from 87.9 — watching where it lands…");
-        try { radio.search(true); } catch (Exception e) { line("search failed " + e); }
-        sleep(9000);
-        dumpAll("after search up");
-        ask("SEARCH (full scan) up from 87.9 — what happened?", "Stopped on a real station", "Swept without stopping", "Nothing / error");
-
-        // PHASE 2 — RDS selector sweep
-        line("\n-- RDS selector sweep --");
-        for (int s = 0; s < 4; s++) { try { radio.setRDSState((byte) s, true); } catch (Exception ignored) {} }
-        dumpAll("after setRDSState 0..3 = true");
-
-        // PHASE 3 — source-gate WRITE test (the main event)
-        for (double mhz : TEST_FREQS) {
-            line("\n-- source WRITE test @ " + mhz + " --");
-            sourceWriteTest(mhz);
-        }
-
-        // PHASE 4 — stock-app A/B (needs you; the dialog stays up while you're away).
-        // Poll getRtMessage in the BACKGROUND during the window — the worker is
-        // blocked on the dialog, so without this we'd only catch RT if the push
-        // callback happened to fire, or if the source were still FM on return.
-        stockPolling = true;
-        new Thread(() -> {
-            while (stockPolling) {
-                try { line("    [stock-poll] source=" + readSource() + " rt='" + radio.getRtMessage() + "' stereo=" + radio.isStreroOn()); }
-                catch (Exception ignored) {}
-                sleep(3000);
+        // RUNG 4 — ask the MCU to physically switch the head-unit source to FM.
+        if (worked == null) {
+            line("\n-- RUNG 4: ACTION_REQUEST_CHANGE_SOURCE (physical source switch) --");
+            prompt("RUNG 4 will ask the head unit to switch its WHOLE audio source to Radio "
+                 + "— like pressing 'Radio' on the unit. Tap OK to send.", "OK");
+            sendRequestSource((byte) 4); sleep(4000); snap("after RUNG4 src=4");
+            boolean yes = audioYes("RUNG 4 (source→4)");
+            if (!yes) {
+                line("  retrying with extra_source_id=8…");
+                sendRequestSource((byte) 8); sleep(4000); snap("after RUNG4 src=8");
+                yes = audioYes("RUNG 4 (source→8)");
             }
-        }, "stock-poll").start();
-        instruct("STOCK-APP COMPARISON.\n\nOpen the STOCK radio app, tune it to " + TEST_FREQS[0]
-               + ", let it play ~15s so RDS locks, then come back here and tap Done.\n\n"
-               + "(This probe keeps reading the tuner the whole time — background lines are tagged [stock-poll]; watch for rt='…'.)");
-        stockPolling = false;
-        dumpAll("stock-app active");
-        String rtSeen = ask("With the stock app active, did this probe's log show any \"cb RT '…'\" lines (RadioText)?", "Yes", "No");
-        line("stock-app RadioText seen: " + rtSeen);
-        instruct("You can close the stock app now. Tap Done to finish.");
+            if (yes) worked = "RUNG 4 — ACTION_REQUEST_CHANGE_SOURCE";
+        }
 
-        // PHASE 5 — audio ground truth
-        String audio = ask("Across the whole test, did FM audio ever actually play through the speakers?", "Yes", "No");
-        line("audio played: " + audio);
+        // RUNG 5 — public-API long shot (vendor FM URI through MediaPlayer).
+        if (worked == null) {
+            line("\n-- RUNG 5: MediaPlayer THIRDPARTY://MEDIAPLAYER_PLAYERTYPE_FM (long shot) --");
+            tryVendorMediaPlayer(); sleep(3000); snap("after RUNG5");
+            if (audioYes("RUNG 5")) worked = "RUNG 5 — vendor MediaPlayer URI";
+        }
+
+        line("\n==== RESULT: " + (worked != null ? "AUDIO via " + worked : "NO rung produced audio") + " ====");
+        snap("final");
+        line("mcu_current_source now = " + readSource() + "  (4 = FM is the active source)");
+        // Bonus: if forcing FM as the source also unlocked RadioText, capture it.
+        try { line("RDS check: rt='" + radio.getRtMessage() + "' stereo=" + radio.isStreroOn()); } catch (Exception ignored) {}
+
+        // Cleanup — offer to turn the tuner back off / restore the source.
+        String c = prompt("Test done. Turn the tuner audio back off?", "Stop FM", "Leave it playing");
+        if ("Stop FM".equals(c)) {
+            sendExitFm();
+            if (origSrc >= 0 && readSource() != origSrc) { sendRequestSource((byte) origSrc); line("requested source back to " + origSrc); }
+        }
 
         saveLog();
-        line("==== FULL TEST DONE ====");
+        line("==== DONE ====");
         testRunning = false;
     }
 
-    // ── Test steps ──────────────────────────────────────────────────────────
-    private void sourceWriteTest(double mhz) {
-        tuneMhzTo(mhz); sleep(2000);
-        int orig = readSource();
-        line("  orig " + SRC_KEY + "=" + orig);
-        boolean wrote = false;
-        try { wrote = Settings.System.putInt(getContentResolver(), SRC_KEY, SRC_FM); }
-        catch (Exception e) { line("  putInt threw " + e); }
-        int rb = readSource();
-        line("  putInt(4)=" + wrote + " readback=" + rb + " stuck=" + (rb == SRC_FM));
-        line("  holding source=FM 25s — watching getRtMessage/isStreroOn + callbacks (RT can be slow)…");
-        for (int i = 0; i < 5; i++) {
-            sleep(5000);
-            try { line("    t+" + ((i + 1) * 5) + "s rt='" + radio.getRtMessage() + "' stereo=" + radio.isStreroOn()); }
-            catch (Exception ignored) {}
-            if (i == 2) rawFrequencyParcelDump();   // re-check hidden fields while FM is the source
-        }
-        String r = ask("On " + mhz + " with source forced to FM — what happened?",
-                "RadioText / station text appeared", "Audio started", "Both", "Nothing");
-        line("  write-test result @ " + mhz + ": " + r);
-        if (orig >= 0) { try { Settings.System.putInt(getContentResolver(), SRC_KEY, orig); } catch (Exception ignored) {} line("  restored " + SRC_KEY + " to " + orig); }
-        else line("  original was unreadable (-1) — not restoring; the MCU re-asserts the real source on its own");
+    /** One audio yes/no via the inline buttons; true iff the user says audio plays. */
+    private boolean audioYes(String rung) {
+        return prompt(rung + ": is FM audio playing through the speakers now?", "YES — audio!", "No").startsWith("YES");
     }
 
-    private void dumpAll(String tag) {
+    // ── Bring-up broadcasts (exact actions/extras from SprdRadioManager$1) ──────
+    private void sendAppInOut(int appId) {
+        Intent i = new Intent("com.nwd.action.ACTION_APP_IN_OUT");
+        i.putExtra("extra_app_id", appId);
+        i.putExtra("extra_app_operation", 1);
+        i.putExtra("extra_app_event", 0);
+        sendBroadcast(i);
+        line("bcast ACTION_APP_IN_OUT extra_app_id=" + appId);
+    }
+    private void sendMediaPlay(int appId) {
+        Intent i = new Intent("com.nwd.ACTION_MEDIA_PLAY");
+        i.putExtra("extra_app_id", appId);
+        sendBroadcast(i);
+        line("bcast ACTION_MEDIA_PLAY extra_app_id=" + appId);
+    }
+    private void sendRequestSource(byte src) {
+        Intent i = new Intent("com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE");
+        i.putExtra("extra_source_id", src);
+        sendBroadcast(i);
+        line("bcast ACTION_REQUEST_CHANGE_SOURCE extra_source_id=" + src);
+    }
+    private void sendExitFm() { sendBroadcast(new Intent("com.nwd.android.ACTION_EXIT_ARM_FM_RAIDO")); line("bcast ACTION_EXIT_ARM_FM_RAIDO"); }
+    private void sendStopQqMusic() { sendBroadcast(new Intent("com.music.action.STOP_QQ_MUSIC")); line("bcast STOP_QQ_MUSIC (clear competing media)"); }
+
+    private void tryVendorMediaPlayer() {
+        try {
+            if (vendorMp != null) { try { vendorMp.release(); } catch (Exception ignored) {} vendorMp = null; }
+            vendorMp = new MediaPlayer();
+            vendorMp.setAudioStreamType(android.media.AudioManager.STREAM_MUSIC);
+            vendorMp.setDataSource("THIRDPARTY://MEDIAPLAYER_PLAYERTYPE_FM");
+            vendorMp.prepare();
+            vendorMp.start();
+            line("vendor MediaPlayer prepared+started");
+        } catch (Throwable e) { line("vendor MediaPlayer failed (expected on most units): " + e); }
+    }
+
+    // ── State snapshot / calibration ───────────────────────────────────────────
+    private void calibrate() {
         if (radio == null) return;
-        line("---- dump: " + tag + " ----");
-        try { line("  radioType=" + radio.getRadioType() + " state=" + radio.getRadioState() + " scan=" + radio.getCurrentScanState()); } catch (Exception e) { line("  err " + e); }
         try {
             Frequency f = radio.getCurrentFrequency();
             if (f != null) { fmBand = f.band; int fv = f.freq; freqMult = fv > 50000 ? 1000 : fv > 5000 ? 100 : fv > 500 ? 10 : 1;
-                line("  freq raw=" + fv + " (" + (fv / (double) freqMult) + " MHz) band=" + f.band + " PS='" + f.psName + "'"); }
-        } catch (Exception e) { line("  freq err " + e); }
-        try { line("  isStreroOn=" + radio.isStreroOn() + " isHasStrero=" + radio.isHasStrero() + " isNearOn=" + radio.isNearOn() + " backSvc=" + radio.isRadioBackServiceOn()); } catch (Exception e) { line("  err " + e); }
-        try { line("  pty=" + radio.getPTYType() + " prefabPty=" + radio.getPrefabPTYType() + " rt='" + radio.getRtMessage() + "'"); } catch (Exception e) { line("  err " + e); }
-        StringBuilder rds = new StringBuilder();
-        for (int s = 0; s < 4; s++) { try { rds.append(s).append('=').append(radio.getRDSState(s)).append(' '); } catch (Exception e) { rds.append(s).append("=err "); } }
-        line("  rdsState " + rds);
-        try { RadioPoint[] pts = radio.getRadioPoint(); if (pts != null) { StringBuilder sb = new StringBuilder(); for (RadioPoint p : pts) sb.append(p).append("; "); line("  bandPlan " + sb); } } catch (Exception e) { line("  bandplan err " + e); }
-        try { Frequency[] pf = radio.getPrefabFrequency(); if (pf != null) { StringBuilder sb = new StringBuilder("[" + pf.length + "] "); for (Frequency p : pf) sb.append(p.freq).append('/').append(p.psName).append(','); line("  presets " + sb); } } catch (Exception e) { line("  presets err " + e); }
+                line("calibrated freqMult=" + freqMult + " band=" + fmBand + " (from raw " + fv + ")"); }
+        } catch (Exception e) { line("calibrate err " + e); }
     }
 
-    private void sourceSettingsDump() {
-        line("---- source settings ----");
-        line("  WRITE_SETTINGS granted=" + canWrite());
-        line("  " + SRC_KEY + "=" + readSource() + " (FM would be " + SRC_FM + ")");
-        try {
-            Cursor c = getContentResolver().query(Settings.System.CONTENT_URI, null, null, null, null);
-            if (c != null) {
-                int ni = c.getColumnIndex("name"), vi = c.getColumnIndex("value"); int total = 0;
-                StringBuilder m = new StringBuilder();
-                while (c.moveToNext()) {
-                    total++;
-                    String n = ni >= 0 ? c.getString(ni) : null;
-                    String v = vi >= 0 ? c.getString(vi) : null;
-                    if (n != null && n.matches("(?i).*(mcu|radio|source|antenna|fm|rds|tuner).*")) m.append("    ").append(n).append(" = ").append(v).append('\n');
-                }
-                c.close();
-                line("  Settings.System rows=" + total + "; matching:\n" + m);
-            } else line("  Settings.System not enumerable on this ROM");
-        } catch (Exception e) { line("  enumerate err " + e); }
+    private void snap(String tag) {
+        StringBuilder s = new StringBuilder("SNAP[" + tag + "] src=" + readSource());
+        if (radio != null) {
+            try { s.append(" state=" + radio.getRadioState()); } catch (Exception e) { s.append(" state=err"); }
+            try { Frequency f = radio.getCurrentFrequency(); if (f != null) s.append(" freq=" + f.freq + " PS='" + f.psName + "'"); } catch (Exception e) { s.append(" freq=err"); }
+            try { s.append(" stereo=" + radio.isStreroOn()); } catch (Exception ignored) {}
+            try { s.append(" rt='" + radio.getRtMessage() + "'"); } catch (Exception ignored) {}
+            try { s.append(" backSvc=" + radio.isRadioBackServiceOn()); } catch (Exception ignored) {}
+        } else s.append(" (not bound)");
+        line(s.toString());
     }
 
     private int readSource() { try { return Settings.System.getInt(getContentResolver(), SRC_KEY, -1); } catch (Exception e) { return -1; } }
-    private boolean canWrite() { try { return Settings.System.canWrite(this); } catch (Exception e) { return false; } }
-    private void openGrantScreen() {
-        try { startActivity(new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:" + getPackageName())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); }
-        catch (Exception e) { line("open grant screen failed " + e); }
-    }
 
     private void startSourceObserver() {
         if (sourceObserver != null) return;
@@ -351,48 +351,6 @@ public class MainActivity extends Activity {
         };
         try { getContentResolver().registerContentObserver(Settings.System.getUriFor(SRC_KEY), false, sourceObserver); line("source observer on"); }
         catch (Exception e) { line("observer reg failed " + e); sourceObserver = null; }
-    }
-
-    // ── New probes (added per request) ─────────────────────────────────────────
-    /** RAW getCurrentFrequency: hand-marshal the reply parcel and check for bytes
-     *  left over after our {band, psName, freq} — those are fields our AIDL
-     *  reconstruction TRUNCATES (a hidden RSSI would show here, and would differ
-     *  between a strong and a weak station). */
-    private void rawFrequencyParcelDump() {
-        if (radio == null) { line("not connected"); return; }
-        Parcel data = Parcel.obtain(), reply = Parcel.obtain();
-        try {
-            data.writeInterfaceToken(RF_DESCRIPTOR);
-            radio.asBinder().transact(TXN_GET_CURRENT_FREQ, data, reply, 0);
-            reply.readException();
-            int present = reply.readInt();
-            if (present == 0) { line("  rawFreq: null result"); return; }
-            byte band = reply.readByte();
-            String ps = reply.readString();
-            int freq = reply.readInt();
-            int avail = reply.dataAvail();
-            line("  rawFreq: band=" + band + " ps='" + ps + "' freq=" + freq + " | LEFTOVER=" + avail + (avail > 0 ? " bytes  <-- HIDDEN FIELDS" : " (none)"));
-            StringBuilder extra = new StringBuilder();
-            while (reply.dataAvail() >= 4) extra.append("int:").append(reply.readInt()).append(' ');
-            while (reply.dataAvail() >= 1) extra.append("byte:").append((int) reply.readByte()).append(' ');
-            if (extra.length() > 0) line("    leftover -> " + extra);
-        } catch (Throwable e) { line("  rawFreq transact failed: " + e); }
-        finally { reply.recycle(); data.recycle(); }
-    }
-
-    /** Exhaustive system-property read (these units stash MCU/radio state here). */
-    private void getpropDump() {
-        line("---- getprop (radio/fm/mcu/tuner/source/antenna) ----");
-        try {
-            Process p = Runtime.getRuntime().exec("getprop");
-            java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()));
-            String ln; int n = 0;
-            while ((ln = r.readLine()) != null) {
-                if (ln.toLowerCase(Locale.US).matches(".*(radio|fm|mcu|tuner|source|antenna).*")) { line("  " + ln); n++; }
-            }
-            r.close();
-            line("  (" + n + " matching props)");
-        } catch (Throwable e) { line("  getprop failed: " + e); }
     }
 
     private void startBroadcastLogger() {
@@ -407,9 +365,10 @@ public class MainActivity extends Activity {
         };
         IntentFilter f = new IntentFilter();
         for (String a : new String[]{
+                "com.nwd.action.ACTION_APP_IN_OUT", "com.nwd.ACTION_MEDIA_PLAY",
                 "com.nwd.action.ACTION_CHANGE_SOURCE", "com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE",
-                "com.nwd.action.ACTION_REQUEST_GOTO_CURRENT_SOURCE", "com.nwd.action.ACTION_SOURCE_CHANGED",
-                "com.nwd.action.MCU_STATE", "com.nwd.action.ACTION_RADIO", "com.nwd.radio.RDS" }) f.addAction(a);
+                "com.nwd.action.ACTION_MCU_STATE_CHANGE", "com.nwd.android.ACTION_EXIT_ARM_FM_RAIDO",
+                "com.nwd.radio.RDS" }) f.addAction(a);
         try {
             if (Build.VERSION.SDK_INT >= 34) registerReceiver(nwdRx, f, Context.RECEIVER_EXPORTED);
             else registerReceiver(nwdRx, f);
@@ -417,77 +376,46 @@ public class MainActivity extends Activity {
         } catch (Throwable e) { line("broadcast reg failed " + e); nwdRx = null; }
     }
 
-    private void search(boolean up) { if (radio == null) { line("not connected"); return; } try { radio.search(up); line("search(" + (up ? "up" : "down") + ") — full scan"); } catch (Exception e) { line("search FAILED: " + e); } }
-    private void nearOn(boolean on) { if (radio == null) { line("not connected"); return; } try { radio.setNearOn(on); line("setNearOn(" + on + ") isNearOn=" + radio.isNearOn()); } catch (Exception e) { line("setNearOn FAILED: " + e); } }
-    private void intro() { if (radio == null) { line("not connected"); return; } try { radio.INTRO(); line("INTRO() — intro scan"); } catch (Exception e) { line("INTRO FAILED: " + e); } }
-
-    private void sendCmd() {
-        if (radio == null) { line("not connected"); return; }
-        try {
-            byte a = (byte) Integer.parseInt(cmdA.getText().toString().trim());
-            byte b = (byte) Integer.parseInt(cmdB.getText().toString().trim());
-            radio.sendRadioCommand(a, b);
-            line("sendRadioCommand(" + a + ", " + b + ") sent — watch callbacks/getters for any effect");
-        } catch (Exception e) { line("sendRadioCommand FAILED: " + e); }
-    }
-
-    /** Latch source=FM indefinitely (no auto-restore) so slow RadioText has time
-     *  to accumulate; tap Restore src (or exit) to put it back. */
-    private void latchFm() {
-        if (!canWrite()) { line("no WRITE_SETTINGS — grant it first (full test opens the screen)"); return; }
-        if (latchedOrig == Integer.MIN_VALUE) latchedOrig = readSource();
-        try { Settings.System.putInt(getContentResolver(), SRC_KEY, SRC_FM); } catch (Exception e) { line("latch putInt " + e); }
-        line("LATCHED " + SRC_KEY + "=FM (orig " + latchedOrig + ", readback " + readSource() + "). Watch for RT; tap Restore src when done.");
-    }
-    private void restoreSource() {
-        if (latchedOrig == Integer.MIN_VALUE) { line("nothing latched"); return; }
-        try { Settings.System.putInt(getContentResolver(), SRC_KEY, latchedOrig); } catch (Exception ignored) {}
-        line("restored " + SRC_KEY + " to " + latchedOrig);
-        latchedOrig = Integer.MIN_VALUE;
-    }
-
-    // ── Interactive primitives (called only from the worker thread) ────────────
-    /** Multiple-choice question; blocks the worker until a button is tapped. */
-    private String ask(String q, String... options) {
-        line("Q: " + q);
+    // ── Inline prompt primitive (called from the worker thread) ─────────────────
+    /** Post a question with one button per option; block the worker until tapped.
+     *  Buttons live in the activity's own view, so this survives leaving/returning
+     *  to the app and never window-leaks. */
+    private String prompt(String text, String... options) {
+        line("Q: " + text.replace('\n', ' '));
         answer.clear();
         runOnUiThread(() -> {
-            try {
-                new AlertDialog.Builder(this).setTitle("Question").setMessage(q).setCancelable(false)
-                        .setItems(options, (d, which) -> answer.offer(options[which])).show();
-            } catch (Exception e) { line("dialog failed: " + e); answer.offer("(dialog-failed)"); }
+            promptText.setText(text);
+            promptButtons.removeAllViews();
+            for (String opt : options) {
+                Button b = new Button(this);
+                b.setText(opt);
+                b.setAllCaps(false);
+                b.setOnClickListener(v -> {
+                    answer.offer(opt);
+                    promptButtons.removeAllViews();
+                    promptText.setText("✓ " + opt);
+                });
+                b.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+                promptButtons.addView(b);
+            }
+            promptPanel.setVisibility(View.VISIBLE);
         });
-        try { String a = answer.take(); line("A: " + a); return a; } catch (InterruptedException e) { return ""; }
+        try { String a = answer.take(); line("A: " + a); return a; }
+        catch (InterruptedException e) { return ""; }
     }
 
-    /** Instruction; blocks until you tap Done (or Skip). Show it while foreground —
-     *  the dialog stays up while you visit another app, and you tap Done on return. */
-    private boolean instruct(String text) {
-        line("STEP: " + text.replace('\n', ' '));
-        answer.clear();
-        runOnUiThread(() -> {
-            try {
-                new AlertDialog.Builder(this).setTitle("Do this, then confirm").setMessage(text).setCancelable(false)
-                        .setPositiveButton("Done", (d, w) -> answer.offer("done"))
-                        .setNegativeButton("Skip", (d, w) -> answer.offer("skip")).show();
-            } catch (Exception e) { line("dialog failed: " + e); answer.offer("skip"); }
-        });
-        try { boolean done = "done".equals(answer.take()); line(done ? "  → confirmed" : "  → skipped"); return done; } catch (InterruptedException e) { return false; }
-    }
-
-    // ── Manual actions ────────────────────────────────────────────────────────
-    private void tuneMhz() { try { tuneMhzTo(Double.parseDouble(mhzField.getText().toString().trim())); } catch (Exception e) { line("bad MHz: " + e); } }
+    // ── Manual tune ────────────────────────────────────────────────────────────
+    private void tuneMhz() { try { fmBand = (byte) Integer.parseInt(bandField.getText().toString().trim()); tuneMhzTo(Double.parseDouble(mhzField.getText().toString().trim())); } catch (Exception e) { line("bad MHz/band: " + e); } }
     private void tuneMhzTo(double mhz) {
         if (radio == null) { line("not connected"); return; }
         try { int raw = (int) Math.round(mhz * freqMult); line("tune " + mhz + " (raw " + raw + ", band " + fmBand + ")"); radio.setCurrentFrequency(raw, fmBand, 0); }
         catch (RemoteException e) { line("tune FAILED: " + e); }
     }
-    private void seek(boolean up) { if (radio == null) { line("not connected"); return; } try { radio.seek(up); line("seek(" + (up ? "up" : "down") + ")"); } catch (RemoteException e) { line("seek FAILED: " + e); } }
 
     // ── Callbacks (Binder thread) ─────────────────────────────────────────────
     private final RadioCallback.Stub callback = new RadioCallback.Stub() {
         public void notifyState(byte s) { line("cb state " + s); }
-        public void notifyCurrentFrequency(byte band, int freq, String ps, int arg) { line("cb FREQ " + (freq / (double) freqMult) + " MHz PS='" + ps + "' arg=" + arg); }
+        public void notifyCurrentFrequency(byte band, int freq, String ps, int arg) { line("cb FREQ " + (freq / (double) freqMult) + " PS='" + ps + "' arg=" + arg); }
         public void notifyNearOn(boolean on) { line("cb nearOn " + on); }
         public void notifyStereo(boolean on) { line("cb stereo " + on); }
         public void notifyStereoOn(boolean on) { line("cb stereoOn " + on); }
@@ -507,7 +435,7 @@ public class MainActivity extends Activity {
         String name = "nwdprobe-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date()) + ".txt";
         String text; synchronized (logBuf) { text = logBuf.toString(); }
         try {
-            if (android.os.Build.VERSION.SDK_INT >= 29) {
+            if (Build.VERSION.SDK_INT >= 29) {
                 ContentValues cv = new ContentValues();
                 cv.put(MediaStore.Downloads.DISPLAY_NAME, name);
                 cv.put(MediaStore.Downloads.MIME_TYPE, "text/plain");
@@ -532,14 +460,13 @@ public class MainActivity extends Activity {
             if (amount > 0) log.scrollTo(0, amount);
         });
     }
-    private Button btn(String t, View.OnClickListener l) { Button b = new Button(this); b.setText(t); b.setOnClickListener(l); return b; }
+    private Button btn(String t, View.OnClickListener l) { Button b = new Button(this); b.setAllCaps(false); b.setText(t); b.setOnClickListener(l); return b; }
     private TextView label(String t) { TextView v = new TextView(this); v.setText(" " + t + " "); return v; }
     private View weighted(View v) { v.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f)); return v; }
     private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density); }
 
     @Override protected void onDestroy() {
-        stockPolling = false;
-        if (latchedOrig != Integer.MIN_VALUE) { try { Settings.System.putInt(getContentResolver(), SRC_KEY, latchedOrig); } catch (Exception ignored) {} }
+        try { if (vendorMp != null) { vendorMp.release(); vendorMp = null; } } catch (Exception ignored) {}
         try { if (sourceObserver != null) getContentResolver().unregisterContentObserver(sourceObserver); } catch (Exception ignored) {}
         try { if (nwdRx != null) unregisterReceiver(nwdRx); } catch (Exception ignored) {}
         try { if (radio != null) radio.unRegistCallback(callback); } catch (Exception ignored) {}

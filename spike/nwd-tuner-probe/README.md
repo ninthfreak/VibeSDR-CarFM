@@ -1,34 +1,49 @@
-# NWD built-in FM tuner — proof-of-life probe
+# NWD built-in FM tuner — standalone-audio probe
 
-A throwaway Android app that binds your head unit's built-in FM tuner service
-(`com.nwd.radio.service`) and runs an **exhaustive, guided test** of it. **This is
-not the CarFM backend** — it exists only to answer, on real hardware, the open
-questions in `docs/BUILTIN-TUNER-FINDINGS.md` (chiefly: can we unlock RadioText by
-writing `mcu_current_source`, and does anything change when the stock app is the
-active source).
+A throwaway Android app that pokes your head unit's built-in FM tuner service
+(`com.nwd.radio.service`) to answer **one question on real hardware:**
 
-**RUN FULL TEST** drives the whole thing (allow ~15 min): it auto-tunes 88.7 and
-101.5, dumps every getter, runs the source-gate write experiment, and pauses to
-**ask you button questions** (how does it sound? did text appear?) or **give you a
-step to perform** (grant a permission, open the stock app) with a **Done** button.
-Your answers and the machine readings all land in one log saved to Downloads.
+> **Can FM audio be brought up WITHOUT launching the stock radio app?**
 
-It also runs several deeper probes automatically:
-- **Raw `getCurrentFrequency` parcel dump** — hand-marshals the reply and reports
-  any bytes left over after our `{band, ps, freq}`. Leftover = **hidden fields our
-  AIDL truncates**; if they differ between a strong and weak station, that's a
-  signal reading we've been missing.
-- **`search()` full-scan** test (vs the stepping `seek()`), **`getprop`** dump,
-  and a **broadcast logger** for `com.nwd.action.*`.
+**This is not the CarFM backend** — it exists only to test that one thing.
 
-Manual buttons remain for ad-hoc poking: Connect / Tune / Seek / **Search** /
-**Near ON/OFF** / **INTRO** / Dump / Source probe / **getprop** / **Raw parcel** /
-**Latch FM src** + **Restore src** (hold source=FM indefinitely for slow RDS) /
-**sendRadioCommand a,b** (advanced — controlled MCU command).
+## What it does
+
+Decompiling the service (Spreadtrum path, `SprdRadioManager$1.onReceive`) showed
+that all the privileged audio work — power up the tuner, grab audio focus, route
+via `AudioSystem.setForceUse`, unmute — runs **inside the service**, and the
+service starts it in response to broadcasts the stock app fires *on itself*, with
+**no permission or caller check**. So a third-party app doesn't need audio
+permissions; it just needs to send the same broadcast to the running service.
+
+**▶ RUN AUDIO TEST** climbs a ladder of bring-up attempts and stops at the first
+one that produces sound, asking you a single yes/no per rung:
+
+1. `com.nwd.action.ACTION_APP_IN_OUT` with `extra_app_id=8` → service `InitFM()` — the stock app's own trigger.
+2. `com.nwd.ACTION_MEDIA_PLAY` with `extra_app_id=8` → the same `InitFM()` path.
+3. Bind + `setCurrentFrequency` (on the Spreadtrum build, tuning powers up the tuner on its own).
+4. `com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE` (`extra_source_id=4`, then `8`) — asks the MCU to *physically* switch the head unit's audio source to Radio. Needed if this unit is a true external-MCU analog tuner rather than a SoC tuner.
+5. `MediaPlayer("THIRDPARTY://MEDIAPLAYER_PLAYERTYPE_FM")` — a public-API long shot.
+
+Before the ladder it wakes/binds the service (the receivers are registered
+dynamically, so the service must be alive) and clears competing media. As a
+**bonus**, if a rung makes FM the active source it may also unlock **RadioText** —
+the probe logs `getRtMessage`/callbacks throughout, so we'd catch that too.
+
+> **Not tested here:** writing `mcu_current_source` directly. The decompile shows
+> that's a dead end — it needs system permission and the MCU re-asserts it — and
+> it's exactly what made the previous probe fail. This one triggers the service
+> instead of fighting the setting.
+
+Questions are answered with **inline buttons in the app's own screen** (the old
+version used a dialog that could lock up). Manual buttons remain for ad-hoc use:
+**Connect**, **Tune**, **Dump**, and one-tap **APP_IN_OUT 8 / MEDIA_PLAY 8 /
+REQ SRC 4 / EXIT FM**. Everything — machine readings and your answers — lands in
+one log saved to Downloads.
 
 The AIDL in `app/src/main/aidl/…` is a clean-room reconstruction of the service's
-interface (method order = the real transaction codes, Parcel layouts verified
-from the service). No decompiled vendor code is included.
+interface (method order = the real transaction codes). No decompiled vendor code
+is included.
 
 ## Build
 
@@ -41,9 +56,8 @@ from the service). No decompiled vendor code is included.
 
 **Command line — build only.** The Gradle **wrapper is committed** and pins Gradle
 8.9, so use `./gradlew` — do **not** run `gradle wrapper` (your system Gradle is
-older than AGP 8 needs; that's what the `dependencyResolutionManagement` error
-was). You need JDK 17+ (21 is fine) and the Android SDK. If Gradle can't find the
-SDK, point it at one:
+older than AGP 8 needs). You need JDK 17+ (21 is fine) and the Android SDK. If
+Gradle can't find the SDK, point it at one:
 ```bash
 cd spike/nwd-tuner-probe
 export ANDROID_HOME=$HOME/Android/Sdk      # or wherever your SDK is
@@ -66,35 +80,30 @@ The head unit does not have to be connected to your computer. Pick whichever fit
   `adb connect <unit-ip>:5555`): `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
   If your unit isn't networked/connected, ignore this.
 
-## Running the full test (on the unit)
+## Running the test (on the unit)
 
-Do it **parked**; no driving or GPS needed — pick a spot where a couple of
-stations come in. Then:
+Do it **parked**. Then:
 
-1. Launch **NWD Tuner Probe** → tap **▶ RUN FULL TEST**. It connects on its own.
-2. **First run only:** it will ask to write system settings. Tap **Done** to open
-   the grant screen, enable *"modify system settings"* for the probe, come back,
-   and **press RUN FULL TEST again**. (The permission sticks; later runs skip it.)
-3. From then on it runs unattended except for the prompts:
-   - **Questions** (buttons): "How does 88.7 sound? Clear / Weak / Silent",
-     "Did RadioText appear?", "Did audio play?" — just tap the honest answer; it's
-     recorded in the log next to the machine readings.
-   - **Steps** (Done button): the **stock-app comparison** — it asks you to open
-     the stock radio app, tune it to 88.7, wait ~15s, then come back and tap
-     **Done**. Leave the dialog up while you're in the stock app. This is the
-     decisive A/B: if RadioText shows up *only* when the stock app is the active
-     source, we know the gate is source-driven.
-4. When it finishes it **saves the log to Downloads** (`nwdprobe-<timestamp>.txt`).
+1. **Turn the volume up**, and make sure the **stock radio app is closed**.
+2. Launch **NWD Tuner Probe** → tap **▶ RUN AUDIO TEST**. It binds the service on
+   its own. No permission grant is needed.
+3. After each rung it asks, with buttons: **"is FM audio playing through the
+   speakers now?" → YES — audio! / No.** Answer honestly; it climbs to the next
+   rung only on *No*, and stops as soon as you say *Yes*.
+   - Rung 4 first warns you (with an **OK** button) that it will switch the whole
+     unit's source to Radio — that one is more intrusive, like pressing *Radio* on
+     the head unit.
+4. At the end it reports which rung (if any) produced audio, then offers **Stop FM
+   / Leave it playing**, and **saves the log to Downloads** (`nwdprobe-<timestamp>.txt`).
    Send me that file (or a screenshot).
 
-The two answers I most want from it: does forcing `mcu_current_source=4` make
-**RadioText** appear (write test), and does RadioText appear when the **stock app**
-is active (A/B step). Together they tell us whether CarFM can get RadioText, and how.
+The answer I most want: **which rung, if any, makes sound come out with the stock
+app closed.** That tells us whether CarFM can drive its own audio, and how.
 
 ## Safety
-It binds the *same* service the stock radio app uses. The only thing it writes is
-`mcu_current_source` in `Settings.System`, and it **restores the original value**
-after each ~12s hold. That's volatile source-selection state — a reboot fully
-resets it, and it never touches firmware, CAN, calibration, or presets
-(`saveCurrentFrequency` is never called). Worst realistic case is a brief
-source/audio mix-up cleared by switching source or restarting. Run it parked.
+It binds the *same* service the stock radio app uses and sends the *same*
+broadcasts the stock app sends. It does **not** write any system setting, touch
+firmware, CAN, calibration, or presets (`saveCurrentFrequency` is never called).
+Rung 4 changes the active audio source (reversible — **Stop FM** restores it, and
+a reboot fully resets it). Worst realistic case is a brief source/audio mix-up
+cleared by switching source or restarting. Run it parked.
