@@ -128,6 +128,10 @@ public class MainActivity extends Activity {
         rf.setTextSize(15f);
         root.addView(rf);
 
+        Button wp = btn("▶  OVERWRITE BUILT-IN PRESETS (app → unit)", v -> runWritePresets());
+        wp.setTextSize(15f);
+        root.addView(wp);
+
         promptPanel = new LinearLayout(this);
         promptPanel.setOrientation(LinearLayout.VERTICAL);
         promptPanel.setBackgroundColor(0xFF203040);
@@ -429,6 +433,73 @@ public class MainActivity extends Activity {
         saveLog();
         line("==== RADIO FUNCTIONS DONE ====");
         testRunning = false;
+    }
+
+    // ── Overwrite the built-in preset banks from the "app" side (ONE-WAY: app→unit) ──
+    // Demo list standing in for CarFM's presets: 18 ascending frequencies, so a
+    // sequential fill (FM1[0..5], FM2[0..5], FM3[0..5]) steps low→high on the wheel.
+    private static final double[] TEST_PRESETS = {
+        88.1, 89.5, 90.7, 91.9, 93.3, 94.5,      // FM1
+        96.1, 97.3, 98.9, 100.3, 101.5, 102.7,   // FM2
+        103.9, 104.7, 105.5, 106.3, 107.1, 107.9 // FM3
+    };
+
+    private void runWritePresets() {
+        if (testRunning) { line("test already running"); return; }
+        testRunning = true;
+        new Thread(this::writePresetsBody, "nwd-writepresets").start();
+    }
+
+    private void writePresetsBody() {
+        line("\n==== OVERWRITE BUILT-IN PRESETS (app → unit) ====");
+        String go = prompt("This OVERWRITES the head unit's built-in FM presets (FM1/FM2/FM3) with an "
+                + "ascending test list. Your current built-in presets WILL be replaced. Continue?",
+                "Overwrite", "Cancel");
+        if (!"Overwrite".equals(go)) { line("cancelled"); testRunning = false; return; }
+
+        wakeAndBind();
+        for (int i = 0; radio == null && i < 16; i++) sleep(500);
+        if (radio == null) { line("not bound — aborting"); testRunning = false; return; }
+        line("ensuring FM powered (ACTION_APP_IN_OUT app_id=8)…");
+        sendAppInOut(8); sleep(3500); calibrate();
+
+        line("\n-- BEFORE --"); dumpAllBanks();
+
+        int n = Math.min(TEST_PRESETS.length, 18);
+        line("\n-- writing " + n + " presets (FM1/FM2/FM3, 6 each) via saveCurrentFrequency --");
+        for (int i = 0; i < n; i++) {
+            int band = i / 6, slot = i % 6;
+            if (slot == 0) {
+                line("  → switch to " + bankName(band));
+                if (!gotoBand(band)) line("  WARN: could not reach " + bankName(band) + " (now on " + bankName(currentBand()) + ") — writes may land in the wrong bank");
+            }
+            tuneMhzTo(TEST_PRESETS[i]); sleep(1600);   // let mCurrentStation settle before save
+            try { radio.saveCurrentFrequency((byte) slot); line("  wrote " + bankName(band) + " slot " + (slot + 1) + " = " + TEST_PRESETS[i]); }
+            catch (Exception e) { line("  saveCurrentFrequency(" + slot + ") FAILED: " + e); }
+            sleep(600);
+        }
+
+        line("\n-- AFTER --"); dumpAllBanks();
+        prompt("Check the head unit's FM1/FM2/FM3 lists — do they now show the ascending test stations?",
+                "Yes, overwritten", "No / partial");
+        saveLog();
+        line("==== OVERWRITE DONE ====");
+        testRunning = false;
+    }
+
+    private int currentBand() {
+        if (radio == null) return -1;
+        try { Frequency f = radio.getCurrentFrequency(); return f != null ? f.band : -1; } catch (Exception e) { return -1; }
+    }
+
+    /** Advance changeBand() until we're on `target` (FM1=0/FM2=1/FM3=2). */
+    private boolean gotoBand(int target) {
+        for (int t = 0; t < 8; t++) {
+            if (currentBand() == target) return true;
+            try { radio.changeBand(); } catch (Exception e) { line("  changeBand err " + e); }
+            sleep(1600);
+        }
+        return currentBand() == target;
     }
 
     /** Read the MHz box on the UI thread (view access must not be off-thread). */

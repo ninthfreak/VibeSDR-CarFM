@@ -120,6 +120,17 @@ the real seek-to-next-station (scans and stops), `seek()` is a single manual ste
 before we could power FM up ourselves. For the RDS dwell, point the MHz box at a
 station you *know* carries RadioText.
 
+### OVERWRITE BUILT-IN PRESETS (app → unit)
+
+A third button, testing **one-way sync from the app INTO the head unit's preset
+banks** (never the reverse). It writes an ascending 18-station demo list into
+FM1/FM2/FM3 (6 each) by, for each slot: switching to the bank (`changeBand`),
+tuning to the frequency, and calling `saveCurrentFrequency(slot)` (0–5, zero-based,
+writes the current station into `mPrefFrequency[bank][slot]`). It dumps all banks
+before and after so you can confirm the overwrite. Capacity is 18 FM presets
+(`CleanFMPreFreData` clears exactly 3 banks × 6). **It replaces the built-in
+presets** — that's the point, and confirmed intended.
+
 ## Safety
 It binds the *same* service the stock radio app uses and sends the *same*
 broadcasts the stock app sends. It does **not** write any system setting, touch
