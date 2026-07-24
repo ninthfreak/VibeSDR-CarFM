@@ -161,6 +161,7 @@ public class MainActivity extends Activity {
         LinearLayout manual = new LinearLayout(this);
         manual.setOrientation(LinearLayout.HORIZONTAL);
         manual.addView(weighted(btn("Tune", v -> tuneMhz())));
+        manual.addView(weighted(btn("Dump banks", v -> new Thread(this::dumpAllBanks).start())));
         manual.addView(weighted(btn("Rich dump", v -> new Thread(() -> richDump("manual")).start())));
         manual.addView(weighted(btn("logcat", v -> new Thread(() -> captureLogcat("manual")).start())));
         manual.addView(weighted(btn("Save log", v -> saveLog())));
@@ -391,6 +392,7 @@ public class MainActivity extends Activity {
         sendAppInOut(8); sleep(3500);
         calibrate();
         richDump("radiofunc baseline");
+        dumpAllBanks();   // FM1/FM2/FM3 (+AM) preset lists — see how AMS filled them
 
         // A — tune to a chosen station (prove we can pick the station standalone).
         line("\n-- A: tune to " + uiMhz + " (setCurrentFrequency) --");
@@ -433,6 +435,41 @@ public class MainActivity extends Activity {
     private void latchMhzField() {
         runOnUiThread(() -> { try { uiMhz = Double.parseDouble(mhzField.getText().toString().trim()); } catch (Exception ignored) {} });
         sleep(150);
+    }
+
+    /** FM1=0, FM2=1, FM3=2, then AM banks. arg is 1-6 WITHIN this bank; the bank is
+     *  carried by notifyCurrentFrequency's separate `band` field / Frequency.band. */
+    private static String bankName(int band) {
+        switch (band) { case 0: return "FM1"; case 1: return "FM2"; case 2: return "FM3"; case 3: return "AM1"; case 4: return "AM2"; default: return "band" + band; }
+    }
+
+    /** Dump every preset bank. getPrefabFrequency() returns only the CURRENT bank's
+     *  6 slots, so cycle changeBand() and read each (FM1/FM2/FM3/AM…). NOTE:
+     *  changeBand retunes to each bank's last station as it goes; it wraps back
+     *  after a full cycle. Ascending values in a bank = auto-stored by AMS. */
+    private void dumpAllBanks() {
+        if (radio == null) { line("dumpAllBanks: not bound"); return; }
+        line("---- ALL PRESET BANKS (cycling changeBand) ----");
+        for (int i = 0; i < 5; i++) {
+            try {
+                Frequency cf = radio.getCurrentFrequency();
+                int band = cf != null ? cf.band : -1;
+                Frequency[] pf = radio.getPrefabFrequency();
+                StringBuilder sb = new StringBuilder("  band=" + band + "(" + bankName(band) + ") ");
+                if (pf != null) {
+                    sb.append('[').append(pf.length).append("] ");
+                    for (int s = 0; s < pf.length; s++) {
+                        sb.append(s + 1).append(':').append(pf[s].freq / (double) freqMult);
+                        if (pf[s].psName != null && !pf[s].psName.isEmpty()) sb.append('/').append(pf[s].psName);
+                        sb.append("  ");
+                    }
+                } else sb.append("(null)");
+                line(sb.toString());
+            } catch (Exception e) { line("  bank read err " + e); }
+            try { radio.changeBand(); } catch (Exception e) { line("  changeBand err " + e); }
+            sleep(1500);
+        }
+        line("  (cycled through all banks; ascending values in a bank = AMS auto-store)");
     }
 
     /** Sit on the current station for `seconds`, logging freq / PS / RadioText every 3s. */
@@ -690,7 +727,7 @@ public class MainActivity extends Activity {
     // ── Callbacks (Binder thread) ─────────────────────────────────────────────
     private final RadioCallback.Stub callback = new RadioCallback.Stub() {
         public void notifyState(byte s) { line("cb state " + s); }
-        public void notifyCurrentFrequency(byte band, int freq, String ps, int arg) { line("cb FREQ " + (freq / (double) freqMult) + " PS='" + ps + "' arg=" + arg); }
+        public void notifyCurrentFrequency(byte band, int freq, String ps, int arg) { line("cb FREQ " + (freq / (double) freqMult) + " PS='" + ps + "' band=" + band + "(" + bankName(band) + ") arg=" + arg + (arg >= 1 && arg <= 6 ? "  => " + bankName(band) + " slot " + arg : "  (not a preset in this bank)")); }
         public void notifyNearOn(boolean on) { line("cb nearOn " + on); }
         public void notifyStereo(boolean on) { line("cb stereo " + on); }
         public void notifyStereoOn(boolean on) { line("cb stereoOn " + on); }
