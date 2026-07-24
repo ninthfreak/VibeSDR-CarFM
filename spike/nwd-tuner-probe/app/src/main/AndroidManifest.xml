@@ -2,9 +2,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
-    <!-- Source-gate experiment: write mcu_current_source in Settings.System. Special
-         access; the app opens the grant screen for you during the full test. -->
-    <uses-permission android:name="android.permission.WRITE_SETTINGS"/>
 
     <!-- Android 11+ package visibility: needed to bind the radio service by package -->
     <queries>
