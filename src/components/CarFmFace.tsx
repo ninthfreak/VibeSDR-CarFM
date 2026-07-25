@@ -88,9 +88,6 @@ export interface CarFmFaceProps {
   audioActive?: boolean;
   onClaimAudio?: () => void;     // inactive → take priority (power button)
   onReleaseAudio?: () => void;   // active → give it up
-  /** Band-theme Easter egg forced from the settings secret panel (§12); overrides
-   *  RadioText detection. null/undefined → auto-detect from the live RadioText. */
-  forcedEggId?: string | null;
 }
 
 const CHANNEL_HZ = 100_000;             // 0.1 MHz — the design's tune/seek step
@@ -361,7 +358,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
     rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
     onSetAutostart, onSetTheme, onRetryTuner, presets, nwdActive, onHardwareSeek,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
-    audioActive, onClaimAudio, onReleaseAudio, forcedEggId,
+    audioActive, onClaimAudio, onReleaseAudio,
   } = props;
   const insets = useSafeAreaInsets();
   const scheme = useColorScheme();
@@ -371,8 +368,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // `off` gates the grayscale filter, veils, depth removal and indicator off-states.
   const off = audioActive === false;
   // Band theme (§12): match the live RadioText to an artist (or take a forced id
-  // from the secret panel). Cosmetic only; suppressed while audio is released.
-  const egg = resolveEgg({ rt: radioText, forcedId: forcedEggId, dark, pal: basePal, off });
+  // from the settings secret panel). Cosmetic only; suppressed while audio is
+  // released. Forced id is session-only (never persisted, per the spec).
+  const [forcedEgg, setForcedEgg] = useState<string | null>(null);
+  const egg = resolveEgg({ rt: radioText, forcedId: forcedEgg, dark, pal: basePal, off });
   const eggTk = eggTokens(egg, basePal);
   // Fold the theme's accent restatement into the palette so every interactive
   // element (active preset, star, stereo lock, Nearby/Done) recolours at once.
@@ -1101,6 +1100,8 @@ export default function CarFmFace(props: CarFmFaceProps) {
         onRetryTuner={onRetryTuner}
         onSetAutostart={(on) => onSetAutostart?.(on)}
         onSetTheme={(t) => onSetTheme?.(t)}
+        forcedEggId={forcedEgg}
+        onForceEgg={setForcedEgg}
         onClose={() => setSettingsOpen(false)}
       />
       {/* Preset logo-search window (design §6.4). */}
