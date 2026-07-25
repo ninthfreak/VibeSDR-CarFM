@@ -104,11 +104,17 @@ Then:
 1. Launch **NWD Tuner Probe** → tap **▶ RUN ALL TESTS**. It re-states the expected
    state on screen, then binds the service and runs the three phases back to back
    (~4–5 min). No permission grant needed.
-2. Follow the on-screen prompts. Each phase reminds you what it's doing; answer the
-   yes/no buttons honestly (audio playing? did seek stop on a station? etc.). The
-   more intrusive steps (source switch, preset overwrite) ask for a confirm first.
-3. At the end it offers **Stop FM / Leave it playing** and **saves the log to
-   Downloads** (`nwdprobe-<timestamp>.txt`). Send me that file (or a screenshot).
+2. Follow the on-screen prompts. Each phase opens with a bold banner saying what
+   it proves, so they don't blur together. **The only questions you're asked are the
+   ones only your ears can answer** — "is audio playing?" and "are you hearing the
+   right station?". RDS and seek results are read straight from the tuner's own
+   variables and printed to the log; the probe does **not** ask you to eyeball them.
+   The more intrusive steps (source switch, preset overwrite) ask for a confirm first.
+3. At the very end it offers **Stop FM / Leave it playing** as the *last* action
+   (nothing is written after it, so audio won't pop back on behind a file save) and
+   **saves the log to Downloads** (`nwdprobe-<timestamp>.txt`). If Stop FM is chosen
+   it watches a few seconds and records whether the MCU re-powers FM on its own.
+   Send me that file (or a screenshot).
 
 (Individual phases can be run alone from **Advanced** — including a
 **Reclaim-after-loss** test that guides you through losing the source to another
@@ -120,12 +126,21 @@ app closed.** That tells us whether CarFM can drive its own audio, and how.
 ### RUN RADIO FUNCTIONS (tune · seek · RDS)
 
 Runs **after** audio is up (it powers FM up first anyway). It proves the rest of a
-real radio: **tunes to WIBA 101.5 and WERN 88.7** (asking you to confirm you hear
-each), gives each a **30s RadioText dwell**, then **seeks** with the actual
-hardware station-seek. Note the AIDL is named backwards on this AllWinner unit —
-`search()` is the real seek-to-next-station (scans and stops), `seek()` is a single
-manual step — and the seek is gated on the tuner being powered, which is why it did
-nothing before we could power FM up ourselves.
+real radio: **tunes to WIBA 101.5 and WERN 88.7** (asking you to confirm by ear you
+hear each), then for each station **reads RDS for ~24s** — PS / RadioText / PTY are
+sampled from the tuner's own getters and the probe prints a verdict (`RDS PRESENT …`
+or `NO RDS reached the client …`). It does **not** ask you whether text appeared;
+the app can see the variables before anything would ever hit a screen.
+
+Then **seek**: for each of `search up`, `search down`, and a single `step up`, it
+records the frequency **before**, fires the call, **polls until the tuner stops
+moving**, and prints `start → landed` with a verdict (real hop vs. one tick vs. no
+change). So you see exactly what it did instead of just hearing the audio change,
+and it never "keeps slowly seeking" while waiting on you — it settles first, then
+moves on, and parks back on 101.5 at the end. Note the AIDL is named backwards on
+this AllWinner unit — `search()` is the real seek-to-next-station (scans and stops),
+`seek()` is a single manual step — and seek is gated on the tuner being powered,
+which is why it did nothing before we could power FM up ourselves.
 
 ### OVERWRITE BUILT-IN PRESETS (app → unit)
 
@@ -141,7 +156,10 @@ confirmed intended.
 ## Safety
 It binds the *same* service the stock radio app uses and sends the *same*
 broadcasts the stock app sends. It does **not** write any system setting, touch
-firmware, CAN, calibration, or presets (`saveCurrentFrequency` is never called).
-Rung 4 changes the active audio source (reversible — **Stop FM** restores it, and
-a reboot fully resets it). Worst realistic case is a brief source/audio mix-up
-cleared by switching source or restarting. Run it parked.
+firmware, CAN, or calibration. It **does** overwrite the built-in FM **presets** in
+Phase 3 (`saveCurrentFrequency`) — one-way, app→unit, and only after you confirm;
+that's the whole point of that phase, and it's reversible by re-running the stock
+app's auto-store or overwriting again. Rung 4 changes the active audio source
+(reversible — **Stop FM** restores it, and a reboot fully resets it). Worst
+realistic case is a brief source/audio mix-up cleared by switching source or
+restarting. Run it parked.
