@@ -62,6 +62,14 @@ export const DARK: CarFmPalette = {
   nearbyGlass: '#2A3644',
 };
 
+/** The canonical dark surface a station logo composites onto (hero card / preset
+ *  tile / peek card are all this panel tone). It's the `bg` INPUT to dark-mode
+ *  logo adaptation and the cache key — one variant per station serves every dark
+ *  logo surface (remap/halo variants carry transparency, so they read on any of
+ *  them). A separate night/dusk theme would pass its own colour and get its own
+ *  cached variant. Never hardcode this downstream — read it from here. */
+export const LOGO_DARK_BG = DARK.panel;
+
 /** Bundled via expo-font in App.tsx (no Google Fonts at runtime). */
 export const FONT = 'Atkinson Hyperlegible';
 /** Real 700 cut, registered as its own family — Android faux-bolds a single

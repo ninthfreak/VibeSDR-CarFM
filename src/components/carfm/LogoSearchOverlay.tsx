@@ -24,7 +24,8 @@ import { ddgStationLogoResults, stationLogoQuery, type DdgImage } from '../../se
 import { setStationLogoFromUrl, getStationLogo } from '../../services/stationFinder';
 import { getStationPrefs, setStationPrefs } from '../../services/stationDb';
 import LogoTile, { invalidateLogoTile, invalidateStationDisplay } from './LogoTile';
-import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
+import LogoDarkPicker from './LogoDarkPicker';
+import { FONT, FONT_BOLD, LOGO_DARK_BG, type CarFmPalette } from './tokens';
 
 export interface LogoSearchTarget {
   base: string;        // callsign base — the DB key the logo is saved against
@@ -57,6 +58,9 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
   const [currentUri, setCurrentUri] = useState<string | null>(null);
   const [showCall, setShowCall] = useState(true);
   const [showFreq, setShowFreq] = useState(true);
+  // After a NEW logo is assigned, offer the dark-mode treatment picker before
+  // fully closing (the handoff's priority-2 UX). Null = not showing.
+  const [darkPick, setDarkPick] = useState<{ base: string; uri: string } | null>(null);
 
   const query = target ? stationLogoQuery(target.freqMhz, target.callsign) : '';
 
@@ -102,6 +106,12 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
       invalidateLogoTile(target.base);
       invalidateStationDisplay();
       onAssigned?.(target.base);
+      // A NEW logo was just assigned → offer the dark-mode treatment picker
+      // before closing. Toggling display prefs alone (no pick) just closes.
+      if (picking) {
+        const u = await getStationLogo(target.base);
+        if (u) { setDarkPick({ base: target.base, uri: u }); setSaving(false); return; }
+      }
       onClose();
     } catch {
       setPhase('error');
@@ -118,6 +128,7 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
     : { hx: 22, hy: 16, qx: 22, qy: 12, bx: 22, fx: 22, fy: 14 };
 
   return (
+   <>
     <Modal visible={visible && !!target} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.scrim}>
         <View style={[styles.card, { width: cardW, height: cardH, backgroundColor: pal.bg }]}>
@@ -329,6 +340,15 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
         </View>
       </View>
     </Modal>
+    <LogoDarkPicker
+      visible={!!darkPick}
+      base={darkPick?.base ?? null}
+      logoUri={darkPick?.uri ?? null}
+      darkBg={LOGO_DARK_BG}
+      pal={pal}
+      onClose={() => { setDarkPick(null); onClose(); }}
+    />
+   </>
   );
 }
 
