@@ -12,11 +12,14 @@ import React, { useEffect, useState } from 'react';
 import { Image, Text, View } from 'react-native';
 
 import { getStationLogo, callsignForFreq } from '../../services/stationFinder';
-import { getStationPrefs } from '../../services/stationDb';
+import { getStationPrefs, getDarkLogo } from '../../services/stationDb';
+import { regenerateDarkLogo } from '../../services/logoDark/regenerate';
 import { callsignBase } from '../../services/piCallsign';
-import { brandColor, cleanCall, monogram, FONT_BOLD, type CarFmPalette } from './tokens';
+import { brandColor, cleanCall, monogram, FONT_BOLD, DARK, LOGO_DARK_BG, type CarFmPalette } from './tokens';
 
 const cache = new Map<string, string | null>();
+const darkCache = new Map<string, { uri: string; treatment: string } | null>();
+const regenTried = new Set<string>();   // one lazy regen attempt per (base|bg) per session
 const listeners = new Set<() => void>();
 const dispListeners = new Set<() => void>();
 
@@ -30,8 +33,11 @@ export function callsignFrom(name?: string): string | null {
 /** Drop a station's cached logo (or all) and re-read every mounted tile. Called
  *  after the logo-search window assigns a new logo. */
 export function invalidateLogoTile(base?: string): void {
-  if (base) cache.delete(base.toUpperCase());
-  else cache.clear();
+  if (base) {
+    const b = base.toUpperCase();
+    cache.delete(b);
+    for (const k of [...darkCache.keys()]) if (k.startsWith(b + '|')) darkCache.delete(k);
+  } else { cache.clear(); darkCache.clear(); }
   listeners.forEach((l) => l());
 }
 
@@ -73,6 +79,83 @@ export function useStationLogo(name?: string, freqMhz?: number): {
   }, [base, tick]);
 
   return { base, uri, hasLogo: !!uri };
+}
+
+/** The cached dark-mode variant for a station on background `darkBg`, or nulls.
+ *  Pass `darkBg` only when the dark theme is active (undefined in light mode →
+ *  no lookup). Re-reads when invalidateLogoTile() fires. The returned `uri` is a
+ *  transparent-background PNG (remap/halo/as-is) or the keyed logo for `PLATE`;
+ *  `treatment` is the enum (REMAP/HALO/AS_IS/PLATE) so the caller knows whether
+ *  to add a grey plate. */
+export function useDarkLogo(base: string | null, darkBg?: string): { uri: string | null; treatment: string | null } {
+  const key = base && darkBg ? `${base.toUpperCase()}|${darkBg.toLowerCase()}` : null;
+  const [v, setV] = useState<{ uri: string; treatment: string } | null>(key ? darkCache.get(key) ?? null : null);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const l = () => setTick((n) => n + 1);
+    listeners.add(l);
+    return () => { listeners.delete(l); };
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    if (!base || !darkBg || !key) { setV(null); return; }
+    if (darkCache.has(key)) { setV(darkCache.get(key)!); return; }
+    getDarkLogo(base, darkBg)
+      .then((d) => {
+        const val = d ? { uri: d.dataUri, treatment: d.treatment } : null;
+        darkCache.set(key, val);
+        if (!cancelled) setV(val);
+        // No variant yet for a station that HAS a logo (this hook is only called
+        // with darkBg when a logo exists) → adapt it once in the background, then
+        // re-read. Guarded so a decode failure doesn't loop.
+        if (!d && !regenTried.has(key)) {
+          regenTried.add(key);
+          regenerateDarkLogo(base, darkBg).then(() => { darkCache.delete(key); invalidateLogoTile(base); }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [base, darkBg, tick]);
+  return { uri: v?.uri ?? null, treatment: v?.treatment ?? null };
+}
+
+/** Render a real logo image inside a fixed-geometry plate, choosing the light or
+ *  dark-adapted source and the right backing:
+ *   • light mode → the original logo on `plateBg` (default transparent).
+ *   • dark mode + a cached variant → the adapted PNG; a grey rounded PLATE only
+ *     for the PLATE treatment, otherwise transparent (remap/halo/as-is carry
+ *     their own readability).
+ *   • dark mode + no variant yet → the original on `darkFallbackBg` (a light
+ *     plate) so a not-yet-adapted dark logo doesn't vanish.
+ *  `dark` is whether the dark theme is active; `darkVariant` comes from
+ *  useDarkLogo(); pass both so this stays a pure presentational helper. */
+export function LogoImage({ uri, dark, darkVariant, w, h, radius, plateBg, darkFallbackBg = '#FFFFFF' }: {
+  uri: string;
+  dark: boolean;
+  darkVariant: { uri: string | null; treatment: string | null };
+  w: number; h: number; radius: number;
+  plateBg?: string;
+  darkFallbackBg?: string;
+}) {
+  let src = uri;
+  let bg = plateBg ?? 'transparent';
+  let pad = 0;
+  if (dark) {
+    if (darkVariant.uri) {
+      src = darkVariant.uri;
+      if (darkVariant.treatment === 'PLATE') { bg = '#E6E6E6'; pad = Math.round(Math.max(w, h) * 0.09); }
+      else bg = 'transparent';                       // remap/halo/as-is read on the dark surface directly
+    } else {
+      bg = darkFallbackBg;                            // not adapted yet → keep it visible on a light plate
+    }
+  }
+  const plateRadius = dark && darkVariant.treatment === 'PLATE' ? Math.round(Math.min(w, h) * 0.14) : radius;
+  return (
+    <View style={{ width: w, height: h, borderRadius: plateRadius, backgroundColor: bg, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', padding: pad }}>
+      <Image source={{ uri: src }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+    </View>
+  );
 }
 
 /** Notify every mounted hero that a station's Display Call Sign / Frequency
@@ -146,16 +229,11 @@ export function PresetPlate({ name, freqMhz, w, h, radius, pal, freqSize }: {
   freqSize: number;       // frequency font size (rendered only in the no-logo case)
 }) {
   const { base, uri } = useStationLogo(name, freqMhz);
+  const dark = pal === DARK;
+  const darkVariant = useDarkLogo(base, dark && uri ? LOGO_DARK_BG : undefined);
   if (uri) {
-    // Real logo: borderless transparent plate, Fit; no freq/callsign text.
-    return (
-      <View style={{
-        width: w, height: h, borderRadius: radius, overflow: 'hidden',
-        alignItems: 'center', justifyContent: 'center',
-      }}>
-        <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
-      </View>
-    );
+    // Real logo: Fit, borderless in light mode / dark-adapted in dark mode.
+    return <LogoImage uri={uri} dark={dark} darkVariant={darkVariant} w={w} h={h} radius={radius} />;
   }
   // No logo: call letters inside the box, frequency beneath it.
   const label = base ? cleanCall(base) : (cleanCall(name).slice(0, 4) || name?.trim().slice(0, 4).toUpperCase() || '·');

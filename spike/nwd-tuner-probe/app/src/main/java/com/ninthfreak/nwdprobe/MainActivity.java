@@ -273,14 +273,30 @@ public class MainActivity extends Activity {
         phaseRadioFunc();
         phaseWritePresets();
 
-        String c = prompt("All phases done. Turn the tuner audio back off?", "Stop FM", "Leave it playing");
-        if ("Stop FM".equals(c)) sendExitFm();
-
         line("\n==== FULL RUN SUMMARY ====");
         line("audio winning rung : " + (worked != null ? worked : "NONE"));
         line("logcat readable    : " + logcatReadable);
         line("\n" + summary);
-        saveLog();
+
+        // Optional stop — the LAST real action, so nothing the probe does can
+        // re-trigger audio after it. If FM pops back on anyway, that's the MCU
+        // (its active SOURCE is still Radio), which we watch for and record.
+        String c = prompt("Everything is captured. Stop the tuner audio now?\n\n"
+             + "Note: if it comes back on, the head unit's active source is still Radio — "
+             + "you'd switch sources on the unit itself to fully silence it.", "Stop FM", "Leave it playing");
+        if ("Stop FM".equals(c)) {
+            sendExitFm();
+            line("sent EXIT_ARM_FM — watching 6s to see whether it stays off…");
+            boolean cameBack = false;
+            for (int t = 0; t < 6; t++) { sleep(1000); if (am != null && am.isMusicActive()) cameBack = true; }
+            boolean nowOn = am != null && am.isMusicActive();
+            line("  after EXIT_ARM_FM: musicActive=" + nowOn
+                 + (cameBack ? "  <-- FM re-powered itself (MCU source is still Radio; switch source on the unit to fully stop)"
+                             : "  (stayed off)"));
+            summary.append("STOP: EXIT_ARM_FM -> ").append(cameBack ? "re-powered by MCU" : "stayed off").append('\n');
+        }
+
+        saveLog();   // file write is the final step; audio was already handled + recorded above
         line("==== FULL RUN DONE ====");
         testRunning = false;
     }
@@ -304,8 +320,11 @@ public class MainActivity extends Activity {
 
     // ── PHASE 1: standalone audio bring-up ladder ───────────────────────────────
     private String phaseAudio() {
-        prompt("PHASE 1 — STANDALONE AUDIO.\n\nConfirms FM audio can start with the stock radio app CLOSED. "
-             + "It tries a few triggers and asks 'is audio playing?' after each.\n\nTap Continue.", "Continue");
+        banner("PHASE 1 of 3", "STANDALONE AUDIO",
+               "Proves FM audio can START with the stock radio app CLOSED. Tries a ladder of\n"
+             + "triggers and stops at the first that makes sound — the ONLY thing asked here is\n"
+             + "'is audio playing?', because only your ears can confirm it.");
+        prompt("Ready for Phase 1 (standalone audio)?", "Continue");
         sendStopQqMusic(); sleep(600); audioSnap("after STOP_QQ_MUSIC");
         String worked = null;
 
@@ -390,60 +409,114 @@ public class MainActivity extends Activity {
                .append("   USER  : ").append(yes ? "AUDIO YES" : "no").append("\n\n");
     }
 
-    // ── PHASE 2: tune · seek · RDS ──────────────────────────────────────────────
+    // ── PHASE 2: tune · RDS · seek ──────────────────────────────────────────────
+    // Distinct from Phase 1 (which only proves audio starts). This proves the app
+    // can CONTROL the tuner: land on a chosen station (human ear confirms), read
+    // whatever RDS the service exposes (decided from the variables, NOT asked), and
+    // drive seek with a visible before→after frequency readout (no guessing).
     private void phaseRadioFunc() {
-        prompt("PHASE 2 — TUNE · SEEK · RDS.\n\nFM should be playing. It tunes to WIBA 101.5 and WERN 88.7 "
-             + "(confirming you hear each), checks BOTH for RadioText, then tests seek.\n\nTap Continue.", "Continue");
+        banner("PHASE 2 of 3", "TUNE · RDS · SEEK",
+               "Proves CarFM can DRIVE the built-in tuner: pick a station, read RDS, run seek.\n\n"
+             + "You'll confirm by ear which station you land on. The RDS and seek results are read\n"
+             + "straight from the tuner's own variables and shown in the log — no guesswork asked of you.");
+        prompt("Ready for Phase 2 (tune / RDS / seek)?", "Continue");
         ensurePowered();
 
         // RDS enable: on this AllWinner unit setRDSState only toggles AF(1)/TA(2)
         // (not a PS/RT master switch), but enable everything we can and record the
-        // states — the logcat capture in the dwells shows whether the RDS DECODER
-        // (NewRdsManager) is producing PS/RT internally even if none reaches us.
+        // states — captureLogcat shows whether the RDS DECODER (NewRdsManager) is
+        // producing PS/RT internally even if none reaches us as a bound client.
         line("\n-- enabling RDS selectors (AF/TA are the only setRDSState levers here) --");
         for (int s = 0; s < 4; s++) { try { radio.setRDSState((byte) s, true); } catch (Exception ignored) {} }
         StringBuilder rs = new StringBuilder();
         for (int s = 0; s < 4; s++) { try { rs.append(s).append('=').append(radio.getRDSState(s)).append(' '); } catch (Exception e) { rs.append(s).append("=err "); } }
         line("  rdsState now " + rs);
 
-        // WIBA 101.5 — tune, confirm you hear it, dwell 30s for RadioText.
+        // WIBA 101.5 — tune, human confirms by ear, then AUTO-READ RDS (no question).
         tuneConfirm(101.5, "WIBA", "TUNE-WIBA");
-        line("\n-- RDS dwell 30s on WIBA 101.5 --");
-        dwell("RDS-WIBA", 30); captureLogcat("RDS-WIBA");
-        prompt("WIBA 101.5 — did any RadioText / station name appear (log rt='…'/PS, or on screen)?",
-                "Yes, text appeared", "No text");
+        rdsRead("WIBA 101.5", 24); captureLogcat("RDS-WIBA");
 
-        // WERN 88.7 — tune, confirm, dwell 30s for RadioText.
+        // WERN 88.7 — same.
         tuneConfirm(88.7, "WERN", "TUNE-WERN");
-        line("\n-- RDS dwell 30s on WERN 88.7 --");
-        dwell("RDS-WERN", 30); captureLogcat("RDS-WERN");
-        prompt("WERN 88.7 — did any RadioText / station name appear (log rt='…'/PS, or on screen)?",
-                "Yes, text appeared", "No text");
+        rdsRead("WERN 88.7", 24); captureLogcat("RDS-WERN");
 
-        // Seek tests move the station around, so run them last.
-        line("\n-- search(up) = hardware SEEK to next station --");
-        try { radio.search(true); line("called search(true)"); } catch (Exception e) { line("search failed " + e); }
-        watch("SEEKUP", 9000, 1000); captureLogcat("SEEKUP");
-        prompt("SEEK up — what happened?", "Stopped on a NEW station", "Only stepped once", "Nothing");
+        // Seek — visible before→after, self-settling, decided from the frequency (no question).
+        line("\n-- SEEK tests (each shows start → landed frequency; the tuner settles before we move on) --");
+        seekReport("search up",   true,  false); captureLogcat("SEEKUP");
+        seekReport("search down", false, false); captureLogcat("SEEKDN");
+        seekReport("step up",     true,  true);  captureLogcat("STEP");
 
-        line("\n-- search(down) = seek to next station downward --");
-        try { radio.search(false); line("called search(false)"); } catch (Exception e) { line("search failed " + e); }
-        watch("SEEKDN", 9000, 1000); captureLogcat("SEEKDN");
-        prompt("SEEK down — what happened?", "Stopped on a NEW station", "Only stepped once", "Nothing");
-
-        line("\n-- seek(up) = single manual STEP --");
-        try { radio.seek(true); line("called seek(true)"); } catch (Exception e) { line("seek failed " + e); }
-        watch("STEP", 4000, 1000); captureLogcat("STEP");
-        prompt("STEP up — what happened?", "Moved one small step", "Seeked to a station", "Nothing");
+        // Park it back on a known station so it doesn't end mid-scan.
+        line("-- parking back on WIBA 101.5 --");
+        tuneMhzTo(101.5); sleep(1500);
         richDump("radiofunc-final");
     }
 
-    /** Tune to a named station and ask the user to confirm they're hearing it. */
+    /** Tune to a named station and ask the user to confirm they're hearing it. This
+     *  is the one question worth asking — only a human ear can verify the tune
+     *  actually landed on the right audible station. */
     private void tuneConfirm(double mhz, String call, String tag) {
         line("\n-- tune to " + call + " " + mhz + " --");
         tuneMhzTo(mhz); watch(tag, 5000, 1000); captureLogcat(tag);
-        prompt("Tuned to " + call + " " + mhz + ". Are you hearing " + call + " (" + mhz + ")?",
+        prompt("Tuned to " + call + " " + fmt(mhz) + ". Are you hearing " + call + "?",
                 "Yes, correct station", "No / wrong / silent");
+    }
+
+    /** Read RDS for `seconds` and DECIDE from the tuner's own variables whether any
+     *  PS / RadioText / PTY ever arrived — the app sees these before anything would
+     *  hit a screen, so there's nothing to ask the user. Prints a verdict line. */
+    private void rdsRead(String label, int seconds) {
+        line("\n-- reading RDS on " + label + " for " + seconds + "s (PS / RadioText / PTY) --");
+        String bestPs = "", bestRt = ""; int bestPty = -1;
+        for (int i = 0; i < seconds; i += 3) {
+            sleep(3000);
+            String ps = "", rt = ""; int pty = -1;
+            if (radio != null) {
+                try { Frequency f = radio.getCurrentFrequency(); if (f != null && f.psName != null) ps = f.psName.trim(); } catch (Exception ignored) {}
+                try { String m = radio.getRtMessage(); if (m != null) rt = m.trim(); } catch (Exception ignored) {}
+                try { pty = radio.getPTYType(); } catch (Exception ignored) {}
+            }
+            if (!ps.isEmpty() && ps.length() > bestPs.length()) bestPs = ps;
+            if (!rt.isEmpty() && rt.length() > bestRt.length()) bestRt = rt;
+            if (pty > bestPty) bestPty = pty;
+            line("  [" + label + "] t+" + (i + 3) + "s  PS='" + ps + "' RT='" + rt + "' PTY=" + pty);
+        }
+        boolean any = !bestPs.isEmpty() || !bestRt.isEmpty() || bestPty > 0;
+        String verdict = any
+            ? "RDS PRESENT — PS='" + bestPs + "' RT='" + bestRt + "' PTY=" + bestPty
+            : "NO RDS reached the client (PS/RT/PTY all empty for " + seconds + "s)";
+        line("  ==> " + label + ": " + verdict);
+        summary.append("RDS ").append(label).append(": ").append(verdict).append('\n');
+    }
+
+    /** Drive seek and REPORT the outcome from the frequency itself: start → where it
+     *  landed, whether that's a real hop or a single tick. Polls until the tuner
+     *  stops moving (so it never "keeps slowly changing" waiting on the user), and
+     *  asks nothing — the before→after readout is the evidence. */
+    private void seekReport(String label, boolean up, boolean single) {
+        if (radio == null) { line("  " + label + ": not bound"); return; }
+        double before = currentMhz();
+        line("\n-- " + label + " (from " + fmt(before) + ") --");
+        try { if (single) radio.seek(up); else radio.search(up); }
+        catch (Exception e) { line("  " + label + " call failed: " + e); return; }
+
+        // Poll until the frequency holds steady for ~1.5s (3 equal reads) or we time out.
+        double last = before, end = before; int stable = 0;
+        for (int t = 0; t < 20 && stable < 3; t++) {
+            sleep(500);
+            double now = currentMhz();
+            if (now > 0 && Math.abs(now - last) < 0.005) stable++;
+            else { stable = 0; last = now; }
+            if (now > 0) end = now;
+        }
+        String ps = "";
+        try { Frequency f = radio.getCurrentFrequency(); if (f != null && f.psName != null) ps = f.psName.trim(); } catch (Exception ignored) {}
+        double delta = Math.abs(end - before);
+        String verdict = delta < 0.05  ? "no change — seek did nothing (" + fmt(before) + ")"
+                       : delta <= 0.25 ? "stepped one tick: " + fmt(before) + " -> " + fmt(end)
+                       :                 "landed on a station: " + fmt(before) + " -> " + fmt(end) + (ps.isEmpty() ? "" : " PS='" + ps + "'");
+        line("  ==> " + label + ": " + verdict);
+        summary.append("SEEK ").append(label).append(": ").append(verdict).append('\n');
     }
 
     // ── PHASE 3: overwrite built-in presets (ONE-WAY app→unit) ──────────────────
@@ -455,9 +528,12 @@ public class MainActivity extends Activity {
     };
 
     private void phaseWritePresets() {
-        String go = prompt("PHASE 3 — OVERWRITE BUILT-IN PRESETS (app → unit).\n\nREPLACES the head unit's "
-             + "FM presets with the app's 8-station list (one-way; nothing is read back into any app). "
-             + "Your current built-in presets WILL be replaced.\n\nContinue?", "Overwrite", "Skip");
+        banner("PHASE 3 of 3", "OVERWRITE PRESETS (app → unit)",
+               "Proves CarFM can WRITE the head unit's own FM1/FM2/FM3 preset banks. Replaces them\n"
+             + "with the app's 8-station list, ascending. One-way only — nothing is ever read back\n"
+             + "into the app. The tuner audibly sweeps through the stations as it saves each slot.");
+        String go = prompt("Phase 3 REPLACES your built-in FM presets with the app's list. Continue?",
+                "Overwrite", "Skip");
         if (!"Overwrite".equals(go)) { line("overwrite skipped"); return; }
         ensurePowered();
 
@@ -560,18 +636,17 @@ public class MainActivity extends Activity {
         line("  (cycled through all banks; ascending values in a bank = AMS auto-store)");
     }
 
-    /** Sit on the current station for `seconds`, logging freq / PS / RadioText every 3s. */
-    private void dwell(String tag, int seconds) {
-        for (int i = 0; i < seconds; i += 3) {
-            sleep(3000);
-            StringBuilder s = new StringBuilder("  [" + tag + "] t+" + (i + 3) + "s");
-            if (radio != null) {
-                try { Frequency f = radio.getCurrentFrequency(); if (f != null) s.append(" freq=").append(f.freq / (double) freqMult).append(" PS='").append(f.psName).append('\''); } catch (Exception ignored) {}
-                try { s.append(" rt='").append(radio.getRtMessage()).append('\''); } catch (Exception ignored) {}
-                try { s.append(" pty=").append(radio.getPTYType()); } catch (Exception ignored) {}
-            }
-            line(s.toString());
-        }
+    /** One decimal place, US locale — for the human-facing frequency readouts. */
+    private String fmt(double mhz) { return String.format(Locale.US, "%.1f", mhz); }
+
+    /** A bold, visually distinct phase header so the three phases don't blur together —
+     *  both on screen (the prompt panel) and in the saved log. */
+    private void banner(String tag, String title, String what) {
+        line("\n============================================================");
+        line("  " + tag + "  —  " + title);
+        line("------------------------------------------------------------");
+        for (String ln : what.split("\n")) line("  " + ln);
+        line("============================================================");
     }
 
     // ── Bring-up broadcasts (exact actions/extras from the service receiver) ─────

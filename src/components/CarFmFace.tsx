@@ -26,7 +26,7 @@ import type { NearbyStation } from '../services/stationTypes';
 import { GearIcon, GpsSatellite, MagnifierTower, MotionCar, PowerIcon, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
 import { useMotion } from '../services/motion';
 import { useGpsFix } from '../services/gps';
-import LogoTile, { callsignFrom, useStationLogo, useStationDisplay } from './carfm/LogoTile';
+import LogoTile, { callsignFrom, useStationLogo, useStationDisplay, useDarkLogo } from './carfm/LogoTile';
 import LogoSearchOverlay, { type LogoSearchTarget } from './carfm/LogoSearchOverlay';
 import NearbyPicker from './carfm/NearbyPicker';
 import Numpad from './carfm/Numpad';
@@ -34,7 +34,7 @@ import PresetsBand, { type PresetItem } from './carfm/PresetsBand';
 import { callsignBase } from '../services/piCallsign';
 import SidePresetCard, { PEEK_OPACITY, PEEK_SCALE } from './carfm/SidePresetCard';
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
-import { cleanCall, DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT, type CarFmPalette } from './carfm/tokens';
+import { cleanCall, DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT, LOGO_DARK_BG, type CarFmPalette } from './carfm/tokens';
 
 export interface CarFmPreset {
   name: string;
@@ -286,19 +286,31 @@ function SlidingFreq({ value, dir, fontSize, color }: {
 // call sign / frequency are hidden); the white plate hugs the logo's width once
 // its aspect ratio is known (captured on load), so square badges and wide
 // wordmarks both sit tight rather than in a big empty box. Fit — never cropped.
-function HeroLogo({ uri, height, maxWidth, radius }: {
+function HeroLogo({ uri, height, maxWidth, radius, dark, darkVariant }: {
   uri: string; height: number; maxWidth: number; radius: number;
+  dark: boolean; darkVariant: { uri: string | null; treatment: string | null };
 }) {
   const [aspect, setAspect] = useState<number | null>(null);
   const w = aspect ? Math.min(maxWidth, Math.round(height * aspect)) : maxWidth;
+  // Light mode keeps the white plate. Dark mode drops it for an adapted variant
+  // (remap/halo/as-is read on the hero card itself); the PLATE treatment gets a
+  // grey plate; a not-yet-adapted logo keeps the white plate so it stays visible.
+  let src = uri, bg = '#FFFFFF', px = 8, py = 4, br = radius;
+  if (dark) {
+    if (darkVariant.uri) {
+      src = darkVariant.uri;
+      if (darkVariant.treatment === 'PLATE') { bg = '#E6E6E6'; px = Math.round(height * 0.11); py = px; br = Math.round(height * 0.14); }
+      else { bg = 'transparent'; px = 0; py = 0; }
+    }
+  }
   return (
     <View style={{
-      height, width: w, maxWidth, borderRadius: radius, backgroundColor: '#FFFFFF',
-      paddingVertical: 4, paddingHorizontal: 8, overflow: 'hidden',
+      height, width: w, maxWidth, borderRadius: br, backgroundColor: bg,
+      paddingVertical: py, paddingHorizontal: px, overflow: 'hidden',
       alignItems: 'center', justifyContent: 'center',
     }}>
       <Image
-        source={{ uri }}
+        source={{ uri: src }}
         onLoad={(e) => {
           const s = e.nativeEvent.source as { width?: number; height?: number };
           if (s?.width && s?.height) setAspect(s.width / s.height);
@@ -455,6 +467,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // per-station Display Call Sign / Frequency flags hide those on the hero and
   // the logo grows to reclaim the freed space.
   const heroLogo = useStationLogo(callsign || undefined, mhz);
+  const heroDarkLogo = useDarkLogo(heroLogo.base, dark && heroLogo.uri ? LOGO_DARK_BG : undefined);
   const heroDisp = useStationDisplay(heroLogo.base, heroLogo.hasLogo);
   // Station identity for the hero: RDS PS / PI-callsign when present, else the
   // callsign resolved from the dial frequency via the FCC DB (heroLogo.base).
@@ -862,7 +875,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             {heroLogo.hasLogo && heroLogo.uri ? (
               // Real logo REPLACES the big call sign; call sign is a small label beneath.
               <View style={styles.heroLogoCol}>
-                <HeroLogo uri={heroLogo.uri} height={heroLogoH} maxWidth={heroLogoMaxW} radius={L.s(16)} />
+                <HeroLogo uri={heroLogo.uri} height={heroLogoH} maxWidth={heroLogoMaxW} radius={L.s(16)} dark={dark} darkVariant={heroDarkLogo} />
                 {heroDisp.showCall && !!heroIdent ? (
                   <Text numberOfLines={1} style={[styles.heroCallLabel, { fontSize: L.s(tall ? 22 : 26), color: pal.dim }]}>
                     {heroIdent}
