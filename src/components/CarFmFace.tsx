@@ -34,7 +34,7 @@ import PresetsBand, { type PresetItem } from './carfm/PresetsBand';
 import { callsignBase } from '../services/piCallsign';
 import SidePresetCard, { PEEK_OPACITY, PEEK_SCALE } from './carfm/SidePresetCard';
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
-import { cleanCall, DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT, LOGO_DARK_BG, type CarFmPalette } from './carfm/tokens';
+import { cleanCall, DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT, type CarFmPalette } from './carfm/tokens';
 
 export interface CarFmPreset {
   name: string;
@@ -467,7 +467,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // per-station Display Call Sign / Frequency flags hide those on the hero and
   // the logo grows to reclaim the freed space.
   const heroLogo = useStationLogo(callsign || undefined, mhz);
-  const heroDarkLogo = useDarkLogo(heroLogo.base, dark && heroLogo.uri ? LOGO_DARK_BG : undefined);
+  const heroDarkLogo = useDarkLogo(heroLogo.base, dark && !!heroLogo.uri);
   const heroDisp = useStationDisplay(heroLogo.base, heroLogo.hasLogo);
   // Station identity for the hero: RDS PS / PI-callsign when present, else the
   // callsign resolved from the dial frequency via the FCC DB (heroLogo.base).

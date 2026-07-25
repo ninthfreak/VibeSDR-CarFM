@@ -16,19 +16,21 @@
 import { getLogoDataUri, getDarkTreatment, saveDarkLogo, clearDarkLogo } from '../stationDb';
 import { processLogoForDark, hexToUnitRgb, treatmentToEnum, type Treatment } from './adapt';
 
-/** Create or refresh the cached dark variant for `base` on background `bgHex`.
- *  Keeps a user override when possible, else stores the pipeline's auto-pick.
- *  Clears the cache if the station has no logo; leaves any prior cache intact if
- *  the logo can't be decoded (render falls back to the white plate). */
-export async function regenerateDarkLogo(base: string, bgHex: string): Promise<void> {
+/** Create or refresh the cached dark variant for `base`. `gateBg` is the dark
+ *  surface the GATE composites onto to choose the auto-pick — the stored PNG
+ *  itself is background-independent (paper is cleared to transparency). Keeps a
+ *  user override when possible, else stores the pipeline's auto-pick. Clears the
+ *  cache if the station has no logo; leaves any prior cache intact if the logo
+ *  can't be decoded (render falls back to the white plate). */
+export async function regenerateDarkLogo(base: string, gateBg: string): Promise<void> {
   try {
     const uri = await getLogoDataUri(base);
     if (!uri) { await clearDarkLogo(base); return; }
 
-    const res = await processLogoForDark(uri, hexToUnitRgb(bgHex));
+    const res = await processLogoForDark(uri, hexToUnitRgb(gateBg));
     if (!res) return;   // decode/process failed — keep whatever was cached before
 
-    const prior = await getDarkTreatment(base, bgHex);
+    const prior = await getDarkTreatment(base);
     let treatment: Treatment = res.pick;
     let chosen = false;
     if (prior?.chosen) {
@@ -37,7 +39,7 @@ export async function regenerateDarkLogo(base: string, bgHex: string): Promise<v
     }
 
     const cand = res.candidates.find((c) => c.treatment === treatment) ?? res.candidates[0];
-    await saveDarkLogo(base, bgHex, treatmentToEnum(cand.treatment), cand.pngBase64, chosen);
+    await saveDarkLogo(base, treatmentToEnum(cand.treatment), cand.pngBase64, chosen);
   } catch {
     /* never let logo adaptation break a save */
   }

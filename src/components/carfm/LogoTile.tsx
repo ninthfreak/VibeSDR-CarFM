@@ -36,7 +36,7 @@ export function invalidateLogoTile(base?: string): void {
   if (base) {
     const b = base.toUpperCase();
     cache.delete(b);
-    for (const k of [...darkCache.keys()]) if (k.startsWith(b + '|')) darkCache.delete(k);
+    darkCache.delete(b);
   } else { cache.clear(); darkCache.clear(); }
   listeners.forEach((l) => l());
 }
@@ -81,14 +81,14 @@ export function useStationLogo(name?: string, freqMhz?: number): {
   return { base, uri, hasLogo: !!uri };
 }
 
-/** The cached dark-mode variant for a station on background `darkBg`, or nulls.
- *  Pass `darkBg` only when the dark theme is active (undefined in light mode →
- *  no lookup). Re-reads when invalidateLogoTile() fires. The returned `uri` is a
- *  transparent-background PNG (remap/halo/as-is) or the keyed logo for `PLATE`;
- *  `treatment` is the enum (REMAP/HALO/AS_IS/PLATE) so the caller knows whether
- *  to add a grey plate. */
-export function useDarkLogo(base: string | null, darkBg?: string): { uri: string | null; treatment: string | null } {
-  const key = base && darkBg ? `${base.toUpperCase()}|${darkBg.toLowerCase()}` : null;
+/** The cached dark-mode variant for a station, or nulls. Pass `active` = true
+ *  only when the dark theme is showing AND the station has a logo (light mode →
+ *  no lookup). The stored PNG is background-independent (paper is transparent),
+ *  so this needs no bg. Re-reads when invalidateLogoTile() fires. The returned
+ *  `uri` is a transparent-background PNG (remap/halo/as-is) or the keyed logo for
+ *  `PLATE`; `treatment` is the enum so the caller knows whether to add a plate. */
+export function useDarkLogo(base: string | null, active: boolean): { uri: string | null; treatment: string | null } {
+  const key = base && active ? base.toUpperCase() : null;
   const [v, setV] = useState<{ uri: string; treatment: string } | null>(key ? darkCache.get(key) ?? null : null);
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -98,25 +98,25 @@ export function useDarkLogo(base: string | null, darkBg?: string): { uri: string
   }, []);
   useEffect(() => {
     let cancelled = false;
-    if (!base || !darkBg || !key) { setV(null); return; }
+    if (!base || !active || !key) { setV(null); return; }
     if (darkCache.has(key)) { setV(darkCache.get(key)!); return; }
-    getDarkLogo(base, darkBg)
+    getDarkLogo(base)
       .then((d) => {
         const val = d ? { uri: d.dataUri, treatment: d.treatment } : null;
         darkCache.set(key, val);
         if (!cancelled) setV(val);
-        // No variant yet for a station that HAS a logo (this hook is only called
-        // with darkBg when a logo exists) → adapt it once in the background, then
-        // re-read. Guarded so a decode failure doesn't loop.
+        // No variant yet for a station that HAS a logo (active only when a logo
+        // exists) → adapt once in the background (gate bg = the canonical dark
+        // surface), then re-read. Guarded so a decode failure doesn't loop.
         if (!d && !regenTried.has(key)) {
           regenTried.add(key);
-          regenerateDarkLogo(base, darkBg).then(() => { darkCache.delete(key); invalidateLogoTile(base); }).catch(() => {});
+          regenerateDarkLogo(base, LOGO_DARK_BG).then(() => { darkCache.delete(key); invalidateLogoTile(base); }).catch(() => {});
         }
       })
       .catch(() => {});
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base, darkBg, tick]);
+  }, [base, active, tick]);
   return { uri: v?.uri ?? null, treatment: v?.treatment ?? null };
 }
 
@@ -230,7 +230,7 @@ export function PresetPlate({ name, freqMhz, w, h, radius, pal, freqSize }: {
 }) {
   const { base, uri } = useStationLogo(name, freqMhz);
   const dark = pal === DARK;
-  const darkVariant = useDarkLogo(base, dark && uri ? LOGO_DARK_BG : undefined);
+  const darkVariant = useDarkLogo(base, dark && !!uri);
   if (uri) {
     // Real logo: Fit, borderless in light mode / dark-adapted in dark mode.
     return <LogoImage uri={uri} dark={dark} darkVariant={darkVariant} w={w} h={h} radius={radius} />;
