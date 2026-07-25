@@ -396,6 +396,16 @@ public class MainActivity extends Activity {
              + "(confirming you hear each), checks BOTH for RadioText, then tests seek.\n\nTap Continue.", "Continue");
         ensurePowered();
 
+        // RDS enable: on this AllWinner unit setRDSState only toggles AF(1)/TA(2)
+        // (not a PS/RT master switch), but enable everything we can and record the
+        // states — the logcat capture in the dwells shows whether the RDS DECODER
+        // (NewRdsManager) is producing PS/RT internally even if none reaches us.
+        line("\n-- enabling RDS selectors (AF/TA are the only setRDSState levers here) --");
+        for (int s = 0; s < 4; s++) { try { radio.setRDSState((byte) s, true); } catch (Exception ignored) {} }
+        StringBuilder rs = new StringBuilder();
+        for (int s = 0; s < 4; s++) { try { rs.append(s).append('=').append(radio.getRDSState(s)).append(' '); } catch (Exception e) { rs.append(s).append("=err "); } }
+        line("  rdsState now " + rs);
+
         // WIBA 101.5 — tune, confirm you hear it, dwell 30s for RadioText.
         tuneConfirm(101.5, "WIBA", "TUNE-WIBA");
         line("\n-- RDS dwell 30s on WIBA 101.5 --");
@@ -691,7 +701,10 @@ public class MainActivity extends Activity {
                         || low.contains("opendev") || low.contains("opendevice") || low.contains("enablefmaudio")
                         || low.contains("awfmfeature") || low.contains("awradio") || low.contains("sprdfm")
                         || low.contains("sprdradio") || low.contains("fmfeature") || low.contains("changesource")
-                        || low.contains("scanwhole") || low.contains("strength") || low.contains("prefab")) {
+                        || low.contains("scanwhole") || low.contains("strength") || low.contains("prefab")
+                        || low.contains("newrds") || low.contains("rdsmanager") || low.contains("getlrtext")
+                        || low.contains("lrtext") || low.contains("rtmessage") || low.contains("radiotext")
+                        || low.contains("rds ") || low.contains("ps=") || low.contains("psname")) {
                     if (hit++ < 120) line("  LOGCAT[" + tag + "]| " + ln);
                 }
             }
