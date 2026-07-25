@@ -23,6 +23,7 @@ type NwdNative = {
   setRdsEnabled(on: boolean): void;
   setAudioEnabled(on: boolean): void;
   requestAudioSource(): void;
+  syncPresets(freqsMhz: number[]): Promise<number>;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 };
@@ -75,6 +76,14 @@ export async function nwdProbe(): Promise<string> {
 }
 export function nwdSetRds(on: boolean): void { native?.setRdsEnabled(on); }
 export function nwdSetAudio(on: boolean): void { native?.setAudioEnabled(on); }
+/** ONE-WAY preset sync (app → head unit): overwrite the built-in FM1/FM2/FM3 banks
+ *  with an ascending MHz list (max 18). Resolves with the count written. Never
+ *  reads unit presets back (guardrail). The tuner audibly sweeps during the write,
+ *  so call this only on a deliberate, debounced preset change. */
+export function nwdSyncPresets(freqsMhz: number[]): Promise<number> {
+  if (!native) return Promise.resolve(0);
+  return native.syncPresets(freqsMhz).catch(() => 0);
+}
 /** Fire the MCU source-switch broadcasts (they launch the stock radio app) —
  *  a deliberate test of whether becoming the radio "source" brings audio +
  *  callbacks alive. Not called automatically. */
