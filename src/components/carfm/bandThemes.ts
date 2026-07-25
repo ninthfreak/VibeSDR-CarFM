@@ -14,7 +14,7 @@
 
 /** The interactive palette fields a theme reads/overrides (subset of the CarFm
  *  palette — kept structural so this file needs no token import). */
-export type EggPalette = { text: string; dim: string; border: string; blue: string; blueFill: string; onBlue: string };
+export type EggPalette = { text: string; dim: string; border: string; blue: string; blueFill: string };
 
 export type Motif = 'acdc' | 'submarine' | 'bigsuit' | 'xerox' | 'spiral';
 
@@ -187,9 +187,11 @@ export function resolveEgg(opts: {
 }
 
 /** The interactive-token overrides a resolved egg imposes (uiAccent recolours
- *  every interactive element at once). Returns the merged {blue,blueFill,onBlue}
- *  to spread over the palette; a no-op object when the egg doesn't restate them. */
-export function eggTokens(egg: Egg | null, pal: EggPalette): { blue: string; blueFill: string; onBlue: string } {
-  if (!egg?.uiAccent) return { blue: pal.blue, blueFill: pal.blueFill, onBlue: pal.onBlue };
-  return { blue: egg.uiAccent, blueFill: egg.uiAccentFill ?? pal.blueFill, onBlue: egg.uiAccentOn ?? pal.onBlue };
+ *  every interactive element at once). Returns the merged {blue,blueFill} to
+ *  spread over the palette; a no-op object when the egg doesn't restate them.
+ *  (The design's `uiAccentOn` has no home in the app palette, so it's carried on
+ *  the Egg for the art pass but not applied here.) */
+export function eggTokens(egg: Egg | null, pal: EggPalette): { blue: string; blueFill: string } {
+  if (!egg?.uiAccent) return { blue: pal.blue, blueFill: pal.blueFill };
+  return { blue: egg.uiAccent, blueFill: egg.uiAccentFill ?? pal.blueFill };
 }

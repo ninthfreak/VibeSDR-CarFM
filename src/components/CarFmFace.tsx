@@ -35,6 +35,7 @@ import { callsignBase } from '../services/piCallsign';
 import SidePresetCard, { PEEK_OPACITY, PEEK_SCALE } from './carfm/SidePresetCard';
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
 import { cleanCall, DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT, type CarFmPalette } from './carfm/tokens';
+import { resolveEgg, eggTokens } from './carfm/bandThemes';
 
 export interface CarFmPreset {
   name: string;
@@ -87,6 +88,9 @@ export interface CarFmFaceProps {
   audioActive?: boolean;
   onClaimAudio?: () => void;     // inactive → take priority (power button)
   onReleaseAudio?: () => void;   // active → give it up
+  /** Band-theme Easter egg forced from the settings secret panel (§12); overrides
+   *  RadioText detection. null/undefined → auto-detect from the live RadioText. */
+  forcedEggId?: string | null;
 }
 
 const CHANNEL_HZ = 100_000;             // 0.1 MHz — the design's tune/seek step
@@ -357,15 +361,35 @@ export default function CarFmFace(props: CarFmFaceProps) {
     rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
     onSetAutostart, onSetTheme, onRetryTuner, presets, nwdActive, onHardwareSeek,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
-    audioActive, onClaimAudio, onReleaseAudio,
+    audioActive, onClaimAudio, onReleaseAudio, forcedEggId,
   } = props;
   const insets = useSafeAreaInsets();
   const scheme = useColorScheme();
-  const pal = (theme === 'light' || (theme !== 'dark' && scheme === 'light')) ? LIGHT : DARK;
-  const dark = pal === DARK;
+  const basePal = (theme === 'light' || (theme !== 'dark' && scheme === 'light')) ? LIGHT : DARK;
+  const dark = basePal === DARK;
   // Audio priority released (§4.7): the whole face goes flat/grayscale + "dead".
   // `off` gates the grayscale filter, veils, depth removal and indicator off-states.
   const off = audioActive === false;
+  // Band theme (§12): match the live RadioText to an artist (or take a forced id
+  // from the secret panel). Cosmetic only; suppressed while audio is released.
+  const egg = resolveEgg({ rt: radioText, forcedId: forcedEggId, dark, pal: basePal, off });
+  const eggTk = eggTokens(egg, basePal);
+  // Fold the theme's accent restatement into the palette so every interactive
+  // element (active preset, star, stereo lock, Nearby/Done) recolours at once.
+  // `dark` above intentionally uses basePal (identity), not this merged palette.
+  const pal = egg ? { ...basePal, blue: eggTk.blue, blueFill: eggTk.blueFill } : basePal;
+  // Themed surfaces (cosmetic overrides; default tokens when no egg).
+  const pageBg = egg?.pageBg ?? pal.bg;
+  const heroCardBg = egg?.card?.bg ?? pal.panel;
+  const heroCardBorder = egg?.card?.border ?? pal.border;
+  const heroCardText = egg?.card?.text ?? pal.text;
+  // Genre/PTY line: a theme can replace the text and restyle its colour. (Pulse,
+  // cross-fade cycle and outline ring are ornament — deferred to the art pass.)
+  const genreLabel = egg?.genreText ?? ptyText;
+  const genreColor = egg?.genreColor ?? pal.dim;
+  // A theme that suppresses logos forces the call-sign identity so its own type
+  // reads (hero here; preset/peek suppression rides in the art pass).
+  const eggHideLogos = !!egg?.suppressLogos;
   // RN filter grayscale (New Architecture) — applied to each face region's content;
   // the power button is drawn in full color ABOVE it (design's Android guidance).
   const GS: any = off ? { filter: [{ grayscale: 1 }] } : null;
@@ -722,12 +746,12 @@ export default function CarFmFace(props: CarFmFaceProps) {
   return (
     <View
       onLayout={(e: LayoutChangeEvent) => setDim({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
-      style={[styles.stage, { backgroundColor: pal.bg, paddingTop: insets.top, paddingBottom: insets.bottom }]}
+      style={[styles.stage, { backgroundColor: pageBg, paddingTop: insets.top, paddingBottom: insets.bottom }]}
     >
       {/* Responsive face (ANDROID §0): laid out directly at the real available
           dp — no design canvas, no uniform scale. Tracks reflow per surface and
           the token ramp (L) re-derives the spec's dp for this surface. */}
-      <View style={[styles.face, { backgroundColor: pal.bg, paddingHorizontal: L.padH, gap: L.gap, paddingVertical: L.padTop }]}>
+      <View style={[styles.face, { backgroundColor: pageBg, paddingHorizontal: L.padH, gap: L.gap, paddingVertical: L.padTop }]}>
       {/* ── Header row (design v2: signal · stereo+tells · PTY · gear) ──
           Tuner error is a hard either/or with the status cluster: with no tuner
           session there is no signal/RDS/stereo/genre to read, so the whole
@@ -750,8 +774,8 @@ export default function CarFmFace(props: CarFmFaceProps) {
             </View>
             <View style={styles.zoneCenter}>
               {stereoCluster}
-              {ptyText && !off ? (
-                <Text numberOfLines={1} style={[styles.ptyCentered, { fontSize: L.ptyFont, color: pal.dim }, ptyShadow]}>{ptyText}</Text>
+              {genreLabel && !off ? (
+                <Text numberOfLines={1} style={[styles.ptyCentered, { fontSize: L.ptyFont, color: genreColor }, ptyShadow]}>{genreLabel}</Text>
               ) : null}
             </View>
           </>
@@ -760,9 +784,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
           <View style={styles.headerLeft}>
             {signalCluster}
             {stereoCluster}
-            {ptyText && !off ? (
+            {genreLabel && !off ? (
               <View style={[styles.ptyWrap, { maxWidth: 200 }]}>
-                <Text numberOfLines={1} style={[styles.ptyText, { fontSize: L.ptyFont, color: pal.dim }, ptyShadow]}>{ptyText}</Text>
+                <Text numberOfLines={1} style={[styles.ptyText, { fontSize: L.ptyFont, color: genreColor }, ptyShadow]}>{genreLabel}</Text>
               </View>
             ) : null}
             {oobEl}
@@ -872,8 +896,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
           </View>
         ) : (
           <>
-            {heroLogo.hasLogo && heroLogo.uri ? (
+            {heroLogo.hasLogo && heroLogo.uri && !eggHideLogos ? (
               // Real logo REPLACES the big call sign; call sign is a small label beneath.
+              // A band theme that suppresses logos falls through to the call-sign form.
               <View style={styles.heroLogoCol}>
                 <HeroLogo uri={heroLogo.uri} height={heroLogoH} maxWidth={heroLogoMaxW} radius={L.s(16)} dark={dark} darkVariant={heroDarkLogo} />
                 {heroDisp.showCall && !!heroIdent ? (
@@ -883,10 +908,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 ) : null}
               </View>
             ) : heroIdent ? (
-              // No real logo: big call sign, NO monogram tile on the hero.
+              // No real logo (or theme suppresses it): big call sign, no monogram tile.
               <Text
                 numberOfLines={1}
-                style={[styles.call, { fontSize: L.call, color: pal.text }]}
+                style={[styles.call, { fontSize: L.call, color: heroCardText }]}
               >
                 {heroIdent}
               </Text>
@@ -941,7 +966,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
               style={[
                 tall ? styles.heroCard : styles.heroCardWide, styles.heroCardZ,
                 {
-                  width: tall ? tallHeroW : L.heroCardW, backgroundColor: pal.panel, borderColor: pal.border,
+                  width: tall ? tallHeroW : L.heroCardW, backgroundColor: heroCardBg, borderColor: heroCardBorder,
                   paddingVertical: L.s(tall ? 30 : 24), paddingHorizontal: L.s(tall ? 26 : 30), gap: L.s(14),
                 },
                 off && styles.heroCardFlat,   // §4.7: drop the depth shadow when dead
@@ -984,7 +1009,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
               height={L.rtHeight}
               fontSize={L.rtFont}
               maxWidth={L.s(880)}
-              colors={{ raised: pal.raised, border: pal.border, dim: pal.dim, text: pal.text }}
+              colors={egg?.rtPlate
+                ? { raised: egg.rtPlate.bg, border: egg.rtPlate.border, dim: pal.dim, text: egg.rtPlate.text }
+                : { raised: pal.raised, border: pal.border, dim: pal.dim, text: pal.text }}
             />
           </View>
         );

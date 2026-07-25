@@ -3,7 +3,7 @@
 // artist detection the whole feature hinges on. Pure leaf, no RN.
 import { normalizeRt, matchEggId, resolveEgg, eggTokens, buildEggs, EGG_MENU, type EggPalette } from '../../src/components/carfm/bandThemes.ts';
 
-const PAL: EggPalette = { text: '#111', dim: '#888', border: '#ccc', blue: '#4A9EFF', blueFill: 'rgba(74,158,255,0.18)', onBlue: '#fff' };
+const PAL: EggPalette = { text: '#111', dim: '#888', border: '#ccc', blue: '#4A9EFF', blueFill: 'rgba(74,158,255,0.18)' };
 
 let fail = 0;
 const ok = (name: string, cond: boolean, extra = '') => { console.log((cond ? 'ok   ' : 'FAIL ') + name + (extra ? ` — ${extra}` : '')); if (!cond) fail++; };
