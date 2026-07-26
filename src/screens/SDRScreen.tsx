@@ -3639,9 +3639,14 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // One-way preset mirror (tasks #10/#11/#12): when the built-in NWD tuner is the
   // active source, overwrite the head unit's FM1/FM2/FM3 banks with CarFM's presets
-  // sorted ASCENDING (sequential fill → steering-wheel steps low→high across banks),
-  // capped at 18. Diffed against the last-synced signature (persisted) so it only
-  // writes on a real change, and debounced so a drag-reorder doesn't fire mid-gesture.
+  // in the app's DISPLAYED CARD ORDER — sequential slot fill (card 1 → FM1 slot 1,
+  // …, card 7 → FM2 slot 1, …), capped at 18. The app is the source of truth for
+  // order (design README §218: PREV/NEXT — and the physical steering-wheel step —
+  // walk presets in DISPLAYED order, not by frequency), so the hardware banks and
+  // the cards stay in lockstep. NOT frequency-sorted; saveCurrentFrequency(slot)
+  // preserves the exact order we write (proven on-device). Diffed against the
+  // last-synced signature (persisted) so it only writes on a real change — which
+  // now includes a reorder — and debounced so a drag-reorder doesn't fire mid-gesture.
   // STRICTLY app → unit; the head unit's banks are never read back into CarFM.
   const nwdSyncSig = useRef<string | null>(null);
   const [nwdSigReady, setNwdSigReady] = useState(false);
@@ -3653,7 +3658,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
   useEffect(() => {
     if (!carFm || !nwdActive || !nwdSigReady) return;
-    const freqs = [...fmPresets].map((p) => p.frequency / 1e6).sort((a, b) => a - b).slice(0, 18);
+    const freqs = fmPresets.map((p) => p.frequency / 1e6).slice(0, 18);   // CARD ORDER, not sorted
     const sig = freqs.map((f) => f.toFixed(1)).join(',');
     if (sig === nwdSyncSig.current) return;   // unchanged since the last sync
     const t = setTimeout(() => {
