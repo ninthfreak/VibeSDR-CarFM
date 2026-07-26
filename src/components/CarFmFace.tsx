@@ -35,7 +35,8 @@ import { callsignBase } from '../services/piCallsign';
 import SidePresetCard, { PEEK_OPACITY, PEEK_SCALE } from './carfm/SidePresetCard';
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
 import { cleanCall, DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT, type CarFmPalette } from './carfm/tokens';
-import { resolveEgg, eggTokens } from './carfm/bandThemes';
+import { resolveEgg, eggTokens, BAND_FONTS_READY } from './carfm/bandThemes';
+import { BandMotif, BoltGlyph } from './carfm/BandThemeArt';
 
 export interface CarFmPreset {
   name: string;
@@ -208,7 +209,9 @@ function PowerButton({ off, size, radius, pal, onClaim, onRelease, style }: {
 // ── RadioText strip: static when short, 16s marquee when > 46 chars ──────────
 // Real RadioText renders in the full text colour; when empty, a dim-italic
 // "Waiting for RadioText…" placeholder shows instead (design rtItemStyle).
-function RadioTextStrip({ text, colors, height = 52, fontSize = 30, maxWidth = 880 }: { text: string; colors: { raised: string; border: string; dim: string; text: string }; height?: number; fontSize?: number; maxWidth?: number }) {
+function RadioTextStrip({ text, colors, height = 52, fontSize = 30, maxWidth = 880, fontFamily, letterSpacing }: { text: string; colors: { raised: string; border: string; dim: string; text: string }; height?: number; fontSize?: number; maxWidth?: number; fontFamily?: string; letterSpacing?: number }) {
+  const eggType = fontFamily ? { fontFamily } : null;
+  const eggTrack = letterSpacing != null ? { letterSpacing } : null;
   const [trackW, setTrackW] = useState(0);
   const x = useRef(new Animated.Value(0)).current;
   const hasText = text.trim().length > 0;
@@ -238,13 +241,13 @@ function RadioTextStrip({ text, colors, height = 52, fontSize = 30, maxWidth = 8
           style={[styles.rtTrack, { transform: [{ translateX: x }] }]}
           onLayout={(e: LayoutChangeEvent) => setTrackW(e.nativeEvent.layout.width)}
         >
-          <Text numberOfLines={1} style={[styles.rtText, { fontSize, color: textColor }]}>{shown}</Text>
-          <Text numberOfLines={1} style={[styles.rtText, { fontSize, color: textColor }]}>{shown}</Text>
+          <Text numberOfLines={1} style={[styles.rtText, { fontSize, color: textColor }, eggType, eggTrack]}>{shown}</Text>
+          <Text numberOfLines={1} style={[styles.rtText, { fontSize, color: textColor }, eggType, eggTrack]}>{shown}</Text>
         </Animated.View>
       ) : (
         // Static text clips at the strip edges like the design's overflow:hidden
         // — never an ellipsis (the refs show edge-clipped text, not "…").
-        <Text numberOfLines={1} ellipsizeMode="clip" style={[styles.rtText, { fontSize, color: textColor, fontStyle: hasText ? 'normal' : 'italic', textAlign: 'center' }]}>
+        <Text numberOfLines={1} ellipsizeMode="clip" style={[styles.rtText, { fontSize, color: textColor, fontStyle: hasText ? 'normal' : 'italic', textAlign: 'center' }, hasText ? eggType : null, eggTrack]}>
           {shown}
         </Text>
       )}
@@ -257,8 +260,8 @@ function RadioTextStrip({ text, colors, height = 52, fontSize = 30, maxWidth = 8
 // opacity 0.25 and settle to 0 / 1 over ~200ms — one two-endpoint transition
 // per change (the design's carfm-scan-up/down keyframes expressed as a single
 // timing), never a hard swap. dir 0 = ordinary retune, no slide.
-function SlidingFreq({ value, dir, fontSize, color }: {
-  value: string; dir: 1 | -1 | 0; fontSize: number; color: string;
+function SlidingFreq({ value, dir, fontSize, color, fontFamily }: {
+  value: string; dir: 1 | -1 | 0; fontSize: number; color: string; fontFamily?: string;
 }) {
   const y = useRef(new Animated.Value(0)).current;
   const op = useRef(new Animated.Value(1)).current;
@@ -276,7 +279,7 @@ function SlidingFreq({ value, dir, fontSize, color }: {
     ]).start();
   }, [value, dir, y, op]);
   return (
-    <Animated.Text style={[styles.freq, { fontSize, color, opacity: op, transform: [{ translateY: y }] }]}>
+    <Animated.Text style={[styles.freq, { fontSize, color, opacity: op, transform: [{ translateY: y }] }, fontFamily ? { fontFamily } : null]}>
       {value}
     </Animated.Text>
   );
@@ -389,6 +392,13 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // A theme that suppresses logos forces the call-sign identity so its own type
   // reads (hero here; preset/peek suppression rides in the art pass).
   const eggHideLogos = !!egg?.suppressLogos;
+  // Themed type — applied only once the display faces are bundled (BAND_FONTS_READY).
+  // Values are registered RN family names; undefined → the default face falls through.
+  const eggFontOn = BAND_FONTS_READY && !!egg;
+  const eggHeroFont = eggFontOn ? (egg?.heroFont ?? egg?.font) : undefined;
+  const eggFreqFont = eggFontOn ? egg?.freqFont : undefined;
+  const eggRtFont = eggFontOn ? (egg?.rtFont ?? egg?.font) : undefined;
+  const eggGenreFont = eggFontOn ? (egg?.genreFont ?? egg?.font) : undefined;
   // RN filter grayscale (New Architecture) — applied to each face region's content;
   // the power button is drawn in full color ABOVE it (design's Android guidance).
   const GS: any = off ? { filter: [{ grayscale: 1 }] } : null;
@@ -774,7 +784,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             <View style={styles.zoneCenter}>
               {stereoCluster}
               {genreLabel && !off ? (
-                <Text numberOfLines={1} style={[styles.ptyCentered, { fontSize: L.ptyFont, color: genreColor }, ptyShadow]}>{genreLabel}</Text>
+                <Text numberOfLines={1} style={[styles.ptyCentered, { fontSize: L.ptyFont, color: genreColor }, eggGenreFont ? { fontFamily: eggGenreFont } : null, ptyShadow]}>{genreLabel}</Text>
               ) : null}
             </View>
           </>
@@ -785,7 +795,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             {stereoCluster}
             {genreLabel && !off ? (
               <View style={[styles.ptyWrap, { maxWidth: 200 }]}>
-                <Text numberOfLines={1} style={[styles.ptyText, { fontSize: L.ptyFont, color: genreColor }, ptyShadow]}>{genreLabel}</Text>
+                <Text numberOfLines={1} style={[styles.ptyText, { fontSize: L.ptyFont, color: genreColor }, eggGenreFont ? { fontFamily: eggGenreFont } : null, ptyShadow]}>{genreLabel}</Text>
               </View>
             ) : null}
             {oobEl}
@@ -804,7 +814,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
               style={({ pressed }) => [styles.gearBtn, { borderColor: pal.border, backgroundColor: pal.raised }, pressed && { opacity: 0.55 }]}
               accessibilityRole="button" accessibilityLabel="Settings"
             >
-              <GearIcon size={24} color={pal.dim} />
+              {egg?.settingsBoltColor ? <BoltGlyph size={24} color={egg.settingsBoltColor} /> : <GearIcon size={24} color={pal.dim} />}
             </Pressable>
           </View>
           {tall ? (
@@ -890,7 +900,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             </Text>
             <View style={styles.freqRow}>
               <Text style={[styles.scanArrow, { color: pal.dim }]}>{scan.dir > 0 ? '▲' : '▼'}</Text>
-              <SlidingFreq value={fmt(scan.display)} dir={scan.dir} fontSize={L.freq} color={pal.amber} />
+              <SlidingFreq value={fmt(scan.display)} dir={scan.dir} fontSize={L.freq} color={pal.amber} fontFamily={eggFreqFont} />
             </View>
           </View>
         ) : (
@@ -908,12 +918,21 @@ export default function CarFmFace(props: CarFmFaceProps) {
               </View>
             ) : heroIdent ? (
               // No real logo (or theme suppresses it): big call sign, no monogram tile.
-              <Text
-                numberOfLines={1}
-                style={[styles.call, { fontSize: L.call, color: heroCardText }]}
-              >
-                {heroIdent}
-              </Text>
+              // AC/DC flanks it with lightning bolts (design's callSignBolt).
+              egg?.callSignBolt ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: L.s(8) }}>
+                  <BoltGlyph size={L.call * 0.7} color={egg.accent} />
+                  <Text numberOfLines={1} style={[styles.call, { fontSize: L.call, color: heroCardText, fontFamily: eggHeroFont ?? styles.call.fontFamily }]}>{heroIdent}</Text>
+                  <BoltGlyph size={L.call * 0.7} color={egg.accent} />
+                </View>
+              ) : (
+                <Text
+                  numberOfLines={1}
+                  style={[styles.call, { fontSize: L.call, color: heroCardText, fontFamily: eggHeroFont ?? styles.call.fontFamily }]}
+                >
+                  {heroIdent}
+                </Text>
+              )
             ) : null /* No callsign resolved (NWD with no GPS lock yet): show
                         nothing here and let the frequency below stand as the
                         identity — never the inaccurate "Tuning…". */}
@@ -926,7 +945,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 accessibilityLabel={`Frequency ${fmt(mhz)} megahertz. Tap to enter a frequency.`}
               >
                 <View style={styles.freqRow}>
-                  <SlidingFreq value={fmt(mhz)} dir={seekLandDir.current} fontSize={L.freq} color={pal.amber} />
+                  <SlidingFreq value={fmt(mhz)} dir={seekLandDir.current} fontSize={L.freq} color={pal.amber} fontFamily={eggFreqFont} />
                 </View>
               </Pressable>
             ) : null}
@@ -972,6 +991,13 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 flip ? { transform: flip.centerTransform } : null,
               ]}
             >
+              {/* Band-theme motif watermark (§12) — cosmetic, behind the content,
+                  clipped to the card, pointer-inert. Colour is the theme glow. */}
+              {egg ? (
+                <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', borderRadius: 28, overflow: 'hidden' }]}>
+                  <BandMotif motif={egg.motif} color={egg.glow ?? egg.accent} size={(tall ? tallHeroW : L.heroCardW) * 0.66} opacity={dark ? 0.16 : 0.12} />
+                </View>
+              ) : null}
               {/* Grayscaled content (§4.7); the power button is drawn in colour above it. */}
               <View style={[styles.heroContent, { gap: L.s(14) }, GS]}>
                 {heroCenter}
@@ -1011,6 +1037,8 @@ export default function CarFmFace(props: CarFmFaceProps) {
               colors={egg?.rtPlate
                 ? { raised: egg.rtPlate.bg, border: egg.rtPlate.border, dim: pal.dim, text: egg.rtPlate.text }
                 : { raised: pal.raised, border: pal.border, dim: pal.dim, text: pal.text }}
+              fontFamily={eggRtFont}
+              letterSpacing={egg?.rtSpacing}
             />
           </View>
         );

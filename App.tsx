@@ -179,6 +179,16 @@ export default function App() {
     // Real bold cut as its own family: Android fake-bolds a single family,
     // which reads lighter than the design's true 700 (design handoff §3).
     'AtkinsonHyperlegible-Bold': require('./assets/fonts/AtkinsonHyperlegible-Bold.ttf'),
+    // Band-theme display faces (§12 Easter eggs). Anton and Permanent Marker are
+    // the design's actual spec faces (both open-licensed). The rest are open-
+    // licensed STAND-INS for proprietary faces we can't ship (Squealer, Onyx,
+    // Gridnik/Singothic, the Beatles faces) — chosen to carry the same intent.
+    'Anton':           require('./assets/fonts/Anton-Regular.ttf'),           // Talking Heads (spec)
+    'Permanent Marker': require('./assets/fonts/PermanentMarker-Regular.ttf'), // Nirvana (spec)
+    'Metal Mania':     require('./assets/fonts/MetalMania-Regular.ttf'),       // AC/DC — stand-in for Squealer
+    'Bebas Neue':      require('./assets/fonts/BebasNeue-Regular.ttf'),        // Nirvana hero — stand-in for Onyx
+    'Chakra Petch':    require('./assets/fonts/ChakraPetch-Regular.ttf'),      // NIN — stand-in for Gridnik/Singothic
+    'Righteous':       require('./assets/fonts/Righteous-Regular.ttf'),        // The Beatles — stand-in (theme partial)
   });
 
   const [splashDone, setSplashDone]   = useState(false);
