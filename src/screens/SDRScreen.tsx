@@ -3540,8 +3540,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   // now; the real native claim (ACTION_APP_IN_OUT app_id=8) / release (ExitFm)
   // hooks in with task #14 once the probe verifies it on-device.
   const [fmAudioActive, setFmAudioActive] = useState(true);
-  const onFmClaimAudio = useCallback(() => { setFmAudioActive(true); }, []);
-  const onFmReleaseAudio = useCallback(() => { setFmAudioActive(false); }, []);
+  // The power button must actually drive the tuner, not just flip the visual state —
+  // on NWD, claiming/releasing the MCU FM source is what starts/STOPS the (analog,
+  // MCU-routed) audio. Without this the face went "dead" but sound kept playing.
+  const onFmClaimAudio = useCallback(() => {
+    setFmAudioActive(true);
+    if (nwdActiveRef.current) nwdSetAudio(true);
+  }, []);
+  const onFmReleaseAudio = useCallback(() => {
+    setFmAudioActive(false);
+    if (nwdActiveRef.current) nwdSetAudio(false);
+  }, []);
   useEffect(() => {
     if (!carFm) return;
     AsyncStorage.getItem('@carfm/theme_v1')

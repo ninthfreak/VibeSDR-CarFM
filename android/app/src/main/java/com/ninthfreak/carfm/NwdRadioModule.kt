@@ -225,25 +225,54 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(sb.toString())
     }
 
-    /** Keep the tuner's (analog, MCU-routed) audio alive + unmute music. Does NOT
-     *  fire the source-switch broadcasts: on-device those launched the STOCK radio
-     *  app over CarFM. Kept as a separate, opt-in call for later experimentation. */
+    /** Claim / release the FM audio source. The tuner's audio is analog + MCU-routed,
+     *  so producing sound means BECOMING the active source, and stopping it means the
+     *  MCU actually LETTING GO — `setRadioBackServiceOn` alone does neither.
+     *
+     *  ON  → announce we're the FM source the way the probe proved works
+     *        (ACTION_APP_IN_OUT app_id=8, operation=1 IN) → service InitFM/powerUp →
+     *        MCU routes tuner audio; keep the back-service alive + unmute.
+     *  OFF → announce we're LEAVING (operation=0 OUT) + exit ARM FM + back-service off
+     *        + mute. EXIT_ARM_FM alone does NOT stick while the active source is still
+     *        Radio (the MCU re-powers FM a second later — the "comes back on" bug); the
+     *        app-OUT is what asks the MCU to release the source.
+     *
+     *  ⚠ NEEDS ON-DEVICE CONFIRMATION: the exact OFF signal that makes the MCU release
+     *  is what the probe's "Investigation C" measures. If app-OUT doesn't stick on the
+     *  unit, the probe will name the one that does (e.g. a source switch away from
+     *  Radio) — swap it in here then. */
     @ReactMethod
     fun setAudioEnabled(on: Boolean) {
-        try { radio?.setRadioBackServiceOn(on) } catch (e: Throwable) { Log.w(TAG, "setRadioBackServiceOn failed", e) }
+        val audio = reactContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         if (on) {
-            (reactContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
-                ?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
+            sendAppInOut(operation = 1)      // claim the FM source (proven trigger)
+            try { radio?.setRadioBackServiceOn(true) } catch (e: Throwable) { Log.w(TAG, "backservice on failed", e) }
+            audio?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
+        } else {
+            try { radio?.setRadioBackServiceOn(false) } catch (e: Throwable) { Log.w(TAG, "backservice off failed", e) }
+            sendAppInOut(operation = 0)      // release the FM source so it STAYS off
+            reactContext.sendBroadcast(Intent("com.nwd.android.ACTION_EXIT_ARM_FM_RAIDO"))
+            audio?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
         }
     }
 
-    /** The source-switch broadcasts, split out so they're NOT fired automatically
-     *  (they launch the stock radio app). Exposed for deliberate testing only. */
+    /** ACTION_APP_IN_OUT app_id=8 — the source claim/release the stock app uses and
+     *  the probe validated. operation: 1 = app IN (claim), 0 = app OUT (release). */
+    private fun sendAppInOut(operation: Int) {
+        reactContext.sendBroadcast(
+            Intent("com.nwd.action.ACTION_APP_IN_OUT")
+                .putExtra("extra_app_id", 8)
+                .putExtra("extra_app_operation", operation)
+                .putExtra("extra_app_event", 0)
+        )
+    }
+
+    /** The heavier physical source-switch broadcasts (like pressing "Radio" on the
+     *  unit). Kept as a separate, opt-in call — NOT fired automatically. */
     @ReactMethod
     fun requestAudioSource() {
-        reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE"))
-        reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_CHANGE_SOURCE"))
-        reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_REQUEST_GOTO_CURRENT_SOURCE"))
+        reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE").putExtra("extra_source_id", 4.toByte()))
+        reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_CHANGE_SOURCE").putExtra("extra_source_id", 4.toByte()))
     }
 
     /** ONE-WAY preset sync (app → head unit): overwrite the built-in FM1/FM2/FM3

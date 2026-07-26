@@ -349,6 +349,37 @@ Ranked; all need on-device testing:
 - **Signal (RSSI) and raw RDS/BLER** are native-only (vendor `.so` + device
   access) → out of reach without root; not worth chasing for a normal app.
 
+# Deep dive — 2026-07-25 (drive log `nwdprobe-20260725-205108`)
+
+Two concrete findings from the latest probe run, and the probe was refocused to
+chase what's still open (it no longer re-runs the known-good path).
+
+## RadioText: we DID become the source, yet still no text
+The RUNG-1 trigger (`ACTION_APP_IN_OUT app_id=8`) drove `mcu_current_source → 4`
+and audio played — i.e. **we satisfied `isRadioSource()`** — but every
+`NewRdsManager.setCurrentFrequency` callback still logged **`mRdsEnable=false`**,
+and PS/RT/PTY stayed empty for 24s on two strong stations. So on THIS unit
+(AllWinner `AWRadioManager`/`NewRdsManager` path, not the Spreadtrum
+`ArmRadioManager` the earlier decompile covered) the live blocker is the **RDS
+enable flag**, not the source gate. Next levers to try (now in the probe,
+Investigation A): `setRadioBackServiceOn(true)` + re-assert source; and finding a
+client-reachable call that sets `mRdsEnable`/opens the device.
+
+## Audio-off: EXIT_ARM_FM does not stick — the MCU re-powers FM
+`ACTION_EXIT_ARM_FM_RAIDO` stopped audio only briefly; within ~1s
+`isMusicActive` went true again because **`mcu_current_source` stayed `4`
+(Radio)** — the MCU re-inits FM. ⇒ Stopping FM requires the active **source** to
+be released/switched, not just an FM exit. The probe's Investigation C now walks
+`EXIT_ARM_FM` → `APP_IN_OUT operation=0` (leave source) → `REQUEST_CHANGE_SOURCE`
+away from Radio and names the one that sticks.
+
+**App fix shipped (needs device confirm):** `NwdRadioModule.setAudioEnabled` was a
+no-op for stopping (it only toggled `setRadioBackServiceOn`), and the CarFM power
+button never even called it — it only flipped the visual `off` state. Both fixed:
+the power button now drives `nwdSetAudio`, and OFF sends `APP_IN_OUT operation=0`
++ `EXIT_ARM_FM` + mute. Swap in the probe's confirmed winner if app-OUT doesn't
+stick on the unit.
+
 ## Ethics/scope
 Interoperability RE of our own device's interface, read-only, local. Do not
 redistribute decompiled code, modified APKs, or firmware.

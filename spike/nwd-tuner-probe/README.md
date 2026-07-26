@@ -16,23 +16,34 @@ service starts it in response to broadcasts the stock app fires *on itself*, wit
 **no permission or caller check**. So a third-party app doesn't need audio
 permissions; it just needs to send the same broadcast to the running service.
 
-There is **one button, ▶ RUN ALL TESTS**, that runs three phases back to back as a
-guided stream, with on-screen state reminders and a yes/no per step. Everything
-else (the individual tests + manual controls) is tucked under **Advanced**.
+There is **one button, ▶ RUN ALL TESTS**. It now runs a **focused investigation**,
+not the old full sweep: it no longer re-tests what we've already confirmed (audio
+starts via `app_id=8`, tuning lands on the right station, presets overwrite). It
+drives the three still-**open** questions, reading objective signals
+(`isMusicActive` / `mcu_current_source` / frequency) instead of asking — the only
+ear-check is the one genuinely-open seek question. The old full phases (audio
+ladder, tune-confirm, overwrite presets, reclaim) are **preserved under Advanced**
+— nothing was deleted, just taken off the default run.
 
-**Phase 1 — standalone audio.** Climbs a ladder of bring-up attempts and stops at
-the first that produces sound, asking a single yes/no per rung:
+**Setup (silent).** Bind the service and power FM up via the confirmed trigger
+(`ACTION_APP_IN_OUT extra_app_id=8`), verified with `AudioManager.isMusicActive()`
+— no "can you hear it?".
 
-1. `com.nwd.action.ACTION_APP_IN_OUT` with `extra_app_id=8` → service `InitFM()` — the stock app's own trigger.
-2. `com.nwd.ACTION_MEDIA_PLAY` with `extra_app_id=8` → the same `InitFM()` path.
-3. Bind + `setCurrentFrequency` (on the Spreadtrum build, tuning powers up the tuner on its own).
-4. `com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE` (`extra_source_id=4`, then `8`) — asks the MCU to *physically* switch the head unit's audio source to Radio. Needed if this unit is a true external-MCU analog tuner rather than a SoC tuner.
-5. `MediaPlayer("THIRDPARTY://MEDIAPLAYER_PLAYERTYPE_FM")` — a public-API long shot.
+**A — RadioText.** A passive bound client sees `rt=''`. The last drive log showed
+we reached `mcu_current_source=4` (we're the FM source) yet the decoder stayed off
+(`mRdsEnable=false`). This walks the client-reachable levers (back-service on,
+re-assert source) and watches whether PS/RT/PTY ever populate.
 
-Before the ladder it wakes/binds the service (the receivers are registered
-dynamically, so the service must be alive) and clears competing media. As a
-**bonus**, if a rung makes FM the active source it may also unlock **RadioText** —
-the probe logs `getRtMessage`/callbacks throughout, so we'd catch that too.
+**B — Seek, outside the preset auto-search.** Characterizes **both** on-demand
+primitives: `seek()` (a single frequency step) and `search()` (scans and stops on
+the next station — the real on-demand seek). Reports exactly what each does, with
+one ear-check on whether they land on a clear station.
+
+**C — Audio-off that STAYS off.** The "comes back on" bug: exiting FM doesn't stick
+while the active source is still Radio (the MCU re-powers it). Walks stop methods —
+`EXIT_ARM_FM`, `APP_IN_OUT operation=0` (leave the source), `REQUEST_CHANGE_SOURCE`
+away from Radio — watching `isMusicActive` for 6s each, and names the one that
+sticks. That winner is the exact signal CarFM's power button must send.
 
 > **Not tested here:** writing `mcu_current_source` directly. The decompile shows
 > that's a dead end — it needs system permission and the MCU re-asserts it — and

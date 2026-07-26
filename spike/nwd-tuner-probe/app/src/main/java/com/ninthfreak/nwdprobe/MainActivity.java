@@ -50,21 +50,28 @@ import java.util.concurrent.ArrayBlockingQueue;
 /**
  * NWD built-in FM tuner — standalone-radio probe (heavily instrumented).
  *
- * ONE big button, RUN ALL TESTS, runs three phases back to back as a guided
- * stream, with on-screen state reminders + yes/no questions (inline buttons):
- *   PHASE 1  standalone audio bring-up (can FM play with the stock app closed?)
- *   PHASE 2  tune · seek · RDS (station control, real seek, RadioText dwell)
- *   PHASE 3  overwrite the head unit's FM1/FM2/FM3 presets from the app side
- *            (ONE-WAY app→unit; nothing is ever read back into an app store)
- * Everything else (individual tests + manual controls) is under "Advanced".
+ * ONE big button, RUN ALL TESTS, now runs a FOCUSED investigation — it no longer
+ * re-tests what we've already confirmed (audio starts via app_id=8, tuning lands
+ * on the right station, presets overwrite). It drives the three still-OPEN
+ * questions, reading objective signals (isMusicActive / mcu_current_source /
+ * frequency) instead of asking, except the one genuinely-open seek ear-check:
+ *   A. RADIOTEXT  — can a bound client open the RDS decoder (mRdsEnable)?
+ *   B. SEEK       — is there an on-demand seek outside the preset auto-search?
+ *                   (characterizes BOTH seek() [single step] and search() [to-station])
+ *   C. AUDIO-OFF  — which stop makes the MCU release Radio so audio STAYS off?
+ * The old full phases (audio ladder, tune-confirm, overwrite presets, reclaim)
+ * are preserved under "Advanced" — nothing was deleted, just taken off the default
+ * run so it stops re-proving the known-good path.
  *
  * Key facts from decompiling com.nwd.radio.service (AllWinner path):
- *   • ACTION_APP_IN_OUT extra_app_id=8 -> AWFMFeature.InitFM() -> powerUp + route.
- *   • search(up) is the REAL seek-to-station; seek(up) is a single manual step;
- *     the scan is gated on POWER_UP (so power FM up first).
- *   • presets: mPrefFrequency[bank][0..5]; bank 0/1/2 = FM1/FM2/FM3 (18 FM slots);
- *     saveCurrentFrequency(slot 0-5) writes the current station into the cur bank.
- *   • notifyCurrentFrequency(band, freq, ps, arg): band = bank, arg = 1-6 slot.
+ *   • ACTION_APP_IN_OUT extra_app_id=8 (operation=1 IN / 0 OUT) -> InitFM/powerUp.
+ *   • search(bool) scans and STOPS on the next station (on-demand seek); seek(bool)
+ *     is a single step; both are gated on POWER_UP (so power FM up first).
+ *   • RDS decode (analyzeBuiltInRadioRds) is gated on mRdsEnable && (mbDeviceOpen ||
+ *     isRadioSource()); isRadioSource() reads mcu_current_source==4 (the MCU writes it).
+ *   • audio is analog + MCU-routed: exiting FM doesn't stick while the active SOURCE
+ *     is still Radio — the MCU re-powers it. Stopping means switching the source.
+ *   • presets: saveCurrentFrequency(slot 0-5) writes the current station; band=bank.
  *
  * Throwaway RE harness, NOT the CarFM backend. AIDL is a clean-room reconstruction.
  */
@@ -257,48 +264,169 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** The full guided run: three phases back to back on one shared bind. */
+    /** The focused investigation run. Everything we've ALREADY proven — audio can
+     *  start (RUNG 1 = ACTION_APP_IN_OUT app_id=8), tuning lands on the right
+     *  station, presets overwrite via AMS — is NOT re-tested here (those live under
+     *  Advanced). It drives straight at the three things still OPEN:
+     *    A. RadioText  — can we open the RDS decoder as a bound client?
+     *    B. Seek       — is there an on-demand seek OUTSIDE the preset auto-search?
+     *    C. Audio-off  — which stop actually makes the MCU let go, so it STAYS off?
+     *  Objective signals (isMusicActive, mcu_current_source, frequency) are read
+     *  directly — the only ear-question is the one genuinely-open seek check. */
     private void runAllBody() {
-        line("\n==== FULL PROBE RUN (all tests) ====");
-        prompt("FULL PROBE RUN — expected state BEFORE starting:\n\n"
+        line("\n==== NWD PROBE — focused investigation ====");
+        prompt("NWD PROBE — before you start:\n\n"
              + "• Stock radio app CLOSED.\n"
-             + "• CarFM NOT running.\n"
-             + "• Volume UP; nothing else playing (no Bluetooth audio, no music app).\n\n"
-             + "Runs 3 phases back to back (~4-5 min): standalone audio → tune/seek/RDS → "
-             + "overwrite presets. Follow the on-screen prompts.\n\nTap Start.", "Start");
-        if (!connectAndBaseline()) { saveLog(); testRunning = false; return; }
-        dumpAllBanks();   // current preset lists up front
+             + "• Volume UP; nothing else playing.\n\n"
+             + "This no longer re-tests what we've already confirmed. It investigates the three\n"
+             + "open questions — RadioText, on-demand seek, and turning the audio off so it STAYS\n"
+             + "off. ~3 min, mostly hands-off.\n\nTap Start.", "Start");
+        if (!connectSlim()) { saveLog(); testRunning = false; return; }
+        powerOnFm();   // known trigger; confirmed objectively, no "can you hear it?"
 
-        String worked = phaseAudio();
-        phaseRadioFunc();
-        phaseWritePresets();
+        investigateRds();
+        investigateSeek();
+        investigateAudioOff();
 
-        line("\n==== FULL RUN SUMMARY ====");
-        line("audio winning rung : " + (worked != null ? worked : "NONE"));
-        line("logcat readable    : " + logcatReadable);
+        line("\n==== SUMMARY ====");
+        line("logcat readable : " + logcatReadable);
         line("\n" + summary);
-
-        // Optional stop — the LAST real action, so nothing the probe does can
-        // re-trigger audio after it. If FM pops back on anyway, that's the MCU
-        // (its active SOURCE is still Radio), which we watch for and record.
-        String c = prompt("Everything is captured. Stop the tuner audio now?\n\n"
-             + "Note: if it comes back on, the head unit's active source is still Radio — "
-             + "you'd switch sources on the unit itself to fully silence it.", "Stop FM", "Leave it playing");
-        if ("Stop FM".equals(c)) {
-            sendExitFm();
-            line("sent EXIT_ARM_FM — watching 6s to see whether it stays off…");
-            boolean cameBack = false;
-            for (int t = 0; t < 6; t++) { sleep(1000); if (am != null && am.isMusicActive()) cameBack = true; }
-            boolean nowOn = am != null && am.isMusicActive();
-            line("  after EXIT_ARM_FM: musicActive=" + nowOn
-                 + (cameBack ? "  <-- FM re-powered itself (MCU source is still Radio; switch source on the unit to fully stop)"
-                             : "  (stayed off)"));
-            summary.append("STOP: EXIT_ARM_FM -> ").append(cameBack ? "re-powered by MCU" : "stayed off").append('\n');
-        }
-
-        saveLog();   // file write is the final step; audio was already handled + recorded above
-        line("==== FULL RUN DONE ====");
+        saveLog();
+        line("==== DONE ====");
         testRunning = false;
+    }
+
+    /** Bind + a ONE-LINE state read. We know the AIDL map, so no baseline rich dump,
+     *  no getprop sweep, no preset-bank cycling on the default run (all still under
+     *  Advanced / Rich dump if ever needed). */
+    private boolean connectSlim() {
+        boolean wasRunning = preflightAlreadyRunning();
+        wakeAndBind();
+        for (int i = 0; radio == null && i < 16; i++) sleep(500);
+        if (radio == null) { line("NOT BOUND — is the head unit's radio service running? aborting"); return false; }
+        calibrate();
+        line("bound (service was already running=" + wasRunning + ") — " + stateLine());
+        return true;
+    }
+
+    /** Bring FM audio up via the KNOWN winner (ACTION_APP_IN_OUT app_id=8) and confirm
+     *  it OBJECTIVELY with AudioManager.isMusicActive() — no "can you hear it?". Only
+     *  falls back / asks if the objective check says there's genuinely no audio. */
+    private boolean powerOnFm() {
+        line("\n-- powering FM (ACTION_APP_IN_OUT app_id=8 — the confirmed trigger) --");
+        sendStopQqMusic(); sleep(400);
+        sendAppInOut(8); sleep(3500); calibrate();
+        if (am != null && am.isMusicActive()) { line("  audio active (isMusicActive=true), on " + fmt(currentMhz()) + " src=" + readSource()); return true; }
+        line("  isMusicActive=false — one retry with ACTION_MEDIA_PLAY…");
+        sendMediaPlay(8); sleep(3000);
+        if (am != null && am.isMusicActive()) { line("  audio active after MEDIA_PLAY, src=" + readSource()); return true; }
+        return prompt("No audio detected automatically. Is it actually silent? (stock app closed, volume up?)",
+                "It's playing", "It's silent").startsWith("It's playing");
+    }
+
+    // ── INVESTIGATION A: RadioText ──────────────────────────────────────────────
+    // Known: a passive bound client gets rt=''. Last drive log showed we DID reach
+    // mcu_current_source=4 (we're the FM source) yet mRdsEnable stayed false, so the
+    // decoder never fed us. This walks the client-reachable levers that might flip
+    // that and watches PS/RT/PTY — read from the tuner's own variables, no ear-check.
+    private void investigateRds() {
+        banner("INVESTIGATION A", "RADIOTEXT (RDS)",
+               "A passive client sees no RadioText. Last run we were the FM source yet the decoder\n"
+             + "(mRdsEnable=false) never fed us. This tries the levers that could open it — become\n"
+             + "the source, keep the back-service alive — and watches whether PS/RT/PTY populate.");
+        line("-- tuning " + STRONG_MHZ + " (strong local RDS) --");
+        tuneMhzTo(STRONG_MHZ); sleep(2500);
+        for (int s = 0; s < 4; s++) { try { radio.setRDSState((byte) s, true); } catch (Exception ignored) {} }
+
+        line("\n-- lever 1: as-is, source=" + readSource() + " --");
+        rdsRead("A1 as-is", 9); captureLogcat("RDS-A1");
+
+        line("\n-- lever 2: setRadioBackServiceOn(true) + re-assert FM source --");
+        try { radio.setRadioBackServiceOn(true); } catch (Exception e) { line("  backservice err " + e); }
+        sendAppInOut(8); sleep(2500);
+        line("  mcu_current_source now = " + readSource());
+        rdsRead("A2 backsvc+source", 12); captureLogcat("RDS-A2");
+
+        line("\n==> RadioText: mcu_current_source=" + readSource()
+             + " — see the lever verdicts above (still empty = the decoder never reached the client).");
+    }
+
+    // ── INVESTIGATION B: seek OUTSIDE the preset auto-search ─────────────────────
+    // The tuner seeks fine while auto-storing presets (AMS). Open question: can WE
+    // trigger a seek on demand? The AIDL exposes two primitives — characterize BOTH:
+    //   • radio.seek(bool)   — last log: a single 0.2 MHz step (does NOT find a station)
+    //   • radio.search(bool) — last log: scanned and STOPPED on the next station
+    // so we settle which one is the real on-demand "seek to next station".
+    private void investigateSeek() {
+        banner("INVESTIGATION B", "SEEK — on demand, outside the preset auto-search",
+               "AMS seeks fine. Open question: can WE seek on demand? Two AIDL primitives:\n"
+             + "  seek()   — expected a single frequency step\n"
+             + "  search() — expected a real hop to the next station (this is the on-demand seek)\n"
+             + "Reports exactly what each does; one ear-check on whether they land on a real station.");
+        line("-- parking on 88.7 so a seek has room to run --");
+        tuneMhzTo(88.7); sleep(1800);
+
+        seekReport("seek() up",   true,  true);
+        String a1 = prompt("After seek() up: CLEAR station (music/voice) or noise/silence?",
+                "Clear station", "Noise / silence");
+        summary.append("SEEK seek()-up audible: ").append(a1).append('\n');
+
+        seekReport("seek() down", false, true);
+
+        line("-- now the same, via search() (the on-demand seek-to-station) --");
+        seekReport("search() up",   true,  false);
+        String a2 = prompt("After search() up: CLEAR station or noise/silence?",
+                "Clear station", "Noise / silence");
+        summary.append("SEEK search()-up audible: ").append(a2).append('\n');
+        seekReport("search() down", false, false);
+
+        line("-- parking back on " + STRONG_MHZ + " --");
+        tuneMhzTo(STRONG_MHZ); sleep(1200);
+    }
+
+    // ── INVESTIGATION C: turn audio OFF and make it STAY off ─────────────────────
+    // The quirk: stop FM and the MCU re-powers it ~1s later because its active SOURCE
+    // is still Radio (=4). EXIT_ARM_FM alone never sticks. This walks stop methods and
+    // finds the one that makes the MCU let go — the exact signal CarFM's power button
+    // must send. Each is watched 6s; source is read before/after.
+    private void investigateAudioOff() {
+        banner("INVESTIGATION C", "TURN AUDIO OFF — and make it STAY off",
+               "Stop FM and it comes back a second later: the MCU's active source is still Radio.\n"
+             + "This walks stop methods to find the one that sticks — what CarFM's power button needs.");
+        if (!"Go".equals(prompt("Ready to test turning the audio OFF? (tries a few methods, ~30s)", "Go", "Skip"))) {
+            line("audio-off investigation skipped"); summary.append("AUDIO-OFF: skipped\n"); return;
+        }
+        String winner = null;
+        if (stopAndWatch("1. EXIT_ARM_FM (baseline — expected to come back)", this::sendExitFm)) winner = "EXIT_ARM_FM";
+        if (winner == null) { ensurePowered(); if (stopAndWatch("2. APP_IN_OUT app_id=8 operation=0 (leave the FM source)", () -> sendAppInOut(8, 0))) winner = "APP_IN_OUT operation=0"; }
+        if (winner == null) { ensurePowered(); if (stopAndWatch("3. REQUEST_CHANGE_SOURCE -> 0 (switch MCU off Radio)", () -> sendRequestSource((byte) 0))) winner = "REQUEST_CHANGE_SOURCE src=0"; }
+        if (winner == null) { ensurePowered(); if (stopAndWatch("4. REQUEST_CHANGE_SOURCE -> 1", () -> sendRequestSource((byte) 1))) winner = "REQUEST_CHANGE_SOURCE src=1"; }
+
+        line("\n==> AUDIO-OFF: " + (winner != null
+                ? winner + " made the audio STAY off (source left Radio). ⇒ CarFM's power-off should send this."
+                : "NONE stuck — MCU keeps re-powering; mcu_current_source=" + readSource() + " (still Radio). Needs a source switch the unit accepts."));
+        summary.append("AUDIO-OFF sticks with: ").append(winner != null ? winner : "NONE found").append('\n');
+    }
+
+    /** Send a stop method, then watch ~6s: does audio STAY off, or does the MCU
+     *  re-power it? Logs source + isMusicActive each second. Returns true iff it
+     *  never came back on within the window. */
+    private boolean stopAndWatch(String label, Runnable send) {
+        boolean onBefore = am != null && am.isMusicActive();
+        line("\n-- " + label + "  (before: music=" + onBefore + " src=" + readSource() + ") --");
+        send.run();
+        boolean cameBack = false;
+        for (int t = 0; t < 6; t++) {
+            sleep(1000);
+            boolean on = am != null && am.isMusicActive();
+            if (on) cameBack = true;
+            line("   t+" + (t + 1) + "s music=" + on + " src=" + readSource());
+        }
+        boolean nowOn = am != null && am.isMusicActive();
+        boolean stayedOff = !nowOn && !cameBack;
+        line("   ==> " + (stayedOff ? "STAYED OFF ✓ (src=" + readSource() + ")"
+                        : nowOn ? "still playing" : "flickered off then came back"));
+        return stayedOff;
     }
 
     // ── Shared setup ────────────────────────────────────────────────────────────
@@ -650,13 +778,15 @@ public class MainActivity extends Activity {
     }
 
     // ── Bring-up broadcasts (exact actions/extras from the service receiver) ─────
-    private void sendAppInOut(int appId) {
+    private void sendAppInOut(int appId) { sendAppInOut(appId, 1); }   // operation=1 = app IN (claim FM source)
+    /** operation: 1 = app IN (claim the FM source), 0 = app OUT (release it). */
+    private void sendAppInOut(int appId, int operation) {
         Intent i = new Intent("com.nwd.action.ACTION_APP_IN_OUT");
         i.putExtra("extra_app_id", appId);
-        i.putExtra("extra_app_operation", 1);
+        i.putExtra("extra_app_operation", operation);
         i.putExtra("extra_app_event", 0);
         sendBroadcast(i);
-        line("bcast ACTION_APP_IN_OUT extra_app_id=" + appId);
+        line("bcast ACTION_APP_IN_OUT extra_app_id=" + appId + " operation=" + operation);
     }
     private void sendMediaPlay(int appId) {
         Intent i = new Intent("com.nwd.ACTION_MEDIA_PLAY");
