@@ -97,3 +97,43 @@ export function BoltGlyph({ color, size = 22 }: { color: string; size?: number }
     </Svg>
   );
 }
+
+/** AC/DC raised-fist "horns" hand — a small corner ornament on the hero card. */
+export function HornsGlyph({ color, size = 34 }: { color: string; size?: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 100 100">
+      <G fill={color}>
+        {/* index + pinky raised, middle two curled into the fist, thumb across */}
+        <Rect x="20" y="18" width="12" height="46" rx="6" />
+        <Rect x="68" y="18" width="12" height="46" rx="6" />
+        <Path d="M28 54 C24 54 20 58 20 66 L20 78 C20 88 28 94 40 94 L60 94 C72 94 80 88 80 78 L80 60 C80 54 76 52 72 54 C72 46 62 46 62 54 C62 46 52 46 52 54 L52 58 C48 52 40 54 40 60 C40 54 32 54 28 54 Z" />
+      </G>
+    </Svg>
+  );
+}
+
+/** The concentric ring frame around a hero card (Beatles, Talking Heads). Each
+ *  `ring` is a "COLOUR OFFSETpx" pair (an inset border line). Rendered as a stack
+ *  of pointer-inert absolute borders — RN can't do CSS multi-ring box-shadow. */
+export function CardFrame({ rings, radius }: { rings: string[]; radius: number }) {
+  return (
+    <View pointerEvents="none" style={StyleSheet_absoluteFill}>
+      {rings.map((r, i) => {
+        const sp = r.trim().split(/\s+/);
+        const color = sp[0];
+        const inset = parseFloat(sp[1] ?? '0') || 0;
+        return (
+          <View
+            key={i}
+            style={{
+              position: 'absolute', top: inset, left: inset, right: inset, bottom: inset,
+              borderWidth: 1.4, borderColor: color, borderRadius: Math.max(0, radius - inset),
+            }}
+          />
+        );
+      })}
+    </View>
+  );
+}
+// Local alias so the import list stays minimal.
+const StyleSheet_absoluteFill = { position: 'absolute' as const, top: 0, left: 0, right: 0, bottom: 0 };
