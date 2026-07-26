@@ -31,8 +31,6 @@ export type Candidate = {
   raster?: Raster;
   /** Rounded-plate params (plate only). */
   plate?: PlateParams;
-  /** Pixels remap deliberately sank into the bg — excluded by the gate. */
-  sank?: Uint8Array;
 };
 
 const packRGB = (r: number, g: number, b: number) => (r << 16) | (g << 8) | b;
@@ -217,44 +215,78 @@ export function route(coverage: number): Treatment[] {
 }
 
 // ── Stage 5a: remap ─────────────────────────────────────────────────────────
-/** OKLCh lightness remap that keeps brand hue. Returns processed pixels + the
- *  `sank` mask (light-neutral paper it darkened into the bg). */
-export function remap(img: Raster): { raster: Raster; sank: Uint8Array } {
+/** OKLCh lightness remap that keeps brand hue. Two steps (HANDOFF_2 §5a):
+ *   1. CLEAR THE PAPER to transparency — light near-neutral ink (letter
+ *      counters, ring gaps) fades to alpha 0 via a per-pixel lightness ramp, so
+ *      the real dark surface shows through. NEVER darkened to black (that only
+ *      works on a black theme). Chromatic ink is never in the ramp → 100% kept.
+ *   2. LIFT the remaining dark ink; never darken anything (`L' = max(L', L)`).
+ *  Large light-neutral components (a white wordmark) are `protect`ed and kept.
+ *  Because paper becomes transparent, the output is background-independent. */
+export function remap(img: Raster): { raster: Raster } {
   const { w, h, rgba: px } = img, n = w * h;
-  const NEUTRAL_C = 0.03;                            // the doc's value (NOT 0.045)
+  const NEUTRAL_C = 0.03;    // the doc's value (NOT 0.045); "neutral" for the lift
+  const SOFT_C = 0.048;      // only near-neutral pixels are eligible to be cleared
   const bboxArea = n;
 
-  // lightNeutral = ink && chroma<0.03 && L>0.72 ; protect big components of it.
   const L = new Float32Array(n), A = new Float32Array(n), B = new Float32Array(n);
+  const alpha = new Float32Array(n);
   const lightNeutral = new Uint8Array(n);
   for (let i = 0, j = 0; i < n; i++, j += 4) {
     const [Ll, aa, bb] = srgb8ToLab(px[j], px[j + 1], px[j + 2]);
-    L[i] = Ll; A[i] = aa; B[i] = bb;
-    const ink = px[j + 3] > 128, c = chroma(aa, bb);
+    L[i] = Ll; A[i] = aa; B[i] = bb; alpha[i] = px[j + 3] / 255;
+    const ink = alpha[i] > 0.5, c = chroma(aa, bb);
     if (ink && c < NEUTRAL_C && Ll > 0.72) lightNeutral[i] = 1;
   }
   const cc = connectedComponents(lightNeutral, w, h);
   const protectLabel = new Uint8Array(cc.count + 1);
   for (let id = 1; id <= cc.count; id++) if (cc.areas[id] >= 0.08 * bboxArea) protectLabel[id] = 1;
 
-  const out = new Uint8ClampedArray(px);
-  const sank = new Uint8Array(n);
+  // Paper colour = mean sRGB of the (unprotected) light-neutral pixels, for the
+  // decontamination of partially-cleared edges. Fallback: white.
+  let pr = 0, pg = 0, pb = 0, pc = 0;
   for (let i = 0, j = 0; i < n; i++, j += 4) {
-    if (protectLabel[cc.labels[i]]) continue;        // protected: keep original L,C
-    const c = chroma(A[i], B[i]), neutral = c < NEUTRAL_C;
-    const oldL = L[i];
-    let newL: number;
-    if (neutral) newL = 1 - oldL;
-    else if (oldL < 0.45) newL = Math.max(oldL, 0.62);
-    else newL = oldL;
-    let a = A[i], b = B[i];
-    if (newL > oldL) { a *= 0.85; b *= 0.85; }        // C' = C*0.85 when lightening
-    newL = newL < 0 ? 0 : newL > 0.92 ? 0.92 : newL;  // clamp(L',0,0.92)
-    const [r, g, bl] = labToSrgb8(newL, a, b);
-    out[j] = r; out[j + 1] = g; out[j + 2] = bl;
-    if (neutral && oldL > 0.5) sank[i] = 1;           // light paper we darkened → sank
+    if (lightNeutral[i] && !protectLabel[cc.labels[i]]) { pr += px[j] / 255; pg += px[j + 1] / 255; pb += px[j + 2] / 255; pc++; }
   }
-  return { raster: { w, h, rgba: out }, sank };
+  const paper: [number, number, number] = pc > 0 ? [pr / pc, pg / pc, pb / pc] : [1, 1, 1];
+
+  // Step 1: per-pixel clearing coverage (no dilation) → new alpha.
+  const newA = Float32Array.from(alpha);
+  for (let i = 0; i < n; i++) {
+    if (protectLabel[cc.labels[i]]) continue;
+    if (alpha[i] > 0.5 && chroma(A[i], B[i]) < SOFT_C) {
+      const cov = Math.min(1, Math.max(0, (L[i] - 0.55) / 0.30));   // 0 at L≤.55, 1 at L≥.85
+      if (cov > 0) newA[i] = alpha[i] * (1 - cov);
+    }
+  }
+
+  // Step 2: write final alpha; decontaminate cleared edges; lift remaining ink.
+  const out = new Uint8ClampedArray(px);
+  for (let i = 0, j = 0; i < n; i++, j += 4) {
+    const a = newA[i];
+    out[j + 3] = Math.round(a * 255);
+    if (protectLabel[cc.labels[i]]) continue;                        // protected: keep original L,C
+    if (newA[i] < alpha[i] - 1e-6) {                                 // (partly) cleared paper
+      if (a > 0.001) {
+        const d = Math.max(a, 0.10);
+        for (let c = 0; c < 3; c++) { const v = (px[j + c] / 255 - paper[c] * (1 - a)) / d; out[j + c] = Math.round((v < 0 ? 0 : v > 1 ? 1 : v) * 255); }
+      }
+      continue;
+    }
+    if (a <= 0.5) continue;                                          // transparent (keyed) bg — leave
+    const oldL = L[i], c = chroma(A[i], B[i]), neutral = c < NEUTRAL_C;
+    let newL: number;
+    if (neutral && oldL < 0.5) newL = 1 - oldL;                      // dark ink lifts
+    else if (!neutral && oldL < 0.45) newL = Math.max(oldL, 0.62);
+    else newL = oldL;
+    newL = Math.max(newL, oldL);                                     // never darken
+    let av = A[i], bv = B[i];
+    if (newL > oldL) { av *= 0.85; bv *= 0.85; }                     // C' = C*0.85 when lightening
+    newL = Math.min(newL, 0.92);
+    const [r, g, bl] = labToSrgb8(newL, av, bv);
+    out[j] = r; out[j + 1] = g; out[j + 2] = bl;
+  }
+  return { raster: { w, h, rgba: out } };
 }
 
 // ── Stage 5b: halo ──────────────────────────────────────────────────────────
@@ -290,7 +322,7 @@ export function plateParams(): PlateParams {
 
 // ── Stage 5d: gate (catastrophe check ONLY — never a ranker) ────────────────
 /** Composite the candidate on `bg` and decide readable / unreadable. Excludes
- *  1px of eroded ink edge and the pixels remap deliberately sank. */
+ *  1px of eroded ink edge; cleared paper is already alpha 0 (auto-excluded). */
 export function gate(cand: Candidate, bg: [number, number, number]): { pass: boolean; note: string } {
   if (cand.treatment === 'plate') return { pass: true, note: 'plate is the guaranteed floor' };
   const img = cand.raster;
@@ -312,7 +344,7 @@ export function gate(cand: Candidate, bg: [number, number, number]): { pass: boo
 
   let neutralTot = 0, neutralPass = 0, chromTot = 0, chromPass = 0, inkTot = 0, blowout = 0;
   for (let i = 0, j = 0; i < n; i++, j += 4) {
-    if (!eroded[i] || cand.sank?.[i]) continue;
+    if (!eroded[i]) continue;
     const a = px[j + 3] / 255;
     // Composite over bg (ink is mostly opaque; handle partial cleanly).
     const r = px[j] / 255 * a + bg[0] * (1 - a), g = px[j + 1] / 255 * a + bg[1] * (1 - a), bl = px[j + 2] / 255 * a + bg[2] * (1 - a);

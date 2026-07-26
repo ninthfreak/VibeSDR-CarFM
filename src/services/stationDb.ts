@@ -39,9 +39,8 @@ const LOGO_DDL = `
     callsign_base TEXT PRIMARY KEY, marked_at INTEGER);
   CREATE TABLE IF NOT EXISTS station_prefs (
     callsign_base TEXT PRIMARY KEY, show_call INTEGER, show_freq INTEGER);
-  CREATE TABLE IF NOT EXISTS logo_dark (
-    callsign_base TEXT, bg TEXT, treatment TEXT, chosen INTEGER, img BLOB, updated_at INTEGER,
-    PRIMARY KEY (callsign_base, bg));`;
+  CREATE TABLE IF NOT EXISTS dark_logos (
+    callsign_base TEXT PRIMARY KEY, treatment TEXT, chosen INTEGER, img BLOB, updated_at INTEGER);`;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase | null> | null = null;
 
@@ -242,25 +241,24 @@ export async function setManualLogo(base: string, img: Uint8Array, mime: string)
   await saveLogo(base, img, mime, null, null, 'manual');
 }
 
-// ── dark-mode logo variants (derived cache, keyed by station + background) ────
-// One row per (station, dark background): the chosen treatment + its rendered
-// PNG. `chosen=1` marks a user pick (survives reprocessing); `chosen=0` is the
-// pipeline's auto-pick. This is DERIVED data — safe to drop and regenerate, so
-// it is not carried across a DB_ASSET_VERSION bump. `bg` is the theme background
-// hex, lowercased, so a night/dusk theme gets its own reprocessed variant.
-
-const normBg = (hex: string) => hex.trim().toLowerCase();
+// ── dark-mode logo variants (derived cache, keyed by station) ─────────────────
+// One row per station: the chosen treatment + its rendered PNG. `chosen=1` marks
+// a user pick (survives reprocessing); `chosen=0` is the pipeline's auto-pick.
+// The PNG is BACKGROUND-INDEPENDENT — the remap clears paper to transparency
+// rather than painting it, so one variant reads on every dark surface (incl. a
+// future night/dusk theme); only the gate uses the bg, at process time. Hence
+// the key is the station alone. DERIVED data — safe to drop and regenerate, so
+// it is not carried across a DB_ASSET_VERSION bump.
 
 export type DarkLogo = { treatment: string; chosen: boolean; dataUri: string };
 
-/** The cached dark variant for a station on background `bgHex`, or null. */
-export async function getDarkLogo(base: string, bgHex: string): Promise<DarkLogo | null> {
+/** The cached dark variant for a station, or null. */
+export async function getDarkLogo(base: string): Promise<DarkLogo | null> {
   const d = await db();
   if (!d || !base) return null;
   try {
     const r = await d.getFirstAsync<{ treatment: string; chosen: number | null; img: Uint8Array | null }>(
-      `SELECT treatment, chosen, img FROM logo_dark WHERE callsign_base = ? AND bg = ?`,
-      [base.toUpperCase(), normBg(bgHex)]);
+      `SELECT treatment, chosen, img FROM dark_logos WHERE callsign_base = ?`, [base.toUpperCase()]);
     if (!r?.img) return null;
     return { treatment: r.treatment, chosen: r.chosen === 1, dataUri: `data:image/png;base64,${bytesToBase64(r.img)}` };
   } catch { return null; }
@@ -268,37 +266,36 @@ export async function getDarkLogo(base: string, bgHex: string): Promise<DarkLogo
 
 /** Just the chosen treatment + whether it was a user pick — for the reprocess
  *  decision (keep a user override, replace an auto-pick). null if none cached. */
-export async function getDarkTreatment(base: string, bgHex: string): Promise<{ treatment: string; chosen: boolean } | null> {
+export async function getDarkTreatment(base: string): Promise<{ treatment: string; chosen: boolean } | null> {
   const d = await db();
   if (!d || !base) return null;
   try {
     const r = await d.getFirstAsync<{ treatment: string; chosen: number | null }>(
-      `SELECT treatment, chosen FROM logo_dark WHERE callsign_base = ? AND bg = ?`,
-      [base.toUpperCase(), normBg(bgHex)]);
+      `SELECT treatment, chosen FROM dark_logos WHERE callsign_base = ?`, [base.toUpperCase()]);
     return r ? { treatment: r.treatment, chosen: r.chosen === 1 } : null;
   } catch { return null; }
 }
 
-/** Store (upsert) the chosen dark variant for a station+background. `pngBase64`
- *  is bare base64 (no data-URI prefix). `chosen` = true for a user pick. */
-export async function saveDarkLogo(base: string, bgHex: string, treatment: string, pngBase64: string, chosen: boolean): Promise<void> {
+/** Store (upsert) the chosen dark variant for a station. `pngBase64` is bare
+ *  base64 (no data-URI prefix). `chosen` = true for a user pick. */
+export async function saveDarkLogo(base: string, treatment: string, pngBase64: string, chosen: boolean): Promise<void> {
   const d = await db();
   if (!d || !base) return;
   try {
     await d.runAsync(
-      `INSERT INTO logo_dark(callsign_base,bg,treatment,chosen,img,updated_at) VALUES (?,?,?,?,?,?)
-       ON CONFLICT(callsign_base,bg) DO UPDATE SET
+      `INSERT INTO dark_logos(callsign_base,treatment,chosen,img,updated_at) VALUES (?,?,?,?,?)
+       ON CONFLICT(callsign_base) DO UPDATE SET
          treatment=excluded.treatment, chosen=excluded.chosen, img=excluded.img, updated_at=excluded.updated_at`,
-      [base.toUpperCase(), normBg(bgHex), treatment, chosen ? 1 : 0, base64ToBytes(pngBase64), Date.now()]);
+      [base.toUpperCase(), treatment, chosen ? 1 : 0, base64ToBytes(pngBase64), Date.now()]);
   } catch (e) { console.warn('[stationDb] saveDarkLogo failed', e); }
 }
 
-/** Drop all cached dark variants for a station — call when its source logo
+/** Drop the cached dark variant for a station — call when its source logo
  *  changes or is removed, so a stale adaptation can't linger. */
 export async function clearDarkLogo(base: string): Promise<void> {
   const d = await db();
   if (!d || !base) return;
-  try { await d.runAsync('DELETE FROM logo_dark WHERE callsign_base = ?', [base.toUpperCase()]); }
+  try { await d.runAsync('DELETE FROM dark_logos WHERE callsign_base = ?', [base.toUpperCase()]); }
   catch (e) { console.warn('[stationDb] clearDarkLogo failed', e); }
 }
 

@@ -15,6 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { BatteryBolt, SignalWaves, WarningTriangle } from './icons';
 import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
+import { EGG_MENU } from './bandThemes';
 import { snapshotDate } from '../../services/stationDb';
 import { clearLogoCache } from '../../services/stationLogoCache';
 import { isNwdAvailable, nwdRequestAudioSource, nwdProbe } from '../../services/nwdRadio';
@@ -47,7 +48,7 @@ function SectionLabel({ text, pal }: { text: string; pal: CarFmPalette }) {
 
 export default function SettingsPanel({
   visible, pal, tunerError, nwdActive = false, autostart, theme,
-  onRetryTuner, onSetAutostart, onSetTheme, onClose,
+  onRetryTuner, onSetAutostart, onSetTheme, onClose, forcedEggId, onForceEgg,
 }: {
   visible: boolean;
   pal: CarFmPalette;
@@ -60,6 +61,10 @@ export default function SettingsPanel({
   onSetAutostart: (on: boolean) => void;
   onSetTheme: (t: CarFmTheme) => void;
   onClose: () => void;
+  /** Band-theme Easter egg forced on (§12), or null. Revealed by six taps on the
+   *  about line; overrides RadioText detection. Not persisted. */
+  forcedEggId?: string | null;
+  onForceEgg?: (id: string | null) => void;
 }) {
   const [diagOpen, setDiagOpen] = useState(false);
   const [backend, setBackend] = useState('rtl');
@@ -69,6 +74,9 @@ export default function SettingsPanel({
   const [dataDate, setDataDate] = useState<string | null>(null);
   const [diagOn, setDiagOn] = useState(isDiagEnabled());
   const [, forceTick] = useState(0);
+  // Six taps on the about line reveal the hidden band-theme force group (§12).
+  const [eggTaps, setEggTaps] = useState(0);
+  const eggPanelOpen = eggTaps >= 6;
 
   // Refresh the log view as events arrive while the panel is open.
   useEffect(() => {
@@ -392,7 +400,34 @@ export default function SettingsPanel({
               ) : null}
             </View>
 
-            <Text style={[styles.about, { color: pal.dim }]}>{aboutText}</Text>
+            <Pressable onPress={() => setEggTaps((n) => n + 1)} accessibilityRole="text">
+              <Text style={[styles.about, { color: pal.dim }]}>{aboutText}</Text>
+            </Pressable>
+
+            {/* Secret band-theme group (§12): six taps on the about line. Picking
+                a theme forces it regardless of what's playing; labels are puns —
+                matching still uses the real id. */}
+            {eggPanelOpen ? (
+              <View style={{ marginTop: 14 }}>
+                <SectionLabel text="BAND THEMES" pal={pal} />
+                <View style={{ backgroundColor: pal.raised, borderColor: pal.border, borderWidth: 1, borderRadius: 14, overflow: 'hidden' }}>
+                  {[{ id: null as string | null, label: 'Off (auto-detect)' }, ...EGG_MENU].map((m, i) => {
+                    const on = (forcedEggId ?? null) === m.id;
+                    return (
+                      <Pressable
+                        key={m.id ?? 'off'}
+                        onPress={() => onForceEgg?.(m.id)}
+                        style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 13 }, i > 0 && { borderTopWidth: 1, borderTopColor: pal.border }, pressed && { opacity: 0.7 }]}
+                        accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={m.label}
+                      >
+                        <Text style={{ fontFamily: FONT_BOLD, fontSize: 16, color: on ? pal.blue : pal.text }}>{m.label}</Text>
+                        {on ? <Text style={{ color: pal.blue, fontFamily: FONT_BOLD, fontSize: 16 }}>✓</Text> : null}
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : null}
           </ScrollView>
         </View>
       </View>

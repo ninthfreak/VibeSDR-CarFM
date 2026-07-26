@@ -52,7 +52,7 @@ export default function LogoDarkPicker({ visible, base, logoUri, darkBg, pal, on
     if (!cand) return;
     setBusy(true);
     try {
-      await saveDarkLogo(base, darkBg, treatmentToEnum(cand.treatment), cand.pngBase64, sel !== result.pick);
+      await saveDarkLogo(base, treatmentToEnum(cand.treatment), cand.pngBase64, sel !== result.pick);
       invalidateLogoTile(base);
     } finally {
       setBusy(false);

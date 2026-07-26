@@ -32,7 +32,7 @@ export type AdaptResult = {
 
 function build(t: Treatment, keyed: Raster): Candidate {
   switch (t) {
-    case 'remap': { const { raster, sank } = remap(keyed); return { treatment: 'remap', raster, sank }; }
+    case 'remap': { const { raster } = remap(keyed); return { treatment: 'remap', raster }; }
     case 'halo': return { treatment: 'halo', raster: halo(keyed) };
     case 'as-is': return { treatment: 'as-is', raster: keyed };
     case 'plate': return { treatment: 'plate', raster: keyed, plate: plateParams() };
