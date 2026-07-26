@@ -24,7 +24,7 @@ export const PEEK_SCALE = 0.88;
 export const PEEK_OPACITY = 0.6;
 
 export default function SidePresetCard({
-  name, freqMhz, pal, side, width, k = 1, onPress,
+  name, freqMhz, pal, side, width, k = 1, onPress, suppressLogo,
 }: {
   name: string;
   freqMhz?: number;              // dial frequency — resolves the callsign for the logo
@@ -34,6 +34,7 @@ export default function SidePresetCard({
   /** Type/element ramp factor from the face (§0 responsive tokens). */
   k?: number;
   onPress?: () => void;
+  suppressLogo?: boolean;        // band theme (§12) → show the call-sign box, not the logo
 }) {
   const s = (v: number) => Math.round(v * k);
   // Peek cards use the EXACT same treatment as the bottom preset tiles (§5): a
@@ -63,6 +64,7 @@ export default function SidePresetCard({
         radius={s(14)}
         pal={pal}
         freqSize={Math.max(13, s(16))}
+        suppressLogo={suppressLogo}
       />
       {/* inner-edge fade */}
       <Svg style={StyleSheet.absoluteFill} pointerEvents="none">

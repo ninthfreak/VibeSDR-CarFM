@@ -219,7 +219,7 @@ export function CallSignBox({ label, colorKey, w, h, radius }: {
  *  exists (borderless, Fit — the logo carries the identity, no text) OR a wide
  *  colored call-sign box with the frequency BENEATH it in full text color +
  *  heavier weight. Preset tiles and prev/next peek cards render EXACTLY this. */
-export function PresetPlate({ name, freqMhz, w, h, radius, pal, freqSize }: {
+export function PresetPlate({ name, freqMhz, w, h, radius, pal, freqSize, suppressLogo }: {
   name?: string;
   freqMhz?: number;
   w: number;              // plate width (landscape box / logo plate)
@@ -227,11 +227,12 @@ export function PresetPlate({ name, freqMhz, w, h, radius, pal, freqSize }: {
   radius: number;
   pal: CarFmPalette;
   freqSize: number;       // frequency font size (rendered only in the no-logo case)
+  suppressLogo?: boolean; // band theme (§12) hides logos → force the call-sign box
 }) {
   const { base, uri } = useStationLogo(name, freqMhz);
   const dark = pal === DARK;
   const darkVariant = useDarkLogo(base, dark && !!uri);
-  if (uri) {
+  if (uri && !suppressLogo) {
     // Real logo: Fit, borderless in light mode / dark-adapted in dark mode.
     return <LogoImage uri={uri} dark={dark} darkVariant={darkVariant} w={w} h={h} radius={radius} />;
   }

@@ -53,10 +53,10 @@ interface DragCallbacks {
 
 /** One preset tile; wiggles (±1.1°, 0.42s loop) while reordering, frozen mid-drag. */
 function Tile({
-  p, pal, active, reordering, size, dragging, anyDrag,
+  p, pal, active, reordering, size, dragging, anyDrag, suppressLogo,
   translate, flip, shift, tileRef, onMeasure, onPress, onLongPress, onRemove, onSearchLogo, drag,
 }: {
-  p: PresetItem; pal: CarFmPalette; active: boolean; reordering: boolean; size: TileSize;
+  p: PresetItem; pal: CarFmPalette; active: boolean; reordering: boolean; size: TileSize; suppressLogo?: boolean;
   dragging: boolean; anyDrag: boolean;
   translate: Animated.ValueXY; flip: Animated.ValueXY; shift: Animated.ValueXY;
   tileRef: (v: View | null) => void; onMeasure: (x: number, y: number) => void;
@@ -164,6 +164,7 @@ function Tile({
           radius={size.logoRadius}
           pal={pal}
           freqSize={size.nameFont}
+          suppressLogo={suppressLogo}
         />
         {active ? <View style={[styles.activeBar, { backgroundColor: pal.blue }]} /> : null}
       </Pressable>
@@ -175,10 +176,11 @@ export default function PresetsBand({
   pal, presets, activeIndex, reordering,
   onSelect, onEnterReorder, onExitReorder, onReorder, onRemove, onOpenNearby, onSearchLogo,
   grow = false, bandHeight = 140, showNav = true, showNearby = true,
-  tall = false, twoRows = false, landscape = false, k = 1,
+  tall = false, twoRows = false, landscape = false, k = 1, suppressLogos = false,
 }: {
   pal: CarFmPalette;
   presets: PresetItem[];
+  suppressLogos?: boolean;                // band theme (§12) → preset tiles show call-signs
   activeIndex: number;                    // -1 when the tuned freq isn't a preset
   reordering: boolean;
   onSelect: (p: PresetItem) => void;
@@ -411,6 +413,7 @@ export default function PresetsBand({
         size={tileSizeFor(i === activeIndex)}
         dragging={dragKey === key}
         anyDrag={anyDrag}
+        suppressLogo={suppressLogos}
         translate={dragXY}
         flip={flipOf(key)}
         shift={shiftOf(key)}

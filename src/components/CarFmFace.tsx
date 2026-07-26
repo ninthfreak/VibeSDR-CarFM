@@ -255,13 +255,60 @@ function RadioTextStrip({ text, colors, height = 52, fontSize = 30, maxWidth = 8
   );
 }
 
+// ── Themed genre line (§12) ──────────────────────────────────────────────────
+// The band-theme genre string, with two optional live behaviours: AC/DC PULSES
+// the colour between two ambers; NIN CROSS-FADES through a list of phrases. With
+// neither it renders exactly like the plain PTY text (safe drop-in). All timing
+// uses useNativeDriver:false so the animated colour and fade share a driver.
+function ThemedGenre({ label, cycle, pulse, pulseOn, dark, color, fontFamily, fontSize, style, shadow, outline }: {
+  label: string; cycle?: string[]; pulse?: { light: string[]; dark: string[] }; pulseOn?: boolean;
+  dark: boolean; color: string; fontFamily?: string; fontSize: number; style: any; shadow?: any;
+  outline?: { color: string; width: number };
+}) {
+  const items = cycle && cycle.length > 1 ? cycle : [label];
+  const [idx, setIdx] = useState(0);
+  const fade = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (items.length < 2) { setIdx(0); return; }
+    const id = setInterval(() => {
+      Animated.timing(fade, { toValue: 0, duration: 380, useNativeDriver: false }).start(() => {
+        setIdx((i) => (i + 1) % items.length);
+        Animated.timing(fade, { toValue: 1, duration: 380, useNativeDriver: false }).start();
+      });
+    }, 3200);
+    return () => clearInterval(id);
+  }, [items.length, fade]);
+
+  const pulseV = useRef(new Animated.Value(0)).current;
+  const ramp = pulse ? (dark ? pulse.dark : pulse.light) : null;
+  useEffect(() => {
+    if (!pulseOn || !ramp) return;
+    const anim = Animated.loop(Animated.sequence([
+      Animated.timing(pulseV, { toValue: 1, duration: 720, useNativeDriver: false }),
+      Animated.timing(pulseV, { toValue: 0, duration: 720, useNativeDriver: false }),
+    ]));
+    anim.start();
+    return () => anim.stop();
+  }, [pulseOn, ramp, pulseV]);
+  const animColor: any = pulseOn && ramp ? pulseV.interpolate({ inputRange: [0, 1], outputRange: [ramp[0], ramp[1]] }) : color;
+
+  const edge = outline
+    ? { textShadowColor: outline.color, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: outline.width }
+    : shadow;
+  return (
+    <Animated.Text numberOfLines={1} style={[style, { fontSize, color: animColor, opacity: fade }, fontFamily ? { fontFamily } : null, edge]}>
+      {items[idx] ?? label}
+    </Animated.Text>
+  );
+}
+
 // ── Seek digit slide (LOSSY #6 — required) ───────────────────────────────────
 // On each frequency change while seeking, the digits enter offset ±14dp with
 // opacity 0.25 and settle to 0 / 1 over ~200ms — one two-endpoint transition
 // per change (the design's carfm-scan-up/down keyframes expressed as a single
 // timing), never a hard swap. dir 0 = ordinary retune, no slide.
-function SlidingFreq({ value, dir, fontSize, color, fontFamily }: {
-  value: string; dir: 1 | -1 | 0; fontSize: number; color: string; fontFamily?: string;
+function SlidingFreq({ value, dir, fontSize, color, fontFamily, shadow }: {
+  value: string; dir: 1 | -1 | 0; fontSize: number; color: string; fontFamily?: string; shadow?: any;
 }) {
   const y = useRef(new Animated.Value(0)).current;
   const op = useRef(new Animated.Value(1)).current;
@@ -279,7 +326,7 @@ function SlidingFreq({ value, dir, fontSize, color, fontFamily }: {
     ]).start();
   }, [value, dir, y, op]);
   return (
-    <Animated.Text style={[styles.freq, { fontSize, color, opacity: op, transform: [{ translateY: y }] }, fontFamily ? { fontFamily } : null]}>
+    <Animated.Text style={[styles.freq, { fontSize, color, opacity: op, transform: [{ translateY: y }] }, fontFamily ? { fontFamily } : null, shadow]}>
       {value}
     </Animated.Text>
   );
@@ -399,6 +446,18 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const eggFreqFont = eggFontOn ? egg?.freqFont : undefined;
   const eggRtFont = eggFontOn ? (egg?.rtFont ?? egg?.font) : undefined;
   const eggGenreFont = eggFontOn ? (egg?.genreFont ?? egg?.font) : undefined;
+  // Hero-identity lettering (§12). RN Text carries one shadow, so nameGhost (a
+  // hard drop-shadow) and nameOutline (approximated as a soft ring — RN has no
+  // real text stroke) are mutually exclusive, which matches the registry (no egg
+  // sets both). nameBlock wraps the identity in a solid slab (Talking Heads).
+  const eggNameShadow: any = egg?.nameGhost
+    ? { textShadowColor: egg.nameGhost.color, textShadowOffset: { width: egg.nameGhost.dx, height: egg.nameGhost.dy }, textShadowRadius: 0 }
+    : egg?.nameOutline
+    ? { textShadowColor: egg.nameOutline.stroke, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: Math.max(1, egg.nameOutline.width) }
+    : null;
+  const eggFreqShadow: any = egg?.freqShadow
+    ? { textShadowColor: egg.freqShadow.color, textShadowOffset: { width: egg.freqShadow.dx, height: egg.freqShadow.dy }, textShadowRadius: 0 }
+    : null;
   // RN filter grayscale (New Architecture) — applied to each face region's content;
   // the power button is drawn in full color ABOVE it (design's Android guidance).
   const GS: any = off ? { filter: [{ grayscale: 1 }] } : null;
@@ -784,7 +843,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             <View style={styles.zoneCenter}>
               {stereoCluster}
               {genreLabel && !off ? (
-                <Text numberOfLines={1} style={[styles.ptyCentered, { fontSize: L.ptyFont, color: genreColor }, eggGenreFont ? { fontFamily: eggGenreFont } : null, ptyShadow]}>{genreLabel}</Text>
+                <ThemedGenre label={genreLabel} cycle={egg?.genreCycle} pulse={egg?.genrePulse} pulseOn={egg?.genrePulseOn} outline={egg?.genreOutline} dark={dark} color={genreColor} fontFamily={eggGenreFont} fontSize={L.ptyFont} style={styles.ptyCentered} shadow={ptyShadow} />
               ) : null}
             </View>
           </>
@@ -795,7 +854,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             {stereoCluster}
             {genreLabel && !off ? (
               <View style={[styles.ptyWrap, { maxWidth: 200 }]}>
-                <Text numberOfLines={1} style={[styles.ptyText, { fontSize: L.ptyFont, color: genreColor }, eggGenreFont ? { fontFamily: eggGenreFont } : null, ptyShadow]}>{genreLabel}</Text>
+                <ThemedGenre label={genreLabel} cycle={egg?.genreCycle} pulse={egg?.genrePulse} pulseOn={egg?.genrePulseOn} outline={egg?.genreOutline} dark={dark} color={genreColor} fontFamily={eggGenreFont} fontSize={L.ptyFont} style={styles.ptyText} shadow={ptyShadow} />
               </View>
             ) : null}
             {oobEl}
@@ -900,7 +959,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             </Text>
             <View style={styles.freqRow}>
               <Text style={[styles.scanArrow, { color: pal.dim }]}>{scan.dir > 0 ? '▲' : '▼'}</Text>
-              <SlidingFreq value={fmt(scan.display)} dir={scan.dir} fontSize={L.freq} color={pal.amber} fontFamily={eggFreqFont} />
+              <SlidingFreq value={fmt(scan.display)} dir={scan.dir} fontSize={L.freq} color={pal.amber} fontFamily={eggFreqFont} shadow={eggFreqShadow} />
             </View>
           </View>
         ) : (
@@ -922,13 +981,18 @@ export default function CarFmFace(props: CarFmFaceProps) {
               egg?.callSignBolt ? (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: L.s(8) }}>
                   <BoltGlyph size={L.call * 0.7} color={egg.accent} />
-                  <Text numberOfLines={1} style={[styles.call, { fontSize: L.call, color: heroCardText, fontFamily: eggHeroFont ?? styles.call.fontFamily }]}>{heroIdent}</Text>
+                  <Text numberOfLines={1} style={[styles.call, { fontSize: L.call, color: heroCardText, fontFamily: eggHeroFont ?? styles.call.fontFamily }, eggNameShadow]}>{heroIdent}</Text>
                   <BoltGlyph size={L.call * 0.7} color={egg.accent} />
+                </View>
+              ) : egg?.nameBlock ? (
+                // Talking Heads: the identity sits in a solid colour slab.
+                <View style={{ backgroundColor: egg.nameBlock.bg, paddingHorizontal: L.s(16), paddingTop: L.s(2), paddingBottom: L.s(6), borderRadius: L.s(3) }}>
+                  <Text numberOfLines={1} style={[styles.call, { fontSize: L.call, color: egg.nameBlock.color, fontFamily: eggHeroFont ?? styles.call.fontFamily }, eggNameShadow]}>{heroIdent}</Text>
                 </View>
               ) : (
                 <Text
                   numberOfLines={1}
-                  style={[styles.call, { fontSize: L.call, color: heroCardText, fontFamily: eggHeroFont ?? styles.call.fontFamily }]}
+                  style={[styles.call, { fontSize: L.call, color: heroCardText, fontFamily: eggHeroFont ?? styles.call.fontFamily }, eggNameShadow]}
                 >
                   {heroIdent}
                 </Text>
@@ -945,7 +1009,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 accessibilityLabel={`Frequency ${fmt(mhz)} megahertz. Tap to enter a frequency.`}
               >
                 <View style={styles.freqRow}>
-                  <SlidingFreq value={fmt(mhz)} dir={seekLandDir.current} fontSize={L.freq} color={pal.amber} fontFamily={eggFreqFont} />
+                  <SlidingFreq value={fmt(mhz)} dir={seekLandDir.current} fontSize={L.freq} color={pal.amber} fontFamily={eggFreqFont} shadow={eggFreqShadow} />
                 </View>
               </Pressable>
             ) : null}
@@ -972,7 +1036,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 GS,
               ]}
             >
-              <SidePresetCard name={preset.name} freqMhz={preset.frequencyMhz} pal={pal} side={side} width={peekW} k={k} onPress={onPress} />
+              <SidePresetCard name={preset.name} freqMhz={preset.frequencyMhz} pal={pal} side={side} width={peekW} k={k} onPress={onPress} suppressLogo={eggHideLogos} />
             </Animated.View>
           );
         };
@@ -1019,7 +1083,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
                   },
                 ]}
               >
-                <SidePresetCard name={flip.cloneName} pal={pal} side={flip.farSide} width={peekW} k={k} />
+                <SidePresetCard name={flip.cloneName} pal={pal} side={flip.farSide} width={peekW} k={k} suppressLogo={eggHideLogos} />
               </Animated.View>
             ) : null}
           </View>
@@ -1062,6 +1126,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
       <PresetsBand
         pal={pal}
         presets={items}
+        suppressLogos={eggHideLogos}
         activeIndex={activeIndex}
         reordering={reordering}
         grow={false}
