@@ -89,6 +89,10 @@ export interface CarFmFaceProps {
   audioActive?: boolean;
   onClaimAudio?: () => void;     // inactive → take priority (power button)
   onReleaseAudio?: () => void;   // active → give it up
+  /** Steering-wheel / media ⏮⏭ preset step from the parent. Bump `seq` (with a
+   *  direction) to run the SAME animated stepPreset as the on-screen PREV/NEXT —
+   *  hero-swap FLIP + step in DISPLAYED order — instead of a silent tune. */
+  hardwareStep?: { dir: 1 | -1; seq: number };
 }
 
 const CHANNEL_HZ = 100_000;             // 0.1 MHz — the design's tune/seek step
@@ -429,7 +433,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
     rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
     onSetAutostart, onSetTheme, onRetryTuner, presets, nwdActive, onHardwareSeek,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
-    audioActive, onClaimAudio, onReleaseAudio,
+    audioActive, onClaimAudio, onReleaseAudio, hardwareStep,
   } = props;
   const insets = useSafeAreaInsets();
   const scheme = useColorScheme();
@@ -783,6 +787,16 @@ export default function CarFmFace(props: CarFmFaceProps) {
     const n = ((i + dir) % items.length + items.length) % items.length;
     onTuneHz(Math.round(items[n].frequencyMhz * 1e6));
   }, [items, activeIndex, onTuneHz, startFlip, off]);
+
+  // Steering-wheel / media ⏮⏭ (parent bumps hardwareStep.seq): run the animated
+  // stepPreset so the wheel gets the hero-swap FLIP and steps in DISPLAYED order —
+  // exactly like the on-screen PREV/NEXT, not a silent frequency jump.
+  const lastHwSeq = useRef(hardwareStep?.seq ?? 0);
+  useEffect(() => {
+    if (!hardwareStep || hardwareStep.seq === lastHwSeq.current) return;
+    lastHwSeq.current = hardwareStep.seq;
+    stepPreset(hardwareStep.dir);
+  }, [hardwareStep, stepPreset]);
 
   const onNearbyTune = useCallback((st: NearbyStation) => {
     onTuneHz(Math.round(st.frequencyMhz * 1e6));

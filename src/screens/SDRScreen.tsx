@@ -1302,6 +1302,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onFilterBothRef = useRef<((low: number, high: number) => void) | null>(null);
   const onVtsJumpRef   = useRef<((d: 'left' | 'right') => void) | null>(null);
   const onSearchTuneRef = useRef<((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean) => void) | null>(null);
+  const fmHwStepRef    = useRef<((dir: 1 | -1) => void) | null>(null);   // CarFM: steering-wheel ⏮⏭ → animated preset step
 
   // ── Media skip mode: lock-screen ⏮⏭ tune by step or jump bookmarks ───────
   // CarFM defaults to bookmark stepping so steering-wheel / ESP32 ⏮⏭ move
@@ -1344,6 +1345,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     c.tune(newHz, undefined, { recenter: true });   // media-control skip = discrete jump
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: newHz }));
   };
+  // CarFM steering-wheel ⏮⏭ preset step: a signal the face reacts to by running its
+  // animated stepPreset (hero-swap FLIP + step in DISPLAYED/card order). Bumping the
+  // seq each press is what makes a repeat press in the same direction re-fire.
+  const [fmHwStep, setFmHwStep] = useState<{ dir: 1 | -1; seq: number } | undefined>(undefined);
+  const fmHwSeq = useRef(0);
+  const fmDoHwStep = useCallback((dir: 1 | -1) => {
+    fmHwSeq.current += 1;
+    setFmHwStep({ dir, seq: fmHwSeq.current });
+  }, []);
+  fmHwStepRef.current = fmDoHwStep;
   useEffect(() => {
     AsyncStorage.getItem('lsv_media_skip').then((v: string | null) => {
       if (v === 'bookmark' || v === 'step') setMediaSkip(v);
@@ -1771,6 +1782,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       const dir = e.direction === 'prev' ? 'left' : 'right';
       // DAB: cycle programmes within the ensemble (the VFO is locked there).
       if (String(client.current?.getStatus().mode) === 'dab') { dabSkipRef.current?.(dir); return; }
+      // CarFM: drive the FACE's animated preset step (hero-swap FLIP, steps in
+      // displayed/card order) — not onVtsJump, which silently retuned by frequency.
+      if (carFm) { fmHwStepRef.current?.(dir === 'left' ? -1 : 1); return; }
       if (mediaSkipRef.current === 'bookmark') onVtsJumpRef.current?.(dir);
       else mediaStepSkipRef.current?.(dir);
     });
@@ -4767,6 +4781,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           audioActive={fmAudioActive}
           onClaimAudio={onFmClaimAudio}
           onReleaseAudio={onFmReleaseAudio}
+          hardwareStep={fmHwStep}
         />
       ) : null}
     </View>
