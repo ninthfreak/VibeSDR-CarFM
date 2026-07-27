@@ -151,9 +151,9 @@ function DrivingStatusIcons({ pal }: { pal: CarFmPalette }) {
   const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 0.4] });
   const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.07] });
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
       {isMoving ? (
-        <Animated.View style={{ opacity, transform: [{ scale }], marginRight: -6 }} accessibilityLabel="Vehicle in motion">
+        <Animated.View style={{ opacity, transform: [{ scale }] }} accessibilityLabel="Vehicle in motion">
           <MotionCar size={34} color={pal.amber} />
         </Animated.View>
       ) : null}
@@ -570,9 +570,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
       padH: s(tall ? 16 : 24),
       padTop: s(tall ? 14 : 18),
       gap: s(tall ? 10 : 12),
-      freq: s(tall ? 58 : landscape ? 48 : 60),
+      freq: s(tall ? 64 : landscape ? 56 : 78),
       mhz: s(tall ? 20 : landscape ? 18 : 22),
-      call: s(tall ? 52 : landscape ? 50 : 66),
+      call: s(tall ? 62 : landscape ? 60 : 94),
       logo: s(tall ? 80 : landscape ? 70 : 92),
       star: s(tall ? 58 : landscape ? 48 : 56),
       rtMarginTop: s(tall ? 12 : landscape ? 10 : 18),
@@ -833,7 +833,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // centered, controls right — so the signal dB stacks below the icon and the
   // stereo column is truly centered regardless of the side widths.
   const signalCluster = (
-    <View style={[styles.signalPill, tall && styles.signalPillTall]}>
+    <View style={[styles.signalPill, tall && styles.signalPillTall, !tall && { minHeight: L.stereoH, justifyContent: 'center' }]}>
       {/* NWD has no real signal metric — the bars are a DB+GPS *estimate*, so they
           render grey (not amber) to signal "not live", and the dB number is
           suppressed (we have no measured level). Zero + grey when there's no fix
@@ -932,7 +932,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             {signalCluster}
             {stereoCluster}
             {genreLabel && !off ? (
-              <View style={[styles.ptyWrap, { maxWidth: 200 }]}>
+              <View style={[styles.ptyWrap, { maxWidth: 200, height: L.stereoH }]}>
                 <ThemedGenre label={genreLabel} cycle={egg?.genreCycle} pulse={egg?.genrePulse} pulseOn={egg?.genrePulseOn} outline={egg?.genreOutline} droop={egg?.genreDroop} dark={dark} color={genreColor} fontFamily={eggGenreFont} fontSize={L.ptyFont} style={styles.ptyText} shadow={ptyShadow} />
               </View>
             ) : null}
@@ -1310,7 +1310,10 @@ const styles = StyleSheet.create({
   face: { width: '100%', height: '100%', flexDirection: 'column' },
 
   header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 14, flexShrink: 1 },
+  // flex-start so signal + genre align to the STEREO pill's band (the RDS/HD/TP/AF
+  // tell strip hangs BELOW the pill and must not pull them down). signal/genre are
+  // given the pill's height + centered content below, so all three read level.
+  headerLeft: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, flexShrink: 1 },
   headerRight: { alignItems: 'center', gap: 12, flexShrink: 0 },
   headerTopRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   // Tall-track status zones (§4.1 v1.5.0): flexed sides center the wrap-content
