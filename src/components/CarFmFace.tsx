@@ -74,6 +74,11 @@ export interface CarFmFaceProps {
   /** The built-in NWD tuner is the active source (drives hardware seek + honest
    *  tuner-source detection in settings). */
   nwdActive?: boolean;
+  /** Head-unit preset programming (Settings). Manual only — writing sweeps. */
+  onProgramHeadUnit?: () => void;
+  nwdProgramming?: boolean;
+  nwdPresetsInSync?: boolean;
+  nwdPresetCount?: number;
   /** Hardware seek (built-in tuner): when set, SEEK uses the tuner's own
    *  next-station scan instead of the FCC-DB sweep. */
   onHardwareSeek?: (dir: 1 | -1) => void;
@@ -453,6 +458,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
     freqHz, stationName, callsignHint, radioText, stereo, signalDb,
     rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
     onSetAutostart, onSetTheme, onRetryTuner, presets, nwdActive, onHardwareSeek,
+    onProgramHeadUnit, nwdProgramming, nwdPresetsInSync, nwdPresetCount,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
     audioActive, onClaimAudio, onReleaseAudio, hardwareStep,
   } = props;
@@ -1288,6 +1294,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
         onSetTheme={(t) => onSetTheme?.(t)}
         forcedEggId={forcedEgg}
         onForceEgg={setForcedEgg}
+        onProgramHeadUnit={onProgramHeadUnit}
+        nwdProgramming={nwdProgramming}
+        nwdPresetsInSync={nwdPresetsInSync}
+        nwdPresetCount={nwdPresetCount}
         onClose={() => setSettingsOpen(false)}
       />
       {/* Preset logo-search window (design §6.4). */}

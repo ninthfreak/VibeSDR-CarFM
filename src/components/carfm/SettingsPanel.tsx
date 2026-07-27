@@ -49,6 +49,7 @@ function SectionLabel({ text, pal }: { text: string; pal: CarFmPalette }) {
 export default function SettingsPanel({
   visible, pal, tunerError, nwdActive = false, autostart, theme,
   onRetryTuner, onSetAutostart, onSetTheme, onClose, forcedEggId, onForceEgg,
+  onProgramHeadUnit, nwdProgramming = false, nwdPresetsInSync = false, nwdPresetCount = 0,
 }: {
   visible: boolean;
   pal: CarFmPalette;
@@ -61,6 +62,11 @@ export default function SettingsPanel({
   onSetAutostart: (on: boolean) => void;
   onSetTheme: (t: CarFmTheme) => void;
   onClose: () => void;
+  /** Head-unit preset programming (NWD). Manual — writing sweeps through stations. */
+  onProgramHeadUnit?: () => void;
+  nwdProgramming?: boolean;
+  nwdPresetsInSync?: boolean;
+  nwdPresetCount?: number;
   /** Band-theme Easter egg forced on (§12), or null. Revealed by six taps on the
    *  about line; overrides RadioText detection. Not persisted. */
   forcedEggId?: string | null;
@@ -399,6 +405,44 @@ export default function SettingsPanel({
                 </>
               ) : null}
             </View>
+
+            {/* Head-unit presets (NWD only). Programming TUNES through each station
+                (the tuner has no silent write) and overwrites ALL 18 hardware slots
+                with the app's presets, wrapped — so the steering wheel only ever
+                lands on your presets, never leftover stations. Manual by design:
+                this is why the app no longer sweeps on launch. */}
+            {nwdActive ? (
+              <>
+                <SectionLabel text="HEAD-UNIT PRESETS (STEERING WHEEL)" pal={pal} />
+                <View style={{ backgroundColor: pal.raised, borderColor: pal.border, borderWidth: 1, borderRadius: 14, overflow: 'hidden' }}>
+                  <View style={{ paddingHorizontal: 16, paddingVertical: 13 }}>
+                    <Text style={{ fontFamily: FONT, fontSize: 14, color: pal.dim }}>
+                      {nwdPresetsInSync
+                        ? `Head unit matches your ${nwdPresetCount} preset${nwdPresetCount === 1 ? '' : 's'} (last programmed).`
+                        : 'Head unit not programmed with the current presets.'}
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={() => {
+                      if (nwdPresetCount === 0) { Alert.alert('No presets', 'Save some presets first, then program the head unit.'); return; }
+                      Alert.alert(
+                        'Program head unit?',
+                        `This tunes through your ${nwdPresetCount} station${nwdPresetCount === 1 ? '' : 's'} (you\'ll hear it sweep, ~${Math.ceil(18 * 1.6)}s) and overwrites ALL 18 hardware preset slots — wrapping your presets so the steering wheel only cycles them. Do it while parked.`,
+                        [{ text: 'Cancel', style: 'cancel' }, { text: 'Program', onPress: () => onProgramHeadUnit?.() }],
+                      );
+                    }}
+                    disabled={nwdProgramming}
+                    style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 13, borderTopWidth: 1, borderTopColor: pal.border }, pressed && { opacity: 0.7 }]}
+                    accessibilityRole="button"
+                  >
+                    <Text style={{ fontFamily: FONT_BOLD, fontSize: 16, color: nwdProgramming ? pal.dim : pal.blue }}>
+                      {nwdProgramming ? 'Programming… (sweeping)' : 'Program head unit from app presets'}
+                    </Text>
+                    <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
+                  </Pressable>
+                </View>
+              </>
+            ) : null}
 
             <Pressable onPress={() => setEggTaps((n) => n + 1)} accessibilityRole="text">
               <Text style={[styles.about, { color: pal.dim }]}>{aboutText}</Text>
