@@ -1302,6 +1302,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onFilterBothRef = useRef<((low: number, high: number) => void) | null>(null);
   const onVtsJumpRef   = useRef<((d: 'left' | 'right') => void) | null>(null);
   const onSearchTuneRef = useRef<((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean) => void) | null>(null);
+  const fmHwStepRef    = useRef<((dir: 1 | -1) => void) | null>(null);   // CarFM: steering-wheel ⏮⏭ → animated preset step
 
   // ── Media skip mode: lock-screen ⏮⏭ tune by step or jump bookmarks ───────
   // CarFM defaults to bookmark stepping so steering-wheel / ESP32 ⏮⏭ move
@@ -1344,6 +1345,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     c.tune(newHz, undefined, { recenter: true });   // media-control skip = discrete jump
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: newHz }));
   };
+  // CarFM steering-wheel ⏮⏭ preset step: a signal the face reacts to by running its
+  // animated stepPreset (hero-swap FLIP + step in DISPLAYED/card order). Bumping the
+  // seq each press is what makes a repeat press in the same direction re-fire.
+  const [fmHwStep, setFmHwStep] = useState<{ dir: 1 | -1; seq: number } | undefined>(undefined);
+  const fmHwSeq = useRef(0);
+  const fmDoHwStep = useCallback((dir: 1 | -1) => {
+    fmHwSeq.current += 1;
+    setFmHwStep({ dir, seq: fmHwSeq.current });
+  }, []);
+  fmHwStepRef.current = fmDoHwStep;
   useEffect(() => {
     AsyncStorage.getItem('lsv_media_skip').then((v: string | null) => {
       if (v === 'bookmark' || v === 'step') setMediaSkip(v);
@@ -1771,6 +1782,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       const dir = e.direction === 'prev' ? 'left' : 'right';
       // DAB: cycle programmes within the ensemble (the VFO is locked there).
       if (String(client.current?.getStatus().mode) === 'dab') { dabSkipRef.current?.(dir); return; }
+      // CarFM: drive the FACE's animated preset step (hero-swap FLIP, steps in
+      // displayed/card order) — not onVtsJump, which silently retuned by frequency.
+      if (carFm) { fmHwStepRef.current?.(dir === 'left' ? -1 : 1); return; }
       if (mediaSkipRef.current === 'bookmark') onVtsJumpRef.current?.(dir);
       else mediaStepSkipRef.current?.(dir);
     });
@@ -3639,9 +3653,14 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // One-way preset mirror (tasks #10/#11/#12): when the built-in NWD tuner is the
   // active source, overwrite the head unit's FM1/FM2/FM3 banks with CarFM's presets
-  // sorted ASCENDING (sequential fill → steering-wheel steps low→high across banks),
-  // capped at 18. Diffed against the last-synced signature (persisted) so it only
-  // writes on a real change, and debounced so a drag-reorder doesn't fire mid-gesture.
+  // in the app's DISPLAYED CARD ORDER — sequential slot fill (card 1 → FM1 slot 1,
+  // …, card 7 → FM2 slot 1, …), capped at 18. The app is the source of truth for
+  // order (design README §218: PREV/NEXT — and the physical steering-wheel step —
+  // walk presets in DISPLAYED order, not by frequency), so the hardware banks and
+  // the cards stay in lockstep. NOT frequency-sorted; saveCurrentFrequency(slot)
+  // preserves the exact order we write (proven on-device). Diffed against the
+  // last-synced signature (persisted) so it only writes on a real change — which
+  // now includes a reorder — and debounced so a drag-reorder doesn't fire mid-gesture.
   // STRICTLY app → unit; the head unit's banks are never read back into CarFM.
   const nwdSyncSig = useRef<string | null>(null);
   const [nwdSigReady, setNwdSigReady] = useState(false);
@@ -3653,7 +3672,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
   useEffect(() => {
     if (!carFm || !nwdActive || !nwdSigReady) return;
-    const freqs = [...fmPresets].map((p) => p.frequency / 1e6).sort((a, b) => a - b).slice(0, 18);
+    const freqs = fmPresets.map((p) => p.frequency / 1e6).slice(0, 18);   // CARD ORDER, not sorted
     const sig = freqs.map((f) => f.toFixed(1)).join(',');
     if (sig === nwdSyncSig.current) return;   // unchanged since the last sync
     const t = setTimeout(() => {
@@ -4762,6 +4781,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           audioActive={fmAudioActive}
           onClaimAudio={onFmClaimAudio}
           onReleaseAudio={onFmReleaseAudio}
+          hardwareStep={fmHwStep}
         />
       ) : null}
     </View>

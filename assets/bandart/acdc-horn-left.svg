@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="70" height="96" viewBox="0 0 70 96" fill="none">
+  <defs><filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+    <feDropShadow dx="0" dy="0" stdDeviation="2.5" flood-color="rgba(255,59,48,0.7)"></feDropShadow>
+  </filter></defs>
+  <g stroke="#E31E24" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)" transform="rotate(-2.5 35 48)">
+    <path d="M22.50 90.50 L21.76 88.03" stroke-width="6.47"></path>
+    <path d="M21.76 88.03 L21.04 85.50" stroke-width="6.16"></path>
+    <path d="M21.04 85.50 L20.34 82.94" stroke-width="5.83"></path>
+    <path d="M20.34 82.94 L19.66 80.33" stroke-width="5.49"></path>
+    <path d="M19.66 80.33 L18.99 77.69" stroke-width="5.15"></path>
+    <path d="M18.99 77.69 L18.35 75.00" stroke-width="4.83"></path>
+    <path d="M18.35 75.00 L17.72 72.29" stroke-width="4.55"></path>
+    <path d="M17.72 72.29 L17.11 69.55" stroke-width="4.34"></path>
+    <path d="M17.11 69.55 L16.51 66.78" stroke-width="4.21"></path>
+    <path d="M16.51 66.78 L15.93 63.98" stroke-width="4.07"></path>
+    <path d="M15.93 63.98 L15.37 61.17" stroke-width="3.93"></path>
+    <path d="M15.37 61.17 L14.82 58.33" stroke-width="3.78"></path>
+    <path d="M14.82 58.33 L14.29 55.48" stroke-width="3.63"></path>
+    <path d="M14.29 55.48 L13.78 52.62" stroke-width="3.47"></path>
+    <path d="M13.78 52.62 L13.28 49.75" stroke-width="3.33"></path>
+    <path d="M13.28 49.75 L12.79 46.87" stroke-width="3.19"></path>
+    <path d="M12.79 46.87 L12.31 43.99" stroke-width="3.05"></path>
+    <path d="M12.31 43.99 L11.85 41.11" stroke-width="2.92"></path>
+    <path d="M11.85 41.11 L11.40 38.23" stroke-width="2.78"></path>
+    <path d="M11.40 38.23 L10.97 35.35" stroke-width="2.64"></path>
+    <path d="M10.97 35.35 L10.54 32.48" stroke-width="2.49"></path>
+    <path d="M10.54 32.48 L10.13 29.63" stroke-width="2.34"></path>
+    <path d="M10.13 29.63 L9.73 26.78" stroke-width="2.20"></path>
+    <path d="M9.73 26.78 L9.34 23.96" stroke-width="2.05"></path>
+    <path d="M9.34 23.96 L8.96 21.15" stroke-width="1.90"></path>
+    <path d="M8.96 21.15 L8.59 18.36" stroke-width="1.80"></path>
+    <path d="M8.59 18.36 L8.23 15.60" stroke-width="1.75"></path>
+    <path d="M8.23 15.60 L7.88 12.87" stroke-width="1.73"></path>
+    <path d="M7.88 12.87 L7.53 10.17" stroke-width="1.72"></path>
+    <path d="M7.53 10.17 L7.20 7.50" stroke-width="1.69"></path>
+    <path d="M5.60 3.60 L7.08 5.83" stroke-width="1.89"></path>
+    <path d="M7.08 5.83 L8.63 8.03" stroke-width="2.12"></path>
+    <path d="M8.63 8.03 L10.25 10.21" stroke-width="2.33"></path>
+    <path d="M10.25 10.21 L11.93 12.36" stroke-width="2.50"></path>
+    <path d="M11.93 12.36 L13.67 14.48" stroke-width="2.63"></path>
+    <path d="M13.67 14.48 L15.47 16.57" stroke-width="2.72"></path>
+    <path d="M15.47 16.57 L17.32 18.62" stroke-width="2.80"></path>
+    <path d="M17.32 18.62 L19.21 20.64" stroke-width="2.87"></path>
+    <path d="M19.21 20.64 L21.15 22.62" stroke-width="2.95"></path>
+    <path d="M21.15 22.62 L23.12 24.57" stroke-width="3.05"></path>
+    <path d="M23.12 24.57 L25.13 26.47" stroke-width="3.18"></path>
+    <path d="M25.13 26.47 L27.16 28.33" stroke-width="3.31"></path>
+    <path d="M27.16 28.33 L29.22 30.15" stroke-width="3.39"></path>
+    <path d="M29.22 30.15 L31.30 31.92" stroke-width="3.44"></path>
+    <path d="M31.30 31.92 L33.39 33.64" stroke-width="3.47"></path>
+    <path d="M33.39 33.64 L35.49 35.31" stroke-width="3.50"></path>
+    <path d="M35.49 35.31 L37.60 36.93" stroke-width="3.54"></path>
+    <path d="M37.60 36.93 L39.71 38.50" stroke-width="3.61"></path>
+    <path d="M39.71 38.50 L41.81 40.01" stroke-width="3.70"></path>
+    <path d="M41.81 40.01 L43.91 41.47" stroke-width="3.82"></path>
+    <path d="M43.91 41.47 L46.00 42.86" stroke-width="3.94"></path>
+    <path d="M46.00 42.86 L48.07 44.20" stroke-width="4.06"></path>
+    <path d="M48.07 44.20 L50.12 45.47" stroke-width="4.18"></path>
+    <path d="M50.12 45.47 L52.14 46.68" stroke-width="4.29"></path>
+    <path d="M52.14 46.68 L54.13 47.83" stroke-width="4.40"></path>
+    <path d="M54.13 47.83 L56.09 48.91" stroke-width="4.50"></path>
+    <path d="M56.09 48.91 L58.02 49.91" stroke-width="4.60"></path>
+    <path d="M58.02 49.91 L59.89 50.85" stroke-width="4.70"></path>
+    <path d="M59.89 50.85 L61.72 51.71" stroke-width="4.87"></path>
+    <path d="M61.72 51.71 L63.50 52.50" stroke-width="5.08"></path>
+  </g>
+</svg>

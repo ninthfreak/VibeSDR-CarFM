@@ -148,10 +148,14 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         } catch (e: Throwable) { promise.reject("tune", e.message, e) }
     }
 
-    /** Hardware seek up/down to the next receivable station. */
+    /** Hardware seek up/down to the next receivable station. Uses search(), NOT
+     *  seek(): the probe (2026-07-26) showed radio.seek() only nudges one 0.2 MHz
+     *  step (landing on noise), while radio.search() scans and STOPS on the next
+     *  real station both directions (88.7→91.1 / 91.1→88.7, clear audio) — the
+     *  genuine on-demand seek, and it works outside the preset auto-search. */
     @ReactMethod
     fun seek(up: Boolean) {
-        try { radio?.seek(up) } catch (e: Throwable) { Log.w(TAG, "seek failed", e) }
+        try { radio?.search(up) } catch (e: Throwable) { Log.w(TAG, "seek (search) failed", e) }
     }
 
     /** Read the tuner's CURRENT state via the synchronous getters. On-device the
@@ -231,28 +235,28 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
      *
      *  ON  → announce we're the FM source the way the probe proved works
      *        (ACTION_APP_IN_OUT app_id=8, operation=1 IN) → service InitFM/powerUp →
-     *        MCU routes tuner audio; keep the back-service alive + unmute.
-     *  OFF → announce we're LEAVING (operation=0 OUT) + exit ARM FM + back-service off
-     *        + mute. EXIT_ARM_FM alone does NOT stick while the active source is still
-     *        Radio (the MCU re-powers FM a second later — the "comes back on" bug); the
-     *        app-OUT is what asks the MCU to release the source.
-     *
-     *  ⚠ NEEDS ON-DEVICE CONFIRMATION: the exact OFF signal that makes the MCU release
-     *  is what the probe's "Investigation C" measures. If app-OUT doesn't stick on the
-     *  unit, the probe will name the one that does (e.g. a source switch away from
-     *  Radio) — swap it in here then. */
+     *        MCU routes tuner audio (mcu_current_source→4); keep the back-service
+     *        alive + unmute.
+     *  OFF → switch the MCU source AWAY from Radio (ACTION_REQUEST_CHANGE_SOURCE
+     *        extra_source_id=0). This is the ONLY thing that sticks: the probe
+     *        (2026-07-26) proved EXIT_ARM_FM and app-OUT (operation=0) both left
+     *        mcu_current_source=4 and the MCU re-powered FM a second later (the
+     *        "comes back on" bug), while source→0 made the audio STAY off
+     *        (music=false, src=0). Pressing power ON again re-claims via app-IN. */
     @ReactMethod
     fun setAudioEnabled(on: Boolean) {
         val audio = reactContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         if (on) {
-            sendAppInOut(operation = 1)      // claim the FM source (proven trigger)
+            sendAppInOut(operation = 1)      // claim the FM source (proven trigger) → src 4
             try { radio?.setRadioBackServiceOn(true) } catch (e: Throwable) { Log.w(TAG, "backservice on failed", e) }
             audio?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
         } else {
             try { radio?.setRadioBackServiceOn(false) } catch (e: Throwable) { Log.w(TAG, "backservice off failed", e) }
-            sendAppInOut(operation = 0)      // release the FM source so it STAYS off
-            reactContext.sendBroadcast(Intent("com.nwd.android.ACTION_EXIT_ARM_FM_RAIDO"))
-            audio?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
+            // Device-proven stop: move the active source off Radio (→0). The MCU then
+            // releases FM and it stays silent; nothing else (exit / app-out) held.
+            reactContext.sendBroadcast(
+                Intent("com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE").putExtra("extra_source_id", 0.toByte())
+            )
         }
     }
 

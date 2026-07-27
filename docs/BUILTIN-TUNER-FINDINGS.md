@@ -369,16 +369,32 @@ client-reachable call that sets `mRdsEnable`/opens the device.
 `ACTION_EXIT_ARM_FM_RAIDO` stopped audio only briefly; within ~1s
 `isMusicActive` went true again because **`mcu_current_source` stayed `4`
 (Radio)** — the MCU re-inits FM. ⇒ Stopping FM requires the active **source** to
-be released/switched, not just an FM exit. The probe's Investigation C now walks
-`EXIT_ARM_FM` → `APP_IN_OUT operation=0` (leave source) → `REQUEST_CHANGE_SOURCE`
-away from Radio and names the one that sticks.
+be released/switched, not just an FM exit.
 
-**App fix shipped (needs device confirm):** `NwdRadioModule.setAudioEnabled` was a
-no-op for stopping (it only toggled `setRadioBackServiceOn`), and the CarFM power
-button never even called it — it only flipped the visual `off` state. Both fixed:
-the power button now drives `nwdSetAudio`, and OFF sends `APP_IN_OUT operation=0`
-+ `EXIT_ARM_FM` + mute. Swap in the probe's confirmed winner if app-OUT doesn't
-stick on the unit.
+# CONFIRMED — 2026-07-26 (probe `nwdprobe-20260726-122129`, focused run)
+
+Three decisive results from the refocused probe:
+
+- **RadioText — still walled.** Even as the FM source (`mcu_current_source=4`),
+  both levers (as-is; `setRadioBackServiceOn(true)` + re-assert source) left
+  `mRdsEnable=false` and PS/RT/PTY empty. RadioText is not reachable by a bound
+  client on this unit through any lever we have. CarFM stays on FCC-DB identity
+  (no RT) — this is settled, not worth more chasing without root/native `.so`.
+- **Seek — use `search()`, not `seek()`.** `radio.seek()` only nudges one 0.2 MHz
+  step (landed on noise). **`radio.search()` is the real on-demand seek**: it scans
+  and STOPS on the next station both ways (88.7→91.1, 91.1→88.7, clear audio), and
+  it is NOT the preset auto-search (AMS). ⇒ `NwdRadioModule.seek()` now calls
+  `search()`.
+- **Audio-off — `REQUEST_CHANGE_SOURCE → 0` is the ONLY thing that sticks.**
+  `EXIT_ARM_FM` ❌ (stayed on, src=4); `APP_IN_OUT operation=0` ❌ (stayed on,
+  src=4); **`ACTION_REQUEST_CHANGE_SOURCE extra_source_id=0` ✅** → `music=false`,
+  `src=0`, stayed off. ⇒ `setAudioEnabled(false)` now sends that; ON re-claims via
+  `APP_IN_OUT app_id=8 operation=1` (src→4). (My earlier app-OUT guess was wrong;
+  corrected to the proven winner.)
+
+**App fixes shipped (now device-backed):** the CarFM power button never called
+`nwdSetAudio` (only flipped the visual `off` state) — now wired. `setAudioEnabled`
+ON = app-IN claim; OFF = source→0. `seek()` = `search()`.
 
 ## Ethics/scope
 Interoperability RE of our own device's interface, read-only, local. Do not

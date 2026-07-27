@@ -36,7 +36,7 @@ import SidePresetCard, { PEEK_OPACITY, PEEK_SCALE } from './carfm/SidePresetCard
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
 import { cleanCall, DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT, type CarFmPalette } from './carfm/tokens';
 import { resolveEgg, eggTokens, BAND_FONTS_READY } from './carfm/bandThemes';
-import { BandMotif, BoltGlyph, HornsGlyph, CardFrame } from './carfm/BandThemeArt';
+import { BandGear, AcdcHorn, AcdcBolt, CardFrame } from './carfm/bandArt';
 
 export interface CarFmPreset {
   name: string;
@@ -89,6 +89,10 @@ export interface CarFmFaceProps {
   audioActive?: boolean;
   onClaimAudio?: () => void;     // inactive → take priority (power button)
   onReleaseAudio?: () => void;   // active → give it up
+  /** Steering-wheel / media ⏮⏭ preset step from the parent. Bump `seq` (with a
+   *  direction) to run the SAME animated stepPreset as the on-screen PREV/NEXT —
+   *  hero-swap FLIP + step in DISPLAYED order — instead of a silent tune. */
+  hardwareStep?: { dir: 1 | -1; seq: number };
 }
 
 const CHANNEL_HZ = 100_000;             // 0.1 MHz — the design's tune/seek step
@@ -323,6 +327,23 @@ function GlitchWrap({ on, children }: { on: boolean; children: React.ReactNode }
   return <Animated.View style={{ transform: [{ translateX: x }] }}>{children}</Animated.View>;
 }
 
+// AC/DC call sign with the SUPPLIED bolt SVG splitting it at its midpoint
+// (WI⚡BA — EASTER-EGGS §2.1). RN can't inline SVG inside <Text>, so it's a row:
+// firstHalf | bolt | secondHalf. Bolt inherits the text colour (per §2.1.2), which
+// on the dark "Back in Black" hero is the explicit silver the caller passes.
+function CallWithBolt({ text, style, fontSize, boltColor }: { text: string; style: any; fontSize: number; boltColor: string }) {
+  const mid = Math.ceil(text.length / 2);
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      <Text numberOfLines={1} style={style}>{text.slice(0, mid)}</Text>
+      <View style={{ marginHorizontal: fontSize * 0.04, transform: [{ translateY: -fontSize * 0.06 }] }}>
+        <AcdcBolt color={boltColor} width={fontSize * 0.74} height={fontSize * 1.05} />
+      </View>
+      <Text numberOfLines={1} style={style}>{text.slice(mid)}</Text>
+    </View>
+  );
+}
+
 // ── Seek digit slide (LOSSY #6 — required) ───────────────────────────────────
 // On each frequency change while seeking, the digits enter offset ±14dp with
 // opacity 0.25 and settle to 0 / 1 over ~200ms — one two-endpoint transition
@@ -429,7 +450,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
     rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
     onSetAutostart, onSetTheme, onRetryTuner, presets, nwdActive, onHardwareSeek,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
-    audioActive, onClaimAudio, onReleaseAudio,
+    audioActive, onClaimAudio, onReleaseAudio, hardwareStep,
   } = props;
   const insets = useSafeAreaInsets();
   const scheme = useColorScheme();
@@ -463,7 +484,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // Themed type — applied only once the display faces are bundled (BAND_FONTS_READY).
   // Values are registered RN family names; undefined → the default face falls through.
   const eggFontOn = BAND_FONTS_READY && !!egg;
-  const eggHeroFont = eggFontOn ? (egg?.heroFont ?? egg?.font) : undefined;
+  // Beatles hero stays PLAIN (EASTER-EGGS §4: the SgtPeppers cut is outline-only and
+  // its intended solid/lined treatments can't be produced — no hero font, no effects).
+  const eggHeroFont = eggFontOn && egg?.motif !== 'submarine' ? (egg?.heroFont ?? egg?.font) : undefined;
   const eggFreqFont = eggFontOn ? egg?.freqFont : undefined;
   const eggRtFont = eggFontOn ? (egg?.rtFont ?? egg?.font) : undefined;
   const eggGenreFont = eggFontOn ? (egg?.genreFont ?? egg?.font) : undefined;
@@ -784,6 +807,16 @@ export default function CarFmFace(props: CarFmFaceProps) {
     onTuneHz(Math.round(items[n].frequencyMhz * 1e6));
   }, [items, activeIndex, onTuneHz, startFlip, off]);
 
+  // Steering-wheel / media ⏮⏭ (parent bumps hardwareStep.seq): run the animated
+  // stepPreset so the wheel gets the hero-swap FLIP and steps in DISPLAYED order —
+  // exactly like the on-screen PREV/NEXT, not a silent frequency jump.
+  const lastHwSeq = useRef(hardwareStep?.seq ?? 0);
+  useEffect(() => {
+    if (!hardwareStep || hardwareStep.seq === lastHwSeq.current) return;
+    lastHwSeq.current = hardwareStep.seq;
+    stepPreset(hardwareStep.dir);
+  }, [hardwareStep, stepPreset]);
+
   const onNearbyTune = useCallback((st: NearbyStation) => {
     onTuneHz(Math.round(st.frequencyMhz * 1e6));
   }, [onTuneHz]);
@@ -900,7 +933,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
               style={({ pressed }) => [styles.gearBtn, { borderColor: pal.border, backgroundColor: pal.raised }, pressed && { opacity: 0.55 }]}
               accessibilityRole="button" accessibilityLabel="Settings"
             >
-              {egg?.settingsBoltColor ? <BoltGlyph size={24} color={egg.settingsBoltColor} /> : <GearIcon size={24} color={pal.dim} />}
+              {egg ? <BandGear motif={egg.motif} size={24} color={egg.settingsBoltColor ?? egg.accent} /> : <GearIcon size={24} color={pal.dim} />}
             </Pressable>
           </View>
           {tall ? (
@@ -1008,11 +1041,13 @@ export default function CarFmFace(props: CarFmFaceProps) {
               // twitches the whole identity (heroGlitch).
               <GlitchWrap on={!!egg?.heroGlitch}>{
               egg?.callSignBolt ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: L.s(8) }}>
-                  <BoltGlyph size={L.call * 0.7} color={egg.accent} />
-                  <Text numberOfLines={1} style={[styles.call, { fontSize: L.call * eggHeroScale, color: heroCardText }, eggHeroType, eggNameShadow]}>{caseIdent(heroIdent)}</Text>
-                  <BoltGlyph size={L.call * 0.7} color={egg.accent} />
-                </View>
+                // AC/DC: the supplied bolt SVG splits the call sign at its midpoint.
+                <CallWithBolt
+                  text={caseIdent(heroIdent)}
+                  fontSize={L.call * eggHeroScale}
+                  boltColor={dark ? '#C9C9C9' : heroCardText}
+                  style={[styles.call, { fontSize: L.call * eggHeroScale, color: heroCardText }, eggHeroType, eggNameShadow]}
+                />
               ) : egg?.nameBlock ? (
                 // Talking Heads: the identity sits in a solid colour slab.
                 <View style={{ backgroundColor: egg.nameBlock.bg, paddingHorizontal: L.s(16), paddingTop: L.s(2), paddingBottom: L.s(6), borderRadius: L.s(3) }}>
@@ -1085,20 +1120,20 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 flip ? { transform: flip.centerTransform } : null,
               ]}
             >
-              {/* Band-theme motif watermark (§12) — cosmetic, behind the content,
-                  clipped to the card, pointer-inert. Colour is the theme glow. */}
-              {egg ? (
-                <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', borderRadius: 28, overflow: 'hidden' }]}>
-                  <BandMotif motif={egg.motif} color={egg.glow ?? egg.accent} size={(tall ? tallHeroW : L.heroCardW) * 0.66} opacity={dark ? 0.16 : 0.12} />
-                </View>
-              ) : null}
-              {/* Concentric ring frame (Beatles / Talking Heads). */}
+              {/* Concentric ring frame — Beatles drum-hoop / Talking Heads double rule. */}
               {egg?.cardFrame ? <CardFrame rings={egg.cardFrame.rings} radius={28} /> : null}
-              {/* AC/DC horns — small corner ornament. */}
+              {/* AC/DC horns (EASTER-EGGS §2.1) — the SUPPLIED SVGs, overhanging the
+                  hero card's top corners (left top:-44/left:-16, right top:-44/right:-16);
+                  they carry their own baked red stroke + glow and rotation. */}
               {egg?.horns ? (
-                <View pointerEvents="none" style={{ position: 'absolute', top: L.s(8), right: L.s(10) }}>
-                  <HornsGlyph size={L.s(34)} color={egg.accent} />
-                </View>
+                <>
+                  <View pointerEvents="none" style={{ position: 'absolute', top: L.s(-44), left: L.s(-16), zIndex: 4 }}>
+                    <AcdcHorn side="left" w={L.s(70)} h={L.s(96)} />
+                  </View>
+                  <View pointerEvents="none" style={{ position: 'absolute', top: L.s(-44), right: L.s(-16), zIndex: 4 }}>
+                    <AcdcHorn side="right" w={L.s(70)} h={L.s(96)} />
+                  </View>
+                </>
               ) : null}
               {/* Grayscaled content (§4.7); the power button is drawn in colour above it. */}
               <View style={[styles.heroContent, { gap: L.s(14) }, GS]}>
