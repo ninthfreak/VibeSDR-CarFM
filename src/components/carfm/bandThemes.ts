@@ -55,13 +55,10 @@ export type Egg = {
   modes?: { light?: Partial<Egg>; dark?: Partial<Egg> };
 };
 
-/** The band-theme display faces are bundled (App.tsx useFonts). Font fields below
- *  are REGISTERED RN family names. Anton (Talking Heads) and Permanent Marker
- *  (Nirvana) are the design's actual spec faces — both open-licensed. The rest are
- *  open-licensed STAND-INS for proprietary faces we can't legally ship:
- *    Metal Mania  → AC/DC "Squealer"          Bebas Neue → Nirvana hero "Onyx"
- *    Chakra Petch → NIN "Gridnik"/"Singothic"  Righteous  → the Beatles faces (partial)
- *  Set false to fall every theme back to Atkinson. */
+/** The band-theme display faces are bundled (App.tsx useFonts) — the REAL supplied
+ *  faces from the v1.12.0 handoff, registered under the family names below verbatim
+ *  (Squealer, BeatlesYellowSub, SgtPeppers, MadieRoger, PermanentMarker, Onyx,
+ *  Gridnik, Singothic, Anton). No stand-ins. Set false to fall back to Atkinson. */
 export const BAND_FONTS_READY = true;
 
 /** Build the theme registry against the active palette. It's a function (not a
@@ -71,7 +68,7 @@ export function buildEggs(pal: EggPalette): Egg[] {
   return [
     {
       id: 'AC/DC', names: ['ac dc', 'acdc'], motif: 'acdc',
-      font: 'Metal Mania',
+      font: 'Squealer',
       accent: '#E31E24', glow: '#FF3B30',
       genreText: "High Voltage Rock 'n' Roll", genreColor: '#E8A400',
       genrePulse: { light: ['#E8A400', '#FFE24A'], dark: ['#E8A400', '#FFE24A'] }, genrePulseOn: true,
@@ -92,14 +89,15 @@ export function buildEggs(pal: EggPalette): Egg[] {
     },
     {
       id: 'The Beatles', names: ['beatles'], motif: 'submarine',
-      font: 'Righteous',
+      font: 'BeatlesYellowSub',
       accent: '#C9A227', glow: '#E8CF7A',
       genreText: 'Rock', genreColor: '#4A2C15',
-      genreFont: 'Righteous', genreDroop: true,
+      genreFont: 'MadieRoger', genreDroop: true,
       card: { bg: '#F3E8D2', border: '#A81F28', text: '#241608', sub: '#6B4A2A' },
       cardFrame: { width: 8, rings: ['#F3E8D2 5px', '#2E4EA0 6.5px', '#F3E8D2 17px', '#A81F28 18.5px'] },
-      heroCase: 'lower', heroFont: 'Righteous',
-      callLined: { line: '#8E1B24', gap: 5 }, freqShadow: { color: '#8E1B24', dx: 5, dy: 6 },
+      heroCase: 'lower', heroFont: 'SgtPeppers',
+      // §4: the SgtPeppers cut is outline-only; the prototype's callLined/freqShadow
+      // are KNOWN-WRONG placeholders — do not port. Hero lettering stays plain.
       rtPlate: { bg: '#FFFFFF', border: '#DED6C6', text: '#1A1A1A', serial: 'No. 0101538' },
       stripes: true, suppressLogos: true,
     },
@@ -116,22 +114,22 @@ export function buildEggs(pal: EggPalette): Egg[] {
     },
     {
       id: 'Nirvana', names: ['nirvana'], motif: 'xerox',
-      font: 'Permanent Marker',
+      font: 'PermanentMarker',
       accent: pal.text, glow: pal.border, chromeInk: pal.text,
       genreText: 'Verse Chorus Verse', genreColor: pal.dim,
-      genreFont: 'Permanent Marker',
-      heroFont: 'Bebas Neue', heroScale: 1.5,
+      genreFont: 'PermanentMarker',
+      heroFont: 'Onyx', heroScale: 1.5,
       nameGhost: { color: 'rgba(0,0,0,0.2)', dx: 3, dy: 3 },
       suppressLogos: true, rtSpacing: 1,
     },
     {
       id: 'Nine Inch Nails', names: ['nine inch nails'], motif: 'spiral',
-      font: 'Chakra Petch',
+      font: 'Gridnik',
       accent: pal.text, glow: pal.border, chromeInk: pal.text,
       genreText: 'Broken Machines', genreCycle: ['Broken Machines', 'Things Falling Apart'], genreColor: pal.dim,
-      genreFont: 'Chakra Petch',
-      rtFont: 'Chakra Petch', freqFont: 'Chakra Petch',
-      heroFont: 'Chakra Petch', heroScale: 1.3, heroTrack: 9, freqScale: 0.95, heroGlitch: true,
+      genreFont: 'Singothic',
+      rtFont: 'Singothic', freqFont: 'Singothic',
+      heroFont: 'Gridnik', heroScale: 1.3, heroTrack: 9, freqScale: 0.95, heroGlitch: true,
       nameGhost: { color: 'rgba(0,0,0,0.16)', dx: 2, dy: 0 },
       suppressLogos: true, rtSpacing: 5,
     },
