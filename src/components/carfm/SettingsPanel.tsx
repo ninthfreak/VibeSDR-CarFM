@@ -407,10 +407,10 @@ export default function SettingsPanel({
             </View>
 
             {/* Head-unit presets (NWD only). Programming TUNES through each station
-                (the tuner has no silent write) and overwrites ALL 18 hardware slots
-                with the app's presets, wrapped — so the steering wheel only ever
-                lands on your presets, never leftover stations. Manual by design:
-                this is why the app no longer sweeps on launch. */}
+                (the tuner has no silent write) and writes your presets into the
+                first N of 18 hardware slots. Manual by design — this is why the app
+                no longer sweeps on launch. (Blanking the UNUSED slots so the wheel
+                skips them needs a clear command we haven't located yet.) */}
             {nwdActive ? (
               <>
                 <SectionLabel text="HEAD-UNIT PRESETS (STEERING WHEEL)" pal={pal} />
@@ -427,7 +427,7 @@ export default function SettingsPanel({
                       if (nwdPresetCount === 0) { Alert.alert('No presets', 'Save some presets first, then program the head unit.'); return; }
                       Alert.alert(
                         'Program head unit?',
-                        `This tunes through your ${nwdPresetCount} station${nwdPresetCount === 1 ? '' : 's'} (you\'ll hear it sweep, ~${Math.ceil(18 * 1.6)}s) and overwrites ALL 18 hardware preset slots — wrapping your presets so the steering wheel only cycles them. Do it while parked.`,
+                        `This tunes through your ${nwdPresetCount} station${nwdPresetCount === 1 ? '' : 's'} (you\'ll hear it sweep, ~${Math.ceil(nwdPresetCount * 1.6)}s) and writes them into the head unit's preset slots. Do it while parked.`,
                         [{ text: 'Cancel', style: 'cancel' }, { text: 'Program', onPress: () => onProgramHeadUnit?.() }],
                       );
                     }}

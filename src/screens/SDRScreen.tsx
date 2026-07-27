@@ -3657,11 +3657,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   //     bank inherently TUNES through each station (audible sweep). It can't be
   //     silent — so it's a deliberate action, not an automatic one (which was the
   //     "app changes stations on startup" bug).
-  //   • there is no clear/blank API: a slot always holds a frequency. To stop the
-  //     steering wheel (which steps the HARDWARE slots directly) from landing on
-  //     leftover/unwanted stations, we fill ALL 18 slots with the app presets,
-  //     WRAPPING (card order p1..pN,p1..pN,…). Overwriting every slot IS the clear;
-  //     nothing unwanted is left to scroll into.
+  //   • no clear/blank op is exposed on the AIDL we bind (saveCurrentFrequency only
+  //     overwrites). The service HAS an internal `CleanFMPreFreData` (empties all
+  //     3×6), but there is no confirmed client trigger for it yet — reaching it is
+  //     an open probe investigation. So we write EXACTLY the N app presets (card
+  //     order) into the first N slots and DO NOT touch the rest. NO wrapping — the
+  //     goal is genuinely-blank unused slots (so the wheel skips them), pending the
+  //     clear command; wrapping the presets to fill 18 is explicitly NOT wanted.
   // `@carfm/nwd_preset_sig_v1` records what we last wrote (the intent), so Settings
   // can show app-vs-programmed without a (tuning) read-back.
   const nwdSyncSig = useRef<string | null>(null);
@@ -3674,13 +3676,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
   const onProgramHeadUnit = useCallback(async () => {
     if (!nwdActiveRef.current || nwdProgramming) return;
-    const base = fmPresets.map((p) => p.frequency / 1e6);   // card order
-    if (base.length === 0) return;
-    const freqs = Array.from({ length: 18 }, (_, i) => base[i % base.length]);   // wrap-fill all 18
+    const freqs = fmPresets.map((p) => p.frequency / 1e6).slice(0, 18);   // exactly N, card order, NO wrap
+    if (freqs.length === 0) return;
     setNwdProgramming(true);
     try {
       await nwdSyncPresets(freqs);
-      const sig = base.map((f) => f.toFixed(1)).join(',');
+      const sig = freqs.map((f) => f.toFixed(1)).join(',');
       nwdSyncSig.current = sig;
       setNwdProgrammedSig(sig);
       AsyncStorage.setItem('@carfm/nwd_preset_sig_v1', sig).catch(() => {});
