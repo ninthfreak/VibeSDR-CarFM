@@ -213,7 +213,7 @@ function PowerButton({ off, size, radius, pal, onClaim, onRelease, style }: {
 // ── RadioText strip: static when short, 16s marquee when > 46 chars ──────────
 // Real RadioText renders in the full text colour; when empty, a dim-italic
 // "Waiting for RadioText…" placeholder shows instead (design rtItemStyle).
-function RadioTextStrip({ text, colors, height = 52, fontSize = 30, maxWidth = 880, fontFamily, letterSpacing }: { text: string; colors: { raised: string; border: string; dim: string; text: string }; height?: number; fontSize?: number; maxWidth?: number; fontFamily?: string; letterSpacing?: number }) {
+function RadioTextStrip({ text, colors, height = 52, fontSize = 30, maxWidth = 880, fontFamily, letterSpacing, serial }: { text: string; colors: { raised: string; border: string; dim: string; text: string }; height?: number; fontSize?: number; maxWidth?: number; fontFamily?: string; letterSpacing?: number; serial?: string }) {
   const eggType = fontFamily ? { fontFamily } : null;
   const eggTrack = letterSpacing != null ? { letterSpacing } : null;
   const [trackW, setTrackW] = useState(0);
@@ -255,6 +255,10 @@ function RadioTextStrip({ text, colors, height = 52, fontSize = 30, maxWidth = 8
           {shown}
         </Text>
       )}
+      {/* Beatles: catalogue-serial stamp, bottom-right of the plate. */}
+      {serial ? (
+        <Text style={{ position: 'absolute', right: 14, bottom: 6, fontSize: Math.max(11, fontSize * 0.4), color: colors.dim, letterSpacing: 1 }}>{serial}</Text>
+      ) : null}
     </View>
   );
 }
@@ -843,8 +847,21 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // §4.7 off: the STEREO/MONO pill goes EMPTY (outline, no waves, no text) and all
   // tells drop to their dim/off state.
   const so = stereo && !off;
+  // AC/DC bolt art (supplied PNGs) flanking the STEREO pill (EASTER-EGGS §2.1):
+  // slot 20×28 wide / 28×40 tall, art height 24/34, −2 outward inset, dark-filtered.
+  const fanFilter: any = egg?.stereoArtFilter ? { filter: [{ grayscale: 1 }, { brightness: 2.3 }, { contrast: 0.85 }] } : null;
+  const stereoFan = (side: 'left' | 'right') => egg?.stereoArtL ? (
+    <Image
+      resizeMode="contain"
+      source={side === 'left' ? require('../../assets/fan-l2.png') : require('../../assets/fan-r2.png')}
+      style={[{ width: L.s(tall ? 28 : 20), height: L.s(tall ? 34 : 24),
+        marginRight: side === 'left' ? L.s(-2) : 0, marginLeft: side === 'right' ? L.s(-2) : 0 }, fanFilter] as any}
+    />
+  ) : null;
   const stereoCluster = (
     <View style={styles.stereoCol}>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      {stereoFan('left')}
       <View style={[styles.stereoRow, {
         minHeight: L.stereoH, paddingHorizontal: L.stereoPadH, borderRadius: L.stereoRadius,
         minWidth: L.stereoMinW, borderWidth: 1.5,
@@ -856,6 +873,8 @@ export default function CarFmFace(props: CarFmFaceProps) {
           {off ? '' : stereo ? 'STEREO' : 'MONO'}
         </Text>
         {so ? <StereoWave color={pal.blue} w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
+      </View>
+      {stereoFan('right')}
       </View>
       <View style={styles.tellStrip}>
         <Tell label="RDS" on={!off && !!rdsOk} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />
@@ -1176,6 +1195,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 : { raised: pal.raised, border: pal.border, dim: pal.dim, text: pal.text }}
               fontFamily={eggRtFont}
               letterSpacing={egg?.rtSpacing}
+              serial={egg?.rtPlate?.serial}
             />
           </View>
         );
