@@ -3651,38 +3651,45 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (p) fmRemoveAt(p.frequency);
   }, [fmPresets, fmRemoveAt]);
 
-  // One-way preset mirror (tasks #10/#11/#12): when the built-in NWD tuner is the
-  // active source, overwrite the head unit's FM1/FM2/FM3 banks with CarFM's presets
-  // in the app's DISPLAYED CARD ORDER — sequential slot fill (card 1 → FM1 slot 1,
-  // …, card 7 → FM2 slot 1, …), capped at 18. The app is the source of truth for
-  // order (design README §218: PREV/NEXT — and the physical steering-wheel step —
-  // walk presets in DISPLAYED order, not by frequency), so the hardware banks and
-  // the cards stay in lockstep. NOT frequency-sorted; saveCurrentFrequency(slot)
-  // preserves the exact order we write (proven on-device). Diffed against the
-  // last-synced signature (persisted) so it only writes on a real change — which
-  // now includes a reorder — and debounced so a drag-reorder doesn't fire mid-gesture.
-  // STRICTLY app → unit; the head unit's banks are never read back into CarFM.
+  // Head-unit preset programming (NWD) — app → unit, MANUAL (Settings), never on
+  // launch. The tuner AIDL forces the shape:
+  //   • saveCurrentFrequency(slot) stores only the CURRENT tuned freq, so writing a
+  //     bank inherently TUNES through each station (audible sweep). It can't be
+  //     silent — so it's a deliberate action, not an automatic one (which was the
+  //     "app changes stations on startup" bug).
+  //   • no clear/blank op is exposed on the AIDL we bind (saveCurrentFrequency only
+  //     overwrites). The service HAS an internal `CleanFMPreFreData` (empties all
+  //     3×6), but there is no confirmed client trigger for it yet — reaching it is
+  //     an open probe investigation. So we write EXACTLY the N app presets (card
+  //     order) into the first N slots and DO NOT touch the rest. NO wrapping — the
+  //     goal is genuinely-blank unused slots (so the wheel skips them), pending the
+  //     clear command; wrapping the presets to fill 18 is explicitly NOT wanted.
+  // `@carfm/nwd_preset_sig_v1` records what we last wrote (the intent), so Settings
+  // can show app-vs-programmed without a (tuning) read-back.
   const nwdSyncSig = useRef<string | null>(null);
-  const [nwdSigReady, setNwdSigReady] = useState(false);
+  const [nwdProgrammedSig, setNwdProgrammedSig] = useState<string | null>(null);
+  const [nwdProgramming, setNwdProgramming] = useState(false);
   useEffect(() => {
     AsyncStorage.getItem('@carfm/nwd_preset_sig_v1')
-      .then((v: string | null) => { nwdSyncSig.current = v; })
-      .catch(() => {})
-      .finally(() => setNwdSigReady(true));
+      .then((v: string | null) => { nwdSyncSig.current = v; setNwdProgrammedSig(v); })
+      .catch(() => {});
   }, []);
-  useEffect(() => {
-    if (!carFm || !nwdActive || !nwdSigReady) return;
-    const freqs = fmPresets.map((p) => p.frequency / 1e6).slice(0, 18);   // CARD ORDER, not sorted
-    const sig = freqs.map((f) => f.toFixed(1)).join(',');
-    if (sig === nwdSyncSig.current) return;   // unchanged since the last sync
-    const t = setTimeout(() => {
-      void nwdSyncPresets(freqs).then(() => {
-        nwdSyncSig.current = sig;
-        AsyncStorage.setItem('@carfm/nwd_preset_sig_v1', sig).catch(() => {});
-      });
-    }, 1500);
-    return () => clearTimeout(t);
-  }, [carFm, nwdActive, fmPresets, nwdSigReady]);
+  const onProgramHeadUnit = useCallback(async () => {
+    if (!nwdActiveRef.current || nwdProgramming) return;
+    const freqs = fmPresets.map((p) => p.frequency / 1e6).slice(0, 18);   // exactly N, card order, NO wrap
+    if (freqs.length === 0) return;
+    setNwdProgramming(true);
+    try {
+      await nwdSyncPresets(freqs);
+      const sig = freqs.map((f) => f.toFixed(1)).join(',');
+      nwdSyncSig.current = sig;
+      setNwdProgrammedSig(sig);
+      AsyncStorage.setItem('@carfm/nwd_preset_sig_v1', sig).catch(() => {});
+    } finally { setNwdProgramming(false); }
+  }, [fmPresets, nwdProgramming]);
+  // app-vs-programmed comparison (intent, no tuning): does the current card set
+  // match what we last wrote to the unit?
+  const nwdPresetsInSync = nwdProgrammedSig === fmPresets.map((p) => (p.frequency / 1e6).toFixed(1)).join(',');
 
   // CarFM media surface: push Presets + Nearby (FCC DB) as the browse tree +
   // queue. Nearby is fetched once per session (offline-first facade) and the
@@ -4771,6 +4778,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           onSetAutostart={onFmSetAutostart}
           onRetryTuner={route.params.tunerless ? () => { void tryTunerNow(); } : undefined}
           nwdActive={nwdActive}
+          onProgramHeadUnit={onProgramHeadUnit}
+          nwdProgramming={nwdProgramming}
+          nwdPresetsInSync={nwdPresetsInSync}
+          nwdPresetCount={fmPresets.length}
           onHardwareSeek={nwdActive ? onFmHardwareSeek : undefined}
           presets={fmPresets}
           onTuneHz={onTuneHz}

@@ -74,6 +74,11 @@ export interface CarFmFaceProps {
   /** The built-in NWD tuner is the active source (drives hardware seek + honest
    *  tuner-source detection in settings). */
   nwdActive?: boolean;
+  /** Head-unit preset programming (Settings). Manual only — writing sweeps. */
+  onProgramHeadUnit?: () => void;
+  nwdProgramming?: boolean;
+  nwdPresetsInSync?: boolean;
+  nwdPresetCount?: number;
   /** Hardware seek (built-in tuner): when set, SEEK uses the tuner's own
    *  next-station scan instead of the FCC-DB sweep. */
   onHardwareSeek?: (dir: 1 | -1) => void;
@@ -151,9 +156,9 @@ function DrivingStatusIcons({ pal }: { pal: CarFmPalette }) {
   const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 0.4] });
   const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.07] });
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
       {isMoving ? (
-        <Animated.View style={{ opacity, transform: [{ scale }], marginRight: -6 }} accessibilityLabel="Vehicle in motion">
+        <Animated.View style={{ opacity, transform: [{ scale }] }} accessibilityLabel="Vehicle in motion">
           <MotionCar size={34} color={pal.amber} />
         </Animated.View>
       ) : null}
@@ -213,7 +218,7 @@ function PowerButton({ off, size, radius, pal, onClaim, onRelease, style }: {
 // ── RadioText strip: static when short, 16s marquee when > 46 chars ──────────
 // Real RadioText renders in the full text colour; when empty, a dim-italic
 // "Waiting for RadioText…" placeholder shows instead (design rtItemStyle).
-function RadioTextStrip({ text, colors, height = 52, fontSize = 30, maxWidth = 880, fontFamily, letterSpacing }: { text: string; colors: { raised: string; border: string; dim: string; text: string }; height?: number; fontSize?: number; maxWidth?: number; fontFamily?: string; letterSpacing?: number }) {
+function RadioTextStrip({ text, colors, height = 52, fontSize = 30, maxWidth = 880, fontFamily, letterSpacing, serial }: { text: string; colors: { raised: string; border: string; dim: string; text: string }; height?: number; fontSize?: number; maxWidth?: number; fontFamily?: string; letterSpacing?: number; serial?: string }) {
   const eggType = fontFamily ? { fontFamily } : null;
   const eggTrack = letterSpacing != null ? { letterSpacing } : null;
   const [trackW, setTrackW] = useState(0);
@@ -255,6 +260,10 @@ function RadioTextStrip({ text, colors, height = 52, fontSize = 30, maxWidth = 8
           {shown}
         </Text>
       )}
+      {/* Beatles: catalogue-serial stamp, bottom-right of the plate. */}
+      {serial ? (
+        <Text style={{ position: 'absolute', right: 14, bottom: 6, fontSize: Math.max(11, fontSize * 0.4), color: colors.dim, letterSpacing: 1 }}>{serial}</Text>
+      ) : null}
     </View>
   );
 }
@@ -449,6 +458,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
     freqHz, stationName, callsignHint, radioText, stereo, signalDb,
     rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
     onSetAutostart, onSetTheme, onRetryTuner, presets, nwdActive, onHardwareSeek,
+    onProgramHeadUnit, nwdProgramming, nwdPresetsInSync, nwdPresetCount,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
     audioActive, onClaimAudio, onReleaseAudio, hardwareStep,
   } = props;
@@ -566,9 +576,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
       padH: s(tall ? 16 : 24),
       padTop: s(tall ? 14 : 18),
       gap: s(tall ? 10 : 12),
-      freq: s(tall ? 58 : landscape ? 48 : 60),
+      freq: s(tall ? 64 : landscape ? 56 : 78),
       mhz: s(tall ? 20 : landscape ? 18 : 22),
-      call: s(tall ? 52 : landscape ? 50 : 66),
+      call: s(tall ? 62 : landscape ? 60 : 94),
       logo: s(tall ? 80 : landscape ? 70 : 92),
       star: s(tall ? 58 : landscape ? 48 : 56),
       rtMarginTop: s(tall ? 12 : landscape ? 10 : 18),
@@ -829,7 +839,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // centered, controls right — so the signal dB stacks below the icon and the
   // stereo column is truly centered regardless of the side widths.
   const signalCluster = (
-    <View style={[styles.signalPill, tall && styles.signalPillTall]}>
+    <View style={[styles.signalPill, tall && styles.signalPillTall, !tall && { minHeight: L.stereoH, justifyContent: 'center' }]}>
       {/* NWD has no real signal metric — the bars are a DB+GPS *estimate*, so they
           render grey (not amber) to signal "not live", and the dB number is
           suppressed (we have no measured level). Zero + grey when there's no fix
@@ -843,8 +853,21 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // §4.7 off: the STEREO/MONO pill goes EMPTY (outline, no waves, no text) and all
   // tells drop to their dim/off state.
   const so = stereo && !off;
+  // AC/DC bolt art (supplied PNGs) flanking the STEREO pill (EASTER-EGGS §2.1):
+  // slot 20×28 wide / 28×40 tall, art height 24/34, −2 outward inset, dark-filtered.
+  const fanFilter: any = egg?.stereoArtFilter ? { filter: [{ grayscale: 1 }, { brightness: 2.3 }, { contrast: 0.85 }] } : null;
+  const stereoFan = (side: 'left' | 'right') => egg?.stereoArtL ? (
+    <Image
+      resizeMode="contain"
+      source={side === 'left' ? require('../../assets/fan-l2.png') : require('../../assets/fan-r2.png')}
+      style={[{ width: L.s(tall ? 28 : 20), height: L.s(tall ? 34 : 24),
+        marginRight: side === 'left' ? L.s(-2) : 0, marginLeft: side === 'right' ? L.s(-2) : 0 }, fanFilter] as any}
+    />
+  ) : null;
   const stereoCluster = (
     <View style={styles.stereoCol}>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      {stereoFan('left')}
       <View style={[styles.stereoRow, {
         minHeight: L.stereoH, paddingHorizontal: L.stereoPadH, borderRadius: L.stereoRadius,
         minWidth: L.stereoMinW, borderWidth: 1.5,
@@ -856,6 +879,8 @@ export default function CarFmFace(props: CarFmFaceProps) {
           {off ? '' : stereo ? 'STEREO' : 'MONO'}
         </Text>
         {so ? <StereoWave color={pal.blue} w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
+      </View>
+      {stereoFan('right')}
       </View>
       <View style={styles.tellStrip}>
         <Tell label="RDS" on={!off && !!rdsOk} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />
@@ -913,7 +938,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             {signalCluster}
             {stereoCluster}
             {genreLabel && !off ? (
-              <View style={[styles.ptyWrap, { maxWidth: 200 }]}>
+              <View style={[styles.ptyWrap, { maxWidth: 200, height: L.stereoH }]}>
                 <ThemedGenre label={genreLabel} cycle={egg?.genreCycle} pulse={egg?.genrePulse} pulseOn={egg?.genrePulseOn} outline={egg?.genreOutline} droop={egg?.genreDroop} dark={dark} color={genreColor} fontFamily={eggGenreFont} fontSize={L.ptyFont} style={styles.ptyText} shadow={ptyShadow} />
               </View>
             ) : null}
@@ -1176,6 +1201,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 : { raised: pal.raised, border: pal.border, dim: pal.dim, text: pal.text }}
               fontFamily={eggRtFont}
               letterSpacing={egg?.rtSpacing}
+              serial={egg?.rtPlate?.serial}
             />
           </View>
         );
@@ -1268,6 +1294,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
         onSetTheme={(t) => onSetTheme?.(t)}
         forcedEggId={forcedEgg}
         onForceEgg={setForcedEgg}
+        onProgramHeadUnit={onProgramHeadUnit}
+        nwdProgramming={nwdProgramming}
+        nwdPresetsInSync={nwdPresetsInSync}
+        nwdPresetCount={nwdPresetCount}
         onClose={() => setSettingsOpen(false)}
       />
       {/* Preset logo-search window (design §6.4). */}
@@ -1290,7 +1320,10 @@ const styles = StyleSheet.create({
   face: { width: '100%', height: '100%', flexDirection: 'column' },
 
   header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 14, flexShrink: 1 },
+  // flex-start so signal + genre align to the STEREO pill's band (the RDS/HD/TP/AF
+  // tell strip hangs BELOW the pill and must not pull them down). signal/genre are
+  // given the pill's height + centered content below, so all three read level.
+  headerLeft: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, flexShrink: 1 },
   headerRight: { alignItems: 'center', gap: 12, flexShrink: 0 },
   headerTopRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   // Tall-track status zones (§4.1 v1.5.0): flexed sides center the wrap-content

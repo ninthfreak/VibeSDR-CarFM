@@ -156,6 +156,7 @@ public class MainActivity extends Activity {
         advanced.addView(btn("▶ Audio test only", v -> runAudioTest()));
         advanced.addView(btn("▶ Radio functions only (tune · seek · RDS)", v -> runRadioFunc()));
         advanced.addView(btn("▶ Overwrite presets only", v -> runWritePresets()));
+        advanced.addView(btn("▶ Find preset-CLEAR command (blank slots)", v -> runFindClear()));
         advanced.addView(btn("▶ Reclaim-after-loss test", v -> runReclaim()));
         advanced.addView(btn("Connect (bind service)", v -> wakeAndBind()));
 
@@ -247,6 +248,7 @@ public class MainActivity extends Activity {
     private void runAudioTest()   { runSolo("STANDALONE AUDIO", () -> phaseAudio()); }
     private void runRadioFunc()   { runSolo("RADIO FUNCTIONS", this::phaseRadioFunc); }
     private void runWritePresets(){ runSolo("OVERWRITE PRESETS", this::phaseWritePresets); }
+    private void runFindClear()   { runSolo("FIND PRESET-CLEAR", this::phaseFindClear); }
     private void runReclaim()     { runSolo("RECLAIM AFTER LOSS", this::phaseReclaim); }
 
     private void startWorker(String name, Runnable body) {
@@ -682,6 +684,52 @@ public class MainActivity extends Activity {
         line("\n-- AFTER --"); dumpAllBanks();
         prompt("Check the head unit's FM1/FM2/FM3 lists — do they now show the ascending test stations?",
                 "Yes, overwritten", "No / partial");
+    }
+
+    // ── Find preset-CLEAR: hunt a command that BLANKS the hardware preset slots ──
+    // The decompiled service has CleanFMPreFreData (empties all 3×6), but it is NOT
+    // on the bound AIDL, so we look for a client-reachable trigger empirically. Reads
+    // the CURRENT bank via getPrefabFrequency (NO tuning) before/after each candidate;
+    // if a lever makes the slots go blank (freq<=0), that's the clear.
+    private interface ThrowingRun { void run() throws Exception; }
+    private String bankSlots() {
+        try {
+            Frequency[] pf = radio.getPrefabFrequency();
+            if (pf == null) return "(null)";
+            StringBuilder sb = new StringBuilder();
+            for (Frequency p : pf) sb.append(p.freq <= 0 ? "—" : String.valueOf(p.freq / (double) freqMult)).append(' ');
+            return sb.toString().trim();
+        } catch (Exception e) { return "err " + e; }
+    }
+    private void tryClear(String label, ThrowingRun r) {
+        String before = bankSlots();
+        try { r.run(); } catch (Throwable e) { line("  " + label + ": call FAILED " + e); return; }
+        sleep(1200);
+        String after = bankSlots();
+        line("  " + label + ": " + (before.equals(after) ? "no change (" + after + ")"
+                                                          : "CHANGED  [" + before + "]  ->  [" + after + "]"));
+    }
+    private void phaseFindClear() {
+        if (radio == null) { line("not bound"); return; }
+        if ("Cancel".equals(prompt("FIND PRESET-CLEAR.\n\nHunts a command that BLANKS the head unit's preset "
+             + "slots (so the steering wheel can skip unused presets). Reads the CURRENT bank before/after each "
+             + "candidate — no tuning. ⚠ These may ALTER or auto-store your presets — run only if you're OK "
+             + "re-programming them afterward. Tap Continue.", "Continue", "Cancel"))) { line("cancelled"); return; }
+        ensurePowered(); calibrate();
+        line("\nbaseline current bank: [" + bankSlots() + "]");
+
+        // Named preset method #26 (prefeb ~ 'prefab'): unknown effect — could clear.
+        tryClear("prefeb(false)", () -> radio.prefeb(false));
+        tryClear("prefeb(true)",  () -> radio.prefeb(true));
+
+        // Optional, riskier: the raw sendRadioCommand escape hatch — a small a=0..15
+        // sweep with b=0. UNKNOWN MCU opcodes; only with explicit consent.
+        if ("Sweep".equals(prompt("Also sweep sendRadioCommand(a,0) for a=0..15? These are UNKNOWN raw MCU "
+             + "commands and could change region/antenna/other settings. Only if you accept that.", "Sweep", "Skip"))) {
+            for (int a = 0; a <= 15; a++) { final int aa = a; tryClear("sendRadioCommand(" + a + ",0)", () -> radio.sendRadioCommand((byte) aa, (byte) 0)); }
+        }
+        line("\n==> Any line whose slots went to '— — — …' is the preset-clear command.");
+        richDump("find-clear-final");
     }
 
     // ── Reclaim-after-loss: can CarFM get audio BACK after another source takes over? ──
