@@ -19,7 +19,7 @@ import {
   setManualLogo, logoSourceOf,
   type NearbyDbResult,
 } from './stationDb';
-import { resolveLogo, fetchImage, base64ToBytes, type LogoStation } from './logoResolver';
+import { resolveLogo, fetchImage, fetchImageResult, base64ToBytes, type LogoStation } from './logoResolver';
 import { stationLogoQuery } from './logoDuckDuckGo';
 import { piToCallsign, callsignBase } from './piCallsign';
 import type { NearbyStation, StationIdentity, StationRow } from './stationTypes';
@@ -235,6 +235,28 @@ export async function estimatedSignalDbForFreq(freqMhz?: number): Promise<number
 }
 
 // ── manual assignment + web image search (addendum §7, user addition) ─────────
+/**
+ * Assign a logo to a station from one or more candidate image URLs (a web-search
+ * result and its fallbacks). Tries each in order; the first that downloads wins.
+ * Sticky: auto sources never overwrite it. Returns { ok, error? } — error is the
+ * reason the LAST candidate failed, so the UI can show why instead of a generic
+ * message. (A DDG full-size `image` often 403s or exceeds the size cap while its
+ * proxied `thumbnail` succeeds — pass both so the pick still lands.)
+ */
+export async function setStationLogoFromUrls(
+  base: string, urls: (string | undefined | null)[],
+): Promise<{ ok: boolean; error?: string }> {
+  const cands = urls.filter((u): u is string => typeof u === 'string' && u.length > 0);
+  if (!cands.length) return { ok: false, error: 'no image address to download' };
+  let lastErr = 'the image couldn’t be downloaded';
+  for (const url of cands) {
+    const r = await fetchImageResult(url);
+    if ('bytes' in r) { await setManualLogo(base, r.bytes, r.mime); return { ok: true }; }
+    lastErr = r.error;
+  }
+  return { ok: false, error: lastErr };
+}
+
 /**
  * Assign a logo to a station from an image URL (a web-search result or a pasted
  * link). Sticky: auto sources never overwrite it. Returns true on success.

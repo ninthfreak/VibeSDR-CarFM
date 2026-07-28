@@ -21,7 +21,7 @@ import {
 import Svg, { Circle, Line, Path, Rect } from 'react-native-svg';
 
 import { ddgStationLogoResults, stationLogoQuery, type DdgImage } from '../../services/logoDuckDuckGo';
-import { setStationLogoFromUrl, getStationLogo } from '../../services/stationFinder';
+import { setStationLogoFromUrls, getStationLogo } from '../../services/stationFinder';
 import { getStationPrefs, setStationPrefs } from '../../services/stationDb';
 import LogoTile, { invalidateLogoTile, invalidateStationDisplay } from './LogoTile';
 import LogoDarkPicker from './LogoDarkPicker';
@@ -55,6 +55,9 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
   const [results, setResults] = useState<DdgImage[]>([]);
   const [sel, setSel] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  // Reason the last save failed (shown on the error view). Null = show the
+  // generic connection message.
+  const [errMsg, setErrMsg] = useState<string | null>(null);
   const [currentUri, setCurrentUri] = useState<string | null>(null);
   const [showCall, setShowCall] = useState(true);
   const [showFreq, setShowFreq] = useState(true);
@@ -65,10 +68,10 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
   const query = target ? stationLogoQuery(target.freqMhz, target.callsign) : '';
 
   const runSearch = useCallback((t: LogoSearchTarget) => {
-    setPhase('loading'); setResults([]); setSel(null);
+    setPhase('loading'); setResults([]); setSel(null); setErrMsg(null);
     ddgStationLogoResults(t.freqMhz, t.callsign, 4)
       .then((r) => { setResults(r); setPhase(r.length ? 'results' : 'empty'); })
-      .catch(() => setPhase('error'));
+      .catch((e) => { setErrMsg(String((e as Error)?.message ?? e)); setPhase('error'); });
   }, []);
 
   // On open: load the current logo + saved display prefs, land on the landing view.
@@ -98,11 +101,21 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
     setSaving(true);
     try {
       if (picking) {
-        const ok = await setStationLogoFromUrl(target.base, results[sel!].image);
-        if (!ok) { setPhase('error'); setSaving(false); return; }
+        // Try the full-size image first, then DDG's proxied thumbnail as a
+        // fallback (the full-size URL frequently 403s or exceeds the size cap —
+        // e.g. WERN 88.7 — while the thumbnail reliably downloads).
+        const pick = results[sel!];
+        const r = await setStationLogoFromUrls(target.base, [pick.image, pick.thumbnail]);
+        if (!r.ok) { setErrMsg(r.error ?? null); setPhase('error'); setSaving(false); return; }
       }
-      // Persist the per-station hero display choices alongside the logo.
-      await setStationPrefs(target.base, showCall, showFreq);
+      // Persist the per-station hero display choices. Assigning a NEW logo resets to
+      // the logo default (both OFF → logo-only hero, filling the card) — the show
+      // toggles seed from the PRE-existing logo, so a station that had none would
+      // otherwise save both ON and clobber the design default. The landing view's
+      // explicit toggles (no pick) still save the user's choice.
+      const cs = picking ? false : showCall;
+      const cf = picking ? false : showFreq;
+      await setStationPrefs(target.base, cs, cf);
       invalidateLogoTile(target.base);
       invalidateStationDisplay();
       onAssigned?.(target.base);
@@ -113,7 +126,8 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
         if (u) { setDarkPick({ base: target.base, uri: u }); setSaving(false); return; }
       }
       onClose();
-    } catch {
+    } catch (e) {
+      setErrMsg(String((e as Error)?.message ?? e));
       setPhase('error');
     } finally {
       setSaving(false);
@@ -285,12 +299,14 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
                   </Svg>
                 )}
                 <Text style={[styles.centerTitle, { color: pal.text }]}>
-                  {phase === 'empty' ? 'No logos found' : 'Search couldn’t finish'}
+                  {phase === 'empty' ? 'No logos found' : (errMsg ? 'Couldn’t save that logo' : 'Search couldn’t finish')}
                 </Text>
                 <Text style={[styles.centerSub, { color: pal.dim }]}>
                   {phase === 'empty'
                     ? 'The search came back empty. You can try again or keep the current monogram.'
-                    : 'Something went wrong reaching the logo search. Check your connection and try again.'}
+                    : (errMsg
+                        ? `Couldn’t save this logo — ${errMsg}. Try a different result.`
+                        : 'Something went wrong reaching the logo search. Check your connection and try again.')}
                 </Text>
                 <Pressable
                   onPress={() => target && runSearch(target)}

@@ -136,25 +136,17 @@ function Tile({
         accessibilityLabel={`Preset ${p.name}${active ? ', playing' : ''}${reordering ? ', reordering — drag to move' : ''}`}
       >
         {reordering ? (
-          <>
-            {/* Logo-search badge (§6.4): magnifier-over-picture, top-left, blue. */}
-            <Pressable
-              onPress={onSearchLogo}
-              hitSlop={10}
-              style={[styles.logoEdit, { backgroundColor: pal.blue, borderColor: pal.panel }]}
-              accessibilityRole="button" accessibilityLabel={`Find logo for ${p.name}`}
-            >
-              <LogoSearchIcon size={17} />
-            </Pressable>
-            <Pressable
-              onPress={onRemove}
-              hitSlop={10}
-              style={[styles.removeBadge, { backgroundColor: pal.amber, borderColor: pal.panel }]}
-              accessibilityRole="button" accessibilityLabel={`Remove preset ${p.name}`}
-            >
-              <Text style={styles.removeText}>✕</Text>
-            </Pressable>
-          </>
+          // Logo-search (edit) badge only — the ✕ remove badge was dropped (too easy
+          // to hit by accident; remove a preset via the hero ★ instead). Enlarged 50%
+          // and inset INSIDE the tile so it doesn't overhang the card.
+          <Pressable
+            onPress={onSearchLogo}
+            hitSlop={8}
+            style={[styles.logoEdit, { backgroundColor: pal.blue, borderColor: pal.panel }]}
+            accessibilityRole="button" accessibilityLabel={`Find logo for ${p.name}`}
+          >
+            <LogoSearchIcon size={26} />
+          </Pressable>
         ) : null}
         <PresetPlate
           name={p.name}
@@ -588,16 +580,13 @@ const styles = StyleSheet.create({
   lifted: { zIndex: 30, elevation: 12, shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 20, shadowOffset: { width: 0, height: 18 } },
   activeBar: { position: 'absolute', bottom: 6, width: 26, height: 3, borderRadius: 2 },
   // §6.4 badge anatomy: 28×28, top corners at -9, 2px panel ring.
+  // Edit (logo-search) badge — enlarged 50% (28→42) and inset INSIDE the tile
+  // corner (was top/left −9, overhanging) so it never spills past the card.
   logoEdit: {
-    position: 'absolute', top: -9, left: -9, zIndex: 2,
-    width: 28, height: 28, borderRadius: 14, borderWidth: 2,
+    position: 'absolute', top: 8, left: 8, zIndex: 2,
+    width: 42, height: 42, borderRadius: 21, borderWidth: 2,
     alignItems: 'center', justifyContent: 'center',
   },
-  removeBadge: {
-    position: 'absolute', top: -9, right: -9, zIndex: 2, borderWidth: 2,
-    width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
-  },
-  removeText: { color: '#FFF', fontSize: 17, fontWeight: '700', lineHeight: 18 },
   track: { height: 6, borderRadius: 999, marginTop: 6, overflow: 'hidden' },
   thumb: { position: 'absolute', top: 0, bottom: 0, borderRadius: 999 },
   nearby: {
