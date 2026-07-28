@@ -36,7 +36,11 @@ import { ddgStationLogo } from './logoDuckDuckGo';
 export const AUTO_LOGO_RESOLUTION = false;
 
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const MAX_LOGO_BYTES = 200 * 1024;
+// Cap for a stored logo. 200 KB was too tight for user-picked web logos (a
+// full-resolution PNG station logo routinely exceeds it — a silent reason the
+// manual-assign step failed with a generic error). 1 MB is generous for a
+// single, user-initiated fetch while still guarding against absurd downloads.
+const MAX_LOGO_BYTES = 1024 * 1024;
 
 export interface LogoStation {
   base: string;
@@ -57,18 +61,40 @@ interface SourceHit {
 
 export { base64ToBytes } from './base64';
 
-/** Download an image URL to bytes, size-capped. */
-export async function fetchImage(url: string): Promise<{ bytes: Uint8Array; mime: string } | null> {
+export type FetchImageResult = { bytes: Uint8Array; mime: string } | { error: string };
+
+/**
+ * Download an image URL to bytes, size-capped, returning the FAILURE REASON on
+ * error instead of a bare null. Callers that only need success/failure use
+ * fetchImage(); the manual-assign flow uses this so a failed pick reports WHY
+ * (HTTP status, too-large, non-image) rather than a generic "unspecified error".
+ */
+export async function fetchImageResult(url: string): Promise<FetchImageResult> {
+  if (!/^https?:\/\//i.test(url)) return { error: 'not a web address' };
+  let res: Response;
   try {
-    if (!/^https?:\/\//i.test(url)) return null;
-    const res = await fetch(url, { headers: { 'User-Agent': 'CarFM-CarFM/1.0' } });
-    if (!res.ok) return null;
-    const buf = await res.arrayBuffer();
-    if (!buf.byteLength || buf.byteLength > MAX_LOGO_BYTES) return null;
-    const ct = res.headers.get('content-type');
-    const mime = ct && ct.startsWith('image/') ? ct.split(';')[0] : 'image/png';
-    return { bytes: new Uint8Array(buf), mime };
-  } catch { return null; }
+    res = await fetch(url, { headers: { 'User-Agent': 'CarFM-CarFM/1.0' } });
+  } catch (e) {
+    return { error: `couldn’t reach the image (${String((e as Error)?.message ?? e)})` };
+  }
+  if (!res.ok) return { error: `image host returned HTTP ${res.status}` };
+  let buf: ArrayBuffer;
+  try { buf = await res.arrayBuffer(); } catch (e) {
+    return { error: `couldn’t read the image (${String((e as Error)?.message ?? e)})` };
+  }
+  if (!buf.byteLength) return { error: 'image was empty' };
+  if (buf.byteLength > MAX_LOGO_BYTES) {
+    return { error: `image is too large (${Math.round(buf.byteLength / 1024)} KB, max ${Math.round(MAX_LOGO_BYTES / 1024)} KB)` };
+  }
+  const ct = res.headers.get('content-type');
+  const mime = ct && ct.startsWith('image/') ? ct.split(';')[0] : 'image/png';
+  return { bytes: new Uint8Array(buf), mime };
+}
+
+/** Download an image URL to bytes, size-capped. Null on any failure. */
+export async function fetchImage(url: string): Promise<{ bytes: Uint8Array; mime: string } | null> {
+  const r = await fetchImageResult(url);
+  return 'bytes' in r ? r : null;
 }
 
 /**

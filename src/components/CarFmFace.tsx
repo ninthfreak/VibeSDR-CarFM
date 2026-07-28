@@ -998,7 +998,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
         // and/or frequency are hidden (0/1/2 hidden → base/big/max), so the logo
         // keeps filling the freed vertical space regardless of aspect.
         const heroHidden = (heroDisp.showCall ? 0 : 1) + (heroDisp.showFreq ? 0 : 1);
-        const heroLogoH = L.s(heroHidden === 0 ? (tall ? 90 : 118) : heroHidden === 1 ? (tall ? 126 : 168) : (tall ? 156 : 210));
+        // Logo grows into the space freed by hidden call/freq. Both hidden (the
+        // logo-only default) → fill the card; matches the bigger hero type.
+        const heroLogoH = L.s(heroHidden === 0 ? (tall ? 96 : 124) : heroHidden === 1 ? (tall ? 138 : 186) : (tall ? 188 : 256));
         const heroLogoMaxW = (tall ? tallHeroW : L.heroCardW) - L.s(tall ? 60 : 68);
         // Star always sits in the card's top-right corner (both tracks), never
         // inline with the identity.
