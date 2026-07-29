@@ -43,6 +43,17 @@ class MainActivity : ReactActivity() {
     noteIntent(intent)   // warm start (singleTask): consumed on next focus
   }
 
+  /** Steering-wheel capture, path 2: some head units inject the wheel buttons as
+   *  plain INPUT key events to the foreground activity rather than (or as well
+   *  as) media-button broadcasts. Hand every key to the audio service, which
+   *  logs it (drive-log diagnosis of what the wheel sends) and consumes media
+   *  next/prev while the built-in-FM control session is active — stepping
+   *  CarFM's presets instead of the radio service's hardware banks. */
+  override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+    if (VibeStreamService.instance?.onActivityKeyEvent(event.keyCode, event.action) == true) return true
+    return super.dispatchKeyEvent(event)
+  }
+
   private fun noteIntent(intent: Intent?) {
     if (intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) usbLaunchPending = true
     if (intent?.action == Intent.ACTION_SEND && intent.type?.startsWith("image/") == true) {

@@ -1794,6 +1794,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     const subMediaKey = emitter.addListener('VibeMediaKey', (e: { keyCode: number; keyName: string; nwdControl: boolean }) => {
       diag(`media key: ${e.keyName} (${e.keyCode})${e.nwdControl ? ' [nwd-control]' : ''}`);
     });
+    // DIAGNOSTIC: keys injected into the ACTIVITY input stream (capture path 2 —
+    // some units deliver the wheel as plain key events to the foreground app).
+    const subHwKey = emitter.addListener('VibeHwKey', (e: { keyCode: number; keyName: string; nwdControl: boolean }) => {
+      diag(`activity key: ${e.keyName} (${e.keyCode})${e.nwdControl ? ' [nwd-control]' : ''}`);
+    });
+    // DIAGNOSTIC: audio-focus grant/changes for the NWD control session — shows
+    // whether CarFM won focus (the media-key routing condition) and who takes it.
+    const subFocus = emitter.addListener('VibeFocus', (e: { change: number; granted: boolean }) => {
+      diag(e.change === 0 ? `nwd focus request: ${e.granted ? 'GRANTED' : 'DENIED'}` : `nwd focus change: ${e.change}`);
+    });
     // Car audio route / Android Auto client connect — gates band-aware auto
     // mode/step (handheld use is never auto-switched).
     const subCar = emitter.addListener('VibeCarConnected', (e: { connected: boolean }) => {
@@ -1878,7 +1888,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       }
     });
     return () => {
-      sub.remove(); subMute.remove(); subSig.remove(); subSkip.remove(); subMediaKey.remove(); subWs.remove();
+      sub.remove(); subMute.remove(); subSig.remove(); subSkip.remove(); subMediaKey.remove(); subHwKey.remove(); subFocus.remove(); subWs.remove();
       subCar.remove(); subCarTune.remove(); subDsOff.remove(); subDsOn.remove(); subPath.remove(); subVol.remove();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
