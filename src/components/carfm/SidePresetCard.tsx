@@ -42,6 +42,16 @@ export default function SidePresetCard({
   // and the no-logo call-sign form, so both occupy identical space (§4.3).
   const plateW = Math.min(Math.round(width * 0.92), s(184));
   const plateH = Math.round(plateW * 10 / 16);
+  // The 92%-of-card box and a flat 16dp card padding are geometrically
+  // incompatible: on the tall tracks the plate (86 on a 94 card) is WIDER than
+  // the padded content box (62), so it would spill past the padding, and the
+  // no-logo stack (plate + gap + frequency = 82) exceeds the content height too.
+  // Derive the inset from the plate instead — padding = (card − plate)/2 — so the
+  // §4 box sizes are reachable with a symmetric inset and nothing overflows.
+  // FLOOR, not round: rounding the half-inset up (10.5→11) leaves 183dp of content
+  // for a 184dp plate and it clips by 1dp on the Dudu7-full surface.
+  const pad = Math.max(s(4), Math.floor((width - plateW) / 2));
+  const gap = Math.min(s(12), Math.round(plateH * 0.16));
   const gid = `sidefade-${side}`;
   // PREV (left card) fades on its RIGHT (inner) edge; NEXT fades on its LEFT.
   const x1 = side === 'left' ? '0' : '1';
@@ -52,7 +62,7 @@ export default function SidePresetCard({
       onPress={onPress}
       style={[styles.card, {
         width, backgroundColor: pal.panel, borderColor: pal.border,
-        borderRadius: s(24), padding: s(16), gap: s(12),
+        borderRadius: s(24), padding: pad, gap,
       }]}
       accessibilityRole={onPress ? 'button' : undefined}
       accessibilityLabel={side === 'left' ? `Previous preset ${name}` : `Next preset ${name}`}
@@ -82,8 +92,10 @@ export default function SidePresetCard({
 }
 
 const styles = StyleSheet.create({
+  // Padding + gap are derived per card (see `pad`/`gap` above) so the §4 logo box
+  // fits without spilling; aspect/caps/alignment live here.
   card: {
-    aspectRatio: 1, maxWidth: 206, borderWidth: 1, borderRadius: 24, padding: 16,
-    alignItems: 'center', justifyContent: 'center', gap: 12, flexShrink: 0,
+    aspectRatio: 1, maxWidth: 206, borderWidth: 1, borderRadius: 24,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
 });

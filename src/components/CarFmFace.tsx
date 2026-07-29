@@ -408,7 +408,10 @@ function HeroLogo({ uri, height, maxWidth, radius, dark, darkVariant }: {
   // the logo's own aspect, capped by the card's content width (§2.3 — an extreme
   // wordmark hits the width cap and renders shorter; Fit, never crop). The plate
   // shrink-wraps the image, adding ONLY its 4/8 padding — no box of its own.
-  const imgW = Math.min(maxWidth - px * 2, aspect ? Math.round(height * aspect) : maxWidth - px * 2);
+  // Before onLoad reports the real aspect, assume the 16/10 landscape shape the
+  // rest of the face uses for logo plates — otherwise the plate would render one
+  // frame at the FULL card width (a wide white flash) and then snap in.
+  const imgW = Math.min(maxWidth - px * 2, Math.round(height * (aspect ?? 1.6)));
   return (
     <View style={{
       borderRadius: br, backgroundColor: bg,

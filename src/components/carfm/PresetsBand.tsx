@@ -381,7 +381,10 @@ export default function PresetsBand({
       return { w, h: S(128), logoRadius: active ? 15 : 12, nameFont: nf(15), padTop: S(8), padBottom: S(12), padH: S(6) };
     }
     if (twoRows) {
-      const rowH = Math.max(S(90), Math.round((bandHeight - GAP - 16) / 2));
+      // Two rows + the row gap inside the grid's own paddingVertical:2 (=4 total).
+      // The old "- 16" was a phantom inset that cost the row 7dp and shrank the
+      // flex logo box to ~69 against the LOGO-SIZING §3 target of ~76.
+      const rowH = Math.max(S(90), Math.round((bandHeight - GAP - 4) / 2));
       return { w: S(150), h: rowH, logoRadius: active ? 15 : 12, nameFont: nf(15), padTop: S(8), padBottom: S(12), padH: S(6) };
     }
     const big = active && !reordering;

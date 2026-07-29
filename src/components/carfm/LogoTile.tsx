@@ -263,7 +263,10 @@ export function PresetPlate({ name, freqMhz, w, h, radius, pal, freqSize, suppre
     return (
       <>
         <View
-          onLayout={(e) => {
+          // Measured ONLY for the no-logo call-letter size; a real logo needs no
+          // state (the Image fits itself), so don't churn setState there — the
+          // tuned chip's grow animation fires onLayout repeatedly.
+          onLayout={hasLogo ? undefined : (e) => {
             const { width: bw, height: bh } = e.nativeEvent.layout;
             setBox((prev) => (prev && prev.w === bw && prev.h === bh) ? prev : { w: bw, h: bh });
           }}
