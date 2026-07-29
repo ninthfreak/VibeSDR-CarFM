@@ -216,31 +216,102 @@ export function CallSignBox({ label, colorKey, w, h, radius }: {
 }
 
 /** Shared preset/peek identity block (§4.3/§4.5/§5): a real logo image when one
- *  exists (borderless, Fit — the logo carries the identity, no text) OR a wide
- *  colored call-sign box with the frequency BENEATH it in full text color +
- *  heavier weight. Preset tiles and prev/next peek cards render EXACTLY this. */
-export function PresetPlate({ name, freqMhz, w, h, radius, pal, freqSize, suppressLogo }: {
+ *  exists OR a wide colored call-sign box, with one text row beneath (call sign
+ *  for a logo, frequency for the colored box).
+ *
+ *  Two geometry modes (LOGO-SIZING correction handoff, 2026-07-29):
+ *  - fixed (`w`/`h`, peek cards §4): the caller owns the box — 16/10 aspect there.
+ *  - `fill` (preset chips §3): the box is the FLEX-GROW child of the chip —
+ *    `flex: 1 1 auto`, `minHeight: 0`, 100% width — taking ALL chip height left
+ *    after padding, gap and the text row. Never a fixed dp height: the size falls
+ *    out of the chip's own flex layout, so the tuned chip's bigger box follows. */
+export function PresetPlate({ name, freqMhz, w, h, radius, pal, freqSize, suppressLogo, fill }: {
   name?: string;
   freqMhz?: number;
-  w: number;              // plate width (landscape box / logo plate)
-  h: number;              // plate height
+  w?: number;              // fixed plate width (peek cards; ignored with `fill`)
+  h?: number;              // fixed plate height
   radius: number;
   pal: CarFmPalette;
-  freqSize: number;       // frequency font size (rendered only in the no-logo case)
-  suppressLogo?: boolean; // band theme (§12) hides logos → force the call-sign box
+  freqSize: number;        // text-row font size
+  suppressLogo?: boolean;  // band theme (§12) hides logos → force the call-sign box
+  fill?: boolean;          // preset chips: flex-grow box + text row (LOGO-SIZING §3)
 }) {
   const { base, uri } = useStationLogo(name, freqMhz);
   const dark = pal === DARK;
   const darkVariant = useDarkLogo(base, dark && !!uri);
+  // Measured size of the flex box — only needed to scale the no-logo call letters.
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
+  const label = base ? cleanCall(base) : (cleanCall(name).slice(0, 4) || name?.trim().slice(0, 4).toUpperCase() || '·');
+
+  if (fill) {
+    const hasLogo = !!uri && !suppressLogo;
+    // Dark-mode source/plate selection (mirrors LogoImage).
+    let src = uri ?? '';
+    let bg = 'transparent';
+    let pad = 0;
+    if (hasLogo && dark) {
+      if (darkVariant.uri) {
+        src = darkVariant.uri;
+        if (darkVariant.treatment === 'PLATE') { bg = '#E6E6E6'; pad = 8; }
+      } else {
+        bg = '#FFFFFF';   // not adapted yet → keep it visible on a light plate
+      }
+    }
+    const fs = box
+      ? Math.max(11, Math.round(Math.min(box.h * 0.52, (box.w * 0.82) / Math.max(label.length, 1) * 1.55)))
+      : 12;
+    return (
+      <>
+        <View
+          onLayout={(e) => {
+            const { width: bw, height: bh } = e.nativeEvent.layout;
+            setBox((prev) => (prev && prev.w === bw && prev.h === bh) ? prev : { w: bw, h: bh });
+          }}
+          style={{
+            flexGrow: 1, flexShrink: 1, flexBasis: 'auto', minHeight: 0, alignSelf: 'stretch',
+            borderRadius: radius, overflow: 'hidden', padding: pad,
+            backgroundColor: hasLogo ? bg : brandColor(base ?? label),
+            alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          {hasLogo ? (
+            <Image source={{ uri: src }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+          ) : (
+            <Text
+              allowFontScaling={false}
+              numberOfLines={1}
+              style={{ color: '#FFFFFF', fontFamily: FONT_BOLD, fontSize: fs, letterSpacing: 0.5 }}
+            >
+              {label}
+            </Text>
+          )}
+        </View>
+        {(hasLogo || freqMhz != null) ? (
+          <Text
+            allowFontScaling={false}
+            numberOfLines={1}
+            style={{
+              color: pal.text, fontFamily: FONT_BOLD, fontSize: freqSize, letterSpacing: 0.3,
+              ...(hasLogo ? null : { fontVariant: ['tabular-nums'] as const }),
+            }}
+          >
+            {hasLogo ? label : freqMhz!.toFixed(1)}
+          </Text>
+        ) : null}
+      </>
+    );
+  }
+
+  const boxW = w ?? 0;
+  const boxH = h ?? 0;
   if (uri && !suppressLogo) {
     // Real logo: Fit, borderless in light mode / dark-adapted in dark mode.
-    return <LogoImage uri={uri} dark={dark} darkVariant={darkVariant} w={w} h={h} radius={radius} />;
+    return <LogoImage uri={uri} dark={dark} darkVariant={darkVariant} w={boxW} h={boxH} radius={radius} />;
   }
   // No logo: call letters inside the box, frequency beneath it.
-  const label = base ? cleanCall(base) : (cleanCall(name).slice(0, 4) || name?.trim().slice(0, 4).toUpperCase() || '·');
   return (
     <View style={{ alignItems: 'center', gap: Math.max(3, Math.round(freqSize * 0.34)) }}>
-      <CallSignBox label={label} colorKey={base ?? label} w={w} h={h} radius={radius} />
+      <CallSignBox label={label} colorKey={base ?? label} w={boxW} h={boxH} radius={radius} />
       {freqMhz != null ? (
         <Text
           allowFontScaling={false}

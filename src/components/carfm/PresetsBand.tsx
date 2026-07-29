@@ -22,10 +22,15 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated, Easing, PanResponder, Pressable,
-  ScrollView, StyleSheet, Text, View,
+  Animated, Easing, LayoutAnimation, PanResponder, Platform, Pressable,
+  ScrollView, StyleSheet, Text, UIManager, View,
   type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent,
 } from 'react-native';
+
+// LayoutAnimation on Android (old architecture) is behind an opt-in flag.
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 import { LogoSearchIcon, MagnifierTower } from './icons';
 import { PresetPlate } from './LogoTile';
@@ -39,10 +44,10 @@ const HOLD_MS = 550;
 const keyOf = (p: PresetItem) => `${p.name}|${p.frequencyMhz}`;
 
 interface TileSize {
-  w: number | 'auto'; h: number | string; logo: number; logoRadius: number; nameFont: number;
+  w: number | 'auto'; h: number | string; logoRadius: number; nameFont: number;
   /** Design tileStyle padding '8 6 12' (big '12 8 16') — the deeper bottom pad
    *  keeps the callsign clear of the active underline. */
-  padTop: number; padBottom: number;
+  padTop: number; padBottom: number; padH: number;
 }
 
 interface DragCallbacks {
@@ -63,11 +68,6 @@ function Tile({
   onPress: () => void; onLongPress: () => void; onRemove: () => void; onSearchLogo?: () => void;
   drag: DragCallbacks;
 }) {
-  // Both forms use a WIDE landscape plate (§4.3/§4.5): a real logo fills it
-  // (borderless, Fit) with freq + call sign hidden; no logo → a colored call-sign
-  // box in the SAME aspect with the frequency beneath. PresetPlate renders either.
-  const plateW = Math.round((typeof size.w === 'number' ? size.w : 120) * 0.82);
-  const plateH = Math.round(plateW * 0.6);
   const rot = useRef(new Animated.Value(0)).current;
   // Wiggle only while reordering AND no drag is in progress (the drag freezes it).
   useEffect(() => {
@@ -124,7 +124,10 @@ function Tile({
           styles.tile,
           {
             width: size.w, height: size.h as any,
-            paddingTop: size.padTop, paddingBottom: size.padBottom,
+            paddingTop: size.padTop, paddingBottom: size.padBottom, paddingHorizontal: size.padH,
+            // LOGO-SIZING §3: the plate is the chip's flex-grow child; the gap
+            // between it and the text row is part of the height derivation.
+            gap: 4,
             backgroundColor: pal.panel,
             borderColor: active ? pal.blue : pal.border,
             borderWidth: active ? 2 : 1,
@@ -151,8 +154,7 @@ function Tile({
         <PresetPlate
           name={p.name}
           freqMhz={p.frequencyMhz}
-          w={plateW}
-          h={plateH}
+          fill
           radius={size.logoRadius}
           pal={pal}
           freqSize={size.nameFont}
@@ -368,31 +370,47 @@ export default function PresetsBand({
   const remove = useCallback((index: number) => { snapshot(); onRemove(index); }, [onRemove, snapshot]);
 
   // Per-track tile sizing (design renderVals). The active tile grows only in the
-  // strip tracks; grid/two-row tiles are uniform.
+  // strip tracks; grid/two-row tiles are uniform. The LOGO box has NO size here —
+  // it's the chip's flex-grow child (LOGO-SIZING §3), so its height falls out of
+  // the chip height minus padding, gap and the text row.
   const tileSizeFor = (active: boolean): TileSize => {
     const nf = (v: number) => Math.max(12, S(v));   // tile-name legibility floor
     if (tall) {
       const g = S(12);
       const w = viewW > 0 ? (viewW - 2 * g - 8) / 3 : S(118);   // 3 cols, gaps, h-pad
-      return { w, h: S(128), logo: S(50), logoRadius: 13, nameFont: nf(15), padTop: S(8), padBottom: S(12) };
+      return { w, h: S(128), logoRadius: active ? 15 : 12, nameFont: nf(15), padTop: S(8), padBottom: S(12), padH: S(6) };
     }
     if (twoRows) {
       const rowH = Math.max(S(90), Math.round((bandHeight - GAP - 16) / 2));
-      return { w: S(150), h: rowH, logo: S(46), logoRadius: 12, nameFont: nf(15), padTop: S(8), padBottom: S(12) };
+      return { w: S(150), h: rowH, logoRadius: active ? 15 : 12, nameFont: nf(15), padTop: S(8), padBottom: S(12), padH: S(6) };
     }
     const big = active && !reordering;
     return {
       w: S(big ? (landscape ? 134 : 150) : (landscape ? 106 : 118)),
       h: big ? '100%' : '80%',
-      logo: S(big ? (landscape ? 50 : 58) : (landscape ? 38 : 44)),
       logoRadius: big ? 15 : 12,
       nameFont: nf(big ? (landscape ? 16 : 18) : (landscape ? 13 : 15)),
       padTop: S(big ? 12 : 8),
       padBottom: S(big ? 16 : 12),
+      padH: S(big ? 8 : 6),
     };
   };
 
   const anyDrag = dragKey != null;
+
+  // LOGO-SIZING §3: the tuned chip's size change ANIMATES (design width/height
+  // .25s ease). Scheduled render-side so it applies to the same commit that
+  // resizes the tiles; guarded off during reorder/drag so it can't fight the
+  // FLIP/shift transforms.
+  const prevActiveRef = useRef(activeIndex);
+  if (prevActiveRef.current !== activeIndex) {
+    prevActiveRef.current = activeIndex;
+    if (strip && !reordering && !anyDrag) {
+      LayoutAnimation.configureNext(
+        LayoutAnimation.create(250, LayoutAnimation.Types.easeInEaseOut, LayoutAnimation.Properties.scaleXY));
+    }
+  }
+
   const tiles = presets.map((p, i) => {
     const key = keyOf(p);
     return (
@@ -572,10 +590,8 @@ const styles = StyleSheet.create({
     borderWidth: 1.5, borderStyle: 'dashed', borderRadius: 16, paddingHorizontal: 14,
   },
   empty: { fontFamily: FONT, fontSize: 17, textAlign: 'center' },
-  tile: {
-    borderRadius: 16,
-    alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 8,
-  },
+  // Padding + gap live inline (per-track TileSize / LOGO-SIZING §3 derivation).
+  tile: { borderRadius: 16, alignItems: 'center' },
   // Picked-up tile: raised above its neighbours with a drop shadow (design §8).
   lifted: { zIndex: 30, elevation: 12, shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 20, shadowOffset: { width: 0, height: 18 } },
   activeBar: { position: 'absolute', bottom: 6, width: 26, height: 3, borderRadius: 2 },

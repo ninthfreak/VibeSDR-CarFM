@@ -37,10 +37,11 @@ export default function SidePresetCard({
   suppressLogo?: boolean;        // band theme (§12) → show the call-sign box, not the logo
 }) {
   const s = (v: number) => Math.round(v * k);
-  // Peek cards use the EXACT same treatment as the bottom preset tiles (§5): a
-  // real logo image OR a wide colored call-sign box with the frequency beneath.
-  const plateW = Math.min(Math.round(width * 0.74), s(180));
-  const plateH = Math.round(plateW * 0.6);
+  // Peek plate geometry (LOGO-SIZING §4, sideLogoStyle): width 92% of the card,
+  // maxWidth 184, aspect-locked 16/10 — the SAME landscape box for a real logo
+  // and the no-logo call-sign form, so both occupy identical space (§4.3).
+  const plateW = Math.min(Math.round(width * 0.92), s(184));
+  const plateH = Math.round(plateW * 10 / 16);
   const gid = `sidefade-${side}`;
   // PREV (left card) fades on its RIGHT (inner) edge; NEXT fades on its LEFT.
   const x1 = side === 'left' ? '0' : '1';
@@ -61,7 +62,7 @@ export default function SidePresetCard({
         freqMhz={freqMhz}
         w={plateW}
         h={plateH}
-        radius={s(14)}
+        radius={s(12)}
         pal={pal}
         freqSize={Math.max(13, s(16))}
         suppressLogo={suppressLogo}

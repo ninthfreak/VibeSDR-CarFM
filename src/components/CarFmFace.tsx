@@ -393,7 +393,6 @@ function HeroLogo({ uri, height, maxWidth, radius, dark, darkVariant }: {
   dark: boolean; darkVariant: { uri: string | null; treatment: string | null };
 }) {
   const [aspect, setAspect] = useState<number | null>(null);
-  const w = aspect ? Math.min(maxWidth, Math.round(height * aspect)) : maxWidth;
   // Light mode keeps the white plate. Dark mode drops it for an adapted variant
   // (remap/halo/as-is read on the hero card itself); the PLATE treatment gets a
   // grey plate; a not-yet-adapted logo keeps the white plate so it stays visible.
@@ -405,9 +404,14 @@ function HeroLogo({ uri, height, maxWidth, radius, dark, darkVariant }: {
       else { bg = 'transparent'; px = 0; py = 0; }
     }
   }
+  // LOGO-SIZING §2: the IMAGE height is pinned to the table value; width follows
+  // the logo's own aspect, capped by the card's content width (§2.3 — an extreme
+  // wordmark hits the width cap and renders shorter; Fit, never crop). The plate
+  // shrink-wraps the image, adding ONLY its 4/8 padding — no box of its own.
+  const imgW = Math.min(maxWidth - px * 2, aspect ? Math.round(height * aspect) : maxWidth - px * 2);
   return (
     <View style={{
-      height, width: w, maxWidth, borderRadius: br, backgroundColor: bg,
+      borderRadius: br, backgroundColor: bg,
       paddingVertical: py, paddingHorizontal: px, overflow: 'hidden',
       alignItems: 'center', justifyContent: 'center',
     }}>
@@ -417,7 +421,7 @@ function HeroLogo({ uri, height, maxWidth, radius, dark, darkVariant }: {
           const s = e.nativeEvent.source as { width?: number; height?: number };
           if (s?.width && s?.height) setAspect(s.width / s.height);
         }}
-        style={{ width: '100%', height: '100%' }}
+        style={{ width: imgW, height }}
         resizeMode="contain"
       />
     </View>
@@ -555,7 +559,10 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // (phone landscape) gets smaller type/tiles. Width-class breakpoint 600dp per
   // WindowSizeClass Compact.
   const tall = w < 600;
-  const landscape = !tall && h < 480;
+  // Landscape breakpoint at 500 (was 480): the landscape reference surface is
+  // 1080×486 (LOGO-SIZING §1, and this file's own k ramp divides by h/486), so
+  // h<480 could never fire on the very surface the branch is sized for.
+  const landscape = !tall && h < 500;
   const twoRows = !tall && !landscape && w / h < 1.4;
   // Type/element ramp factor. The spec's dp values are authored at each track's
   // representative surface (§2 table); k re-derives them for the dp actually
@@ -650,13 +657,14 @@ export default function CarFmFace(props: CarFmFaceProps) {
     if (activeIndex < 0) return [items[items.length - 1], items[0]];
     return [items[(activeIndex - 1 + items.length) % items.length], items[(activeIndex + 1) % items.length]];
   }, [items, activeIndex]);
-  const sideCardW = Math.min(L.s(206), Math.max(L.s(120), Math.round(w * 0.18)));
+  // LOGO-SIZING §4: peek card = 20% of surface width, capped at 206, on EVERY
+  // track (the tall surfaces land ~94–97 straight from the 20%). No minimum.
+  const sideCardW = Math.min(L.s(206), Math.round(w * 0.2));
   // Tall/portrait track sizing: a narrower hero card (82%) flanked by smaller
   // peek cards tucked tight. The design's reference screenshots (surface-portrait
   // / surface-slice-one-third) show the peek cards present on the tall track too,
   // not just wide — so they render in every track, only the sizing differs.
   const tallHeroW = Math.min(L.s(560), Math.round(w * 0.82));
-  const tallSideW = Math.min(L.s(150), Math.max(L.s(88), Math.round(w * 0.2)));
   const peekOverlap = L.s(tall ? -46 : -72);
 
   // Tall track (PHONEPORTRAITFIXES §2): hero band grows + centers; the preset
@@ -998,12 +1006,17 @@ export default function CarFmFace(props: CarFmFaceProps) {
         // and/or frequency are hidden (0/1/2 hidden → base/big/max), so the logo
         // keeps filling the freed vertical space regardless of aspect.
         const heroHidden = (heroDisp.showCall ? 0 : 1) + (heroDisp.showFreq ? 0 : 1);
-        // Logo grows into the space freed by hidden call/freq. Both hidden (the
-        // logo-only default) → fill the card; matches the bigger hero type. The
-        // lower tiers stay large too so turning the call sign / frequency ON
-        // shrinks the logo gently rather than dropping it to a thumbnail.
-        const heroLogoH = L.s(heroHidden === 0 ? (tall ? 120 : 156) : heroHidden === 1 ? (tall ? 152 : 204) : (tall ? 188 : 256));
-        const heroLogoMaxW = (tall ? tallHeroW : L.heroCardW) - L.s(tall ? 60 : 68);
+        // LOGO-SIZING §2.1 growth table — EXACT spec numbers per track, stepping
+        // up as the call-sign / frequency rows are hidden (both hidden is the
+        // logo default → the largest tier). `landscape` is its OWN branch, not
+        // the generic wide track.
+        const heroLogoH = L.s(
+          heroHidden === 0 ? (tall ? 90 : landscape ? 98 : 118)
+          : heroHidden === 1 ? (tall ? 126 : landscape ? 140 : 168)
+          : (tall ? 156 : landscape ? 176 : 210));
+        // §2: maxWidth = 100% of the hero card's CONTENT width (card width minus
+        // its own horizontal padding — s(26)/s(30) per side).
+        const heroLogoMaxW = (tall ? tallHeroW : L.heroCardW) - L.s(tall ? 52 : 60);
         // Star always sits in the card's top-right corner (both tracks), never
         // inline with the identity.
         const heroStar = (
@@ -1115,7 +1128,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         // just wide. Chevrons are never used. Only the sizing differs: tall tucks
         // smaller cards with a -46 overlap; wide/landscape use the clamped hero
         // card and a -72 overlap.
-        const peekW = tall ? tallSideW : sideCardW;
+        const peekW = sideCardW;
         const overlap = peekOverlap;
         const renderPeek = (side: 'left' | 'right', preset: PresetItem, onPress: () => void) => {
           const isLanding = !!flip && flip.farSide === side;    // old hero shrinking into this slot
