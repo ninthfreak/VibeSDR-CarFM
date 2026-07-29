@@ -100,6 +100,13 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         // media card survive backgrounding. Pause = stop the stream (power saving,
         // like UberSDR), play = reopen it. The /text + /chat control WS stay in JS.
         const val ACTION_START_FMDX = "com.ninthfreak.carfm.START_FMDX"
+        // Built-in NWD/NOWADA FM: the analog audio is routed by the MCU (not this
+        // service), but the steering-wheel ⏮⏭ buttons are media-key events. This
+        // action holds a media-buttons-only MediaSession (active + PLAYING, NO
+        // AudioTrack, NO audio-focus steal) so those keys route to CarFM and drive
+        // ITS preset list — instead of falling through to the radio service.
+        const val ACTION_START_NWD_CONTROL = "com.ninthfreak.carfm.START_NWD_CONTROL"
+        const val ACTION_STOP_NWD_CONTROL = "com.ninthfreak.carfm.STOP_NWD_CONTROL"
         const val EXTRA_PORT = "port"
         const val EXTRA_TUNE = "tune"
         const val EXTRA_HOST = "host"
@@ -139,6 +146,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     // ── Engine state ─────────────────────────────────────────────────────────
     @Volatile private var running = false
     @Volatile private var externalAudio = false   // OWRX/Kiwi/local: raw PCM pushed from JS
+    @Volatile private var nwdControl = false       // built-in FM: media-buttons-only session (no audio here)
     @Volatile private var externalPauseMode = "release"  // see EXTRA_PAUSE_MODE
     @Volatile private var muted = false
     @Volatile private var volume = 1f
@@ -308,6 +316,13 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 intent.getStringExtra(EXTRA_TUNE) ?: "",
                 intent.getStringExtra(EXTRA_AUTH) ?: "")
             ACTION_START_FMDX -> startFmdxAudio(intent.getStringExtra(EXTRA_BASE_URL) ?: return START_STICKY)
+            ACTION_START_NWD_CONTROL -> startNwdControlSession()
+            ACTION_STOP_NWD_CONTROL -> {
+                stopNwdControlSession()
+                // Only tear the service down if nothing else needs it (a real audio
+                // path could be running — never kill that).
+                if (!running && !externalAudio && !fmdxAudio) { stopSelf(startId); return START_NOT_STICKY }
+            }
             ACTION_PLAY -> setMutedNative(false)
             ACTION_PAUSE -> setMutedNative(true)
             // stopSelf(startId) — NOT bare stopSelf() — so a reconnect (AudioPlayer
@@ -663,6 +678,37 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         extThread?.interrupt(); extThread = null
         extQueue.clear()
         abandonAudioFocus()
+        mediaSession?.isActive = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
+        else { @Suppress("DEPRECATION") stopForeground(true) }
+    }
+
+    // ── Built-in NWD/NOWADA FM: media-buttons-only control session ────────────
+    // The MCU routes the analog FM audio itself — this service produces NO audio
+    // for the built-in tuner. Its ONLY job here is to hold an ACTIVE, PLAYING
+    // MediaSession so Android routes the steering-wheel ⏮⏭ media keys to CarFM
+    // (the same way they'd go to any media app that's playing — cf. Plexamp /
+    // Android Auto). onSkipToNext/Previous → tuneByStep → VibeSkip → JS steps
+    // CarFM's own preset list (app order, unwanted slots don't exist) and animates
+    // the hero swap. Crucially it does NOT requestAudioFocus (that would duck/kill
+    // the MCU's FM audio) and opens NO AudioTrack.
+    fun startNwdControlSession() {
+        Log.i(TAG, "startNwdControlSession")
+        if (externalAudio || fmdxAudio) return   // a real audio path already owns the session
+        nwdControl = true
+        running = true
+        muted = false
+        mediaSession?.isActive = true
+        updateMetadataSession()
+        updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)   // "playing" → media keys target us
+        startForegroundMedia()
+    }
+
+    fun stopNwdControlSession() {
+        Log.i(TAG, "stopNwdControlSession")
+        if (!nwdControl) return
+        nwdControl = false
+        running = false
         mediaSession?.isActive = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
         else { @Suppress("DEPRECATION") stopForeground(true) }
@@ -1064,10 +1110,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     }
 
     private fun tuneByStep(direction: Int) {
-        // External (OWRX/Kiwi): tuning lives in JS — delegate so we don't tune the
-        // native UberSDR WS (resurrecting a session). JS handles step vs bookmark
-        // vs DAB-programme cycling from its own state.
-        if (externalAudio || skipMode == "bookmark") {
+        // External (OWRX/Kiwi) and built-in NWD FM: tuning lives in JS — delegate so
+        // we don't tune the native UberSDR WS (resurrecting a session). JS handles
+        // step vs bookmark vs DAB-programme cycling, and for NWD it steps the preset
+        // strip + animates the hero swap.
+        if (externalAudio || nwdControl || skipMode == "bookmark") {
             emitEvent("VibeSkip") { it.putString("direction", if (direction > 0) "next" else "prev") }
             return
         }
@@ -2119,6 +2166,26 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private fun setupMediaSession() {
         mediaSession = MediaSessionCompat(this, "VibeSDR").apply {
             setCallback(object : MediaSessionCompat.Callback() {
+                // DIAGNOSTIC + capture check: log the RAW media-button key event before
+                // the framework maps it to onSkip*/onPlay. This is how a drive log
+                // confirms the steering wheel actually reaches CarFM (and with which
+                // keycode) when the NWD control session is held. super.* keeps the
+                // normal mapping (KEYCODE_MEDIA_NEXT → onSkipToNext, etc.).
+                override fun onMediaButtonEvent(mediaButtonEvent: Intent): Boolean {
+                    val ke = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                        mediaButtonEvent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, android.view.KeyEvent::class.java)
+                    else @Suppress("DEPRECATION") mediaButtonEvent.getParcelableExtra<android.view.KeyEvent>(Intent.EXTRA_KEY_EVENT)
+                    if (ke != null && ke.action == android.view.KeyEvent.ACTION_DOWN) {
+                        val name = android.view.KeyEvent.keyCodeToString(ke.keyCode)
+                        Log.i(TAG, "onMediaButtonEvent keycode=${ke.keyCode} ($name) nwdControl=$nwdControl")
+                        emitEvent("VibeMediaKey") {
+                            it.putInt("keyCode", ke.keyCode)
+                            it.putString("keyName", name)
+                            it.putBoolean("nwdControl", nwdControl)
+                        }
+                    }
+                    return super.onMediaButtonEvent(mediaButtonEvent)
+                }
                 // Play/pause = unmute/mute, skips = tune ± step (iOS parity)
                 override fun onPlay() { setMutedNative(false) }
                 override fun onPause() { setMutedNative(true) }
