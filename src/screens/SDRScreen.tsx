@@ -1788,6 +1788,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (mediaSkipRef.current === 'bookmark') onVtsJumpRef.current?.(dir);
       else mediaStepSkipRef.current?.(dir);
     });
+    // DIAGNOSTIC: raw media-button keycodes from the service's MediaSession. On
+    // the built-in NWD path this confirms the steering wheel actually reaches
+    // CarFM (and with which keycode) while the control session is held.
+    const subMediaKey = emitter.addListener('VibeMediaKey', (e: { keyCode: number; keyName: string; nwdControl: boolean }) => {
+      diag(`media key: ${e.keyName} (${e.keyCode})${e.nwdControl ? ' [nwd-control]' : ''}`);
+    });
     // Car audio route / Android Auto client connect — gates band-aware auto
     // mode/step (handheld use is never auto-switched).
     const subCar = emitter.addListener('VibeCarConnected', (e: { connected: boolean }) => {
@@ -1872,7 +1878,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       }
     });
     return () => {
-      sub.remove(); subMute.remove(); subSig.remove(); subSkip.remove(); subWs.remove();
+      sub.remove(); subMute.remove(); subSig.remove(); subSkip.remove(); subMediaKey.remove(); subWs.remove();
       subCar.remove(); subCarTune.remove(); subDsOff.remove(); subDsOn.remove(); subPath.remove(); subVol.remove();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3829,6 +3835,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         setFmTunerError(false);
         nwdSetRds(true);
         nwdSetAudio(true);
+        // Hold a media-buttons-only MediaSession so the steering-wheel ⏮⏭ keys
+        // route to CarFM (→ VibeSkip → animated preset step) instead of the radio
+        // service's own preset list. No audio is produced by that session — the
+        // MCU keeps routing the analog FM audio.
+        (VibePowerModule as any)?.startNwdControl?.();
         diag(`NWD connected: registered=${info.registered} band=${info.band} freqMult=${info.freqMult} mhz=${info.mhz ?? '?'} ps='${info.ps ?? ''}' stereo=${info.stereo} rt='${info.rt ?? ''}' pty=${info.pty}; RDS on`);
         // Station names come from the FCC-DB callsign lookup, which needs GPS
         // location — if that's null on the head unit, every station shows
@@ -3914,9 +3925,30 @@ export default function SDRScreen({ route, navigation }: Props) {
       nwdActiveRef.current = false;
       setNwdActive(false);
       subs.forEach((u) => u());
+      (VibePowerModule as any)?.stopNwdControl?.();   // drop the media-button session
       nwdSetAudio(false);   // release the radio audio source before unbinding
       nwdDisconnect();
     };
+  }, [carFm, route.params.tunerless]);
+
+  // While an SDR/dongle is the active source, the built-in FM must NOT run in
+  // parallel — no reason for it to, and it would only fight the dongle audio /
+  // muddy the source. CarFM never CLAIMS the FM source off the tunerless path,
+  // but the stock radio (or a prior built-in session) can leave it playing, and
+  // an SDR-FIRST launch never releases it (the built-in→SDR swap does, in the
+  // tunerless effect's cleanup above). So release it ONCE on entry — the same
+  // device-proven source→0 — then let the dongle's own MediaSession own audio +
+  // the steering wheel (that path already routes ⏮⏭ → VibeSkip → preset step,
+  // identically to the built-in path). Latched so it can't cut dongle audio that
+  // starts moments later.
+  const sdrSilencedFm = useRef(false);
+  useEffect(() => {
+    if (!carFm || route.params.tunerless) return;   // tunerless = built-in FM owns the tuner
+    if (sdrSilencedFm.current) return;
+    sdrSilencedFm.current = true;
+    (async () => {
+      if (await isNwdAvailable()) { nwdSetAudio(false); diag('SDR active → released built-in FM source (source→0)'); }
+    })();
   }, [carFm, route.params.tunerless]);
 
   // TA: a real car radio breaks mute for traffic announcements. If TA rises

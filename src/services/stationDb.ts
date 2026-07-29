@@ -99,16 +99,40 @@ async function openDb(): Promise<SQLite.SQLiteDatabase | null> {
         await nd.runAsync('INSERT OR IGNORE INTO logo_wanted(callsign_base,marked_at) VALUES (?,?)',
           [w.callsign_base, w.marked_at]).catch(() => {});
       }
+      await migratePrefs(nd);   // fresh copy: table is empty, just stamps user_version
       return nd;
     }
 
     const d = await SQLite.openDatabaseAsync(DB_NAME);
     await d.execAsync(LOGO_DDL); // safety: ensure tables exist on any copy
+    await migratePrefs(d);
     return d;
   } catch (e) {
     console.warn('[stationDb] open failed', e);
     return null;
   }
+}
+
+/**
+ * One-time repair (2026-07). The logo-search overlay used to save
+ * show_call = show_freq = 1 on EVERY logo assignment, so every previously
+ * downloaded logo persists a "show call sign + frequency" row that pins the
+ * hero logo to its smallest size — defeating the logo-only default the design
+ * wants (a freshly assigned logo now saves both OFF). Drop those {1,1} rows for
+ * stations that actually HAVE a logo so they fall back to the no-show default
+ * and fill the hero. Partial choices ({1,0}/{0,1}) and no-logo stations are left
+ * untouched. Guarded by PRAGMA user_version so it runs at most once per DB copy.
+ */
+async function migratePrefs(d: SQLite.SQLiteDatabase): Promise<void> {
+  try {
+    const row = await d.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+    if ((row?.user_version ?? 0) >= 1) return;
+    await d.runAsync(
+      `DELETE FROM station_prefs
+        WHERE show_call = 1 AND show_freq = 1
+          AND callsign_base IN (SELECT callsign_base FROM logos WHERE img IS NOT NULL)`);
+    await d.execAsync('PRAGMA user_version = 1');
+  } catch (e) { console.warn('[stationDb] migratePrefs failed', e); }
 }
 
 function db(): Promise<SQLite.SQLiteDatabase | null> {

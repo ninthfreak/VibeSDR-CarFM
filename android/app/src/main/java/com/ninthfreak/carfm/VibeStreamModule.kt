@@ -143,6 +143,27 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun stopFmdxAudio() { VibeStreamService.instance?.stopFmdxAudio() }
 
+    // Built-in NWD/NOWADA FM: hold a media-buttons-only MediaSession so the
+    // steering-wheel ⏮⏭ keys drive CarFM's preset list (see the service). No
+    // audio is produced here — the MCU routes the analog FM audio itself.
+    @ReactMethod
+    fun startNwdControl() {
+        VibeStreamService.reactContext = reactContext
+        val intent = Intent(reactContext, VibeStreamService::class.java).apply {
+            action = VibeStreamService.ACTION_START_NWD_CONTROL
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) reactContext.startForegroundService(intent)
+        else reactContext.startService(intent)
+    }
+
+    @ReactMethod
+    fun stopNwdControl() {
+        reactContext.startService(
+            Intent(reactContext, VibeStreamService::class.java).apply {
+                action = VibeStreamService.ACTION_STOP_NWD_CONTROL
+            })
+    }
+
     @ReactMethod
     fun revive() { VibeStreamService.instance?.revive() }
 
