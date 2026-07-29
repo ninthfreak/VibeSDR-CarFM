@@ -1,0 +1,12 @@
+<resources>
+  <!-- Android 12+ draws its own system splash: the LAUNCHER ICON centered on a
+       splash background — i.e. a logo splash, which this app must not have (and
+       the icon's amber-on-dark reads as the old VibeSDR scheme). A transparent
+       animated-icon drawable leaves just the solid CarFM-dark screen; the base
+       Theme.App.SplashScreen (values/styles.xml) keeps pre-12 devices solid. -->
+  <style name="Theme.App.SplashScreen" parent="AppTheme">
+    <item name="android:windowBackground">@color/splashscreen_background</item>
+    <item name="android:windowSplashScreenBackground">@color/splashscreen_background</item>
+    <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+  </style>
+</resources>
