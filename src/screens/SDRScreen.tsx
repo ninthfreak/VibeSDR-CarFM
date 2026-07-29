@@ -3931,6 +3931,26 @@ export default function SDRScreen({ route, navigation }: Props) {
     };
   }, [carFm, route.params.tunerless]);
 
+  // While an SDR/dongle is the active source, the built-in FM must NOT run in
+  // parallel — no reason for it to, and it would only fight the dongle audio /
+  // muddy the source. CarFM never CLAIMS the FM source off the tunerless path,
+  // but the stock radio (or a prior built-in session) can leave it playing, and
+  // an SDR-FIRST launch never releases it (the built-in→SDR swap does, in the
+  // tunerless effect's cleanup above). So release it ONCE on entry — the same
+  // device-proven source→0 — then let the dongle's own MediaSession own audio +
+  // the steering wheel (that path already routes ⏮⏭ → VibeSkip → preset step,
+  // identically to the built-in path). Latched so it can't cut dongle audio that
+  // starts moments later.
+  const sdrSilencedFm = useRef(false);
+  useEffect(() => {
+    if (!carFm || route.params.tunerless) return;   // tunerless = built-in FM owns the tuner
+    if (sdrSilencedFm.current) return;
+    sdrSilencedFm.current = true;
+    (async () => {
+      if (await isNwdAvailable()) { nwdSetAudio(false); diag('SDR active → released built-in FM source (source→0)'); }
+    })();
+  }, [carFm, route.params.tunerless]);
+
   // TA: a real car radio breaks mute for traffic announcements. If TA rises
   // while muted, unmute for the announcement and restore the mute when it
   // ends. Only ever restores a mute THIS effect lifted.
