@@ -142,10 +142,9 @@ export interface SDRBackend {
   pauseSpectrum(): void;
   resumeSpectrum(): void;
   /** Rebuild the spectrum socket NOW — a half-open zombie never fires onclose, so
-   *  nothing else will. Driven by the client's own starvation watchdog, by the
-   *  native network-path monitor, and by the watch when its rows dry up.
-   *  UberSDR only; the other adapters have different pause/socket semantics and
-   *  their own recovery (see BRIEF-watch-fixes §A7). */
+   *  nothing else will. Driven by the client's own starvation watchdog and by the
+   *  native network-path monitor. UberSDR only; the other adapters have different
+   *  pause/socket semantics and their own recovery. */
   forceResubscribe?(reason: string): void;
 
   getStatus(): SDRStatus;
