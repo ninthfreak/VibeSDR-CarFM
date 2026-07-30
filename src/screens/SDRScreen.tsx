@@ -611,9 +611,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       ?.setLocalSampleRate?.(hwSampleRate);
   }, [isLocal, hwSampleRate]);
 
-    (status.frequency < status.centerHz - status.bwHz / 2 ||
-     status.frequency > status.centerHz + status.bwHz / 2);
-
   // ── Step ──────────────────────────────────────────────────────────────────
 
   const [step,      setStep]      = useState(1000);
@@ -1216,8 +1213,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // never (re)built when the port lands, leaving Kiwi decoders/spots with no output.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseUrl, sessionUuid, decoderBase]);
-
-    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|null>(null);
 
   const spotsKindRef  = useRef<SpotsKind | null>(null);
   const spotBufRef    = useRef<SpotRow[]>([]);
