@@ -25,8 +25,8 @@ endif()
 
 # --- vibedsp: V5 clean-room GPL-free DSP -------------------------------------
 # Static lib linked into the shim. Its vendored KissFFT symbols are PREFIXED
-# (vibe_*) to avoid colliding with ft8_lib's own KissFFT, also linked into the
-# shim. Plain C++17; no SDR++/GPL dependency.
+# (vibe_*) so they can't collide with the copy under ft8_lib/fft, which is also
+# linked into the shim (for audio NR). Plain C++17; no SDR++/GPL dependency.
 add_library(vibedsp STATIC
     vibedsp/fft.cpp vibedsp/ddc.cpp vibedsp/resampler.cpp vibedsp/stereo.cpp
     vibedsp/rds.cpp vibedsp/pipeline.cpp
@@ -45,22 +45,17 @@ target_compile_definitions(vibedsp PRIVATE
 
 # --- VibeSDR local-SDR shim --------------------------------------------------
 # Opens an RTL-SDR from a USB fd via librtlsdr (rtlsdr_open_sys_dev), runs the
-# vibedsp engine, and serves the UberSDR protocol over net_shim. ft8_lib (kgoba,
-# MIT) provides the FT8/FT4 core with its own self-contained KISS FFT.
-file(GLOB FT8_LIB_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/ft8/*.c"
+# vibedsp engine, and serves the UberSDR protocol over net_shim. The vendored
+# KISS FFT under ft8_lib/fft is what the audio noise-reduction module uses (all
+# that survives of ft8_lib now the FT8/FT4 decoders are gone).
+set(FT8_LIB_SRC
     "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/fft/kiss_fft.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/fft/kiss_fftr.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/common/monitor.c")
+    "${CMAKE_CURRENT_SOURCE_DIR}/ft8_lib/fft/kiss_fftr.c")
 
 add_library(vibelocalsdr SHARED
     vibe_localsdr_jni.cpp local_sdr_shim.cpp net_shim.cpp rtl_tcp_server.cpp
     mdns_responder.cpp
     spyserver/spyserver_messages.cpp spyserver/spyserver_client.cpp
-    decoders/fsk_decoder.cpp
-    decoders/wefax_decoder.cpp
-    decoders/ft8_decoder.cpp
-    decoders/sstv_decoder.cpp
     decoders/audio_nr.cpp
     decoders/auto_notch.cpp
     ${FT8_LIB_SRC})

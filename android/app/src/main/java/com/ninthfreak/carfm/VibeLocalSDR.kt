@@ -82,12 +82,6 @@ object VibeLocalSDR {
     fun setStereoEnabled(on: Boolean) { if (loaded) nativeSetStereoEnabled(on) }
     fun setNrStrength(s: Float) { if (loaded) nativeSetNrStrength(s) }
     fun getNrCpu(): Float { return if (loaded) nativeGetNrCpu() else 0f }
-    // ensureLoaded() FIRST: on Kiwi (and any network backend) the native lib is
-    // never loaded by a local-hardware session, so without this the decoder sidecar
-    // returned -1 and feedDecoderPcm no-op'd → decoders/spots produced no output.
-    fun startDecoderService(): Int { ensureLoaded(); return if (loaded) nativeStartDecoderService() else -1 }
-    fun feedDecoderPcm(b64: String, rate: Int) { if (loaded) nativeFeedDecoderPcm(b64, rate) }
-    fun setDecoderFreq(hz: Double) { if (loaded) nativeSetDecoderFreq(hz) }
     fun getTunerGains(): IntArray { return if (loaded) nativeGetTunerGains() ?: IntArray(0) else IntArray(0) }
 
     // ── RTL-TCP server (share this device's dongle over the network) ──────────
@@ -188,9 +182,6 @@ object VibeLocalSDR {
     private external fun nativeSetStereoEnabled(on: Boolean)
     private external fun nativeSetNrStrength(s: Float)
     private external fun nativeGetNrCpu(): Float
-    private external fun nativeStartDecoderService(): Int
-    private external fun nativeFeedDecoderPcm(b64: String, rate: Int)
-    private external fun nativeSetDecoderFreq(hz: Double)
     private external fun nativeGetTunerGains(): IntArray?
     private external fun nativeStartServer(
         fd: Int, vid: Int, pid: Int,
