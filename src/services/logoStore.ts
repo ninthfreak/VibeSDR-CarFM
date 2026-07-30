@@ -263,6 +263,13 @@ export async function clearAllLogoFiles(): Promise<number> {
   return bases.length;
 }
 
+/** Which of these stations DO have a stored logo — one directory listing, no
+ *  per-station stat. Callers resolving many rows should filter with this first. */
+export async function basesWithLogo(bases: string[]): Promise<string[]> {
+  const have = new Set((await listBases()).map((s) => s.toUpperCase()));
+  return bases.filter((b) => have.has(safe(b)));
+}
+
 /** Which of these stations have NO stored logo. */
 export async function basesWithoutLogo(bases: string[]): Promise<string[]> {
   const have = new Set((await listBases()).map((s) => s.toUpperCase()));

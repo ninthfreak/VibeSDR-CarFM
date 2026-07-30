@@ -48,6 +48,31 @@ export function invalidateLogoTile(base?: string): void {
   listeners.forEach((l) => l());
 }
 
+/**
+ * Resolve every preset's logo AHEAD of first paint and seed the caches, so tiles
+ * render their art on the first frame instead of popping in one async chain at a
+ * time. Cheap and idempotent: one directory listing, then only the stations that
+ * actually have a logo. Sizes must match what the tiles request (see PresetPlate).
+ */
+export async function warmStationLogos(
+  items: Array<{ name?: string; frequencyMhz?: number }>,
+): Promise<void> {
+  const sizes = [128, 192];   // chip (fill) and peek/hero-ish default
+  await Promise.all(items.map(async (it) => {
+    try {
+      const nb = callsignFrom(it.name) ? callsignBase(callsignFrom(it.name)!) : null;
+      const base = nb ?? await callsignForFreq(it.frequencyMhz);
+      if (!base) return;
+      await Promise.all(sizes.map(async (sz) => {
+        const k = `${base}|${sz}`;
+        if (cache.has(k)) return;
+        cache.set(k, await getStationLogo(base, sz));
+      }));
+    } catch { /* a warm miss just falls back to the normal path */ }
+  }));
+  listeners.forEach((l) => l());
+}
+
 /** Resolve a station's callsign base + logo data-URI. Shared by LogoTile and the
  *  surfaces that must branch their layout on `hasLogo` (hero replaces the call
  *  sign with the logo; tiles/peek hide their text). */

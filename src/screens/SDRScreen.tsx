@@ -127,6 +127,7 @@ import { ptyLabel } from '../services/ptyLabels';
 import { getCarAutostart, setCarAutostart } from '../services/carMode';
 import CarFmFace, { type CarFmPreset } from '../components/CarFmFace';
 import { identifyByPi, initLogoService, consumeSharedLogo, getNearbyStations, callsignForFreq, estimatedSignalDbForFreq } from '../services/stationFinder';
+import { warmStationLogos } from '../components/carfm/LogoTile';
 import type { StationIdentity } from '../services/stationTypes';
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation } from '../services/instancesApi';
@@ -3636,6 +3637,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       (pos.get(fmKeyOf(a.frequency)) ?? 1e6 + a.frequency / 1e5)
       - (pos.get(fmKeyOf(b.frequency)) ?? 1e6 + b.frequency / 1e5));
   }, [carFm, userBookmarks, visibleBookmarks, fmOrder]);
+
+  // Warm the preset logos as soon as the list is known, so the strip paints its
+  // art on the first frame instead of each tile resolving its own async chain.
+  useEffect(() => {
+    if (!carFm || fmPresets.length === 0) return;
+    void warmStationLogos(fmPresets.map((p) => ({ name: p.name, frequencyMhz: p.frequency / 1e6 })));
+  }, [carFm, fmPresets]);
 
   // Star: save the tuned station (named from RDS PS), or un-save if it already
   // is a preset. Removal also drops any duplicate bookmarks on that channel.

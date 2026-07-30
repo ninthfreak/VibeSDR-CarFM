@@ -21,7 +21,7 @@ import {
 import { prepareLogoRenditions } from './logoPrep';
 import {
   putOriginal, readOriginalDataUri, displayUri, hasOriginal,
-  basesWithoutLogo, migrateLogosFromDb,
+  basesWithoutLogo, basesWithLogo, migrateLogosFromDb,
 } from './logoStore';
 import { resolveLogo, fetchImage, fetchImageResult, base64ToBytes, type LogoStation } from './logoResolver';
 import { stationLogoQuery } from './logoDuckDuckGo';
@@ -69,10 +69,15 @@ export async function getNearbyStations(opts: NearbyOptions = {}): Promise<Nearb
 
   const rows = await dbNearby(location.lat, location.lon, radiusKm, opts.limit ?? 100);
 
+  // ONE directory listing tells us which of these have a logo at all; without it
+  // this fanned out a filesystem lookup per row (up to 100 stations) just to
+  // discover that most have none. `r.hasLogo` can't help — it is the DB's
+  // (l.img IS NOT NULL), always false now that images are files.
+  const withLogo = new Set(await basesWithLogo(rows.map((r) => r.callsignBase)));
   const stations: NearbyStation[] = await Promise.all(rows.map(async (r) => {
-    // `r.hasLogo` is the DB's (l.img IS NOT NULL), which is always false now that
-    // images are files — derive it from the store instead.
-    const logoUri = await displayUri(r.callsignBase, 96);   // nearby rows are small tiles
+    const logoUri = withLogo.has(r.callsignBase)
+      ? await displayUri(r.callsignBase, 96)   // nearby rows are small tiles
+      : null;
     return { ...r, hasLogo: !!logoUri, logoUri, genre: r.genre, homepage: r.homepage };
   }));
 
@@ -194,31 +199,47 @@ async function saveFreqPersist(map: Map<number, string>): Promise<void> {
  *  Prefers a live GPS-located lookup (and caches what it finds); falls back to
  *  the learned persistent cache when there's no lock. Null only when neither the
  *  live dataset nor the cache knows this frequency. */
+let freqRefreshing = false;
+
+/** Refresh the freq→callsign map from the live dataset (needs a GPS fix). Runs in
+ *  the BACKGROUND — never on the path that a logo tile awaits. */
+async function refreshFreqMap(): Promise<void> {
+  if (freqRefreshing) return;
+  freqRefreshing = true;
+  try {
+    const { stations } = await getNearbyStations({ enrich: false });
+    const fresh = new Map<number, string>();
+    stations
+      .filter((s) => s.service === 'FM')
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .forEach((s) => { const k = Math.round(s.frequencyMhz * 10); if (!fresh.has(k)) fresh.set(k, s.callsignBase); });
+    if (fresh.size > 0) {
+      const persist = await loadFreqPersist();
+      fresh.forEach((v, k) => persist.set(k, v));
+      void saveFreqPersist(persist);
+      freqCallsignCache = { at: Date.now(), map: new Map(persist) };
+    } else if (freqCallsignCache) {
+      freqCallsignCache.at = Date.now();     // no lock — don't re-ask every call
+    }
+  } catch { if (freqCallsignCache) freqCallsignCache.at = Date.now(); }
+  finally { freqRefreshing = false; }
+}
+
 export async function callsignForFreq(freqMhz?: number): Promise<string | null> {
   if (freqMhz == null || !isFinite(freqMhz)) return null;
-  if (!freqCallsignCache || Date.now() - freqCallsignCache.at > FREQ_CACHE_MS) {
-    try {
-      const { stations } = await getNearbyStations({ enrich: false });
-      const fresh = new Map<number, string>();
-      stations
-        .filter((s) => s.service === 'FM')
-        .sort((a, b) => a.distanceKm - b.distanceKm)
-        .forEach((s) => { const k = Math.round(s.frequencyMhz * 10); if (!fresh.has(k)) fresh.set(k, s.callsignBase); });
-      if (fresh.size > 0) {
-        // GPS gave us real data — learn it and serve the merged view.
-        const persist = await loadFreqPersist();
-        fresh.forEach((v, k) => persist.set(k, v));
-        void saveFreqPersist(persist);
-        freqCallsignCache = { at: Date.now(), map: new Map(persist) };
-      } else {
-        // No lock / nothing nearby — fall back to what we've learned before.
-        freqCallsignCache = { at: Date.now(), map: await loadFreqPersist() };
-      }
-    } catch {
-      freqCallsignCache = { at: Date.now(), map: await loadFreqPersist() };
-    }
+  const k = Math.round(freqMhz * 10);
+  // COLD START: serve the PERSISTED map immediately and refresh from GPS in the
+  // background. This used to await getNearbyStations() first — i.e. a GPS fix and
+  // a full dataset scan — and every logo tile blocks on this call to learn its
+  // callsign, so a cold start couldn't paint a single logo until the fix landed
+  // (or timed out). The learned map already answers almost every local frequency.
+  if (!freqCallsignCache) {
+    freqCallsignCache = { at: 0, map: await loadFreqPersist() };
+    void refreshFreqMap();
+    return freqCallsignCache.map.get(k) ?? null;
   }
-  return freqCallsignCache.map.get(Math.round(freqMhz * 10)) ?? null;
+  if (Date.now() - freqCallsignCache.at > FREQ_CACHE_MS) void refreshFreqMap();   // never awaited
+  return freqCallsignCache.map.get(k) ?? null;
 }
 
 // ── estimated signal (DB + live GPS) ──────────────────────────────────────────
