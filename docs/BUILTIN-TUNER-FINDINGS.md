@@ -535,3 +535,59 @@ Removed: SettingsPanel section + props, SDRScreen sync/compare state and the
 and its orphaned `gotoBand` helper. There is now NO app-side preset cap — the
 count is the user's choice; the only soft costs are one wheel press per preset
 when cycling, and one logo resolve per preset at startup.
+
+## Signal + RadioText: a channel that BYPASSES the AIDL (2026-07-31)
+
+Re-examined the service for anything genuinely unexplored. Everything below is
+static analysis of `com.nwd.radio.service` v2.1.4.
+
+### Closed off for good
+- **The AIDL is exactly what we reconstructed.** `RadioFeature$Stub`'s
+  TRANSACTION_* constants are 1..30 in our declared order — no hidden method, no
+  mis-ordering. Nothing on it exposes signal.
+- **`RadioCallback` is complete too** — all 14 notify* methods, matching ours.
+  There is **no signal/RSSI callback at all**, so signal was never going to be
+  pushed to us.
+- **Outgoing broadcasts carry no signal or RT.** `ACTION_SEND_RADIO_FREQUENCE`
+  (+`_NEW`), `ACTION_SEND_SCAN_RADIO_FREQUENCE` and `ACTION_RADIO_STATE` carry
+  only frequency, band, preset number and state. `nwd_radio_state` is written to
+  the settings table; no signal/RT key exists.
+
+### Why RadioText has always been empty
+`ArmRadioManager.getRtMessage()` is `return "";` — **hardcoded**. The other three
+managers (`AWRadioManager`, `SprdRadioManager`, `RadioManager`) return a real
+`mRtMessage`. RT was never gated behind a setting we failed to flip; on this
+unit's manager the method is a stub. Also note `setRDSState(byte which, bool)`
+only acts on which==1 (AF) and which==2 (TA) — our `which=0` call sets no flag.
+
+### The unexplored channel — and it has both
+`RadioService.onCreate` picks `ArmRadioManager` when
+`RadioJsonNative.getRadioIc().equals("SI47925")` — a **Silicon Labs Si4792x**
+tuner. `RadioJsonNative` does NOT use the AIDL or JNI: it talks to the MCU in
+JSON through a **vendor framework class**, by reflection:
+
+```java
+ReflectUtil.invokeStatic(android.os.Hardware, "parseJson", String.class, json)
+  {"MODULE":"radio","ACTION":"get","IC":"query"}    -> "SI47925"
+  {"MODULE":"radio","ACTION":"get","RSSI":"query"}  -> signal strength (string int)
+  {"MODULE":"radio","ACTION":"get","RDS":"query"}   -> 16 hex chars = ONE raw RDS
+      group (4 blocks x 2 bytes); "0000000000000000" means no data this poll
+```
+(also `tune`, `setRadioBand`, `setRadioPower`, `setStereoMono`, `setRadioVolume`.)
+
+`android.os.Hardware` is a ROM addition, not AOSP — so it is likely ABSENT from
+the hidden-API blocklist (which is generated from AOSP), and the framework is
+loaded into every app process. If reflection reaches it, this gives the two
+things the AIDL cannot: **true signal strength**, and **raw RDS groups** from
+which RadioText can be decoded ourselves.
+
+**UNPROVEN.** It may fail on the class lookup (different ROM), on hidden-API
+access, or return an error (permission/UID). `NwdRadioModule.probeJsonHardware()`
+runs all three queries read-only and reports the verbatim result or the exact
+exception type — Settings → Diagnostics → "Probe signal + raw RDS (JSON
+channel)". The exception type is the diagnosis: ClassNotFoundException = wrong
+ROM, NoSuchMethodException = different signature, SecurityException /
+InvocationTargetException = reachable but refused.
+
+If it answers, decoding RT means polling groups and assembling 2A/2B segments
+ourselves — real work, but the data would finally be there.

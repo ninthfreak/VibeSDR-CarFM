@@ -20,7 +20,7 @@ import { snapshotDate, clearAllStationPrefs } from '../../services/stationDb';
 import { clearAllLogoFiles } from '../../services/logoStore';
 import { clearLogoCache } from '../../services/stationLogoCache';
 import { invalidateLogoTile, invalidateStationDisplay } from './LogoTile';
-import { isNwdAvailable, nwdRequestAudioSource, nwdProbe } from '../../services/nwdRadio';
+import { isNwdAvailable, nwdRequestAudioSource, nwdProbe, nwdProbeJsonHardware } from '../../services/nwdRadio';
 import { diag, isDiagEnabled, setDiagEnabled, diagLines, diagText, clearDiag, subscribeDiag } from '../../services/diag';
 
 export type CarFmTheme = 'system' | 'light' | 'dark';
@@ -428,6 +428,15 @@ export default function SettingsPanel({
                       <View style={[styles.divider, { backgroundColor: pal.border }]} />
                       <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={runProbe} accessibilityRole="button" accessibilityLabel="Run RDS probe">
                         <Text style={[styles.clearText, { color: pal.blue }]}>Run RDS probe (dumps every tuner getter)</Text>
+                        <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
+                      </Pressable>
+                      <View style={[styles.divider, { backgroundColor: pal.border }]} />
+                      <Pressable
+                        style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]}
+                        onPress={() => { nwdProbeJsonHardware().then((t) => { for (const l of t.split('\n')) if (l.trim()) diag(l); }); }}
+                        accessibilityRole="button" accessibilityLabel="Probe the vendor JSON channel for signal and RDS"
+                      >
+                        <Text style={[styles.clearText, { color: pal.blue }]}>Probe signal + raw RDS (JSON channel)</Text>
                         <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                       </Pressable>
                     </>

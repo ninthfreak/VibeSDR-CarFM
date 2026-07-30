@@ -23,6 +23,7 @@ type NwdNative = {
   setRdsEnabled(on: boolean): void;
   setAudioEnabled(on: boolean): void;
   sendPanelKey?(key: number): void;
+  probeJsonHardware?(): Promise<string>;
   requestAudioSource(): void;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
@@ -112,6 +113,18 @@ export const PANEL_KEY = {
 /** Fire a panel key as if the wheel/panel had been pressed (same unprotected
  *  broadcast the MCU sends) — lets us drive the service's own dispatch table. */
 export function nwdSendPanelKey(key: number): void { native?.sendPanelKey?.(key); }
+
+/**
+ * Probe the vendor JSON channel (android.os.Hardware.parseJson) that the radio
+ * service uses for SIGNAL and RAW RDS — the two things the bound AIDL genuinely
+ * cannot provide (getRtMessage() is hardcoded to "" on this unit's manager, and
+ * no RSSI method exists on the interface at all). Reports the exact result or
+ * the exact failure; read-only, changes no tuner state. See NwdRadioModule.
+ */
+export async function nwdProbeJsonHardware(): Promise<string> {
+  try { return (await native?.probeJsonHardware?.()) ?? 'module unavailable'; }
+  catch (e) { return `probe threw: ${String((e as Error)?.message ?? e)}`; }
+}
 
 /** Subscribe to a native NWD event. Returns an unsubscribe fn (no-op if the
  *  module is absent, e.g. on a non-NWD unit or iOS). */

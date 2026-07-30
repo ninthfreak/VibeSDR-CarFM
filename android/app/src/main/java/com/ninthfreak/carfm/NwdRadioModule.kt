@@ -264,6 +264,63 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
      *  the RDS-enable selectors, presets and radio/scan state. Purely read-only;
      *  safe to call any time after connect. Returns a formatted multi-line string
      *  that JS writes to the tuner diagnostics log. */
+    // ── android.os.Hardware JSON channel (decompile, 2026-07-31) ────────────────
+    // The vendor service does NOT get signal or RDS over the AIDL we bind — it
+    // goes around it. RadioService picks ArmRadioManager when
+    // RadioJsonNative.getRadioIc() == "SI47925" (a Silicon Labs Si4792x), and
+    // RadioJsonNative talks to the MCU as JSON through a VENDOR FRAMEWORK class:
+    //
+    //   ReflectUtil.invokeStatic(android.os.Hardware, "parseJson", String) with
+    //     {"MODULE":"radio","ACTION":"get","IC":"query"}    -> "SI47925"
+    //     {"MODULE":"radio","ACTION":"get","RSSI":"query"}  -> signal, as a string
+    //     {"MODULE":"radio","ACTION":"get","RDS":"query"}   -> 16 hex chars =
+    //       ONE raw RDS group (4 blocks x 2 bytes); "0000000000000000" = no data
+    //
+    // android.os.Hardware is a ROM addition, not AOSP — so it is very likely
+    // ABSENT from the hidden-API blocklist (which is generated from AOSP), and
+    // the framework is loaded into every app process. That makes this plausibly
+    // reachable by reflection from an ordinary app, which would give us the two
+    // things the AIDL genuinely cannot: TRUE signal strength and raw RDS (hence
+    // RadioText, which ArmRadioManager.getRtMessage() hardcodes to "").
+    //
+    // UNPROVEN until this probe runs on the unit: it may throw on the class
+    // lookup (different ROM), on access (hidden-API), or return an error string
+    // (permission / wrong UID). All three are reported verbatim rather than
+    // swallowed. Read-only queries only — nothing here changes tuner state.
+    private fun hardwareParseJson(json: String): String {
+        val cls = Class.forName("android.os.Hardware")
+        val m = cls.getMethod("parseJson", String::class.java)
+        return m.invoke(null, json)?.toString() ?: "(null)"
+    }
+
+    /** Try the JSON channel and report exactly what happened, success or failure. */
+    @ReactMethod
+    fun probeJsonHardware(promise: Promise) {
+        val sb = StringBuilder("JSON-HARDWARE PROBE (android.os.Hardware.parseJson)\n")
+        fun q(label: String, key: String) {
+            sb.append("  ").append(label).append(" = ")
+            try {
+                sb.append('"').append(hardwareParseJson(
+                    """{"MODULE":"radio","ACTION":"get","$key":"query"}""")).append('"')
+            } catch (e: Throwable) {
+                // The exception TYPE is the diagnosis: ClassNotFoundException =
+                // this ROM has no such class; NoSuchMethodException = different
+                // signature; SecurityException / InvocationTargetException =
+                // reachable but refused.
+                sb.append("ERR ").append(e.javaClass.name).append(": ").append(e.message)
+            }
+            sb.append('\n')
+        }
+        q("IC   (expect SI47925)", "IC")
+        q("RSSI (expect a number)", "RSSI")
+        q("RDS  (expect 16 hex chars)", "RDS")
+        // A second RDS read a moment later: RDS arrives group by group, so two
+        // identical non-zero reads still prove the channel is live.
+        Thread.sleep(300)
+        q("RDS  (2nd read)", "RDS")
+        promise.resolve(sb.toString())
+    }
+
     @ReactMethod
     fun probe(promise: Promise) {
         val r = radio ?: run { promise.reject("nc", "not connected"); return }
