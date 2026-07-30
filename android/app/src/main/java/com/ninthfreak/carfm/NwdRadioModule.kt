@@ -349,54 +349,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_CHANGE_SOURCE").putExtra("extra_source_id", 4.toByte()))
     }
 
-    /** ONE-WAY preset sync (app → head unit): overwrite the built-in FM1/FM2/FM3
-     *  preset banks with the given ASCENDING MHz list (max 18, sequential fill).
-     *  Verified on-device via the probe. Per slot: hop to the bank (changeBand),
-     *  tune to the freq, saveCurrentFrequency(slot 0-5). Restores the originally
-     *  tuned station afterward. Runs off the UI thread — the tuner audibly sweeps
-     *  through the frequencies during the write (~N*1.6s), so JS calls this only on
-     *  a deliberate, debounced preset edit, never continuously. It NEVER reads the
-     *  unit's presets back into the app (guardrail: sync is app→unit only). */
-    @ReactMethod
-    fun syncPresets(freqsMhz: ReadableArray, promise: Promise) {
-        val r = radio ?: run { promise.reject("nc", "not connected"); return }
-        Thread {
-            try {
-                val orig = try { r.getCurrentFrequency() } catch (e: Throwable) { null }
-                val origRaw = orig?.freq ?: -1
-                val origBank = orig?.band?.toInt() ?: 0
-                val n = minOf(freqsMhz.size(), 18)
-                for (i in 0 until n) {
-                    val bank = i / 6
-                    val slot = i % 6
-                    if (slot == 0) gotoBand(bank)
-                    val raw = Math.round(freqsMhz.getDouble(i) * freqMult).toInt()
-                    try { r.setCurrentFrequency(raw, fmBand, 0) } catch (e: Throwable) { Log.w(TAG, "sync tune", e) }
-                    Thread.sleep(1200)   // let mCurrentStation settle before saving
-                    try { r.saveCurrentFrequency(slot.toByte()) } catch (e: Throwable) { Log.w(TAG, "sync save", e) }
-                    Thread.sleep(400)
-                }
-                // Return to the station the user was listening to.
-                if (origRaw > 0) {
-                    gotoBand(origBank)
-                    try { r.setCurrentFrequency(origRaw, fmBand, 0) } catch (e: Throwable) {}
-                }
-                promise.resolve(n)
-            } catch (e: Throwable) { promise.reject("sync", e.message, e) }
-        }.start()
-    }
 
-    /** changeBand() until the tuner is on FM bank `target` (FM1=0/FM2=1/FM3=2). */
-    private fun gotoBand(target: Int): Boolean {
-        val r = radio ?: return false
-        for (t in 0 until 8) {
-            val b = try { r.getCurrentFrequency()?.band?.toInt() ?: -1 } catch (e: Throwable) { -1 }
-            if (b == target) return true
-            try { r.changeBand() } catch (e: Throwable) { Log.w(TAG, "changeBand", e) }
-            Thread.sleep(1600)
-        }
-        return (try { r.getCurrentFrequency()?.band?.toInt() ?: -1 } catch (e: Throwable) { -1 }) == target
-    }
 
     // ── Callbacks → JS events ──────────────────────────────────────────────────
     private val callback = object : RadioCallback.Stub() {

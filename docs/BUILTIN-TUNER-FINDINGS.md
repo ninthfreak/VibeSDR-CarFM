@@ -512,3 +512,26 @@ a manual accessibility-permission grant.
 
 Sources: github.com/kapi21/OpenRadioFM · developer.android.com AccessibilityService
 · source.android.com/docs/automotive/displays/key_input · XDA NavRadio+ threads.
+
+## Hardware preset sync REMOVED (2026-07-31)
+
+With the wheel captured via the panel-key broadcast, CarFM drives its own preset
+list and never reads the head unit's banks. The one-way sync (Settings → "Program
+head unit") and the 18-slot ceiling are gone.
+
+The argument for keeping it — "matching banks make the vendor service's
+intermediate jump land on the same station, so there's no second tune" — does not
+hold. The service's `mCurPrefNum` advances one slot per press and wraps through
+ITS 18; CarFM's index advances one and wraps through the USER'S list length. They
+only stay aligned if the list is exactly 18 AND both start at the same slot. With
+6 presets the app wraps after 6 while the service sits at slot 7 — they diverge on
+the first wrap, and never re-align. So programming the banks cannot reliably make
+the two tunes match, "18" is not a meaningful boundary for anything, and the
+seamless audio observed on-device comes from the correction being fast, not from
+the banks agreeing.
+
+Removed: SettingsPanel section + props, SDRScreen sync/compare state and the
+`@carfm/nwd_preset_sig_v1` record, `nwdSyncPresets`, `NwdRadioModule.syncPresets`
+and its orphaned `gotoBand` helper. There is now NO app-side preset cap — the
+count is the user's choice; the only soft costs are one wheel press per preset
+when cycling, and one logo resolve per preset at startup.

@@ -42,7 +42,7 @@ import { splashBridge }                 from '../../App';
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
-import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdSyncPresets, onNwd, PANEL_KEY } from '../services/nwdRadio';
+import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, onNwd, PANEL_KEY } from '../services/nwdRadio';
 import { diag, isDiagEnabled } from '../services/diag';
 import { startMotion, stopMotion } from '../services/motion';
 import { startGpsFix, stopGpsFix } from '../services/gps';
@@ -3675,45 +3675,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (p) fmRemoveAt(p.frequency);
   }, [fmPresets, fmRemoveAt]);
 
-  // Head-unit preset programming (NWD) — app → unit, MANUAL (Settings), never on
-  // launch. The tuner AIDL forces the shape:
-  //   • saveCurrentFrequency(slot) stores only the CURRENT tuned freq, so writing a
-  //     bank inherently TUNES through each station (audible sweep). It can't be
-  //     silent — so it's a deliberate action, not an automatic one (which was the
-  //     "app changes stations on startup" bug).
-  //   • no clear/blank op is exposed on the AIDL we bind (saveCurrentFrequency only
-  //     overwrites). The service HAS an internal `CleanFMPreFreData` (empties all
-  //     3×6), but there is no confirmed client trigger for it yet — reaching it is
-  //     an open probe investigation. So we write EXACTLY the N app presets (card
-  //     order) into the first N slots and DO NOT touch the rest. NO wrapping — the
-  //     goal is genuinely-blank unused slots (so the wheel skips them), pending the
-  //     clear command; wrapping the presets to fill 18 is explicitly NOT wanted.
-  // `@carfm/nwd_preset_sig_v1` records what we last wrote (the intent), so Settings
-  // can show app-vs-programmed without a (tuning) read-back.
-  const nwdSyncSig = useRef<string | null>(null);
-  const [nwdProgrammedSig, setNwdProgrammedSig] = useState<string | null>(null);
-  const [nwdProgramming, setNwdProgramming] = useState(false);
-  useEffect(() => {
-    AsyncStorage.getItem('@carfm/nwd_preset_sig_v1')
-      .then((v: string | null) => { nwdSyncSig.current = v; setNwdProgrammedSig(v); })
-      .catch(() => {});
-  }, []);
-  const onProgramHeadUnit = useCallback(async () => {
-    if (!nwdActiveRef.current || nwdProgramming) return;
-    const freqs = fmPresets.map((p) => p.frequency / 1e6).slice(0, 18);   // exactly N, card order, NO wrap
-    if (freqs.length === 0) return;
-    setNwdProgramming(true);
-    try {
-      await nwdSyncPresets(freqs);
-      const sig = freqs.map((f) => f.toFixed(1)).join(',');
-      nwdSyncSig.current = sig;
-      setNwdProgrammedSig(sig);
-      AsyncStorage.setItem('@carfm/nwd_preset_sig_v1', sig).catch(() => {});
-    } finally { setNwdProgramming(false); }
-  }, [fmPresets, nwdProgramming]);
-  // app-vs-programmed comparison (intent, no tuning): does the current card set
-  // match what we last wrote to the unit?
-  const nwdPresetsInSync = nwdProgrammedSig === fmPresets.map((p) => (p.frequency / 1e6).toFixed(1)).join(',');
 
   // CarFM media surface: push Presets + Nearby (FCC DB) as the browse tree +
   // queue. Nearby is fetched once per session (offline-first facade) and the
@@ -4848,10 +4809,6 @@ export default function SDRScreen({ route, navigation }: Props) {
           onSetAutostart={onFmSetAutostart}
           onRetryTuner={route.params.tunerless ? () => { void tryTunerNow(); } : undefined}
           nwdActive={nwdActive}
-          onProgramHeadUnit={onProgramHeadUnit}
-          nwdProgramming={nwdProgramming}
-          nwdPresetsInSync={nwdPresetsInSync}
-          nwdPresetCount={fmPresets.length}
           onHardwareSeek={nwdActive ? onFmHardwareSeek : undefined}
           presets={fmPresets}
           onTuneHz={onTuneHz}
