@@ -32,6 +32,7 @@ import NearbyPicker from './carfm/NearbyPicker';
 import Numpad from './carfm/Numpad';
 import PresetsBand, { type PresetItem } from './carfm/PresetsBand';
 import { callsignBase } from '../services/piCallsign';
+import { diag } from '../services/diag';
 import SidePresetCard, { PEEK_OPACITY, PEEK_SCALE } from './carfm/SidePresetCard';
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
 import { cleanCall, DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT, type CarFmPalette } from './carfm/tokens';
@@ -619,6 +620,21 @@ export default function CarFmFace(props: CarFmFaceProps) {
     };
   }, [tall, landscape, twoRows, w, k]);
 
+  // Report the surface the face actually resolved to. Logo sizes are all derived
+  // from track + k, so when a logo looks wrong on the unit this line says whether
+  // the cause is the SIZE TABLE or the surface landing in an unexpected track.
+  const trackSig = `${w}x${h} ${tall ? 'tall' : landscape ? 'landscape' : twoRows ? 'twoRows' : 'wide'} k=${k.toFixed(2)}`;
+  const lastTrack = useRef('');
+  useEffect(() => {
+    if (lastTrack.current === trackSig) return;
+    lastTrack.current = trackSig;
+    diag(`surface ${trackSig} | hero logo tiers ${[0, 1, 2].map((n) => Math.min(
+      L.s(n === 0 ? (tall ? 108 : landscape ? 120 : 144)
+        : n === 1 ? (tall ? 152 : landscape ? 171 : 205)
+        : (tall ? 188 : landscape ? 215 : 256)),
+      Math.round(h * 0.42)).toString()).join('/')}`);
+  }, [trackSig, tall, landscape, h, L]);
+
   const mhz = mhzOf(freqHz);
   const inBand = mhz >= FM_MIN_MHZ - 0.05 && mhz <= FM_MAX_MHZ + 0.05;
   const ps = (stationName ?? '').trim();
@@ -1009,14 +1025,22 @@ export default function CarFmFace(props: CarFmFaceProps) {
         // and/or frequency are hidden (0/1/2 hidden → base/big/max), so the logo
         // keeps filling the freed vertical space regardless of aspect.
         const heroHidden = (heroDisp.showCall ? 0 : 1) + (heroDisp.showFreq ? 0 : 1);
-        // LOGO-SIZING §2.1 growth table — EXACT spec numbers per track, stepping
-        // up as the call-sign / frequency rows are hidden (both hidden is the
-        // logo default → the largest tier). `landscape` is its OWN branch, not
-        // the generic wide track.
-        const heroLogoH = L.s(
-          heroHidden === 0 ? (tall ? 90 : landscape ? 98 : 118)
-          : heroHidden === 1 ? (tall ? 126 : landscape ? 140 : 168)
-          : (tall ? 156 : landscape ? 176 : 210));
+        // Hero logo growth (LOGO-SIZING §2.1): three tiers, stepping up as the
+        // call-sign / frequency rows are hidden — both hidden is the logo default
+        // and the largest. `landscape` is its OWN branch, not the generic wide one.
+        //
+        // The tier VALUES sit above the handoff's table (210/176/156 at the top
+        // tier) because that table measured SMALLER than the size already approved
+        // on the head unit — shipping it shrank every logo. §2.2/§7 state the
+        // acceptance as a floor ("anything below is a fail", "reject if less than
+        // ~31%"), so a larger logo still passes; the device is the tie-breaker.
+        // The handoff's RATIOS between tiers (0.56 / 0.80 / 1.00) are preserved.
+        const heroLogoH = Math.min(
+          L.s(heroHidden === 0 ? (tall ? 108 : landscape ? 120 : 144)
+            : heroHidden === 1 ? (tall ? 152 : landscape ? 171 : 205)
+            : (tall ? 188 : landscape ? 215 : 256)),
+          // Never let the logo eat the whole card on a short surface.
+          Math.round(h * 0.42));
         // §2: maxWidth = 100% of the hero card's CONTENT width (card width minus
         // its own horizontal padding — s(26)/s(30) per side).
         const heroLogoMaxW = (tall ? tallHeroW : L.heroCardW) - L.s(tall ? 52 : 60);

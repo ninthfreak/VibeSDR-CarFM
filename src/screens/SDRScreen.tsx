@@ -3922,7 +3922,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         const sig = `${p.mhz ?? '?'}|${p.ps ?? ''}|${p.stereo}|${p.rt ?? ''}|${p.pty}`;
         if (sig !== lastPollSig) {
           lastPollSig = sig;
-          diag(`poll: mhz=${p.mhz ?? '?'} ps='${p.ps ?? ''}' stereo=${p.stereo} rt='${p.rt ?? ''}' pty=${p.pty}`);
+          // Wheel-capture state rides along: the control session starts at CONNECT,
+          // which is usually BEFORE diagnostics get switched on, so its own one-shot
+          // line never makes the log. This makes it visible at any time.
+          let ctl = '';
+          try { ctl = await (VibePowerModule as any)?.getNwdControlState?.() ?? ''; } catch { /* older build */ }
+          diag(`poll: mhz=${p.mhz ?? '?'} ps='${p.ps ?? ''}' stereo=${p.stereo} rt='${p.rt ?? ''}' pty=${p.pty}${ctl ? `  [${ctl}]` : '  [no ctl state — OLD BUILD]'}`);
         }
       }, 1500);
     })();

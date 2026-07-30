@@ -206,6 +206,12 @@ export default function PresetsBand({
   const S = (v: number) => Math.round(v * (k ?? 1));
   const scroll = useRef<ScrollView>(null);
   const [viewW, setViewW] = useState(0);
+  // Measured rail HEIGHT. The tiles used percentage heights ('80%'/'100%'), which
+  // only resolve if every ancestor has a definite height — and a flex-grow logo
+  // box inside a tile whose height didn't resolve collapses to nothing
+  // (LOGO-SIZING §5.5, the "height:auto collapsed to 0" failure). Measuring the
+  // rail and sizing tiles in real dp makes the whole chain definite.
+  const [viewH, setViewH] = useState(0);
   const [contentW, setContentW] = useState(0);
   const [scrollX, setScrollX] = useState(0);
   const [trackW, setTrackW] = useState(0);
@@ -383,14 +389,19 @@ export default function PresetsBand({
     if (twoRows) {
       // Two rows + the row gap inside the grid's own paddingVertical:2 (=4 total).
       // The old "- 16" was a phantom inset that cost the row 7dp and shrank the
-      // flex logo box to ~69 against the LOGO-SIZING §3 target of ~76.
-      const rowH = Math.max(S(90), Math.round((bandHeight - GAP - 4) / 2));
+      // flex logo box to ~69 against the LOGO-SIZING §3 target of ~76. Prefer the
+      // MEASURED rail height over the band token when it's available.
+      const avail = viewH > 0 ? viewH : bandHeight;
+      const rowH = Math.max(S(90), Math.round((avail - GAP - 4) / 2));
       return { w: S(150), h: rowH, logoRadius: active ? 15 : 12, nameFont: nf(15), padTop: S(8), padBottom: S(12), padH: S(6) };
     }
     const big = active && !reordering;
     return {
       w: S(big ? (landscape ? 134 : 150) : (landscape ? 106 : 118)),
-      h: big ? '100%' : '80%',
+      // Real dp once the rail is measured (see viewH) — a percentage here left the
+      // flex logo box with no definite height to grow into. Percentage only as the
+      // first-frame fallback.
+      h: viewH > 0 ? Math.round(viewH * (big ? 1 : 0.8)) : (big ? '100%' : '80%'),
       logoRadius: big ? 15 : 12,
       nameFont: nf(big ? (landscape ? 16 : 18) : (landscape ? 13 : 15)),
       padTop: S(big ? 12 : 8),
@@ -480,7 +491,10 @@ export default function PresetsBand({
           horizontal
           scrollEnabled={!reordering}
           showsHorizontalScrollIndicator={false}
-          onLayout={(e: LayoutChangeEvent) => setViewW(e.nativeEvent.layout.width)}
+          onLayout={(e: LayoutChangeEvent) => {
+            setViewW(e.nativeEvent.layout.width);
+            setViewH(e.nativeEvent.layout.height);
+          }}
           onContentSizeChange={(w: number) => setContentW(w)}
           onScroll={onScroll}
           scrollEventThrottle={16}
@@ -508,7 +522,10 @@ export default function PresetsBand({
           horizontal
           scrollEnabled={!reordering}
           showsHorizontalScrollIndicator={false}
-          onLayout={(e: LayoutChangeEvent) => setViewW(e.nativeEvent.layout.width)}
+          onLayout={(e: LayoutChangeEvent) => {
+            setViewW(e.nativeEvent.layout.width);
+            setViewH(e.nativeEvent.layout.height);
+          }}
           onContentSizeChange={(w: number) => setContentW(w)}
           onScroll={onScroll}
           scrollEventThrottle={16}
