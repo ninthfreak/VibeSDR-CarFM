@@ -327,3 +327,22 @@ export interface BackendCallbacks extends SDRCallbacks {
 }
 
 export type { SDRStatus, SDRMode, SDRCallbacks };
+
+
+/** Server-side DSP (VibeDSP) filter catalogue, as reported by the backend.
+ *  Lives here rather than in a UI file: the adapters publish it (KiwiAdapter
+ *  ships a static list, UberSDR fetches one). */
+export interface DspParamDesc {
+  name:          string;
+  type?:         string;   // 'float' | 'int' | 'bool' | free text
+  default?:      string;
+  min?:          string;
+  max?:          string;
+  description?:  string;
+  runtime_safe?: boolean;
+}
+export interface DspFilterDesc {
+  name:         string;
+  description?: string;
+  params?:      DspParamDesc[];
+}
