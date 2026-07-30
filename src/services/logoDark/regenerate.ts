@@ -13,7 +13,8 @@
 // the candidates for the new run, we keep it; otherwise we fall back to the auto
 // pick. Never throws.
 
-import { getLogoDataUri, getDarkTreatment, saveDarkLogo, clearDarkLogo } from '../stationDb';
+import { readOriginalDataUri, getDarkInfo, putDark, clearDark } from '../logoStore';
+import { prepareDarkLadder } from '../logoPrep';
 import { processLogoForDark, hexToUnitRgb, treatmentToEnum, type Treatment } from './adapt';
 
 /** Create or refresh the cached dark variant for `base`. `gateBg` is the dark
@@ -24,13 +25,13 @@ import { processLogoForDark, hexToUnitRgb, treatmentToEnum, type Treatment } fro
  *  can't be decoded (render falls back to the white plate). */
 export async function regenerateDarkLogo(base: string, gateBg: string): Promise<void> {
   try {
-    const uri = await getLogoDataUri(base);
-    if (!uri) { await clearDarkLogo(base); return; }
+    const uri = await readOriginalDataUri(base);
+    if (!uri) { await clearDark(base); return; }
 
     const res = await processLogoForDark(uri, hexToUnitRgb(gateBg));
     if (!res) return;   // decode/process failed — keep whatever was cached before
 
-    const prior = await getDarkTreatment(base);
+    const prior = await getDarkInfo(base);
     let treatment: Treatment = res.pick;
     let chosen = false;
     if (prior?.chosen) {
@@ -39,7 +40,8 @@ export async function regenerateDarkLogo(base: string, gateBg: string): Promise<
     }
 
     const cand = res.candidates.find((c) => c.treatment === treatment) ?? res.candidates[0];
-    await saveDarkLogo(base, treatmentToEnum(cand.treatment), cand.pngBase64, chosen);
+    await putDark(base, treatmentToEnum(cand.treatment), cand.pngBase64, chosen);
+    await prepareDarkLadder(base);
   } catch {
     /* never let logo adaptation break a save */
   }

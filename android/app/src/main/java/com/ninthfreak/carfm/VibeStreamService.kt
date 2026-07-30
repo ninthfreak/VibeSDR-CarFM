@@ -147,6 +147,14 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     @Volatile private var running = false
     @Volatile private var externalAudio = false   // OWRX/Kiwi/local: raw PCM pushed from JS
     @Volatile private var nwdControl = false       // built-in FM: media-buttons-only session (no audio here)
+    @Volatile private var nwdFocusGranted = false  // did the control session win audio focus?
+
+    /** Wheel-capture state, surfaced in the CarFM diag line so a drive log shows
+     *  whether the control session is even up (and holds focus) without needing
+     *  diagnostics to have been enabled before the tuner connected. */
+    fun nwdControlState(): String =
+        "ctl=${if (nwdControl) "on" else "off"} focus=${if (nwdFocusGranted) "yes" else "no"} " +
+        "session=${if (mediaSession?.isActive == true) "active" else "inactive"}"
     @Volatile private var externalPauseMode = "release"  // see EXTRA_PAUSE_MODE
     @Volatile private var muted = false
     @Volatile private var volume = 1f
@@ -716,7 +724,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         running = true
         muted = false
         val granted = requestAudioFocus()
-        Log.i(TAG, "nwd control audio focus granted=${granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED} ($granted)")
+        nwdFocusGranted = granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        Log.i(TAG, "nwd control audio focus granted=$nwdFocusGranted ($granted)")
         emitEvent("VibeFocus") { it.putInt("change", 0); it.putBoolean("granted", granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) }
         mediaSession?.isActive = true
         updateMetadataSession()
@@ -728,6 +737,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         Log.i(TAG, "stopNwdControlSession")
         if (!nwdControl) return
         nwdControl = false
+        nwdFocusGranted = false
         running = false
         abandonAudioFocus()
         mediaSession?.isActive = false

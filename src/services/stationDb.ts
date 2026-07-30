@@ -4,12 +4,20 @@
  * The DB (assets/db/stations.sqlite) is produced by tools/build_station_db/ from
  * the FCC LMS files and shipped in the APK. At runtime it's copied once into the
  * SQLite dir (a WRITABLE location) and opened. Station rows are read-only
- * reference data; **logos live in the SAME db** (the `logos` table, blobs) and
- * are written at runtime, plus a `logo_wanted` queue for stations seen offline.
+ * reference data.
+ *
+ * Logo IMAGES no longer live here — they are FILES under <docs>/carfm-logos/
+ * (see logoStore.ts), because a DB blob forced every render through a base64
+ * `data:` URI that Android's image cache cannot key. The blob tables remain only
+ * so the one-time migration can drain them; what stays in the DB is the non-image
+ * metadata (genre/homepage/source/TTL), the `logo_wanted` queue, and the
+ * per-station hero display prefs.
  *
  * When the bundled data is refreshed (DB_ASSET_VERSION bump) the copy is replaced
- * with the new asset, so runtime-acquired logos + the wanted queue are MIGRATED
- * forward first (bundled logos, if any, take precedence; runtime ones fill gaps).
+ * with the new asset and the wanted queue is carried forward. Logo images are no
+ * longer affected by a bump at all — they live outside the DB, so they simply
+ * survive it (the blob carry-forward below is vestigial, kept for a device that
+ * hasn't run the filesystem migration yet).
  *
  * Everything degrades to "empty" if the DB is unbuilt (placeholder ships 0 rows),
  * so the feature never crashes.
@@ -20,7 +28,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as SQLite from 'expo-sqlite';
 
 import { boundingBox, haversineKm, receivabilityScore } from './stationGeo';
-import { bytesToBase64, base64ToBytes } from './base64';
+
 import type { StationRow } from './stationTypes';
 
 const DB_NAME = 'stations.sqlite';
@@ -40,7 +48,10 @@ const LOGO_DDL = `
   CREATE TABLE IF NOT EXISTS station_prefs (
     callsign_base TEXT PRIMARY KEY, show_call INTEGER, show_freq INTEGER);
   CREATE TABLE IF NOT EXISTS dark_logos (
-    callsign_base TEXT PRIMARY KEY, treatment TEXT, chosen INTEGER, img BLOB, updated_at INTEGER);`;
+    callsign_base TEXT PRIMARY KEY, treatment TEXT, chosen INTEGER, img BLOB, updated_at INTEGER);
+  CREATE TABLE IF NOT EXISTS logo_renditions (
+    callsign_base TEXT, kind TEXT, img BLOB, mime TEXT, w INTEGER, h INTEGER, updated_at INTEGER,
+    PRIMARY KEY (callsign_base, kind));`;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase | null> | null = null;
 
@@ -173,6 +184,8 @@ export async function nearbyStations(
   let raw: RawRow[];
   try {
     raw = await d.getAllAsync<RawRow>(
+      // has_logo is LEGACY and always 0 now (images are files): the join is kept
+      // for genre/homepage. stationFinder overrides hasLogo from the logo store.
       `SELECT s.*, (l.img IS NOT NULL) AS has_logo, l.genre AS genre, l.homepage AS homepage
          FROM stations s LEFT JOIN logos l ON l.callsign_base = s.callsign_base
         WHERE s.lat BETWEEN ? AND ? AND s.lon BETWEEN ? AND ?`,
@@ -220,19 +233,6 @@ export async function snapshotDate(): Promise<string | null> {
   } catch { return null; }
 }
 
-// ── logos (same db) ──────────────────────────────────────────────────────────
-/** Logo as a data URI for RN <Image>, or null if none stored. */
-export async function getLogoDataUri(base: string): Promise<string | null> {
-  const d = await db();
-  if (!d || !base) return null;
-  try {
-    const row = await d.getFirstAsync<{ img: Uint8Array | null; mime: string | null }>(
-      `SELECT img, mime FROM logos WHERE callsign_base = ?`, [base.toUpperCase()]);
-    if (!row?.img) return null;
-    return `data:${row.mime || 'image/png'};base64,${bytesToBase64(row.img)}`;
-  } catch { return null; }
-}
-
 /**
  * Upsert enrichment for a station. `img === null` records a known miss (no logo)
  * so we don't retry forever; a station saved here is cleared from the queue.
@@ -260,67 +260,56 @@ export async function saveLogo(
   } catch (e) { console.warn('[stationDb] saveLogo failed', e); }
 }
 
-/** Assign a logo by hand (sticky — auto sources won't overwrite it). */
-export async function setManualLogo(base: string, img: Uint8Array, mime: string): Promise<void> {
-  await saveLogo(base, img, mime, null, null, 'manual');
-}
+// ── images live on the FILESYSTEM now (see logoStore.ts) ─────────────────────
+// Logo IMAGES were SQLite blobs, which forced every render through a base64
+// `data:` URI — 33% bigger, shipped across the JS bridge as a string, and
+// re-decoded each time because the native image cache cannot key a data URI.
+// They are now files under <docs>/carfm-logos/ addressed by `file://` URI.
+// The two helpers below exist ONLY so the one-time migration can drain the old
+// tables; nothing else in the app reads or writes logo bytes here.
 
-// ── dark-mode logo variants (derived cache, keyed by station) ─────────────────
-// One row per station: the chosen treatment + its rendered PNG. `chosen=1` marks
-// a user pick (survives reprocessing); `chosen=0` is the pipeline's auto-pick.
-// The PNG is BACKGROUND-INDEPENDENT — the remap clears paper to transparency
-// rather than painting it, so one variant reads on every dark surface (incl. a
-// future night/dusk theme); only the gate uses the bg, at process time. Hence
-// the key is the station alone. DERIVED data — safe to drop and regenerate, so
-// it is not carried across a DB_ASSET_VERSION bump.
-
-export type DarkLogo = { treatment: string; chosen: boolean; dataUri: string };
-
-/** The cached dark variant for a station, or null. */
-export async function getDarkLogo(base: string): Promise<DarkLogo | null> {
+/** Every logo still stored as a blob — the migration's input. */
+export async function allStoredLogos(): Promise<
+  Array<{ base: string; img: Uint8Array; mime: string | null; source: string | null }>
+> {
   const d = await db();
-  if (!d || !base) return null;
+  if (!d) return [];
   try {
-    const r = await d.getFirstAsync<{ treatment: string; chosen: number | null; img: Uint8Array | null }>(
-      `SELECT treatment, chosen, img FROM dark_logos WHERE callsign_base = ?`, [base.toUpperCase()]);
-    if (!r?.img) return null;
-    return { treatment: r.treatment, chosen: r.chosen === 1, dataUri: `data:image/png;base64,${bytesToBase64(r.img)}` };
-  } catch { return null; }
+    const rows = await d.getAllAsync<{ callsign_base: string; img: Uint8Array | null; mime: string | null; source: string | null }>(
+      'SELECT callsign_base, img, mime, source FROM logos WHERE img IS NOT NULL');
+    return rows.filter((r) => r.img?.length)
+      .map((r) => ({ base: r.callsign_base, img: r.img as Uint8Array, mime: r.mime, source: r.source }));
+  } catch { return []; }
 }
 
-/** Just the chosen treatment + whether it was a user pick — for the reprocess
- *  decision (keep a user override, replace an auto-pick). null if none cached. */
-export async function getDarkTreatment(base: string): Promise<{ treatment: string; chosen: boolean } | null> {
+/** Drop ONE station's image blob, once its bytes are safely on the filesystem. */
+export async function dropLogoBlob(base: string): Promise<void> {
   const d = await db();
-  if (!d || !base) return null;
+  if (!d) return;
+  const key = base.toUpperCase();
   try {
-    const r = await d.getFirstAsync<{ treatment: string; chosen: number | null }>(
-      `SELECT treatment, chosen FROM dark_logos WHERE callsign_base = ?`, [base.toUpperCase()]);
-    return r ? { treatment: r.treatment, chosen: r.chosen === 1 } : null;
-  } catch { return null; }
+    await d.runAsync('UPDATE logos SET img = NULL, mime = NULL WHERE callsign_base = ?', [key]);
+    await d.runAsync('DELETE FROM dark_logos WHERE callsign_base = ?', [key]);
+    await d.runAsync('DELETE FROM logo_renditions WHERE callsign_base = ?', [key]);
+  } catch (e) { console.warn('[stationDb] dropLogoBlob failed', e); }
 }
 
-/** Store (upsert) the chosen dark variant for a station. `pngBase64` is bare
- *  base64 (no data-URI prefix). `chosen` = true for a user pick. */
-export async function saveDarkLogo(base: string, treatment: string, pngBase64: string, chosen: boolean): Promise<void> {
+/** Empty every image table so no stale second copy survives on disk. */
+export async function dropAllLogoBlobs(): Promise<void> {
   const d = await db();
-  if (!d || !base) return;
+  if (!d) return;
   try {
-    await d.runAsync(
-      `INSERT INTO dark_logos(callsign_base,treatment,chosen,img,updated_at) VALUES (?,?,?,?,?)
-       ON CONFLICT(callsign_base) DO UPDATE SET
-         treatment=excluded.treatment, chosen=excluded.chosen, img=excluded.img, updated_at=excluded.updated_at`,
-      [base.toUpperCase(), treatment, chosen ? 1 : 0, base64ToBytes(pngBase64), Date.now()]);
-  } catch (e) { console.warn('[stationDb] saveDarkLogo failed', e); }
+    await d.execAsync('DELETE FROM logos; DELETE FROM dark_logos; DELETE FROM logo_renditions;');
+  } catch (e) { console.warn('[stationDb] dropAllLogoBlobs failed', e); }
 }
 
-/** Drop the cached dark variant for a station — call when its source logo
- *  changes or is removed, so a stale adaptation can't linger. */
-export async function clearDarkLogo(base: string): Promise<void> {
+/** Clear the per-station hero display choices (they default off a logo's
+ *  existence, so a logo wipe must take them with it). */
+export async function clearAllStationPrefs(): Promise<void> {
   const d = await db();
-  if (!d || !base) return;
-  try { await d.runAsync('DELETE FROM dark_logos WHERE callsign_base = ?', [base.toUpperCase()]); }
-  catch (e) { console.warn('[stationDb] clearDarkLogo failed', e); }
+  if (!d) return;
+  try { await d.execAsync('DELETE FROM station_prefs; DELETE FROM logo_wanted;'); }
+  catch (e) { console.warn('[stationDb] clearAllStationPrefs failed', e); }
 }
 
 // ── per-station hero display prefs (§6.4 Display Call Sign / Display Frequency) ──
@@ -350,17 +339,6 @@ export async function setStationPrefs(base: string, showCall: boolean, showFreq:
   } catch (e) { console.warn('[stationDb] setStationPrefs failed', e); }
 }
 
-/** The source that last set a station's stored logo, or null. */
-export async function logoSourceOf(base: string): Promise<string | null> {
-  const d = await db();
-  if (!d || !base) return null;
-  try {
-    const r = await d.getFirstAsync<{ source: string | null }>(
-      `SELECT source FROM logos WHERE callsign_base = ?`, [base.toUpperCase()]);
-    return r?.source ?? null;
-  } catch { return null; }
-}
-
 /**
  * When a station's logo was last fetched — for hits AND recorded misses — so the
  * network layer can honour a TTL and not re-hit. null = never attempted.
@@ -373,17 +351,6 @@ export async function logoFetchedAt(base: string): Promise<number | null> {
       `SELECT fetched_at FROM logos WHERE callsign_base = ?`, [base.toUpperCase()]);
     return r ? (r.fetched_at ?? 0) : null;
   } catch { return null; }
-}
-
-/** True if a real logo (non-null blob) is stored for this station. */
-export async function hasLogo(base: string): Promise<boolean> {
-  const d = await db();
-  if (!d || !base) return false;
-  try {
-    const r = await d.getFirstAsync<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM logos WHERE callsign_base = ? AND img IS NOT NULL`, [base.toUpperCase()]);
-    return (r?.n ?? 0) > 0;
-  } catch { return false; }
 }
 
 /** Mark a station's logo as wanted (seen offline / fetch failed). */
@@ -409,18 +376,4 @@ export async function wantedBases(limit = 200): Promise<string[]> {
       `SELECT callsign_base FROM logo_wanted ORDER BY marked_at ASC LIMIT ?`, [limit]);
     return rows.map((r) => r.callsign_base);
   } catch { return []; }
-}
-
-/** Of the given bases, which have no stored logo yet (need fetching). */
-export async function basesMissingLogo(bases: string[]): Promise<string[]> {
-  const d = await db();
-  if (!d || bases.length === 0) return [];
-  const up = bases.map((b) => b.toUpperCase());
-  try {
-    const placeholders = up.map(() => '?').join(',');
-    const have = await d.getAllAsync<{ callsign_base: string }>(
-      `SELECT callsign_base FROM logos WHERE img IS NOT NULL AND callsign_base IN (${placeholders})`, up);
-    const haveSet = new Set(have.map((r) => r.callsign_base));
-    return up.filter((b) => !haveSet.has(b));
-  } catch { return up; }
 }

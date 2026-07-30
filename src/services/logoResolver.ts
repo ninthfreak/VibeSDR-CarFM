@@ -15,6 +15,8 @@
  */
 
 import { saveLogo, logoFetchedAt, markWanted } from './stationDb';
+import { putOriginal, hasOriginal } from './logoStore';
+import { prepareLogoRenditions } from './logoPrep';
 import { wikidataLogo } from './logoWikidata';
 import { siteFaviconLogo } from './logoSiteFavicon';
 import { ddgStationLogo } from './logoDuckDuckGo';
@@ -105,6 +107,8 @@ export async function resolveLogo(st: LogoStation, opts?: { force?: boolean }): 
   // Background callers stay disabled; only an explicit user action (force) runs.
   if (!AUTO_LOGO_RESOLUTION && !opts?.force) return false;   // see note above
   const base = st.base.toUpperCase();
+  // Already have the image on disk? Only a forced (user) resolve re-fetches.
+  if (!opts?.force && await hasOriginal(base)) return false;
   const at = await logoFetchedAt(base);
   // A forced (user-initiated) resolve ignores the TTL — the user is asking now.
   if (!opts?.force && at != null && Date.now() - at < CACHE_TTL_MS) return false;
@@ -140,7 +144,11 @@ export async function resolveLogo(st: LogoStation, opts?: { force?: boolean }): 
         if (img) { bytes = img.bytes; mime = img.mime; }
       }
       if (bytes) {
-        await saveLogo(base, bytes, mime ?? 'image/png',
+        // Image bytes go to the FILESYSTEM (master + derived renditions); the DB
+        // row keeps only the non-image metadata (genre/homepage/source/ttl).
+        await putOriginal(base, bytes, mime ?? 'image/png', hit.source);
+        await prepareLogoRenditions(base);
+        await saveLogo(base, null, null,
           hit.genre ?? null, hit.homepage ?? st.homepage ?? null, hit.source);
         return true;
       }

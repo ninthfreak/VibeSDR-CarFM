@@ -156,6 +156,13 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         else reactContext.startService(intent)
     }
 
+    /** "ctl=on focus=yes session=active" — or "unavailable" when the service isn't
+     *  running at all (which itself tells us the control session never started). */
+    @ReactMethod
+    fun getNwdControlState(promise: com.facebook.react.bridge.Promise) {
+        promise.resolve(VibeStreamService.instance?.nwdControlState() ?: "unavailable (service not running)")
+    }
+
     @ReactMethod
     fun stopNwdControl() {
         reactContext.startService(

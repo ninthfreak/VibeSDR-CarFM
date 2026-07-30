@@ -1,7 +1,7 @@
 /**
  * Public facade for the "stations near me" feature — the surface the UI calls.
  * Offline-first: the list always comes from the bundled FCC DB and NEVER blocks
- * on the network. Logos live in the same DB (blobs); they're read instantly and
+ * on the network. Logo IMAGES are files (logoStore.ts, `file://` URIs); they're read instantly and
  * resolved through the layered source chain (addendum §7): DuckDuckGo image
  * search (freq + callsign) -> Wikidata -> site favicon, with manual override.
  * Auto/background resolution is OFF — the chain runs only on an explicit user
@@ -15,10 +15,14 @@ import { getUserLocation } from './instancesApi';
 import { haversineKm } from './stationGeo';
 import {
   nearbyStations as dbNearby, stationsForCallsignBase, snapshotDate,
-  getLogoDataUri, markWanted, wantedBases, basesMissingLogo,
-  setManualLogo, logoSourceOf,
+  markWanted, wantedBases,
   type NearbyDbResult,
 } from './stationDb';
+import { prepareLogoRenditions } from './logoPrep';
+import {
+  putOriginal, readOriginalDataUri, displayUri, hasOriginal,
+  basesWithoutLogo, migrateLogosFromDb,
+} from './logoStore';
 import { resolveLogo, fetchImage, fetchImageResult, base64ToBytes, type LogoStation } from './logoResolver';
 import { stationLogoQuery } from './logoDuckDuckGo';
 import { piToCallsign, callsignBase } from './piCallsign';
@@ -52,7 +56,7 @@ function toLogoStation(r: NearbyDbResult): LogoStation {
 
 /** Fire background logo resolution for rows we don't have yet (throttled inside). */
 async function lazyResolve(rows: NearbyDbResult[], cap = 20): Promise<void> {
-  const missing = new Set(await basesMissingLogo(rows.map((r) => r.callsignBase)));
+  const missing = new Set(await basesWithoutLogo(rows.map((r) => r.callsignBase)));
   rows.filter((r) => missing.has(r.callsignBase)).slice(0, cap)
     .forEach((r) => { void resolveLogo(toLogoStation(r)); });
 }
@@ -65,12 +69,12 @@ export async function getNearbyStations(opts: NearbyOptions = {}): Promise<Nearb
 
   const rows = await dbNearby(location.lat, location.lon, radiusKm, opts.limit ?? 100);
 
-  const stations: NearbyStation[] = await Promise.all(rows.map(async (r) => ({
-    ...r,
-    logoUri: r.hasLogo ? await getLogoDataUri(r.callsignBase) : null,
-    genre: r.genre,
-    homepage: r.homepage,
-  })));
+  const stations: NearbyStation[] = await Promise.all(rows.map(async (r) => {
+    // `r.hasLogo` is the DB's (l.img IS NOT NULL), which is always false now that
+    // images are files — derive it from the store instead.
+    const logoUri = await displayUri(r.callsignBase, 96);   // nearby rows are small tiles
+    return { ...r, hasLogo: !!logoUri, logoUri, genre: r.genre, homepage: r.homepage };
+  }));
 
   if (opts.enrich !== false) void lazyResolve(rows.filter((r) => r.service === 'FM'));
   return { location, radiusKm, stations, snapshotDate: snap };
@@ -109,14 +113,25 @@ export async function identifyByPi(pi: number, psText?: string): Promise<Station
 /** A station was tuned/shown — resolve its logo now, or queue it if offline. */
 export async function noteEncountered(st: LogoStation): Promise<void> {
   if (!st.base) return;
-  if ((await basesMissingLogo([st.base])).length === 0) return; // already have it
+  if (await hasOriginal(st.base)) return;          // already have it (files own images now)
   await markWanted(st.base);        // queued even if the resolve below fails
   void resolveLogo(st);             // clears the queue entry on success
 }
 
 /** On-demand logo (data: URI) for one station (e.g. a row scrolled into view). */
-export async function getStationLogo(base: string): Promise<string | null> {
-  return getLogoDataUri(base);
+export async function getStationLogo(base: string, boxDp?: number): Promise<string | null> {
+  // A `file://` URI for the DISPLAY image: the smallest pre-rendered size that
+  // covers `boxDp`, else the trimmed copy, else the untouched master. File URIs
+  // let Android's image loader cache the decoded bitmap — a data: URI can't be
+  // cached and pays base64 + a bridge crossing on every load.
+  return displayUri(base, boxDp);
+}
+
+/** The ORIGINAL as supplied, untouched — the input every derived rendition is
+ *  computed from (dark-mode adaptation, future size variants). Never chain a
+ *  derivation off the display copy. */
+export async function getStationLogoOriginal(base: string): Promise<string | null> {
+  return readOriginalDataUri(base);
 }
 
 /**
@@ -251,7 +266,11 @@ export async function setStationLogoFromUrls(
   let lastErr = 'the image couldn’t be downloaded';
   for (const url of cands) {
     const r = await fetchImageResult(url);
-    if ('bytes' in r) { await setManualLogo(base, r.bytes, r.mime); return { ok: true }; }
+    if ('bytes' in r) {
+      await putOriginal(base, r.bytes, r.mime, 'manual');   // MASTER on disk, never altered
+      await prepareLogoRenditions(base);                    // trimmed copy + size ladder
+      return { ok: true };
+    }
     lastErr = r.error;
   }
   return { ok: false, error: lastErr };
@@ -264,13 +283,15 @@ export async function setStationLogoFromUrls(
 export async function setStationLogoFromUrl(base: string, url: string): Promise<boolean> {
   const img = await fetchImage(url);
   if (!img) return false;
-  await setManualLogo(base, img.bytes, img.mime);
+  await putOriginal(base, img.bytes, img.mime, 'manual');   // MASTER on disk
+  await prepareLogoRenditions(base);                        // trimmed copy + size ladder
   return true;
 }
 
 /** True if this station's logo was set by hand. */
 export async function isManualLogo(base: string): Promise<boolean> {
-  return (await logoSourceOf(base)) === 'manual';
+  const { getMeta } = await import('./logoStore');
+  return (await getMeta(base))?.source === 'manual';
 }
 
 export interface ImageResult { url: string; thumb: string; title: string; width?: number; height?: number; }
@@ -337,7 +358,8 @@ export async function consumeSharedLogo(): Promise<string | null> {
   if (!base) return null;                       // no pending target — ignore
   await AsyncStorage.removeItem(PENDING_LOGO_TARGET);
   try {
-    await setManualLogo(base, base64ToBytes(shared.base64), shared.mime || 'image/png');
+    await putOriginal(base, base64ToBytes(shared.base64), shared.mime || 'image/png', 'manual');
+    await prepareLogoRenditions(base);   // trimmed copy + size ladder
     return base;
   } catch {
     return null;
@@ -358,8 +380,10 @@ export async function sweepWantedLogos(cap = 100): Promise<void> {
 /** Prefetch logos for stations around a location (throttled inside resolveLogo). */
 async function regionalPrefetch(lat: number, lon: number, radiusKm = 100, cap = 60): Promise<void> {
   const rows = await dbNearby(lat, lon, radiusKm, 200);
-  const fm = rows.filter((r) => r.service === 'FM' && !r.hasLogo);
-  const missing = new Set(await basesMissingLogo(fm.map((r) => r.callsignBase)));
+  // Don't pre-filter on r.hasLogo: that DB flag is always false now (images are
+  // files). basesWithoutLogo is the real check.
+  const fm = rows.filter((r) => r.service === 'FM');
+  const missing = new Set(await basesWithoutLogo(fm.map((r) => r.callsignBase)));
   fm.filter((r) => missing.has(r.callsignBase)).slice(0, cap)
     .forEach((r) => { void resolveLogo(toLogoStation(r)); });
 }
@@ -370,6 +394,11 @@ async function regionalPrefetch(lat: number, lon: number, radiusKm = 100, cap = 
  * logos for the surrounding stations. All fetches are background + rate-limited.
  */
 export async function initLogoService(location?: { lat: number; lon: number }): Promise<void> {
+  // Images moved from SQLite blobs to files: drain the old tables once. Each
+  // migrated blob becomes that station's MASTER and gets the trim + size ladder,
+  // so logos assigned before prep-on-assign existed are fixed in place rather
+  // than staying small until reassigned. Awaited so the first render reads files.
+  try { await migrateLogosFromDb(); } catch { /* best effort */ }
   void sweepWantedLogos();
 
   const loc = location ?? (await getUserLocation());

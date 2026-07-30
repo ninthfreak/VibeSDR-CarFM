@@ -21,7 +21,7 @@ import {
 import Svg, { Circle, Line, Path, Rect } from 'react-native-svg';
 
 import { ddgStationLogoResults, stationLogoQuery, type DdgImage } from '../../services/logoDuckDuckGo';
-import { setStationLogoFromUrls, getStationLogo } from '../../services/stationFinder';
+import { setStationLogoFromUrls, getStationLogo, getStationLogoOriginal } from '../../services/stationFinder';
 import { getStationPrefs, setStationPrefs } from '../../services/stationDb';
 import LogoTile, { invalidateLogoTile, invalidateStationDisplay } from './LogoTile';
 import LogoDarkPicker from './LogoDarkPicker';
@@ -122,7 +122,9 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
       // A NEW logo was just assigned → offer the dark-mode treatment picker
       // before closing. Toggling display prefs alone (no pick) just closes.
       if (picking) {
-        const u = await getStationLogo(target.base);
+        // Dark adaptation derives from the ORIGINAL, never from the trimmed
+        // display copy — derived renditions are never chained off each other.
+        const u = await getStationLogoOriginal(target.base);
         if (u) { setDarkPick({ base: target.base, uri: u }); setSaving(false); return; }
       }
       onClose();
@@ -254,9 +256,10 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
                     <Pressable
                       key={`${r.image}-${i}`}
                       onPress={() => setSel(i)}
-                      style={[
+                      style={({ pressed }) => [
                         styles.cell,
                         { borderColor: selected ? pal.blue : pal.border, borderWidth: selected ? 2 : 1, backgroundColor: selected ? pal.blueFill : pal.raised },
+                        pressed && { opacity: 0.7, borderColor: pal.blue },
                       ]}
                       accessibilityRole="button"
                       accessibilityState={{ selected }}
@@ -337,8 +340,9 @@ export default function LogoSearchOverlay({ visible, pal, target, onClose, onAss
               <Pressable
                 onPress={confirm}
                 disabled={!canConfirm}
-                style={[
+                style={({ pressed }) => [
                   styles.btn, styles.confirm,
+                  pressed && canConfirm && { opacity: 0.7 },
                   { minWidth: narrow ? 120 : 148, height: narrow ? 50 : 56 },
                   canConfirm
                     ? { backgroundColor: pal.blue, borderColor: pal.blue }
