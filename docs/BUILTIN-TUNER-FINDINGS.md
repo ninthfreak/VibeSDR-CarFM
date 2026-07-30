@@ -399,3 +399,71 @@ ON = app-IN claim; OFF = source→0. `seek()` = `search()`.
 ## Ethics/scope
 Interoperability RE of our own device's interface, read-only, local. Do not
 redistribute decompiled code, modified APKs, or firmware.
+
+---
+
+# Steering wheel SOLVED — it is a BROADCAST, not a media/input key (2026-07-30)
+
+Static analysis of `com.nwd.radio.service` v2.1.4 (`RadioService`, `ArmRadioManager`).
+This overturns the whole earlier capture effort: two rounds of MediaSession work
+(active+PLAYING session, then an audio-focus grab) and an
+`Activity.dispatchKeyEvent` interceptor all logged **zero** events on-device,
+because **the wheel never enters Android's input pipeline at all.**
+
+## The real path
+```
+MCU  ──broadcast──►  com.nwd.action.ACTION_KEY_VALUE   (byte extra_key_value)
+                     com.nwd.action.ACTION_TEST_KEY    (int  extra_key_value)
+                          │
+     RadioService.onCreate: registerReceiver(mPanelKeyListener, filter)
+                          │        ^^^ NO permission argument — unprotected
+                          ▼
+     RadioService$4.onReceive → RadioFeatureAbs.handlePanelKey(byte)
+                          ▼
+     ArmRadioManager.handlePanelKey  — gated on
+                          Settings.System "mcu_current_source" == 4 (FM)
+```
+Because the receiver is registered with **no permission**, any app can both
+RECEIVE and SEND these broadcasts. CarFM now registers for them
+(`NwdRadioModule.startPanelKeyWatch`) and can fire them (`sendPanelKey`).
+
+## Panel-key dispatch table (verbatim from handlePanelKey)
+| Key | Action | Key | Action |
+|---|---|---|---|
+| 4 | `changeBand()` | 46 | `AMS()` (auto-store) |
+| 5, 60 | `search(up)` | 61 | `INTRO()` |
+| 6, 59 | `search(down)` | **62** | **`prefeb(true)` — preset NEXT** |
+| 16 | `seek(up)` | **63** | **`prefeb(false)` — preset PREV** |
+| 17 | `seek(down)` | 72 / 73 | `changeFmBand()` / `changeAmBand()` |
+
+## What `prefeb(boolean)` actually is
+Not a mystery method: it is **preset next/previous**. It steps `mCurPrefNum`
+(1..6), wraps into the next/previous BAND at the ends, then
+`tuneStation(mPrefFrequency[mBandType][num-1])` and `saveRadioData()`. So the
+wheel walks the **hardware** preset banks — 3 banks × 6 slots — which is exactly
+the reported symptom (scrolling past the user's stations into unwanted ones).
+
+## Presets are SOFTWARE, not MCU firmware
+`ArmRadioManager` holds `mPrefFrequency[[Frequency]` plus a
+`SharedPreferences mPreferences` and `saveRadioData()`. So the banks are Java-side
+state persisted in the service's private prefs — not tuner firmware.
+
+- `CleanFMPreFreData()` / `CleanAMPreFreData()` exist only on
+  `com.nwd.radio.arm.allwinner.AWFMFeature` (Allwinner variant — NOT the
+  `ArmRadioManager` this unit runs), and its sole caller is that class's own
+  `startScanAsync()`. `SprdFMFeature` has `CleanPreFreData()`. **None is reachable
+  over the AIDL**, and on this unit's manager they are not even the active code.
+- ⇒ Blanking the banks from a 3rd-party app remains unavailable. But it is now
+  moot AND undesirable: `prefeb` tunes `mPrefFrequency[..]` unconditionally, so a
+  zeroed slot would tune to garbage rather than be skipped.
+
+## The fix that follows
+We cannot cancel a normal broadcast, so the service still jumps to its own slot.
+But CarFM receives the SAME key and immediately steps ITS preset list
+(`fmHwStepRef` → animated hero swap), so the app's order wins and it refuses to
+walk past the end of the user's list. Verify: the diag line `panel key 62 (preset
+next)` should appear on every wheel press.
+
+## Ethics/scope
+Interoperability RE of our own device's interface, read-only, local. Do not
+redistribute decompiled code, modified APKs, or firmware.

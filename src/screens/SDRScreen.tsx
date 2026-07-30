@@ -42,7 +42,7 @@ import { splashBridge }                 from '../../App';
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
-import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdSyncPresets, onNwd } from '../services/nwdRadio';
+import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdSyncPresets, onNwd, PANEL_KEY } from '../services/nwdRadio';
 import { diag, isDiagEnabled } from '../services/diag';
 import { startMotion, stopMotion } from '../services/motion';
 import { startGpsFix, stopGpsFix } from '../services/gps';
@@ -3886,6 +3886,21 @@ export default function SDRScreen({ route, navigation }: Props) {
         scheduleSignalEst(p.mhz);
         diag(`freq ${p.mhz.toFixed(1)} arg=${p.arg} PS='${p.ps}'`);
         scheduleProbe(p.mhz);
+      }));
+      // STEERING WHEEL — the real transport. The MCU broadcasts
+      // com.nwd.action.ACTION_KEY_VALUE and the vendor service picks it up
+      // WITHOUT a permission, so we receive the same broadcast (decompile,
+      // 2026-07-30). This is why MediaSession + activity-key capture saw nothing:
+      // the wheel never enters Android's input pipeline.
+      //
+      // We can't cancel a normal broadcast, so the service still jumps to ITS
+      // slot (prefeb → mPrefFrequency[band][n-1]). Stepping CarFM's own preset
+      // right after makes the APP's order win — including refusing to walk into
+      // the phantom slots past the end of the user's list.
+      subs.push(onNwd('NwdPanelKey', (p) => {
+        diag(`panel key ${p.key}${p.key === PANEL_KEY.PRESET_NEXT ? ' (preset next)' : p.key === PANEL_KEY.PRESET_PREV ? ' (preset prev)' : ''}`);
+        if (p.key === PANEL_KEY.PRESET_NEXT) fmHwStepRef.current?.(1);
+        else if (p.key === PANEL_KEY.PRESET_PREV) fmHwStepRef.current?.(-1);
       }));
       subs.push(onNwd('NwdRadioRt', (p) => { setLiveStation((prev) => ({ ...prev, text: p.rt || undefined })); diag(`RT '${p.rt}'`); }));
       subs.push(onNwd('NwdRadioStereo', (p) => { setStereoDebounced(p.on); diag(`stereo ${p.on}`); }));

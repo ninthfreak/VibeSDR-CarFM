@@ -22,6 +22,7 @@ type NwdNative = {
   probe(): Promise<string>;
   setRdsEnabled(on: boolean): void;
   setAudioEnabled(on: boolean): void;
+  sendPanelKey?(key: number): void;
   requestAudioSource(): void;
   syncPresets(freqsMhz: number[]): Promise<number>;
   addListener(eventName: string): void;
@@ -99,7 +100,27 @@ export type NwdEvents = {
   NwdRadioScanState: { state: number };
   NwdRadioState: { state: number };
   NwdRadioDisconnected: Record<string, never>;
+  /** Steering-wheel / front-panel key, straight off the MCU's unprotected
+   *  `com.nwd.action.ACTION_KEY_VALUE` broadcast (see NwdRadioModule). 62 =
+   *  preset next, 63 = preset prev; see PANEL_KEY below. */
+  NwdPanelKey: { key: number; action: string };
 };
+
+/** The vendor service's own panel-key dispatch table (decompiled from
+ *  ArmRadioManager.handlePanelKey). Everything here also fires on the WHEEL. */
+export const PANEL_KEY = {
+  CHANGE_BAND: 4,
+  SEARCH_UP: 5, SEARCH_UP_ALT: 60,
+  SEARCH_DOWN: 6, SEARCH_DOWN_ALT: 59,
+  SEEK_UP: 16, SEEK_DOWN: 17,
+  AMS: 46, INTRO: 61,
+  PRESET_NEXT: 62, PRESET_PREV: 63,
+  CHANGE_FM_BAND: 72, CHANGE_AM_BAND: 73,
+} as const;
+
+/** Fire a panel key as if the wheel/panel had been pressed (same unprotected
+ *  broadcast the MCU sends) — lets us drive the service's own dispatch table. */
+export function nwdSendPanelKey(key: number): void { native?.sendPanelKey?.(key); }
 
 /** Subscribe to a native NWD event. Returns an unsubscribe fn (no-op if the
  *  module is absent, e.g. on a non-NWD unit or iOS). */
