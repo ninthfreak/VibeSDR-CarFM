@@ -68,3 +68,7 @@ android/app/src/main/cpp/vibedsp/test/build/
 # vibedsp host harness binary + cmake build dir
 android/app/src/main/cpp/vibedsp/test/fm_probe
 android/app/src/main/cpp/vibedsp/test/build/
+
+# ── Slimming (2026-07-31) ───────────────────────────────────────────────────
+# Expo iOS export leftovers — this fork is Android-only.
+dist-ios-tmp/

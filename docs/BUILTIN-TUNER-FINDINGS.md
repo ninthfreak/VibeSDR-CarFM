@@ -467,3 +467,127 @@ next)` should appear on every wheel press.
 ## Ethics/scope
 Interoperability RE of our own device's interface, read-only, local. Do not
 redistribute decompiled code, modified APKs, or firmware.
+
+## Cross-check against public prior art (web search, 2026-07-30)
+
+Searched for independent confirmation of the panel-key broadcast and the wider
+NWD/MCU picture. Summary: **the panel-key path above is not publicly documented
+anywhere I could find**, but the surrounding architecture and — importantly — a
+better answer to the wheel-suppression problem both are.
+
+**No hits.** `com.nwd.action.ACTION_KEY_VALUE`, `extra_key_value`,
+`handlePanelKey`, and the 62/63 preset codes return nothing relevant. Our
+decompile appears to be an independent finding.
+
+**Confirmed by others.** `kapi21/OpenRadioFM` (Apache-2.0) targets the same
+family incl. "QS NWD" and independently uses `ACTION_CHANGE_SOURCE` /
+`ACTION_REQUEST_CHANGE_SOURCE` for source switching (exactly our audio claim/
+release), reports **18 preset slots**, and had to add retry/`DeadObjectException`
+handling plus a broadcast-monitoring "shadow motor" because *"the AIDL service
+collapses unpredictably"* — a robustness gap CarFM does not yet cover.
+
+**New leads from that project, worth trying on our unit:**
+- Settings keys `nwd_radio_current_freq` and `nwd_radio_current_source` — a
+  cheaper, more reliable frequency feed than our 1.5s `getCurrentFrequency` poll,
+  and a direct read of the source state (we currently read `mcu_current_source`).
+- Their NWD MCU-frame work is explicitly *"proprietary/under research"*, so
+  direct MCU framing is unsolved publicly too — consistent with our conclusion
+  that tuner control is only reachable through the vendor service.
+
+**The wheel-suppression answer we were missing: an AccessibilityService.**
+OpenRadioFM's K706 path uses an accessibility service (`FactoryRadioHijackerService`)
+to intercept physical radio-button and KeyEvent broadcasts, gated by a
+`pref_a11y_forward_media_keys` preference. Android's `AccessibilityService.onKeyEvent`
+receives key events **before** applications and **consumes** them when it returns
+true (`android:canRequestFilterKeyEvents="true"` +
+`accessibilityFlag="flagRequestFilterKeyEvents"`).
+
+⇒ Our broadcast receiver *observes* the wheel but cannot cancel a normal
+broadcast, so the vendor service still jumps to its own slot. An accessibility
+service is the one documented mechanism that could actually **suppress** the
+event. Caveat: it filters *key events*, and on this unit the wheel arrives as a
+**broadcast**, not a key event — so it may not apply here at all. It is worth
+testing only if the panel-key receiver proves insufficient, and it costs the user
+a manual accessibility-permission grant.
+
+Sources: github.com/kapi21/OpenRadioFM · developer.android.com AccessibilityService
+· source.android.com/docs/automotive/displays/key_input · XDA NavRadio+ threads.
+
+## Hardware preset sync REMOVED (2026-07-31)
+
+With the wheel captured via the panel-key broadcast, CarFM drives its own preset
+list and never reads the head unit's banks. The one-way sync (Settings → "Program
+head unit") and the 18-slot ceiling are gone.
+
+The argument for keeping it — "matching banks make the vendor service's
+intermediate jump land on the same station, so there's no second tune" — does not
+hold. The service's `mCurPrefNum` advances one slot per press and wraps through
+ITS 18; CarFM's index advances one and wraps through the USER'S list length. They
+only stay aligned if the list is exactly 18 AND both start at the same slot. With
+6 presets the app wraps after 6 while the service sits at slot 7 — they diverge on
+the first wrap, and never re-align. So programming the banks cannot reliably make
+the two tunes match, "18" is not a meaningful boundary for anything, and the
+seamless audio observed on-device comes from the correction being fast, not from
+the banks agreeing.
+
+Removed: SettingsPanel section + props, SDRScreen sync/compare state and the
+`@carfm/nwd_preset_sig_v1` record, `nwdSyncPresets`, `NwdRadioModule.syncPresets`
+and its orphaned `gotoBand` helper. There is now NO app-side preset cap — the
+count is the user's choice; the only soft costs are one wheel press per preset
+when cycling, and one logo resolve per preset at startup.
+
+## Signal + RadioText: a channel that BYPASSES the AIDL (2026-07-31)
+
+Re-examined the service for anything genuinely unexplored. Everything below is
+static analysis of `com.nwd.radio.service` v2.1.4.
+
+### Closed off for good
+- **The AIDL is exactly what we reconstructed.** `RadioFeature$Stub`'s
+  TRANSACTION_* constants are 1..30 in our declared order — no hidden method, no
+  mis-ordering. Nothing on it exposes signal.
+- **`RadioCallback` is complete too** — all 14 notify* methods, matching ours.
+  There is **no signal/RSSI callback at all**, so signal was never going to be
+  pushed to us.
+- **Outgoing broadcasts carry no signal or RT.** `ACTION_SEND_RADIO_FREQUENCE`
+  (+`_NEW`), `ACTION_SEND_SCAN_RADIO_FREQUENCE` and `ACTION_RADIO_STATE` carry
+  only frequency, band, preset number and state. `nwd_radio_state` is written to
+  the settings table; no signal/RT key exists.
+
+### Why RadioText has always been empty
+`ArmRadioManager.getRtMessage()` is `return "";` — **hardcoded**. The other three
+managers (`AWRadioManager`, `SprdRadioManager`, `RadioManager`) return a real
+`mRtMessage`. RT was never gated behind a setting we failed to flip; on this
+unit's manager the method is a stub. Also note `setRDSState(byte which, bool)`
+only acts on which==1 (AF) and which==2 (TA) — our `which=0` call sets no flag.
+
+### The unexplored channel — and it has both
+`RadioService.onCreate` picks `ArmRadioManager` when
+`RadioJsonNative.getRadioIc().equals("SI47925")` — a **Silicon Labs Si4792x**
+tuner. `RadioJsonNative` does NOT use the AIDL or JNI: it talks to the MCU in
+JSON through a **vendor framework class**, by reflection:
+
+```java
+ReflectUtil.invokeStatic(android.os.Hardware, "parseJson", String.class, json)
+  {"MODULE":"radio","ACTION":"get","IC":"query"}    -> "SI47925"
+  {"MODULE":"radio","ACTION":"get","RSSI":"query"}  -> signal strength (string int)
+  {"MODULE":"radio","ACTION":"get","RDS":"query"}   -> 16 hex chars = ONE raw RDS
+      group (4 blocks x 2 bytes); "0000000000000000" means no data this poll
+```
+(also `tune`, `setRadioBand`, `setRadioPower`, `setStereoMono`, `setRadioVolume`.)
+
+`android.os.Hardware` is a ROM addition, not AOSP — so it is likely ABSENT from
+the hidden-API blocklist (which is generated from AOSP), and the framework is
+loaded into every app process. If reflection reaches it, this gives the two
+things the AIDL cannot: **true signal strength**, and **raw RDS groups** from
+which RadioText can be decoded ourselves.
+
+**UNPROVEN.** It may fail on the class lookup (different ROM), on hidden-API
+access, or return an error (permission/UID). `NwdRadioModule.probeJsonHardware()`
+runs all three queries read-only and reports the verbatim result or the exact
+exception type — Settings → Diagnostics → "Probe signal + raw RDS (JSON
+channel)". The exception type is the diagnosis: ClassNotFoundException = wrong
+ROM, NoSuchMethodException = different signature, SecurityException /
+InvocationTargetException = reachable but refused.
+
+If it answers, decoding RT means polling groups and assembling 2A/2B segments
+ourselves — real work, but the data would finally be there.

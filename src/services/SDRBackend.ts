@@ -68,34 +68,6 @@ export interface ProfileInfo {
   bwHz?:     number;
 }
 
-/** One aircraft from an OWRX ADS-B list.
- *
- *  Fields are the server's own (verified on-air against a live 1090MHz profile).
- *  `country`/`ccode` come FROM THE SERVER — no ICAO-range table needed — and are the
- *  aircraft's REGISTRY, not where the flight departed: a Ryanair 737 is Irish wherever
- *  it took off from. */
-export interface Aircraft {
-  icao:      string;      // 24-bit address, hex — the only field always present
-  flight?:   string;      // callsign, e.g. RYR4KL
-  reg?:      string;      // registration, e.g. D-AENE (the server calls it `aircraft`)
-  ccode?:    string;      // ISO country of REGISTRY
-  country?:  string;
-  altitude?: number;      // ft
-  speed?:    number;      // kt (ground)
-  vspeed?:   number;      // ft/min — climbing/descending
-  course?:   number;      // degrees
-  squawk?:   string;
-  rssi?:     number;      // dB
-  msgs?:     number;
-  lat?:      number;
-  lon?:      number;
-  /** Great-circle km from the RECEIVER (computed here — the server sends position,
-   *  not distance). Absent when the aircraft hasn't sent a position yet: plenty of
-   *  records carry altitude and speed with no lat/lon at all. */
-  distKm?:   number;
-  bearing?:  number;      // degrees from the receiver
-}
-
 /** A demodulator the backend offers (OWRX reports these; UI gates the picker). */
 export interface BackendMode {
   id:    string;            // wire modulation name (usb, wfm, dmr, dab…)
@@ -183,12 +155,6 @@ export interface SDRBackend {
   getProfiles?(): ProfileInfo[];
   selectProfile?(id: string): void;
 
-  /** OWRX: the active secondary decoder id (SSTV/Fax/…) running on top of the
-   *  analog carrier, or null. Lets the UI highlight the carrier AND the decoder. */
-  getSecondaryDecoder?(): string | null;
-  /** OWRX: send a chat message on the main WS (basic text chat, no tune/zoom sync).
-   *  name = the user's chosen handle, prefixed to each message server-side. */
-  sendChat?(text: string, name: string): void;
   /** OWRX: squelch level in dB (−150 = off/open). */
   setSquelch?(level: number): void;
   /** OWRX: noise reduction — threshold ≤ 0 = off, higher = more NR. */
@@ -261,10 +227,6 @@ export interface BackendCallbacks extends SDRCallbacks {
    *  NOT background tasks). Pairs with onSdrUsage so the user can tell whether an
    *  in-use SDR has real listeners before switching its profile. */
   onClients?: (count: number) => void;
-  /** OWRX: an inbound chat message (server broadcasts incl. our own echo). */
-  onChatMessage?: (name: string, text: string, color?: string) => void;
-  /** OWRX: whether the server has chat enabled (config `allow_chat`). */
-  onChatEnabled?: (enabled: boolean) => void;
   /** OWRX: server software name (OpenWebRX / OpenWebRX+) + version, for the menu. */
   onServerInfo?: (info: { name: string; version: string }) => void;
   /** OWRX: server's available demodulators — gate the mode picker to these. */
@@ -292,31 +254,9 @@ export interface BackendCallbacks extends SDRCallbacks {
    *  receiver.gps.lon). Drives the ITU region (MW 9/10 kHz) for custom/OWRX hosts
    *  that don't come through the directory with a known longitude. */
   onReceiverLon?: (lon: number) => void;
-  /** Full receiver lat/lon (Kiwi `gps=(lat,lon)`) — drives FT8 spot distances and
-   *  the on-device-decoder map for Local/Kiwi. */
-  onReceiverLoc?: (lat: number, lon: number) => void;
   /** OWRX: server bookmarks + dial-frequency markers arrive over the WS (no REST
    *  endpoint like UberSDR). Feeds the VTS station readout + the search bar. */
   onBookmarks?: (list: { name: string; frequency: number; mode?: string; repeater?: boolean }[]) => void;
-  /** OWRX: server-side secondary-decoder image output (SSTV/Fax). The server
-   *  decodes and streams scanlines; the UI just paints them on the decoder
-   *  canvas — SSTV pixels are RGB triplets, Fax pixels are greyscale bytes. */
-  onDecoderImage?: (ev:
-    | { phase: 'start'; kind: 'sstv' | 'fax'; width: number; height: number }
-    | { phase: 'line';  kind: 'sstv' | 'fax'; line: number; width: number; pixels: Uint8Array }
-    | { phase: 'done';  kind: 'sstv' | 'fax' }) => void;
-  /** OWRX: server-side TEXT-decoder output (Packet/POCSAG/FLEX/DSC/ISM/HFDL/
-   *  ACARS/ADSB/WSJT…), one formatted line per record. `replace` true = a live
-   *  snapshot (ADS-B list) that supersedes the previous block rather than appends. */
-  onDecoderText?: (line: string, replace?: boolean) => void;
-
-  /** OWRX ADS-B: the live aircraft table, STRUCTURED.
-   *
-   *  The same records also become a text blob for the decoder panel — but flattening
-   *  them to text on arrival is why nothing else in the app could ever use them. The
-   *  server sends a rich record (registration country, altitude, speed, vertical
-   *  rate, position, squawk); keep it. */
-  onAircraft?: (list: Aircraft[]) => void;
   /** OWRX: the server/profile's own preset DSP defaults (config `initial_squelch_level`
    *  / `initial_nr_level`), pushed on connect and every profile switch. The adapter
    *  has already applied them to the demod; this just lets the UI sliders reflect the
@@ -327,3 +267,22 @@ export interface BackendCallbacks extends SDRCallbacks {
 }
 
 export type { SDRStatus, SDRMode, SDRCallbacks };
+
+
+/** Server-side DSP (VibeDSP) filter catalogue, as reported by the backend.
+ *  Lives here rather than in a UI file: the adapters publish it (KiwiAdapter
+ *  ships a static list, UberSDR fetches one). */
+export interface DspParamDesc {
+  name:          string;
+  type?:         string;   // 'float' | 'int' | 'bool' | free text
+  default?:      string;
+  min?:          string;
+  max?:          string;
+  description?:  string;
+  runtime_safe?: boolean;
+}
+export interface DspFilterDesc {
+  name:         string;
+  description?: string;
+  params?:      DspParamDesc[];
+}

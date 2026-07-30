@@ -1,5 +1,10 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
   <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <!-- MainActivity swaps the splash theme out for this one in onCreate, and the
+         window then shows THIS background until React has rendered. Without an
+         explicit value it inherits AppCompat DayNight's default — WHITE in day
+         mode — which is the blank white screen seen during startup. -->
+    <item name="android:windowBackground">@color/splashscreen_background</item>
     <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
     <item name="colorPrimary">@color/colorPrimary</item>
     <item name="android:statusBarColor">@android:color/transparent</item>

@@ -264,6 +264,63 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
      *  the RDS-enable selectors, presets and radio/scan state. Purely read-only;
      *  safe to call any time after connect. Returns a formatted multi-line string
      *  that JS writes to the tuner diagnostics log. */
+    // ── android.os.Hardware JSON channel (decompile, 2026-07-31) ────────────────
+    // The vendor service does NOT get signal or RDS over the AIDL we bind — it
+    // goes around it. RadioService picks ArmRadioManager when
+    // RadioJsonNative.getRadioIc() == "SI47925" (a Silicon Labs Si4792x), and
+    // RadioJsonNative talks to the MCU as JSON through a VENDOR FRAMEWORK class:
+    //
+    //   ReflectUtil.invokeStatic(android.os.Hardware, "parseJson", String) with
+    //     {"MODULE":"radio","ACTION":"get","IC":"query"}    -> "SI47925"
+    //     {"MODULE":"radio","ACTION":"get","RSSI":"query"}  -> signal, as a string
+    //     {"MODULE":"radio","ACTION":"get","RDS":"query"}   -> 16 hex chars =
+    //       ONE raw RDS group (4 blocks x 2 bytes); "0000000000000000" = no data
+    //
+    // android.os.Hardware is a ROM addition, not AOSP — so it is very likely
+    // ABSENT from the hidden-API blocklist (which is generated from AOSP), and
+    // the framework is loaded into every app process. That makes this plausibly
+    // reachable by reflection from an ordinary app, which would give us the two
+    // things the AIDL genuinely cannot: TRUE signal strength and raw RDS (hence
+    // RadioText, which ArmRadioManager.getRtMessage() hardcodes to "").
+    //
+    // UNPROVEN until this probe runs on the unit: it may throw on the class
+    // lookup (different ROM), on access (hidden-API), or return an error string
+    // (permission / wrong UID). All three are reported verbatim rather than
+    // swallowed. Read-only queries only — nothing here changes tuner state.
+    private fun hardwareParseJson(json: String): String {
+        val cls = Class.forName("android.os.Hardware")
+        val m = cls.getMethod("parseJson", String::class.java)
+        return m.invoke(null, json)?.toString() ?: "(null)"
+    }
+
+    /** Try the JSON channel and report exactly what happened, success or failure. */
+    @ReactMethod
+    fun probeJsonHardware(promise: Promise) {
+        val sb = StringBuilder("JSON-HARDWARE PROBE (android.os.Hardware.parseJson)\n")
+        fun q(label: String, key: String) {
+            sb.append("  ").append(label).append(" = ")
+            try {
+                sb.append('"').append(hardwareParseJson(
+                    """{"MODULE":"radio","ACTION":"get","$key":"query"}""")).append('"')
+            } catch (e: Throwable) {
+                // The exception TYPE is the diagnosis: ClassNotFoundException =
+                // this ROM has no such class; NoSuchMethodException = different
+                // signature; SecurityException / InvocationTargetException =
+                // reachable but refused.
+                sb.append("ERR ").append(e.javaClass.name).append(": ").append(e.message)
+            }
+            sb.append('\n')
+        }
+        q("IC   (expect SI47925)", "IC")
+        q("RSSI (expect a number)", "RSSI")
+        q("RDS  (expect 16 hex chars)", "RDS")
+        // A second RDS read a moment later: RDS arrives group by group, so two
+        // identical non-zero reads still prove the channel is live.
+        Thread.sleep(300)
+        q("RDS  (2nd read)", "RDS")
+        promise.resolve(sb.toString())
+    }
+
     @ReactMethod
     fun probe(promise: Promise) {
         val r = radio ?: run { promise.reject("nc", "not connected"); return }
@@ -349,54 +406,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_CHANGE_SOURCE").putExtra("extra_source_id", 4.toByte()))
     }
 
-    /** ONE-WAY preset sync (app → head unit): overwrite the built-in FM1/FM2/FM3
-     *  preset banks with the given ASCENDING MHz list (max 18, sequential fill).
-     *  Verified on-device via the probe. Per slot: hop to the bank (changeBand),
-     *  tune to the freq, saveCurrentFrequency(slot 0-5). Restores the originally
-     *  tuned station afterward. Runs off the UI thread — the tuner audibly sweeps
-     *  through the frequencies during the write (~N*1.6s), so JS calls this only on
-     *  a deliberate, debounced preset edit, never continuously. It NEVER reads the
-     *  unit's presets back into the app (guardrail: sync is app→unit only). */
-    @ReactMethod
-    fun syncPresets(freqsMhz: ReadableArray, promise: Promise) {
-        val r = radio ?: run { promise.reject("nc", "not connected"); return }
-        Thread {
-            try {
-                val orig = try { r.getCurrentFrequency() } catch (e: Throwable) { null }
-                val origRaw = orig?.freq ?: -1
-                val origBank = orig?.band?.toInt() ?: 0
-                val n = minOf(freqsMhz.size(), 18)
-                for (i in 0 until n) {
-                    val bank = i / 6
-                    val slot = i % 6
-                    if (slot == 0) gotoBand(bank)
-                    val raw = Math.round(freqsMhz.getDouble(i) * freqMult).toInt()
-                    try { r.setCurrentFrequency(raw, fmBand, 0) } catch (e: Throwable) { Log.w(TAG, "sync tune", e) }
-                    Thread.sleep(1200)   // let mCurrentStation settle before saving
-                    try { r.saveCurrentFrequency(slot.toByte()) } catch (e: Throwable) { Log.w(TAG, "sync save", e) }
-                    Thread.sleep(400)
-                }
-                // Return to the station the user was listening to.
-                if (origRaw > 0) {
-                    gotoBand(origBank)
-                    try { r.setCurrentFrequency(origRaw, fmBand, 0) } catch (e: Throwable) {}
-                }
-                promise.resolve(n)
-            } catch (e: Throwable) { promise.reject("sync", e.message, e) }
-        }.start()
-    }
 
-    /** changeBand() until the tuner is on FM bank `target` (FM1=0/FM2=1/FM3=2). */
-    private fun gotoBand(target: Int): Boolean {
-        val r = radio ?: return false
-        for (t in 0 until 8) {
-            val b = try { r.getCurrentFrequency()?.band?.toInt() ?: -1 } catch (e: Throwable) { -1 }
-            if (b == target) return true
-            try { r.changeBand() } catch (e: Throwable) { Log.w(TAG, "changeBand", e) }
-            Thread.sleep(1600)
-        }
-        return (try { r.getCurrentFrequency()?.band?.toInt() ?: -1 } catch (e: Throwable) { -1 }) == target
-    }
 
     // ── Callbacks → JS events ──────────────────────────────────────────────────
     private val callback = object : RadioCallback.Stub() {

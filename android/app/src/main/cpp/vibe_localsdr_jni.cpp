@@ -292,49 +292,6 @@ extern "C" JNIEXPORT jfloat JNICALL
 Java_com_ninthfreak_carfm_VibeLocalSDR_nativeGetNrCpu(JNIEnv*, jobject) {
     return vibe::LocalSdrShim::instance().getNrCpu();
 }
-// ── Decoder-only sidecar (Kiwi/OWRX): decode the backend's audio natively ────
-extern "C" JNIEXPORT jint JNICALL
-Java_com_ninthfreak_carfm_VibeLocalSDR_nativeStartDecoderService(JNIEnv* env, jobject) {
-    std::string err;
-    int port = vibe::LocalSdrShim::instance().startDecoderService(err);
-    if (port < 0) LOGE("startDecoderService: %s", err.c_str());
-    return port;
-}
-// PCM is base64-encoded int16 LE (same form JS already builds for pushExternalPcm).
-extern "C" JNIEXPORT void JNICALL
-Java_com_ninthfreak_carfm_VibeLocalSDR_nativeFeedDecoderPcm(JNIEnv* env, jobject, jstring b64, jint rate) {
-    if (!b64) return;
-    const char* s = env->GetStringUTFChars(b64, nullptr);
-    if (!s) return;
-    // Inline base64 decode (RFC 4648).
-    auto dval = [](char c) -> int {
-        if (c >= 'A' && c <= 'Z') return c - 'A';
-        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-        if (c >= '0' && c <= '9') return c - '0' + 52;
-        if (c == '+') return 62;
-        if (c == '/') return 63;
-        return -1;
-    };
-    std::vector<uint8_t> bytes;
-    int val = 0, bits = 0;
-    for (const char* q = s; *q; q++) {
-        int d = dval(*q);
-        if (d < 0) continue;
-        val = (val << 6) | d; bits += 6;
-        if (bits >= 8) { bits -= 8; bytes.push_back((uint8_t)((val >> bits) & 0xFF)); }
-    }
-    (void)val;
-    env->ReleaseStringUTFChars(b64, s);
-    int n = (int)(bytes.size() / 2);
-    if (n < 2) return;
-    vibe::LocalSdrShim::instance().feedDecoderPcm((const int16_t*)bytes.data(), n, (int)rate);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_ninthfreak_carfm_VibeLocalSDR_nativeSetDecoderFreq(JNIEnv*, jobject, jdouble hz) {
-    vibe::LocalSdrShim::instance().setDecoderFreq((double)hz);
-}
-
 // ── RTL-TCP SERVER (share this device's USB dongle over the network) ─────────
 extern "C" JNIEXPORT jint JNICALL
 Java_com_ninthfreak_carfm_VibeLocalSDR_nativeStartServer(

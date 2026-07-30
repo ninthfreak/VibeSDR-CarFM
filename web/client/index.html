@@ -358,7 +358,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* Panels are centred POP-UPS, not side drawers — a full-height drawer holding
    five sliders is mostly empty space. Sized to their content, capped at 80vh.
    The huge box-shadow spread is the backdrop dim (no extra element needed). */
-#menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel {
+#menu, #bookmarksPanel, #recordingsPanel, #audioPanel, #freqPanel {
   position: fixed; top: 50%; left: 50%; z-index: 51;
   width: min(92vw, 520px); max-height: 82vh; overflow-y: auto;
   background: rgba(8,6,2,0.98); border: 1px solid var(--btn-border);
@@ -368,32 +368,18 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   opacity: 0; visibility: hidden;
   transition: opacity .14s ease-out, transform .14s ease-out, visibility .14s;
 }
-#menu.open, #bookmarksPanel.open, #decodersPanel.open,
+#menu.open, #bookmarksPanel.open,
 #recordingsPanel.open, #audioPanel.open, #freqPanel.open {
   opacity: 1; visibility: visible;
   transform: translate(-50%, -50%) scale(1);
 }
-/* Wider ones: bookmarks/recordings/decoders list real content. */
-#bookmarksPanel, #recordingsPanel, #decodersPanel { width: min(94vw, 640px); }
+/* Wider ones: bookmarks/recordings list real content. */
+#bookmarksPanel, #recordingsPanel { width: min(94vw, 640px); }
 
-/* Decoder output. */
-#decText {
-  margin: 10px 0 0; padding: 10px; min-height: 120px; max-height: 300px; overflow-y: auto;
-  background: #000; border: 1px solid var(--btn-border); border-radius: 6px;
-  color: var(--btn-text); font-size: 12px; white-space: pre-wrap; word-break: break-word;
-}
-#decImage {
-  display: none; width: 100%; margin-top: 10px; background: #000;
-  border: 1px solid var(--btn-border); border-radius: 6px; image-rendering: pixelated;
-}
-#decImage.on { display: block; }
-#decText.off { display: none; }
-#spotList { margin-top: 10px; }
 /* Active buttons in the panels. NB: an earlier edit spliced a
    `button.btn[hidden] { display: none }` rule INTO this selector list, which made
    every ACTIVE button in the decoder/audio panels display:none — switch one on and
    it vanished, with no way to switch it back off. */
-#decodersPanel button.btn.on,
 #audioPanel button.btn.on,
 #recordingsPanel button.btn.on {
   background: var(--btn-active-bg);
@@ -401,45 +387,6 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   color: var(--btn-active-tx);
 }
 
-
-/* ── Decoder output box (persistent, bottom-left) ─────────────────────────── */
-#decBox {
-  /* Absolute inside #wfWrap, NOT fixed to the viewport — fixed + bottom:0 put it
-     underneath the control bar. This way it always floats above the bar, whatever
-     height the bar happens to be. */
-  /* Sits above the VTS bar when that's visible — the offset is set from JS, the
-     way the app positions its DecoderPanel above the pill. */
-  position: absolute; left: 14px; bottom: var(--decBoxBottom, 14px); z-index: 45;
-  transition: bottom .15s ease-out;
-  width: min(46vw, 560px); display: none;
-  background: rgba(8,6,2,0.96); border: 1px solid var(--btn-border);
-  border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
-  overflow: hidden;
-}
-#decBox.open { display: block; }
-#decBoxHead {
-  display: flex; align-items: center; gap: 8px; padding: 7px 10px;
-  border-bottom: 1px solid var(--bar-border); font-size: 12px;
-}
-#decBoxHead .dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: rgba(255,255,255,0.25); flex: 0 0 8px;
-}
-#decBoxHead .dot.live { background: #33cc44; box-shadow: 0 0 6px #33cc44; }
-#decTitle { color: var(--amber); letter-spacing: 2px; }
-#decStatus { color: var(--text-dim); font-size: 11px; flex: 1 1 auto; }
-#decBoxHead .btn { padding: 2px 8px; font-size: 11px; }
-#decBody { max-height: 40vh; overflow-y: auto; padding: 8px 10px; }
-#decBox.min #decBody { display: none; }
-#decText {
-  margin: 0; color: var(--btn-text); font-size: 12px;
-  white-space: pre-wrap; word-break: break-word; min-height: 60px;
-}
-#decText.off { display: none; }
-#decImage { display: none; width: 100%; background: #000; image-rendering: pixelated; }
-#decImage.on { display: block; }
-#spotList { display: none; }
-#spotList.on { display: block; }
 
 /* Menu button rows + settings sub-panels (mirrors the app's menu). */
 .btnRow { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
@@ -546,31 +493,6 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 
 
-/* Spot table — the app's columns: time / band / snr / call / country / distance */
-#spotFilters { display: none; gap: 3px; }
-#spotFilters.show { display: inline-flex; }
-#spotFilters .btn { padding: 2px 6px; font-size: 10px; }
-/* Columns: time · band · snr · call · country · distance.
-   The CALL was 1fr, so it soaked up all the slack (a lake of dead space) while
-   COUNTRY sat at a fixed 2.6em and collided with the distance. Country is the
-   variable-length field, so that's the one that should flex — and it ellipsises
-   rather than overrunning its neighbour. */
-#spotList .sres.spot {
-  display: grid;
-  grid-template-columns: 3.2em 2.6em 2.6em 5.6em minmax(0, 1fr) 4.6em;
-  gap: 8px; align-items: baseline; font-size: 11px; padding: 4px 6px;
-}
-#spotList .cty { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#spotList .call { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#spotList .t { color: var(--unit); font-variant-numeric: tabular-nums; }
-#spotList .band { color: var(--text-dim); }
-#spotList .snr { text-align: right; font-variant-numeric: tabular-nums; }
-#spotList .snr.pos { color: #55d98d; }
-#spotList .snr.neg { color: rgba(255,160,0,0.65); }
-#spotList .call { color: var(--freq); letter-spacing: 1px; }
-#spotList .cty { color: var(--text-dim); }
-#spotList .km { color: var(--unit); text-align: right; font-variant-numeric: tabular-nums; }
-
 /* Recordings. */
 #recsList .sres { flex-wrap: wrap; }
 #recsList audio { width: 100%; margin-top: 6px; height: 30px; }
@@ -663,27 +585,6 @@ select.btn { padding: 6px 8px; }
   <span id="vtsBand"></span>
 </div>
 
-<div id="decBox">
-  <div id="decBoxHead">
-    <span class="dot" id="decDot"></span>
-    <span id="decTitle">RTTY</span>
-    <span id="decStatus"></span>
-    <!-- Spot filters — cyclers, as in the app's decoder-panel header. -->
-    <span id="spotFilters">
-      <button class="btn" id="sfMode" title="Mode filter">ALL</button>
-      <button class="btn" id="sfBand" title="Band filter">ALL</button>
-      <button class="btn" id="sfAge" title="Age filter">AGE</button>
-    </span>
-    <button class="btn" id="decClr" title="Clear output">CLR</button>
-    <button class="btn" id="decMin" title="Minimise">–</button>
-    <button class="btn" id="decHide" title="Stop and close">&#10005;</button>
-  </div>
-  <div id="decBody">
-    <pre id="decText"></pre>
-    <canvas id="decImage"></canvas>
-    <div id="spotList"></div>
-  </div>
-</div>
   </div><!-- /#wfWrap -->
 
   <div id="bar">
@@ -742,7 +643,6 @@ select.btn { padding: 6px 8px; }
           <!-- Only useful while unlocked: snap the view back onto the VFO. -->
           <button class="btn" id="centreBtn" title="Centre the view on the VFO" hidden>CENTRE</button>
           <button class="btn" id="menuBtn">MENU</button>
-          <button class="btn" id="decodersBtn" title="RTTY / NAVTEX / WEFAX / SSTV / FT8">DECODERS</button>
         </div>
         <div class="group">
           <span class="lbl">VOL</span>
@@ -843,96 +743,6 @@ select.btn { padding: 6px 8px; }
   </div>
 </div>
 
-<!-- DECODERS menu — a copy of the app's CLIENT DECODERS + DECODED SPOTS section.
-     No viewer in here: selecting a decoder opens the persistent output box
-     (bottom-left), the way OpenWebRX does it. Morse is absent on purpose — the
-     shim has no morse decoder (the app hides it for local hardware too). -->
-<div id="decodersPanel">
-  <div id="menuHead">
-    <span>DECODERS</span>
-    <button class="btn" id="decClose">CLOSE</button>
-  </div>
-
-  <h2>CLIENT DECODERS</h2>
-  <div class="btnRow">
-    <button class="btn" data-dec="rtty">RTTY</button>
-    <button class="btn" data-dec="navtex">NAVTEX</button>
-    <button class="btn" data-dec="wefax">WEFAX</button>
-    <button class="btn" data-dec="sstv">SSTV</button>
-  </div>
-
-  <!-- Settings for the selected mode appear underneath, as in the app. -->
-  <div class="subPanel" id="rttySettings" hidden>
-    <div class="mrow">
-      <label>PRESET</label>
-      <div class="seg" id="rttyPreset">
-        <button class="btn on" data-preset="ham">HAM</button>
-        <button class="btn" data-preset="weather">WEATHER</button>
-        <button class="btn" data-preset="sitor-b">SITOR-B</button>
-      </div>
-    </div>
-    <div class="mrow">
-      <label>SHIFT</label>
-      <div class="seg" id="rttyShift">
-        <button class="btn on" data-shift="170">170</button>
-        <button class="btn" data-shift="200">200</button>
-        <button class="btn" data-shift="425">425</button>
-        <button class="btn" data-shift="450">450</button>
-        <button class="btn" data-shift="850">850</button>
-      </div>
-    </div>
-    <div class="mrow">
-      <label>BAUD</label>
-      <div class="seg" id="rttyBaud">
-        <button class="btn on" data-baud="45.45">45.45</button>
-        <button class="btn" data-baud="50">50</button>
-        <button class="btn" data-baud="75">75</button>
-        <button class="btn" data-baud="100">100</button>
-      </div>
-    </div>
-    <div class="mrow">
-      <label>ENCODING</label>
-      <div class="seg" id="rttyEnc">
-        <button class="btn on" data-enc="ITA2">ITA2</button>
-        <button class="btn" data-enc="ASCII">ASCII</button>
-        <button class="btn" data-enc="CCIR476">CCIR476</button>
-      </div>
-    </div>
-    <div class="mrow">
-      <label>INVERTED</label>
-      <div class="seg"><button class="btn" id="rttyInv">OFF</button></div>
-    </div>
-  </div>
-
-  <div class="subPanel" id="wefaxSettings" hidden>
-    <div class="mrow">
-      <label>LPM</label>
-      <div class="seg" id="wefaxLpm">
-        <button class="btn" data-lpm="60">60</button>
-        <button class="btn on" data-lpm="120">120</button>
-        <button class="btn" data-lpm="240">240</button>
-      </div>
-    </div>
-  </div>
-
-  <h2>RECEIVER LOCATION</h2>
-  <div class="lbl" id="rxLoc">Not published by this server</div>
-  <div class="lbl" style="margin-bottom:6px">
-    Distances and the band plan are measured from the RECEIVER, not from you —
-    the server may be in another town. Set a grid here only if the server hasn't
-    published its own location.
-  </div>
-
-  <h2>DECODED SPOTS</h2>
-  <div class="btnRow">
-    <button class="btn" id="spotsBtn">DIGITAL SPOTS</button>
-    <button class="btn" id="mapBtn" title="Opens in a new tab">&#128506; MAP</button>
-  </div>
-  <div class="lbl" style="margin-top:6px">
-    Decoding runs on the server. Tap a spot to tune.
-  </div>
-</div>
-
 <div id="recordingsPanel">
   <div id="menuHead">
     <span>RECORDINGS</span>
@@ -971,6 +781,13 @@ select.btn { padding: 6px 8px; }
   <div id="menuHead">
     <span>MENU</span>
     <button class="btn" id="menuClose">CLOSE</button>
+  </div>
+
+  <h2>RECEIVER LOCATION</h2>
+  <div class="lbl" id="rxLoc">Not published by this server</div>
+  <div class="lbl" style="margin-bottom:6px">
+    Distances and the band plan are measured from the RECEIVER, not from you —
+    the server may be in another town.
   </div>
 
   <h2>RADIO</h2>

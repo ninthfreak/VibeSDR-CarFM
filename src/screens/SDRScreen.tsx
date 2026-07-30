@@ -20,29 +20,20 @@ import {
   Alert,
   AppState,
   BackHandler,
-  ActivityIndicator,
-  Dimensions,
   NativeEventEmitter,
   NativeModules,
   Platform,
-  Pressable,
-  Share,
   StatusBar,
   StyleSheet,
-  Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useKeepAwake }       from 'expo-keep-awake';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList }     from '../../App';
-import { splashBridge }                 from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
-import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
-import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdSyncPresets, onNwd, PANEL_KEY } from '../services/nwdRadio';
+import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, onNwd, PANEL_KEY } from '../services/nwdRadio';
 import { diag, isDiagEnabled } from '../services/diag';
 import { startMotion, stopMotion } from '../services/motion';
 import { startGpsFix, stopGpsFix } from '../services/gps';
@@ -52,74 +43,30 @@ import { startBookmarkAutosave, stopBookmarkAutosave,
          getLearnedBookmarksNow } from '../services/vibeServer';
 import { setReceiverIso } from '../services/rdsCountry';
 
-/** FFT rate divisor while the phone is backgrounded but the watch is watching.
- *
- *  ONE — i.e. don't throttle at all.
- *
- *  Half rate looked like free battery: the watch only draws ~10fps, so why send
- *  20? Because a 10fps SOURCE cannot reliably yield 10fps of ROWS. Every frame
- *  then has to survive the send gate, the JS thread's background scheduling and
- *  WCSession's own jitter — and iOS throttles a backgrounded JS thread, so frames
- *  slip. Miss one and the next row is 200ms late. The result was a ragged feed
- *  full of holes, which the jitter buffer and the trace's EMA smoothed over: on
- *  the wrist it read as the averaging being cranked right up the moment the phone
- *  locked.
- *
- *  A 20fps source gives the gate a frame to choose from whenever it opens, so the
- *  watch gets a STEADY 10fps locked or awake. Headroom is what buys steadiness
- *  here; the frames we drop cost nothing, and the ones we keep are on time. */
-const WATCH_BG_DIVISOR = 1;
-import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme, type Aircraft } from '../services/SDRBackend';
-import { DecoderClient, RTTY_PRESETS,
-         type RttySettings, type MorseQuality,
-         type SpotRow, type SpotsKind,
-         type ChatUserRow }                            from '../services/DecoderClient';
-import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
-import { MIN_HZ, MAX_HZ, STEPS, stepsForFreq }         from '../services/sdrTypes';
+import { type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme,
+         type DspFilterDesc } from '../services/SDRBackend';
+import { MIN_HZ, MAX_HZ }                              from '../services/sdrTypes';
 import { v4 as uuidv4 }                                from 'uuid';
 import AsyncStorage                                    from '@react-native-async-storage/async-storage';
-import { setDefaultInstance, getDefaultInstance,
-         clearDefaultInstance }                        from '../services/defaultInstance';
-import { getFavourites, toggleFavourite }              from '../services/favourites';
+import { getDefaultInstance }                          from '../services/defaultInstance';
+import { getFavourites }                               from '../services/favourites';
 import { useTheme }                                     from '../contexts/ThemeContext';
 
-import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBar';
-import { setDrumHaptics } from '../components/DrumWheel';
-import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
-import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import AudioPlayer, { VibePowerModule } from '../components/AudioPlayer';
 import LocalAudioPlayer from '../components/LocalAudioPlayer';
-import LocalHardwarePanel from '../components/LocalHardwarePanel';
-import FreqModal       from '../components/FreqModal';
-import ModeSelector    from '../components/ModeSelector';
-import AudioSheet      from '../components/AudioSheet';
-import StepPicker      from '../components/StepPicker';
-import ChatDrawer,
-  { type ChatMessage } from '../components/ChatDrawer';
-import DecoderPanel,
-  { type DecoderType } from '../components/DecoderPanel';
-import SpecRatioOverlay  from '../components/SpecRatioOverlay';
-import MapOverlay, { type MapKind } from '../components/MapOverlay';
-import CityPickerModal from '../components/CityPickerModal';
-import AboutOverlay from '../components/AboutOverlay';
-import RecordingsOverlay from '../components/RecordingsOverlay';
-import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import { resolveStationLogo } from '../services/stationLogoCache';
-import { tidyStationName } from '../services/stationLogo';
 import { isWholeProfileMode } from '../services/dataModes';
 import { isoToFlag, validIso } from '../services/rdsCountry';
-import CenterVfoButton from '../components/CenterVfoButton';
-import PasswordModal from '../components/PasswordModal';
 import {
   fetchBookmarks, findNearest, findNextBookmark,
   fmtBandFreq, deriveItuRegion, refreshBandSnr, getBandSnrDb, propCondition,
   fetchUiConfig, fetchReceiverInfo,
-  VTS_ON_HZ, searchStations, type ServerBookmark, type ServerBand,
+  VTS_ON_HZ, type ServerBookmark, type ServerBand,
   type ServerUiConfig, type ReceiverInfo,
 } from '../services/stations';
 import {
-  loadUserBookmarks, saveUserBookmarks, bookmarksForInstance, withoutInstance,
-  exportBookmarksJSON, parseBookmarksAny, mergeBookmarks, type UserBookmark,
+  loadUserBookmarks, saveUserBookmarks, bookmarksForInstance,
+  mergeBookmarks, type UserBookmark,
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { fmNowPlaying } from '../services/nowPlaying';
@@ -127,46 +74,10 @@ import { ptyLabel } from '../services/ptyLabels';
 import { getCarAutostart, setCarAutostart } from '../services/carMode';
 import CarFmFace, { type CarFmPreset } from '../components/CarFmFace';
 import { identifyByPi, initLogoService, consumeSharedLogo, getNearbyStations, callsignForFreq, estimatedSignalDbForFreq } from '../services/stationFinder';
+import { warmStationLogos } from '../components/carfm/LogoTile';
 import type { StationIdentity } from '../services/stationTypes';
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation } from '../services/instancesApi';
-import { distanceKmToGrid } from '../services/grid';
-import { countryForCallsign } from '../services/callsignCountry';
-import * as DocumentPicker from 'expo-document-picker';
-// SDK 56 moved readAsStringAsync to the legacy entry (new File API otherwise).
-import * as FileSystem from 'expo-file-system/legacy';
-
-// ── Constants ──────────────────────────────────────────────────────────────────
-
-// Drum sensitivity (skin SENS_TABLE parity): px of travel per tune step /
-// zoom octave. PRECISE doubles travel for everything (22→44, 40→77 ≈ skin's
-// zoom 30→58 ratio).
-const DRUM_SENS = {
-  normal:  { vfo: 22, zoomOctave: 40 },
-  precise: { vfo: 44, zoomOctave: 77 },
-};
-// Velocity-adaptive VFO (beyond skin): a slow deliberate thumb gets up to
-// FINE_MULT× more travel per step (fine tuning), a fast spin stays at 1×.
-// Mapped continuously, so decelerating onto a signal gains precision mid-drag.
-const VFO_FINE_MULT  = 4;    // sensitivity multiplier at the slow end
-const VFO_VEL_FINE   = 40;   // px/s and below → fully fine
-const VFO_VEL_FAST   = 350;  // px/s and above → full speed
-
-// SNR-bar compression — the skin's sigNorm curve (30/60@0.8/80) shifted down
-// 30dB: upstream UberSDR's S-meter reads radiod's raw audio-stream SNR which
-// FLOORS at ~30dB with no signal (madpsy/ka9q_ubersdr#77); ours comes from
-// spectrum bins (the correct source), so no-signal ≈ 0-5dB. Same shape: 30dB
-// of span to the knee at 0.8 fill, top fifth compressed for 45-55dB monsters.
-const SIG_FLOOR = 5, SIG_KNEE = 35, SIG_KNEE_FILL = 0.8, SIG_CEIL = 55;
-function sigNorm(v: number): number {
-  if (v <= SIG_FLOOR) return 0;
-  if (v >= SIG_CEIL)  return 1;
-  if (v <= SIG_KNEE)
-    return SIG_KNEE_FILL * (v - SIG_FLOOR) / (SIG_KNEE - SIG_FLOOR);
-  return SIG_KNEE_FILL +
-         (1 - SIG_KNEE_FILL) * (v - SIG_KNEE) / (SIG_CEIL - SIG_KNEE);
-}
-
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -174,35 +85,27 @@ type Props = NativeStackScreenProps<RootStackParamList, 'SDR'>;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function nowUTCStr() {
-  const n = new Date();
-  return String(n.getUTCHours()).padStart(2,'0') + String(n.getUTCMinutes()).padStart(2,'0') + 'z';
-}
-let _msgId = 0;
-function mkMsg(type: ChatMessage['type'], text: string, user?: string): ChatMessage {
-  return { id: String(++_msgId), type, text, user, ts: nowUTCStr() };
+/** A "virtual tuning scale" notification (station on/off tune, band crossing).
+ *  The bar that rendered these was VibeSDR chrome; the payload type stays with
+ *  the code that still computes them. */
+interface VtsNotifData {
+  key:        number;   // bump to re-trigger even with identical text
+  name:       string;
+  secondary?: string;   // overlap band names (band notifs only)
+  offset?:    string;   // "-1.2kHz" distance to the station
+  tuneDir?:   'left' | 'right';  // which way to tune to reach it
+  kind:       'station-on' | 'station-off' | 'band';
+  color?:     string;   // band-condition override for the primary text
+  hold?:      boolean;  // stay up (no auto-dismiss) — digital-voice caller display
+  badge?:     string;   // live-data tag (e.g. 'RDS', 'DMR') — shown before the name
+  source?:    'eibi' | 'server' | 'user';  // bookmark origin → source icon
+  flag?:      string;   // transmitter-country flag (EiBi bookmarks / RDS)
+  logoUrl?:   string;   // resolved WFM RDS station logo
 }
 
-/** RFC3339 server timestamp → "HHMMz" (falls back to now) */
-function chatTs(rfc: string): string {
-  const d = rfc ? new Date(rfc) : new Date();
-  if (isNaN(d.getTime())) return nowUTCStr();
-  return `${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}z`;
-}
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
-
-// V4 local hardware (RTL-SDR) demodulator list — includes WFM (broadcast FM),
-// which HF UberSDR servers don't offer.
-// SAM omitted — the on-device DSP (VibeDSP) has no synchronous-AM demodulator yet.
-const LOCAL_MODES: { id: string; label: string }[] = [
-  { id: 'wfm', label: 'WFM' }, { id: 'nfm', label: 'NFM' }, { id: 'am', label: 'AM' },
-  { id: 'cwu', label: 'CW' },
-  // LSB + USB last so they're the two large bottom buttons (the SSB pair),
-  // with USB as the final option (sits below LSB in the grid).
-  { id: 'lsb', label: 'LSB' }, { id: 'usb', label: 'USB' },
-];
 
 // The live-station snapshot that feeds the CarFM face (name/RadioText/RDS flags).
 type LiveStation = { name?: string; text?: string; rtArtist?: string; rtTitle?: string; tp?: boolean; ta?: boolean; pty?: number; af?: boolean; afMhz?: number[]; badge?: string; countryIso?: string; pi?: string };
@@ -271,7 +174,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     : 'usb';
   const localHwKey = `lsv_local_hw:${localDeviceKey}`;
   const LocalHw = (NativeModules as any).VibeLocalSDR;
-  const [hwOpen,        setHwOpen]        = useState(false);
   const [hwGains,       setHwGains]       = useState<number[]>([]);
   const [hwServerRates, setHwServerRates] = useState<number[] | null>(null);  // VibeServer-offered rates
   const [hwGain,        setHwGain]        = useState(0);     // tenths of dB
@@ -445,102 +347,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     startBookmarkAutosave();
     return () => stopBookmarkAutosave();
   }, [isLocal, isRemoteShim]);
-  const hwClient = useCallback(() => (isRemoteShim
-    ? (client.current as {
-        setHwGain?: (t: number, a: boolean) => void; setHwBiasT?: (on: boolean) => void;
-        setHwAgc?: (on: boolean) => void; setHwPpm?: (n: number) => void;
-        setHwSampleRate?: (r: number) => void;
-      } | null)
-    : null), [isRemoteShim]);
-
-  const onHwAuto = useCallback((auto: boolean) => {
-    setHwAutoGain(auto);
-    const rc = hwClient();
-    if (rc) rc.setHwGain?.(hwGain, auto); else LocalHw?.setGain?.(auto ? -1 : hwGain);
-  }, [LocalHw, hwGain, hwClient]);
-  // Gain reaches the dongle as a USB CONTROL TRANSFER, on the same bus carrying the
-  // bulk IQ stream — so a slider drag firing one per step (~10 in 200ms) elbows the
-  // sample flow aside, and you hear it as breakup while you drag. Coalesce to one
-  // per 120ms, trailing edge always delivered so the gain you release on is the gain
-  // the radio ends up at.
-  const gainSendAt = useRef(0);
-  const gainTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const gainPending = useRef<number | null>(null);
-  const flushGain = useCallback(() => {
-    const tenthDb = gainPending.current;
-    if (tenthDb == null) return;
-    gainPending.current = null;
-    gainSendAt.current = Date.now();
-    const rc = hwClient();
-    if (rc) rc.setHwGain?.(tenthDb, false); else LocalHw?.setGain?.(tenthDb);
-  }, [LocalHw, hwClient]);
-  const onHwGain = useCallback((tenthDb: number) => {
-    setHwAutoGain(false); setHwGain(tenthDb);
-    gainPending.current = tenthDb;
-    const wait = gainSendAt.current + 120 - Date.now();
-    if (wait <= 0) { flushGain(); return; }
-    if (!gainTimer.current) {
-      gainTimer.current = setTimeout(() => { gainTimer.current = null; flushGain(); }, wait);
-    }
-  }, [flushGain]);
-  const onHwPpm = useCallback((ppm: number) => {
-    const v = Math.max(-200, Math.min(200, ppm)); setHwPpm(v);
-    const rc = hwClient();
-    if (rc) rc.setHwPpm?.(v); else LocalHw?.setPpm?.(v);
-  }, [LocalHw, hwClient]);
-  const onHwSampleRate = useCallback((rate: number) => {
-    setHwSampleRate(rate);
-    const rc = hwClient();
-    // VibeServer: ask the server to change its capture rate (= the spectrum span
-    // it sends). Useful to ease a struggling remote link without touching the host.
-    if (rc) rc.setHwSampleRate?.(rate); else LocalHw?.setSampleRate?.(rate);
-  }, [LocalHw, hwClient]);
-  const onHwBiasTee = useCallback((on: boolean) => {
-    setHwBiasTee(on);
-    const rc = hwClient();
-    if (rc) rc.setHwBiasT?.(on); else LocalHw?.setBiasTee?.(on);
-  }, [LocalHw, hwClient]);
-  const onHwAgc = useCallback((on: boolean) => {
-    setHwAgc(on);
-    const rc = hwClient();
-    if (rc) rc.setHwAgc?.(on); else LocalHw?.setAgc?.(on);
-  }, [LocalHw, hwClient]);
-  const onHwDirectSamp = useCallback((mode: number) => { setHwDirectSamp(mode); LocalHw?.setDirectSampling?.(mode); }, [LocalHw]);
-  const onHwDeemph = useCallback((tau: number) => { setHwDeemph(tau); LocalHw?.setDeemphasis?.(tau); }, [LocalHw]);
-  const onHwStereo = useCallback((on: boolean) => { setHwStereo(on); LocalHw?.setStereoEnabled?.(on); }, [LocalHw]);
-  const onLocalSquelch = useCallback((db: number) => {
-    setHwSquelch(db); LocalHw?.setSquelch?.(db > -100, db);
-  }, [LocalHw]);
-  const onLocalNR = useCallback((level: number) => {
-    setHwNrLevel(level);
-    LocalHw?.setNrStrength?.(level / 15);
-    LocalHw?.setNR?.(level > 0);
-  }, [LocalHw]);
-  const onLocalNotch = useCallback((on: boolean) => {
-    setHwNotch(on); LocalHw?.setNotch?.(on);
-  }, [LocalHw]);
-  // Network auto notch (UberSDR/OWRX/Kiwi): client-side, applied in the audio
-  // engine (iOS VibePowerModule / Android VibeStreamService). Persisted globally
-  // and (re)applied whenever the connection comes up — see the effect below.
-  // Session-scoped: NOT persisted, so it reverts to Off on a server change. It
-  // only survives pause/resume because the screen stays mounted (re-applied on
-  // reconnect by the effect below).
-  const onNetNotch = useCallback((on: boolean) => {
-    setNetNotch(on);
-  }, []);
-
-  const insets = useSafeAreaInsets();
-  const { width: screenW, height: screenH } = Dimensions.get('window');
-  const isLandscape = screenW > screenH;
-  // Tablets (iPad) have room for the decoder panel in landscape; phones don't.
-  const isTablet = Math.min(screenW, screenH) >= 768;
-
   // ── Spec ratio (portrait + landscape stored separately) ───────────────────
   const [specRatioPortrait,  setSpecRatioPortrait]  = useState(0.28);
   const [specRatioLandscape, setSpecRatioLandscape] = useState(0.20);
-  const [ratioOverlayOpen,   setRatioOverlayOpen]   = useState(false);
-  const specFrac = isLandscape ? specRatioLandscape : specRatioPortrait;
-
   // ── Client ────────────────────────────────────────────────────────────────
 
   const client    = useRef<SDRBackend | null>(null);
@@ -590,7 +399,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // the user a way out (reconnect / instance list) instead of a stuck notice.
   const [specFailed, setSpecFailed] = useState(false);
   const [profiles, setProfiles]   = useState<ProfileInfo[]>([]);  // OWRX only
-  const [activeProfileId, setActiveProfileId] = useState<string | undefined>(undefined);
   const [sdrUsage, setSdrUsage] = useState<Record<string, { name: string; inUse: boolean; activeProfileId?: string }>>({});  // OWRX: per-SDR usage
   const [clientCount, setClientCount] = useState(0);  // OWRX: live user count
   const [serverModes, setServerModes] = useState<BackendMode[]>([]);  // OWRX gated demod list
@@ -604,9 +412,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [dabProgrammes, setDabProgrammes] = useState<DabProgramme[]>([]);  // OWRX DAB ensemble
   const [activeDabId, setActiveDabId] = useState<number>(0);
   const [dabEnsemble, setDabEnsemble] = useState('');
-  /** OWRX ADS-B: the live aircraft table. Structured — it used to be flattened to
-   *  text on arrival, which is why nothing but the decoder panel could use it. */
-  const [aircraft, setAircraft] = useState<Aircraft[]>([]);
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
   const [liveStation, setLiveStation] = useState<LiveStation>({});
@@ -616,18 +421,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   const lastLiveLogoKey = useRef('');
   const [fmStereo, setFmStereo] = useState(false);   // WFM stereo pilot (local hardware)
 
-  // CarFM: the FM-only face covers the full SDR UI when active. "Advanced" lets
-  // the normal SDR UI (waterfall/decoders/all modes) back in without leaving.
-  const carFm = !!route.params.carFm;
-  // CarFM has no advanced-SDR escape hatch: the face IS the whole UI in a carFm
-  // session. (The stock SDR view still exists for non-carFm/dev launches — see
-  // the !fmFaceActive branch below — but nothing in CarFM can reach it.)
-  const fmFaceActive = carFm;
-  // Ref mirror for the per-frame onSpectrum closure (avoids a stale capture): the
-  // FM face is opaque and self-contained, so all waterfall/meter work is wasted
-  // while it's up.
-  const fmFaceActiveRef = useRef(fmFaceActive);
-  fmFaceActiveRef.current = fmFaceActive;
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
   // True while the head unit's built-in NWD tuner is driving the face (a
   // tunerless carFm launch on an NWD/NOWADA unit). Routes tune commands to it.
@@ -653,21 +446,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       try { const m = JSON.parse(j); if (m && typeof m === 'object') dabSpeedMapRef.current = m; } catch {}
     }).catch(() => {});
   }, []);
-  // Menu speed buttons + fine slider set the factor for the CURRENTLY tuned
-  // station. Applied live; the storage write is debounced so dragging the slider
-  // doesn't hammer AsyncStorage (it fires onValueChange continuously).
-  const dabSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const onDabSpeed = useCallback((scale: number) => {
-    setDabSpeed(scale);
-    client.current?.setDabAudioScale?.(scale);
-    const key = dabKeyRef.current;
-    if (!key) return;
-    dabSpeedMapRef.current = { ...dabSpeedMapRef.current, [key]: scale };
-    if (dabSaveTimer.current) clearTimeout(dabSaveTimer.current);
-    dabSaveTimer.current = setTimeout(() => {
-      AsyncStorage.setItem('owrx_dab_speed_map', JSON.stringify(dabSpeedMapRef.current)).catch(() => {});
-    }, 400);
-  }, []);
   // Called from the DAB metadata handler when the tuned service changes: look up
   // its saved correction (default Off) and apply it automatically.
   const applyDabStation = useCallback((ensemble: string, programme: string) => {
@@ -681,8 +459,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [status, setStatus]       = useState<SDRStatus>({
     // CarFM starts on the FM dial (matters for a tunerless launch, where no
     // last-tune restore runs — the face must not show the ham default).
-    frequency: route.params.carFm ? 98_500_000 : 14_074_000,
-    mode: route.params.carFm ? 'wfm' : 'usb',
+    frequency: 98_500_000,
+    mode: 'wfm',
     bandwidthLow: -3000, bandwidthHigh: 3000,
     binCount: 1024, binBandwidth: 0, centerHz: 0, bwHz: 0,
   });
@@ -699,23 +477,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [dataSaverOff, setDataSaverOff] = useState(false);
   const dataSaverOffRef = useRef(false);
   useEffect(() => { dataSaverOffRef.current = dataSaverOff; }, [dataSaverOff]);
-  const unmute = useCallback(() => {
-    (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })?.setMuted?.(false);
-    setIsMuted(false);
-  }, []);
-
-  // Full-screen waterfall: hide the controls bar, floating chevron restores.
-  const [controlsHidden, setControlsHidden] = useState(false);
-  const onHideControls = useCallback(() => { setControlsHidden(true); setMenuOpen(false); }, []);
-
-  // Centre the spectrum view on the tuned frequency at the current zoom
-  // (reference-skin parity).
-  const onCentreVfo = useCallback(() => {
-    const c = client.current; if (!c) return;
-    const v = c.getView();
-    if (v.binBandwidth > 0) c.zoom(c.getStatus().frequency, v.binBandwidth);
-  }, []);
-
   // ── VFO lock / waterfall panning (BRIEF-vfo-lock-and-panning) ───────────────
   // Default locked = today's behaviour (view follows the VFO). Unlocked lets the
   // waterfall pan freely. Persisted in lsv_vfo_lock; mirrored to the client as
@@ -742,60 +503,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       ?.setLocalSampleRate?.(hwSampleRate);
   }, [isLocal, hwSampleRate]);
 
-  const onToggleVfoLock = useCallback(() => {
-    setVfoLocked(prev => {
-      const next = !prev;
-      client.current?.setFollowMode(next);
-      if (next) onCentreVfo();                  // re-locking snaps back to the VFO
-      AsyncStorage.setItem('lsv_vfo_lock', next ? '1' : '0').catch(() => {});
-      return next;
-    });
-  }, [onCentreVfo]);
-
-  // Boundary walls for the waterfall (unlocked only).
-  //  • Remote (UberSDR/Kiwi/OWRX): hard walls at the band/profile/rx edges.
-  //  • Local/RTL-TCP: the dongle's captured Fs window edges (centre ± Fs/2) —
-  //    these are the real "you can pan/tune this far" boundaries; the spectrum
-  //    ends there. They move as the dongle re-tunes.
-  // Local RF-centre (dongle) — derived to mirror the shim. Drives the RF-centre
-  // marker (which can sit off-screen once the dongle locks and the view pans on)
-  // and the capture-window walls (rfCenter ± Fs/2).
-  const localRf = useMemo(() => {
-    if (!isLocal) return null;
-    const c = client.current as
-      { rfCenterHz?: () => number; captureBandwidth?: () => number } | null;
-    const fs = c?.captureBandwidth?.() || hwSampleRate;
-    const rf = c?.rfCenterHz?.();
-    if (rf == null || !(fs > 0)) return null;
-    return { rf, fs };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLocal, status.centerHz, status.frequency, status.bwHz, hwSampleRate, connEpoch]);
-
-  const walls = useMemo(() => {
-    if (vfoLocked) return null;
-    if (isLocal) {
-      // Hard walls at the captured-band edges (dongle ± Fs/2) — these become
-      // visible as you scroll the view across the band.
-      if (!localRf) return null;
-      const half = localRf.fs / 2;
-      return { loHz: localRf.rf - half, hiHz: localRf.rf + half };
-    }
-    const s = client.current?.panSpan();
-    return s ? { loHz: s.loHz, hiHz: s.hiHz } : null;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vfoLocked, isLocal, localRf, status.bwHz, connEpoch]);
-
-  // VFO has panned outside the visible span → show the floating recentre button.
-  // (No toast hint — the floating button itself is the affordance; VTS pop-ups
-  // caused more trouble than they solved on the original skin.)
-  const vfoOffscreen = !vfoLocked && status.bwHz > 0 &&
-    (status.frequency < status.centerHz - status.bwHz / 2 ||
-     status.frequency > status.centerHz + status.bwHz / 2);
-
   // ── Step ──────────────────────────────────────────────────────────────────
 
   const [step,      setStep]      = useState(1000);
-  const [stepOpen,  setStepOpen]  = useState(false);
   const stepRef = useRef(step);
   useEffect(() => { stepRef.current = step; }, [step]);
 
@@ -804,10 +514,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [dbMin,         setDbMin]         = useState(-120);
   const [dbMax,         setDbMax]         = useState(-20);
   const [colormap,      setColormap]      = useState('Jet');       // production default
-  const [nr,            setNr]            = useState(false);
-  const [nb,            setNb]            = useState(false);
-  // NR cycle: off → nr → nr2. SERV state controlled by server DSP section.
-  const [nrMode,        setNrMode]        = useState<'off'|'nr'|'nr2'>('off');
   // Waterfall / spectrum display settings
   const [specShow,      setSpecShow]      = useState(true);
   const [specSmoothing, setSpecSmoothing] = useState(5);
@@ -824,9 +530,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [spatialSmooth, setSpatialSmooth] = useState(true);
   const [wfCoarse,      setWfCoarse]      = useState<'auto'|'manual'>('auto');
   const [frameRate,     setFrameRate]     = useState<'native'|'20fps'|'30fps'>('20fps');
-  // Smooth tune: 120Hz interpolated scroll while interacting; discrete row
-  // steps + ~30fps spectrum tween once settled (ProMotion idles → battery).
-  const [smoothTune,    setSmoothTune]    = useState(true);
   // Idle saver: after 30s without touch, ask the server for ⅓ frame rate
   // (set_rate 3 — skin default-waterfall parity). Meters/waterfall/spectrum
   // all slow with the data; any touch restores full rate instantly.
@@ -848,17 +551,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Server software version (menu footer — identifies the backend type)
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [serverLabel,   setServerLabel]   = useState<string | null>(null);  // OWRX: OpenWebRX/+
-  const [aboutOpen,     setAboutOpen]     = useState(false);
-  const [recordingsOpen, setRecordingsOpen] = useState(false);
-  // Mute the live SDR while a recording plays so they don't fight over the audio
-  // session; restore the prior mute state when the browser closes.
-  const preRecMuteRef = useRef(false);
-  const onRecordingsActive = useCallback((active: boolean) => {
-    const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
-    if (active) { preRecMuteRef.current = isMutedRef.current; VM?.setMuted?.(true); }
-    else        { VM?.setMuted?.(preRecMuteRef.current); }
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
     if (route.params.tunerless) return;   // no server behind the placeholder URL
@@ -898,8 +590,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => { cancelled = true; };
   }, [baseUrl]);
 
-  // SNR squelch (audio gate) — value ≤ -999 = open/disabled
-  const [snrSquelch,    setSnrSquelch]    = useState(-999);
   // FM squelch — value ≤ -999 = open. Only active on fm/nfm modes.
   const [fmSquelch,     setFmSquelch]     = useState(-999);
   // Server-side NR (DSP insert) — filter list + param descriptors arrive via
@@ -909,20 +599,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [serverDspFilter,  setServerDspFilter]  = useState('');
   const [serverDspParams,  setServerDspParams]  = useState<Record<string,string>>({});
   const [dspFilters,       setDspFilters]       = useState<DspFilterDesc[]>([]);
-  // Kiwi squelch is a CLIENT-SIDE dBFS gate (the server SNR-based squelch is
-  // unreliable). Threshold in dBm: −130 = Off (open), up to −20. Driven from the
-  // S-meter dBm in onSMeter → native setSquelchOpen, with a short release tail.
-  const [kiwiSquelch,      setKiwiSquelch]      = useState(-130); // dBm threshold (−130 = off)
   const kiwiSqDbmRef  = useRef(-130);
   const kiwiSqOpenRef = useRef(true);
   const kiwiSqAboveAt = useRef(0);
-  const onKiwiSquelch = useCallback((db: number) => {
-    setKiwiSquelch(db); kiwiSqDbmRef.current = db;
-    if (db <= -130) {  // Off → force the gate open immediately
-      kiwiSqOpenRef.current = true;
-      (NativeModules.VibePowerModule as { setSquelchOpen?: (o: boolean) => void })?.setSquelchOpen?.(true);
-    }
-  }, []);
   // Evaluate the Kiwi squelch gate against a fresh S-meter reading (dBm).
   const evalKiwiSquelch = useCallback((dbm: number) => {
     const thr = kiwiSqDbmRef.current;
@@ -940,21 +619,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── UI overlay state ──────────────────────────────────────────────────────
 
   const [menuOpen,      setMenuOpen]      = useState(false);
-  const [freqModalOpen, setFreqModalOpen] = useState(false);
-
-  // Server map overlays (HFDL / Digital spots / CW spots — skin parity)
-  const [mapKind, setMapKind] = useState<MapKind | null>(null);
-  // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
-  const [localMapOpen, setLocalMapOpen]   = useState(false);
-  const [cityPickerOpen, setCityPickerOpen] = useState(false);
-
-  // Admin pages (skin menu Admin section) — in-app browser overlay
-  const [adminPage, setAdminPage] = useState<{ url: string; title: string } | null>(null);
-  const onAdminLink = useCallback((path: string, title: string) => {
-    if (!baseUrl) return;
-    setMenuOpen(false);
-    setAdminPage({ url: baseUrl.replace(/\/+$/, '') + path, title });
-  }, [baseUrl]);
 
   // Frequency display unit — chosen in FreqModal, drives the main readout too.
   const [freqUnit, setFreqUnit] = useState<'hz' | 'khz' | 'mhz'>('khz');
@@ -970,15 +634,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (v === 'native' || v === '20fps' || v === '30fps') setFrameRate(v);
     }).catch(() => {});
   }, []);
-  const [modeSelOpen,   setModeSelOpen]   = useState(false);
-  const [audioSheetOpen, setAudioSheetOpen] = useState(false);
-
   // ── Signal / SNR ──────────────────────────────────────────────────────────
 
-  // Meter values bypass React state entirely (full-tree re-render per update
-  // was ~a third of all JS time in the CPU profile) — leaf widgets subscribe.
-  const meterBus    = useRef(createMeterBus());
-  const meterSmooth = useRef({ level: 0, peak: 0, hold: 0 });
   // SNR from radiod's channel status (basebandPower − noiseDensity), pushed by
   // native per audio packet. This is the demodulator's own measurement (zoom-
   // independent, unlike the spectrum). −30 corrects radiod's known +30 dB
@@ -1065,123 +722,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
       specRatioPortrait, specRatioLandscape, baseUrl]);
 
-  // Display-panel save row (skin parity): RESET = defaults + drop the server
-  // override; THIS SERVER = per-instance override; GLOBAL = the shared blob.
-  const onDispReset = useCallback(() => {
-    AsyncStorage.removeItem('lsv_display_prefs:' + baseUrl).catch(() => {});
-    prefsTarget.current = 'global';
-    setDbMin(-120); setDbMax(-20); setColormap('Jet');
-    setSpecShow(true); setSpecSmoothing(5); setSpecFloor(0);
-    setSpecPeakScale(10); setPeakHold(true);
-    setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
-    setAutoContrast(5); setSpatialSmooth(true); setWfCoarse('auto');
-    setVfoNeedle('#ffffff'); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3); setSignalMode('snr'); setStep(1000);
-    setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
-    Alert.alert('Display Reset', 'Display settings restored to defaults.');
-  }, [baseUrl]);
-
-  const onDispSaveServer = useCallback(() => {
-    prefsTarget.current = 'server';
-    AsyncStorage.setItem('lsv_display_prefs:' + baseUrl, latestPrefsJson.current)
-      .catch(() => {});
-    Alert.alert('Saved', 'Display settings saved for this server.');
-  }, [baseUrl]);
-
-  const onDispSaveGlobal = useCallback(() => {
-    prefsTarget.current = 'global';
-    AsyncStorage.removeItem('lsv_display_prefs:' + baseUrl).catch(() => {});
-    AsyncStorage.setItem('lsv_display_prefs', latestPrefsJson.current)
-      .catch(() => {});
-    Alert.alert('Saved', 'Display settings saved as the global default.');
-  }, [baseUrl]);
-
   // ── Recording ─────────────────────────────────────────────────────────────
 
-  const [isRecording, setIsRecording] = useState(false);
-  const [recSeconds,  setRecSeconds]  = useState(0);
   const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // iOS: the native share sheet (UIActivityViewController) must NOT present while
-  // the AudioSheet Modal is up — it presents OVER the modal and RN loses track,
-  // wedging all touch/render on dismiss. So on stop we stash the path, close the
-  // sheet, and fire the share from the sheet's onDismiss (nothing modal up).
-  const pendingRecShare = useRef<string | null>(null);
-
-  const toggleRecording = useCallback(() => {
-    if (!isRecording) {
-      // Pass the LIVE freq/mode for the filename — native currentFreq is only
-      // tracked on UberSDR's audio WS, so OWRX would otherwise show a stale freq.
-      (VibePowerModule as any)?.startRecording(Math.round(status.frequency || 0), String(status.mode || ''))
-        .then(() => {
-          setRecSeconds(0);
-          recTimerRef.current = setInterval(() => setRecSeconds((s: number) => s + 1), 1000);
-          setIsRecording(true);
-        })
-        .catch((e: Error) => Alert.alert('Recording', `Could not start recording: ${e.message}`));
-    } else {
-      if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
-      setRecSeconds(0);
-      setIsRecording(false);
-      VibePowerModule?.stopRecording()
-        .then(async (path: string | null) => {
-          // Half-height native share sheet; the file also stays in app storage
-          // (iOS Documents / Android filesDir) and is reachable via the
-          // Recordings browser. Android needs an Expo content URI to share.
-          if (!path) { setAudioSheetOpen(false); return; }
-          if (Platform.OS === 'android') {
-            try {
-              const cu = await FileSystem.getContentUriAsync(
-                path.startsWith('file://') ? path : 'file://' + path);
-              VibePowerModule?.shareRecording(cu);
-            } catch {}
-            setAudioSheetOpen(false);
-          } else {
-            // Defer the share to AudioSheet's onDismiss (see pendingRecShare).
-            pendingRecShare.current = path;
-            setAudioSheetOpen(false);
-          }
-        })
-        .catch(() => setAudioSheetOpen(false));
-    }
-  }, [isRecording, status.frequency, status.mode]);
-
   useEffect(() => () => {
     if (recTimerRef.current) clearInterval(recTimerRef.current);
   }, []);
-
-  // ── Chat ──────────────────────────────────────────────────────────────────
-
-  const [chatOpen,     setChatOpen]     = useState(false);
-  const [chatUnread,   setChatUnread]   = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [myCallsign,   setMyCallsign]   = useState<string | null>(null);
-  const [chatMuted,    setChatMuted]    = useState(false);
-  const [chatUsers,    setChatUsers]    = useState<ChatUserRow[]>([]);
-  const [chatEnabled,  setChatEnabled]  = useState(false);   // OWRX: from config allow_chat
-  const [syncedUser,   setSyncedUser]   = useState<string | null>(null);
-  const [zoomSync,     setZoomSync]     = useState(false);
-  const myCallsignRef = useRef<string | null>(null);
-  const chatMutedRef  = useRef(false);
-  const syncedUserRef = useRef<string | null>(null);
-  const zoomSyncRef   = useRef(false);
-  useEffect(() => { myCallsignRef.current = myCallsign; }, [myCallsign]);
-  useEffect(() => { chatMutedRef.current = chatMuted; },   [chatMuted]);
-  useEffect(() => { syncedUserRef.current = syncedUser; }, [syncedUser]);
-  useEffect(() => { zoomSyncRef.current = zoomSync; },     [zoomSync]);
-
-  /** quiet=true (history replay / muted) — render without the unread pulse */
-  const addChatMsg = useCallback((msg: ChatMessage, quiet = false) => {
-    setChatMessages((prev: ChatMessage[]) => [...prev.slice(-99), msg]);
-    if (quiet || chatMutedRef.current) return;
-    setChatOpen((open: boolean) => {
-      if (!open) setChatUnread(true);
-      return open;
-    });
-  }, []);
-
-  // Username rules (server SetUsername): 1–15 chars, letters/digits plus
-  // - _ / inside; NO spaces; case preserved (need not be capitals).
-  const sanitizeCallsign = useCallback((raw: string): string =>
-    raw.replace(/[^A-Za-z0-9\-_\/]/g, '').replace(/^[-_\/]+|[-_\/]+$/g, '').slice(0, 15), []);
 
   const isOwrx = route.params.serverType === 'owrx';
   const isKiwi = route.params.serverType === 'kiwi';
@@ -1193,84 +739,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // OWRX and Kiwi have no SNR feed (radiod-only) — default to the S-meter
   // (the 'snr' mode reads dead on those backends).
   useEffect(() => { if ((isOwrx || isKiwi) && signalMode === 'snr') setSignalMode('smeter'); }, [isOwrx, isKiwi, signalMode]);
-  const handleChatJoin = useCallback((cs: string) => {
-    const clean = sanitizeCallsign(cs);
-    if (!clean) return;
-    setMyCallsign(clean);
-    // OWRX has no join handshake — the name rides on each message; UberSDR joins.
-    if (!isOwrx) decoderClient.current?.joinChat(clean);
-    AsyncStorage.setItem('lsv_chat_callsign:' + baseUrl, clean).catch(() => {});
-  }, [sanitizeCallsign, baseUrl, isOwrx]);
-
-  const handleChatSend = useCallback((text: string) => {
-    if (!myCallsign) return;
-    if (isOwrx) client.current?.sendChat?.(text, myCallsign);
-    else decoderClient.current?.sendChat(text);
-    // Own messages echo back via the broadcast — rendered then (deduped),
-    // matching the skin: what you see is what the server accepted.
-  }, [myCallsign, isOwrx]);
-
-  // Tune/zoom sync OUT: report our freq/mode/BW edges/zoom to chat so other
-  // users can see and sync to us (debounced 1s — the drum emits fast)
-  useEffect(() => {
-    if (!myCallsign || !status.frequency || isOwrx) return;   // OWRX = basic text chat, no sync
-    const t = setTimeout(() => {
-      const view = client.current?.getView();
-      decoderClient.current?.sendChatStatus({
-        frequency: status.frequency,
-        mode:      status.mode,
-        bw_low:    status.bandwidthLow,
-        bw_high:   status.bandwidthHigh,
-        zoom_bw:   view?.binBandwidth ?? 0,
-      });
-    }, 1000);
-    return () => clearTimeout(t);
-  }, [myCallsign, status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh]);
-
-  // Tune/zoom sync IN: follow another user's tune (skin syncToUser)
-  const applyChatSync = useCallback((u: ChatUserRow) => {
-    if (!u.frequency || !u.mode) return;
-    onTuneHzRef.current?.(u.frequency);
-    const m = u.mode.toLowerCase();
-    if (m in MODE_BANDWIDTHS) onModeRef.current?.(m as SDRMode);
-    if (typeof u.bw_low === 'number' && typeof u.bw_high === 'number') {
-      onFilterBothRef.current?.(u.bw_low, u.bw_high);
-    }
-    if (zoomSyncRef.current && u.zoom_bw && u.zoom_bw > 0) {
-      client.current?.zoom(u.frequency, u.zoom_bw);
-    }
-  }, []);
-
-  const toggleUserSync = useCallback((username: string) => {
-    setSyncedUser((prev: string | null) => {
-      const next = prev === username ? null : username;
-      if (next) {
-        const u = chatUsersRef.current.find((x: ChatUserRow) => x.username === next);
-        if (u) applyChatSync(u);
-      }
-      return next;
-    });
-  }, [applyChatSync]);
-
-  // One-shot: tap a user row to jump to their frequency without following
-  const chatUserTap = useCallback((u: ChatUserRow) => {
-    applyChatSync(u);
-  }, [applyChatSync]);
-
-  const chatUsersRef = useRef<ChatUserRow[]>([]);
-  useEffect(() => { chatUsersRef.current = chatUsers; }, [chatUsers]);
-  const chatIdRef = useRef(0);
-
-  // chat_user_update broadcasts arrive whenever ANY user on the instance
-  // retunes — on a busy instance that's several per second, and each
-  // setChatUsers re-renders the entire screen tree (the historic CPU
-  // killer). Maintain the list in the ref always; only touch React state
-  // while the drawer is actually open (synced on open).
-  const updateChatUsers = useCallback((fn: (prev: ChatUserRow[]) => ChatUserRow[]) => {
-    chatUsersRef.current = fn(chatUsersRef.current);
-    if (chatOpenRef.current) setChatUsers(chatUsersRef.current);
-  }, []);
-
   // One-time heads-up about OWRX's profile model: pausing disconnects, and a
   // later reconnect resets the receiver to its server-side default profile/freq
   // (we can't persist server profile state across a fresh session without
@@ -1304,11 +772,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onSearchTuneRef = useRef<((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean) => void) | null>(null);
   const fmHwStepRef    = useRef<((dir: 1 | -1) => void) | null>(null);   // CarFM: steering-wheel ⏮⏭ → animated preset step
 
-  // ── Media skip mode: lock-screen ⏮⏭ tune by step or jump bookmarks ───────
-  // CarFM defaults to bookmark stepping so steering-wheel / ESP32 ⏮⏭ move
-  // between presets (spec §5b); a stored user choice below still overrides it.
-  const [mediaSkip, setMediaSkip] = useState<'step' | 'bookmark'>(
-    route.params.carFm ? 'bookmark' : 'step');
+  // ── Media skip mode: lock-screen ⏮⏭ jump between presets ────────────────
+  // Steering-wheel / ESP32 ⏮⏭ move between presets (spec §5b).
+  const [mediaSkip, setMediaSkip] = useState<'step' | 'bookmark'>('bookmark');
   const mediaSkipRef = useRef(mediaSkip);
   useEffect(() => { mediaSkipRef.current = mediaSkip; }, [mediaSkip]);
   // Lock-screen ⏮⏭ step-tune for backends whose tuning lives in JS (OWRX/Kiwi):
@@ -1360,10 +826,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (v === 'bookmark' || v === 'step') setMediaSkip(v);
     }).catch(() => {});
   }, []);
-  const onMediaSkip = useCallback((m: 'step' | 'bookmark') => {
-    setMediaSkip(m);
-    AsyncStorage.setItem('lsv_media_skip', m).catch(() => {});
-  }, []);
   // Push to native; re-push on reconnect (the Android service can be recreated)
   useEffect(() => {
     VibePowerModule?.setMediaSkipMode(mediaSkip);
@@ -1402,346 +864,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   // potential car-specific behaviour later.
   const carConnected = useRef(false);
 
-  // Chat drawer doesn't fit landscape even on a 17 Pro Max (let alone SE) —
-  // the button stays live for the unread pulse, but opening demands portrait.
-  const [chatRotateHint, setChatRotateHint] = useState(false);
-  const chatHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showChatRotateHint = useCallback(() => {
-    setChatRotateHint(true);
-    if (chatHintTimer.current) clearTimeout(chatHintTimer.current);
-    chatHintTimer.current = setTimeout(() => setChatRotateHint(false), 2500);
-  }, []);
-  useEffect(() => () => {
-    if (chatHintTimer.current) clearTimeout(chatHintTimer.current);
-  }, []);
-
-  const openChat = useCallback(() => {
-    if (isLandscape) { showChatRotateHint(); return; }
-    // Prime the chat stream (history replay arrives quiet) even before join
-    decoderClient.current?.subscribeChat();
-    setChatUsers(chatUsersRef.current);  // ref is live; state only while open
-    setChatOpen(true);
-    setChatUnread(false);
-  }, [isLandscape, showChatRotateHint]);
-
-  const closeChat = useCallback(() => {
-    setChatOpen(false);
-  }, []);
-
-  // Rotating to landscape with chat open → close it and explain why
-  useEffect(() => {
-    if (isLandscape && chatOpen) {
-      setChatOpen(false);
-      showChatRotateHint();
-    }
-  }, [isLandscape, chatOpen, showChatRotateHint]);
-
   // Android back gesture/button: CONSUME it on this screen (iOS parity —
   // gestureEnabled:false on the stack). Edge swipes while working the VFO
   // drum were popping to the picker / exiting the app. Close transient UI
   // if open; leaving the instance is the menu's ← BACK button. RN Modals
   // (menu, maps, browser) intercept back themselves before this fires.
-  const chatOpenRef = useRef(false);
-  useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
   useEffect(() => {
     if (Platform.OS !== 'android') return;
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (chatOpenRef.current) setChatOpen(false);
-      return true;  // consumed — never pop the screen from a gesture
-    });
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
     return () => sub.remove();
-  }, []);
-
-  // ── Decoder ───────────────────────────────────────────────────────────────
-
-  const [activeDecoder,  setActiveDecoder]  = useState<DecoderType>(null);
-  const [decoderText,    setDecoderText]    = useState('');
-  const [decoderStatus,  setDecoderStatus]  = useState('listening…');
-  const [decoding,       setDecoding]       = useState(false);
-  const [pillBottom,     setPillBottom]     = useState(200); // updated by pill layout
-  const [rootH,          setRootH]          = useState(0);   // measured root height
-  const pillYRef = useRef<number | null>(null);
-  // Re-derive pillBottom once the root measures (or rotates) — the pill's
-  // own onLayout may have fired first with a stale height
-  useEffect(() => {
-    if (rootH > 0 && pillYRef.current != null) setPillBottom(rootH - pillYRef.current);
-  }, [rootH]);
-
-  // Real decoders — UberSDR server audio extensions over /ws/dxcluster,
-  // exactly as the confirmed-working skin wires them (see DecoderClient.ts).
-  // Uses the SAME session uuid as audio so the extension taps this session's
-  // demodulated stream server-side. DEC_SIM fake data is gone.
-  const decoderClient   = useRef<DecoderClient | null>(null);
-  const decoderImageRef = useRef<DecoderImageHandle | null>(null);
-  const activeDecRef    = useRef<DecoderType>(null);
-
-  // Decoder transport base. Local/UberSDR serve /ws/dxcluster themselves; Kiwi
-  // (no dxcluster) gets a native decoder sidecar fed its audio, so we point the
-  // DecoderClient at that localhost service instead.
-  const [decoderBase, setDecoderBase] = useState<string | null>(isKiwi ? null : baseUrl);
-  useEffect(() => {
-    if (!isKiwi) { setDecoderBase(baseUrl); return; }
-    let cancelled = false;
-    (NativeModules as any).VibeLocalSDR?.startDecoderService?.()
-      .then((port: number) => { if (!cancelled && port > 0) setDecoderBase(`ws://127.0.0.1:${port}`); })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-      (NativeModules as any).VibeLocalSDR?.stopDecoderService?.();
-    };
-  }, [isKiwi, baseUrl]);
-
-  useEffect(() => {
-    if (!decoderBase) return;
-    const dc = new DecoderClient(decoderBase, sessionUuid, {
-      onText: (text: string) => {
-        setDecoding(true);
-        setDecoderText((prev: string) => {
-          const next = prev + text;
-          return next.length > 3000 ? next.slice(next.length - 3000) : next;
-        });
-      },
-      onStatus: (s: string)  => setDecoderStatus(s),
-      onDot:    (d)          => setDecoding(d === 'active' || d === 'rx'),
-      // WEFAX/SSTV — drive the panel's image canvas (skin canvas parity).
-      // WEFAX lines are greyscale, SSTV lines are RGB; route by active decoder.
-      onImageStart: (w: number, h: number) => decoderImageRef.current?.imageStart(w, h),
-      onImageLine:  (ln: number, w: number, px: Uint8Array) => {
-        if (activeDecRef.current === 'sstv') decoderImageRef.current?.sstvLine(ln, w, px);
-        else                                 decoderImageRef.current?.wefaxLine(ln, w, px);
-      },
-      onImageDone: ()            => decoderImageRef.current?.imageDone(),
-      onError:     (msg: string) => setDecoderStatus('error: ' + msg),
-      onSpot: (s) => {
-        if (s.kind !== spotsKindRef.current) return;
-        spotBufRef.current.push(s); // flushed by the 400ms tick — no setState here
-      },
-      // ── Chat (same WS) — replayed history arrives quiet (no unread pulse),
-      //    duplicates are dropped in DecoderClient before reaching here ──────
-      onChatMessage: (user: string, text: string, ts: string, isHistory: boolean) => {
-        const own = user === myCallsignRef.current;
-        setChatMessages((prev: ChatMessage[]) => [
-          ...prev.slice(-99),
-          { id: 'c' + String(++chatIdRef.current),
-            type: own ? 'own' : 'other', user, text, ts: chatTs(ts) },
-        ]);
-        if (!isHistory && !own && !chatMutedRef.current) {
-          setChatOpen((open: boolean) => {
-            if (!open) setChatUnread(true);
-            return open;
-          });
-        }
-      },
-      onChatJoined: (username: string, isHistory: boolean) => {
-        if (!isHistory) addChatMsg(mkMsg('system', `${username} joined the chat`), true);
-        decoderClient.current?.requestChatUsers();
-      },
-      onChatLeft: (username: string, isHistory: boolean) => {
-        if (!isHistory) addChatMsg(mkMsg('system', `${username} left the chat`), true);
-        updateChatUsers((prev: ChatUserRow[]) =>
-          prev.filter((u: ChatUserRow) => u.username !== username));
-        setSyncedUser((prev: string | null) => (prev === username ? null : prev));
-      },
-      onChatUsers: (users: ChatUserRow[]) => updateChatUsers(() => users),
-      onChatUserUpdate: (u: ChatUserRow) => {
-        updateChatUsers((prev: ChatUserRow[]) => {
-          const i = prev.findIndex((x: ChatUserRow) => x.username === u.username);
-          if (i < 0) return [...prev, u];
-          const next = [...prev];
-          next[i] = { ...next[i], ...u };
-          return next;
-        });
-        // Following this user → mirror their tune
-        if (u.username === syncedUserRef.current) applyChatSync(u);
-      },
-      onChatError: (msg: string) => {
-        addChatMsg(mkMsg('system', `⚠ ${msg}`), true);
-        // Join rejected (taken/invalid/profane) → back to the join flow
-        if (/username|callsign/i.test(msg)) {
-          setMyCallsign(null);
-          AsyncStorage.removeItem('lsv_chat_callsign:' + baseUrl).catch(() => {});
-        }
-      },
-    }, password);
-    decoderClient.current = dc;
-
-    // Saved callsign → auto-join on connect (skin autoLogin parity); the
-    // chat stream then stays live for unread pulses without opening the
-    // drawer. Runs here so the client exists before joinChat fires.
-    let cancelled = false;
-    AsyncStorage.getItem('lsv_chat_callsign:' + baseUrl).then((cs: string | null) => {
-      if (cancelled || !cs) return;
-      setMyCallsign(cs);
-      dc.joinChat(cs);
-    }).catch(() => {});
-
-    return () => { cancelled = true; dc.destroy(); decoderClient.current = null; };
-  // decoderBase is async for Kiwi (null until the native decoder sidecar's port
-  // arrives from startDecoderService) — it MUST be a dep, or the DecoderClient is
-  // never (re)built when the port lands, leaving Kiwi decoders/spots with no output.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl, sessionUuid, decoderBase]);
-
-  // Selected decoder mode — persists across stop/start (skin _mode vs _on)
-  const [selDecoder, setSelDecoder] =
-    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|null>(null);
-
-  // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders.
-  // Spots are BUFFERED in a ref and flushed to state on a 400ms tick: the
-  // server replays its whole buffer on subscribe (hundreds of messages in a
-  // burst) and a setState per spot re-renders the entire screen tree — that's
-  // what stuttered the waterfall. The skin never had this because DOM rows
-  // append incrementally.
-  const [spotsKind, setSpotsKind] = useState<SpotsKind | null>(null);
-  const [spots,     setSpots]     = useState<SpotRow[]>([]);
-  const spotsKindRef  = useRef<SpotsKind | null>(null);
-  const spotBufRef    = useRef<SpotRow[]>([]);
-  const spotTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Receiver position for FT8 spot distances (+ the on-device-decoder map).
-  // Kiwi: server gps=(lat,lon) via onReceiverLoc. Local hardware: the phone's GPS
-  // (same permission as instance-list distance sorting); null until resolved.
-  const recvLocRef = useRef<{ lat: number; lon: number } | null>(null);
-  const [recvLoc, setRecvLoc] = useState<{ lat: number; lon: number } | null>(null);
-  useEffect(() => {
-    if (!isLocal) return;
-    let cancelled = false;
-    getUserLocation().then(loc => {
-      if (cancelled || !loc) return;
-      recvLocRef.current = loc; setRecvLoc(loc);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [isLocal]);
-
-  const stopSpotFlush = useCallback(() => {
-    if (spotTimerRef.current) { clearInterval(spotTimerRef.current); spotTimerRef.current = null; }
-    spotBufRef.current = [];
-  }, []);
-
-  const startSpotFlush = useCallback(() => {
-    stopSpotFlush();
-    spotTimerRef.current = setInterval(() => {
-      const buf = spotBufRef.current;
-      if (buf.length === 0) return;
-      spotBufRef.current = [];
-      // On-device decoder (Local/Kiwi) sends a TX grid + callsign but no distance
-      // or country — derive both here. UberSDR spots already carry them.
-      const rx = recvLocRef.current;
-      for (const s of buf) {
-        if (s.distKm == null && s.grid && rx) s.distKm = distanceKmToGrid(rx, s.grid);
-        if (!s.country && s.call) s.country = countryForCallsign(s.call);
-      }
-      buf.reverse(); // arrival order oldest→newest; display newest first
-      setSpots((prev: SpotRow[]) => {
-        const next = buf.concat(prev);
-        return next.length > 200 ? next.slice(0, 200) : next;
-      });
-    }, 400);
-  }, [stopSpotFlush]);
-
-  useEffect(() => stopSpotFlush, [stopSpotFlush]); // clear on unmount
-
-  const openDecoder = useCallback((type: DecoderType) => {
-    setActiveDecoder(type);
-    activeDecRef.current = type;
-    setDecoderText('');
-    setDecoderStatus('listening…');
-    setDecoding(false);
-    decoderImageRef.current?.reset();
-    if (!type) return;
-    if (type === 'ft8') {
-      // FT8 is not an audio extension — it's served instance-wide via the
-      // Digital Spots feed (decoder_feed / digi spots APIs), not per-session.
-      setDecoderStatus('FT8 arrives via Digital Spots — see Server Extensions');
-      return;
-    }
-    decoderClient.current?.start(type);
-  }, []);
-
-  const closeDecoder = useCallback(() => {
-    decoderClient.current?.stop();
-    decoderImageRef.current?.reset();
-    setActiveDecoder(null);
-    activeDecRef.current = null;
-    setDecoding(false);
-    setDecoderText('');
-    setDecoderStatus('listening…');
-  }, []);
-
-  const stopSpots = useCallback(() => {
-    decoderClient.current?.stopSpots();
-    spotsKindRef.current = null;
-    setSpotsKind(null);
-    stopSpotFlush();
-  }, [stopSpotFlush]);
-
-  // Menu decoder toggle — skin semantics: same mode running → stop (selection
-  // kept, settings stay visible); otherwise select + start. Menu stays open.
-  // Spots and audio decoders share the panel — starting one stops the other.
-  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper') => {
-    if (activeDecRef.current === m) {
-      closeDecoder();
-      setSelDecoder(m); // closeDecoder clears running state; keep selection
-    } else {
-      stopSpots();
-      setSelDecoder(m);
-      openDecoder(m);
-    }
-  }, [closeDecoder, openDecoder, stopSpots]);
-
-  // Spots toggle (menu Server Extensions DIGITAL/CW — skin lsvSpots)
-  const onSpotsToggle = useCallback((k: SpotsKind) => {
-    if (spotsKindRef.current === k) {
-      stopSpots();
-    } else {
-      closeDecoder();
-      setSpots([]);
-      spotsKindRef.current = k;
-      setSpotsKind(k);
-      startSpotFlush();
-      decoderClient.current?.startSpots(k);
-    }
-  }, [closeDecoder, stopSpots, startSpotFlush]);
-
-  // RTTY settings — applying requires a re-attach (server reads params at attach)
-  const [rttySettings, setRttySettings] = useState<RttySettings>({ ...RTTY_PRESETS.ham });
-  const onRttySettings = useCallback((s: RttySettings) => {
-    setRttySettings(s);
-    const dc = decoderClient.current;
-    if (!dc) return;
-    dc.rttySettings = { ...s };
-    if (activeDecRef.current === 'rtty') {
-      setDecoderStatus('re-attaching…');
-      dc.start('rtty');
-    }
-  }, []);
-
-  // Morse quality — client-side filter in DecoderClient, no re-attach needed
-  const [morseQuality, setMorseQuality] = useState<MorseQuality>('all');
-  const onMorseQuality = useCallback((q: MorseQuality) => {
-    setMorseQuality(q);
-    if (decoderClient.current) decoderClient.current.morseQuality = q;
-  }, []);
-
-  // WEFAX LPM — same re-attach rule
-  const [wefaxLpm, setWefaxLpm] = useState(120);
-  const onWefaxLpm = useCallback((lpm: number) => {
-    setWefaxLpm(lpm);
-    const dc = decoderClient.current;
-    if (!dc) return;
-    dc.wefaxLpm = lpm;
-    if (activeDecRef.current === 'wefax') {
-      setDecoderStatus('re-attaching…');
-      dc.start('wefax');
-    }
   }, []);
 
   // ── Display style — wired to ThemeContext so the whole app re-renders ────────
   const { themeName, setTheme } = useTheme();
-  const displayStyle = themeName;
-  const handleDisplayStyle = useCallback((s: 'amber' | 'white') => {
-    setTheme(s);
-  }, [setTheme]);
-
   // ── Media control tune events (iOS lock screen) ───────────────────────────
 
   const dspSeen = useRef(false);
@@ -1782,11 +917,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       const dir = e.direction === 'prev' ? 'left' : 'right';
       // DAB: cycle programmes within the ensemble (the VFO is locked there).
       if (String(client.current?.getStatus().mode) === 'dab') { dabSkipRef.current?.(dir); return; }
-      // CarFM: drive the FACE's animated preset step (hero-swap FLIP, steps in
+      // Drive the FACE's animated preset step (hero-swap FLIP, steps in
       // displayed/card order) — not onVtsJump, which silently retuned by frequency.
-      if (carFm) { fmHwStepRef.current?.(dir === 'left' ? -1 : 1); return; }
-      if (mediaSkipRef.current === 'bookmark') onVtsJumpRef.current?.(dir);
-      else mediaStepSkipRef.current?.(dir);
+      fmHwStepRef.current?.(dir === 'left' ? -1 : 1);
     });
     // DIAGNOSTIC: raw media-button keycodes from the service's MediaSession. On
     // the built-in NWD path this confirms the steering wheel actually reaches
@@ -1938,16 +1071,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         (VibePowerModule as any)?.stopExternalAudio?.();
       },
       onReceiverLon: (lon) => { if (!destroyed.current) setRecvLon(lon); },
-      onReceiverLoc: (lat, lon) => { recvLocRef.current = { lat, lon }; if (!destroyed.current) setRecvLoc({ lat, lon }); },
       onReconnecting: () => {},
       onLink: (q) => {
         if (destroyed.current) return;
-        const b = meterBus.current;
-        // On the rtl_tcp path the backend's FFT-timing quality is measured AFTER the
-        // jitter buffer, so it reads green while the network is starving the buffer.
-        // Clamp it with the real network health — a bad link can only make it worse.
-        const eff = Math.min(q, netLinkRef.current) as 0|1|2|3;
-        b.emit({ ...b.value, link: eff });
         // UberSDR auto-reconnects silently — without a cue the app just looks
         // frozen when the link drops (e.g. the instance reboots). But the spectrum
         // is deliberately paused on minimise/resume, which briefly starves the
@@ -1983,19 +1109,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onProfiles:   (list) => { if (!destroyed.current) setProfiles(list); },
       onSdrUsage:   (m) => { if (!destroyed.current) setSdrUsage(m); },
       onClients:    (n) => { if (!destroyed.current) setClientCount(n); },
-      onChatEnabled: (en) => { if (!destroyed.current) setChatEnabled(en); },
       onServerInfo: (info) => { if (!destroyed.current) { setServerLabel(info.name); setServerVersion(info.version || null); } },
-      onChatMessage: (name, text) => {
-        // OWRX basic text chat (name + text). Server echoes our own back, so
-        // don't local-echo on send — render the broadcast and mark own by name.
-        if (destroyed.current) return;
-        const own = name === myCallsignRef.current;
-        setChatMessages((prev: ChatMessage[]) => [
-          ...prev.slice(-99),
-          { id: 'c' + String(++chatIdRef.current), type: own ? 'own' : 'other', user: name, text, ts: chatTs(new Date().toISOString()) },
-        ]);
-        if (!own && !chatMutedRef.current && !chatOpenRef.current) setChatUnread(true);
-      },
       onModes:      (list) => { if (!destroyed.current) setServerModes(list); },
       onServerDspDefaults: (d) => {
         // Adapter already applied these to the demod; bump seq so the menu re-syncs
@@ -2006,40 +1120,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         // OWRX server bookmarks/dial markers (over the WS) → same path as
         // UberSDR's fetched bookmarks: VTS station readout + search bar.
         if (!destroyed.current) setServerBookmarks(list.map((b) => ({ name: b.name, frequency: b.frequency, mode: b.mode, repeater: b.repeater, source: 'server' as const })));
-      },
-      onAircraft: (list) => { if (!destroyed.current) setAircraft(list); },
-
-      onDecoderText: (line, replace) => {
-        // OWRX server-side text decoders (Packet/POCSAG/ADSB/…) → the decoder
-        // text panel. `replace` (ADS-B live list) supersedes the buffer.
-        if (destroyed.current) return;
-        // Auto-open the panel if decode output arrives without a manual pick
-        // (e.g. a profile whose start_mod is a standalone decoder like ADSB).
-        if (!activeDecRef.current) {
-          const dec = (client.current as any)?.getSecondaryDecoder?.() ?? null;
-          const dt: DecoderType = dec === 'sstv' ? 'sstv' : dec === 'fax' ? 'wefax' : dec ? (dec as unknown as DecoderType) : null;
-          if (dt) { activeDecRef.current = dt; setActiveDecoder(dt); }
-        }
-        setDecoding(true);
-        if (replace) { setDecoderText(line); return; }
-        // Append raw — the adapter newline-terminates records and char-stream
-        // decoders (RTTY/CW) carry their own line breaks.
-        setDecoderText((prev: string) => {
-          const next = prev + line;
-          return next.length > 4000 ? next.slice(next.length - 4000) : next;
-        });
-      },
-      onDecoderImage: (ev) => {
-        // OWRX decodes SSTV/Fax server-side and streams scanlines — paint them
-        // on the SAME decoder canvas UberSDR uses (Fax → 'wefax' greyscale path).
-        if (destroyed.current) return;
-        const dt: DecoderType = ev.kind === 'sstv' ? 'sstv' : 'wefax';
-        if (activeDecRef.current !== dt) { activeDecRef.current = dt; setActiveDecoder(dt); }
-        if (ev.phase === 'start') { decoderImageRef.current?.imageStart(ev.width, ev.height); setDecoderStatus(`receiving ${ev.width}x${ev.height}`); }
-        else if (ev.phase === 'line') {
-          if (ev.kind === 'sstv') decoderImageRef.current?.sstvLine(ev.line, ev.width, ev.pixels);
-          else                    decoderImageRef.current?.wefaxLine(ev.line, ev.width, ev.pixels);
-        } else { decoderImageRef.current?.imageDone(); }
       },
       onMetadata:   (meta) => {
         if (destroyed.current) return;
@@ -2080,72 +1160,6 @@ export default function SDRScreen({ route, navigation }: Props) {
           prev.binCount === s.binCount &&
           Math.abs(prev.binBandwidth - s.binBandwidth) < 1e-6
             ? prev : s);
-        // The FM face is opaque and draws its own meter from the audio SNR, so the
-        // per-frame bin math below is pure waste while it's up. Skip it.
-        if (fmFaceActiveRef.current) return;
-        // ── Derive signal level + SNR from bins (advanced-view meter only) ──
-        // Full data rate (~10Hz) — updates only re-render the two meter leaf
-        // widgets via the bus, so there's no need to throttle anymore.
-        // Find peak bin power in the current bandwidth window
-        if (newBins.length > 0) {
-          const len = newBins.length;
-          // Peak in the audio passband window — feeds the dBFS / S-meter modes.
-          const bwFrac = Math.min(1, (s.bandwidthHigh - s.bandwidthLow) / Math.max(1, s.bwHz));
-          const half = Math.floor((bwFrac * len) / 2);
-          const mid = Math.floor(len / 2);
-          let peak = -200;
-          for (let i = Math.max(0, mid - half); i <= Math.min(len - 1, mid + half); i++) {
-            if (newBins[i] > peak) peak = newBins[i];
-          }
-          // SNR comes from radiod's channel status (audioSnrRef), NOT the spectrum
-          // — the demodulator's own measurement of the tuned channel, so it's
-          // independent of zoom (this is how UberSDR's meter works). 0 until the
-          // first reading lands.
-          let snrDb = audioSnrRef.current ?? 0;
-          // Local SDR has no radiod SNR feed, so derive it from the spectrum:
-          // passband peak minus the noise floor (mean of all bins ≈ the floor
-          // for a mostly-empty spectrum). Cheap (no per-frame sort) and gives a
-          // meaningful, zoom-tolerant reading.
-          if (isLocal) {
-            let sum = 0;
-            for (let i = 0; i < len; i++) sum += newBins[i];
-            const floor = sum / len;
-            snrDb = Math.max(0, peak - floor);
-          }
-          // OWRX exposes a real channel S-meter (dBm) over the control WS but no
-          // SNR. When present it's the honest absolute level source (and, lacking
-          // an SNR feed, drives the bar in every mode); otherwise fall back to
-          // the spectrum-derived peak as before.
-          const owrxDbm = owrxSmeterRef.current;
-          const levelDbm = owrxDbm ?? peak;
-          // Bar source follows the meter mode: SNR uses the compression curve
-          // (sigNorm, calibrated for honest 0–50 dB); S-meter/dBFS use the
-          // absolute level mapping off the dBm level. OWRX's smeter dB spans
-          // roughly −110 (noise) … −10 (strong), a different scale to UberSDR's
-          // spectrum, so it gets its own linear mapping.
-          const norm = owrxDbm != null
-            ? Math.max(0, Math.min(1, (owrxDbm + 110) / 100))
-            : signalModeRef.current === 'snr'
-              ? sigNorm(snrDb)
-              : Math.max(0, Math.min(1, (peak + 130) / 90));
-          // Skin-feel smoothing rescaled for 10Hz updates (the skin's 0.55/0.18
-          // alphas assumed its ~60Hz rAF loop — at 10Hz they felt sluggish).
-          const sm = meterSmooth.current;
-          sm.level += (norm > sm.level ? 0.85 : 0.35) * (norm - sm.level);
-          if (sm.level >= sm.peak)   { sm.peak = sm.level; sm.hold = 15; }
-          else if (sm.hold > 0)      { sm.hold--; }
-          else                       { sm.peak = Math.max(0, sm.peak - 0.02); }
-          // Backgrounded frames must NOT drive the meter bus: it re-renders a React
-          // leaf per frame, and per-frame React commits in the background are exactly
-          // what starved the audio DSP in v6. Nobody can see the meter anyway.
-          if (appActiveRef.current) {
-            meterBus.current.emit({
-              level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
-              active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,
-              link: meterBus.current.value.link,
-            });
-          }
-        }
       },
       onError: (msg) => {
         if (destroyed.current) return;
@@ -2495,21 +1509,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idleSlow, baseUrl]); // baseUrl: new client starts at divisor 1
 
-  const onSmoothTune = useCallback((v: boolean) => {
-    setSmoothTune(v);
-    AsyncStorage.setItem('lsv_smooth_tune', v ? '1' : '0').catch(() => {});
-  }, []);
-
-  const onIdleSlow = useCallback((v: boolean) => {
-    setIdleSlow(v);
-    AsyncStorage.setItem('lsv_idle_slow', v ? '1' : '0').catch(() => {});
-  }, []);
-
-  const onFrameRate = useCallback((v: 'native'|'20fps'|'30fps') => {
-    setFrameRate(v);
-    AsyncStorage.setItem('lsv_frame_rate', v).catch(() => {});
-  }, []);
-
   // ── Drum sensitivity (NORMAL / PRECISE) ──────────────────────────────────
   const [drumMode, setDrumMode] = useState<'normal'|'precise'>('normal');
   const drumModeRef = useRef<'normal'|'precise'>('normal');
@@ -2518,26 +1517,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (v === 'normal' || v === 'precise') { setDrumMode(v); drumModeRef.current = v; }
     }).catch(() => {});
   }, []);
-  const onDrumMode = useCallback((m: 'normal'|'precise') => {
-    setDrumMode(m);
-    drumModeRef.current = m;
-    AsyncStorage.setItem('lsv_drum_sens', m).catch(() => {});
-  }, []);
-
   // ✦ HAPTICS toggle — was UI-only (props never passed from here, and the
   // drums ticked unconditionally). Module-level switch in DrumWheel.
   const [hapticsEnabled, setHapticsEnabled] = useState(true);
   useEffect(() => {
     AsyncStorage.getItem('lsv_haptics').then((v: string | null) => {
-      if (v === '0') { setHapticsEnabled(false); setDrumHaptics(false); }
+      if (v === '0') { setHapticsEnabled(false); }
     }).catch(() => {});
   }, []);
-  const onHaptics = useCallback((on: boolean) => {
-    setHapticsEnabled(on);
-    setDrumHaptics(on);
-    AsyncStorage.setItem('lsv_haptics', on ? '1' : '0').catch(() => {});
-  }, []);
-
   // Whether this device has a haptic motor at all — hide the HAPTICS toggle if
   // not (it's a dead button otherwise). iPads have no Taptic Engine; on Android
   // we ask the native Vibrator (some tablets genuinely have no motor).
@@ -2548,55 +1535,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     mod?.hasVibrator?.()
       .then((has) => setHapticsHardware(has !== false))
       .catch(() => setHapticsHardware(true));
-  }, []);
-
-  // ── VFO drum ──────────────────────────────────────────────────────────────
-  // Skin-parity step tuning (vSendDelta + vDown from Scalable_Mobile_UI v6.3.1):
-  //   - pending accumulates in Hz: px × step / pxPerStep (velocity-adaptive)
-  //   - tunes ONLY in whole steps: steps = round(pending / step)
-  //   - baseline snaps to the step grid, so frequency always lands on a
-  //     multiple of the step rate (7,153,000 — never 7,153,437)
-  const vfoPendingHz = useRef(0);
-  const vfoVel = useRef({ t: 0, v: 0 }); // EMA thumb speed, px/s
-
-  const onVfoDelta = useCallback((pxDelta: number) => {
-    const c = client.current; if (!c) return;
-    // Whole-profile data modes are locked to their block — VFO tuning just knocks
-    // you off it (kills the decode, and the block is a nuisance to re-find). DAB had
-    // this guard; ADS-B did NOT, so the drum would happily drag you off 1090 MHz and
-    // stop every aircraft decoding. One predicate now, so the next data mode can't
-    // fall through the same gap. Ignore drum input.
-    if (isWholeProfileMode(String(c.getStatus().mode))) return;
-    markInteract();
-    const s = stepRef.current;
-    // Velocity-adaptive sensitivity: EMA of |px|/dt. A gesture gap resets to
-    // 0 so a fresh slow touch starts fully fine; a fast flick's EMA catches
-    // up within 2–3 events. The fine↔fast blend is continuous, so easing off
-    // mid-spin onto a signal tightens the rate immediately.
-    const now = Date.now();
-    const gap = now - vfoVel.current.t;
-    vfoVel.current.t = now;
-    if (gap > 300) {
-      vfoVel.current.v = 0;
-    } else {
-      const inst = Math.abs(pxDelta) / (Math.max(8, gap) / 1000);
-      vfoVel.current.v = vfoVel.current.v * 0.7 + inst * 0.3;
-    }
-    const k = Math.max(0, Math.min(1,
-      (vfoVel.current.v - VFO_VEL_FINE) / (VFO_VEL_FAST - VFO_VEL_FINE)));
-    const pxPerStep = DRUM_SENS[drumModeRef.current].vfo
-      * (VFO_FINE_MULT - (VFO_FINE_MULT - 1) * k);
-    vfoPendingHz.current += (pxDelta * s) / pxPerStep;
-    const steps = Math.round(vfoPendingHz.current / s);
-    if (!steps) return;
-    vfoPendingHz.current -= steps * s;
-    const cur     = c.getStatus().frequency;
-    const snapped = Math.round(cur / s) * s;   // vDown grid snap
-    const [loHz, hiHz] = c.caps.freqRange;     // backend range (OWRX VHF/UHF ≠ 0–30 MHz)
-    const newHz   = Math.max(loHz, Math.min(hiHz, snapped + steps * s));
-    if (newHz === cur) return;
-    c.tune(newHz);
-    setStatus((prev: SDRStatus) => ({ ...prev, frequency: newHz }));
   }, []);
 
   // ── BW drum ───────────────────────────────────────────────────────────────
@@ -2618,44 +1556,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       ? tuned : s.centerHz;
   }, []);
 
-  const bwZoomAcc = useRef({ base: 0, px: 0, t: 0 });
-  const onBwDelta = useCallback((pxDelta: number) => {
-    const c = client.current; if (!c) return;
-    markInteract();
-    const s = c.getView(); // predicted view — getStatus() is one RTT stale mid-gesture
-    if (!s.binBandwidth || !s.centerHz || !s.binCount) return;
-    const a = bwZoomAcc.current;
-    const now = Date.now();
-    if (now - a.t > 400 || !a.base) { a.base = s.binBandwidth; a.px = 0; }
-    a.t = now;
-    a.px += pxDelta;
-    // Drum px per zoom octave (2×) — PRECISE nearly doubles the travel
-    c.zoom(zoomAnchorHz(s), Math.max(0.5,
-      a.base * Math.pow(0.5, a.px / DRUM_SENS[drumModeRef.current].zoomOctave)));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const zoomBy = useCallback((factor: number) => {
     const c = client.current; if (!c) return;
     const v = c.getView(); if (!v.binBandwidth || !v.centerHz) return;
     c.zoom(zoomAnchorHz(v), Math.max(1, v.binBandwidth * factor));
   }, [zoomAnchorHz]);
-  const onZoomIn  = useCallback(() => zoomBy(0.5), [zoomBy]);
-  const onZoomOut = useCallback(() => zoomBy(2),   [zoomBy]);
-  // Zoom extremes — each adapter clamps internally (UberSDR to its 6 kHz max-zoom
-  // floor / full-span cap, OWRX/Kiwi to their own limits), so a tiny bandwidth =
-  // full zoom in and a huge one = full span out.
-  const onZoomMax = useCallback(() => {       // MAX = zoom all the way in
-    const c = client.current; if (!c) return;
-    const v = c.getView(); if (!v.centerHz) return;
-    c.zoom(zoomAnchorHz(v), 1);
-  }, [zoomAnchorHz]);
-  const onZoomMin = useCallback(() => {       // MIN = full span out
-    const c = client.current; if (!c) return;
-    const v = c.getView(); if (!v.centerHz) return;
-    c.zoom(zoomAnchorHz(v), Number.MAX_SAFE_INTEGER);
-  }, [zoomAnchorHz]);
-
   // Toggle: SET DEFAULT when this instance isn't the default, CLEAR when it is
   const [isDefault, setIsDefault] = useState(false);
   useEffect(() => {
@@ -2663,24 +1568,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       .then((d) => setIsDefault(!!d && d.url === baseUrl))
       .catch(() => {});
   }, [baseUrl]);
-
-  const onSetDefault = useCallback(() => {
-    if (isDefault) {
-      clearDefaultInstance()
-        .then(() => {
-          setIsDefault(false);
-          Alert.alert('Default Cleared', 'No default instance is set.');
-        })
-        .catch(() => {});
-    } else {
-      setDefaultInstance({ name: instanceName ?? baseUrl, url: baseUrl })
-        .then(() => {
-          setIsDefault(true);
-          Alert.alert('Default Set', `${instanceName ?? baseUrl} is now your default instance.`);
-        })
-        .catch(() => {});
-    }
-  }, [baseUrl, instanceName, isDefault]);
 
   // Favourite the current instance from the menu — so a good receiver you found
   // mid-session lands in the picker's favourites without hunting for it again.
@@ -2693,14 +1580,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       .catch(() => {});
   }, [baseUrl]);
 
-  const onToggleFavourite = useCallback(() => {
-    const st = route.params.serverType ?? 'ubersdr';
-    getFavourites()
-      .then((favs) => toggleFavourite({ name: instanceName ?? baseUrl, url: baseUrl, serverType: st }, favs))
-      .then((next) => setIsFavourite(next.some((f) => f.url === baseUrl)))
-      .catch(() => {});
-  }, [baseUrl, instanceName, route.params.serverType]);
-
 
   // ── Mode / filter / tune ──────────────────────────────────────────────────
 
@@ -2709,26 +1588,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     c.setMode(m); // client mirrors the server's per-mode bandwidth defaults
     setStatus({ ...c.getStatus() });
     if (m !== 'wfm') setFmStereo(false);  // stereo icon only applies to WFM
-    // OWRX image decoders (SSTV/Fax) ride on top of the analog carrier — sync the
-    // decoder canvas to the adapter's REAL decoder state (it auto-keeps/clears the
-    // decoder when the carrier changes), so changing the carrier doesn't close it.
-    if (route.params.serverType === 'owrx') {
-      // Image decoders → the Skia canvas (sstv/wefax); any other secondary
-      // decoder (packet/pocsag/adsb/…) → the text panel, titled by its mode id.
-      const dec = c.getSecondaryDecoder?.() ?? null;
-      const dt: DecoderType = dec === 'sstv' ? 'sstv'
-        : dec === 'fax' ? 'wefax'
-        : dec ? (dec as unknown as DecoderType) : null;
-      if (dt !== activeDecRef.current) {
-        if (dt) {
-          decoderImageRef.current?.reset();
-          setDecoderText('');
-          activeDecRef.current = dt; setActiveDecoder(dt);
-          setDecoderStatus('listening…');
-        } else { activeDecRef.current = null; setActiveDecoder(null); }
-      }
-    }
-  }, [route.params.serverType]);
+  }, []);
 
   // Atomic both-edges setter — single setBandwidth, no stale-closure edge
   const onFilterBoth = useCallback((low: number, high: number) => {
@@ -2736,43 +1596,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     setStatus((prev: SDRStatus) => ({ ...prev, bandwidthLow: low, bandwidthHigh: high }));
   }, []);
 
-  const onFilterLow  = useCallback((v: number) => { client.current?.setBandwidth(v, status.bandwidthHigh); setStatus((prev: SDRStatus) => ({ ...prev, bandwidthLow: v })); }, [status.bandwidthHigh]);
-  const onFilterHigh = useCallback((v: number) => { client.current?.setBandwidth(status.bandwidthLow, v);  setStatus((prev: SDRStatus) => ({ ...prev, bandwidthHigh: v })); }, [status.bandwidthLow]);
-
   // ── Audio-WS commands (set_dsp / squelch / gate are AUDIO-WS message types;
   //    the spectrum WS doesn't know them — the old client.setNRMode/setDsp
   //    paths were sending into the void) ──────────────────────────────────────
   const sendAudioCmd = useCallback((obj: Record<string, unknown>) => {
     VibePowerModule?.sendAudioCommand(JSON.stringify(obj));
   }, []);
-
-  // ── NR cycle: off → nr → nr2 — native Swift DSP (VibeDSP.swift skin ports)
-  const onNrMode = useCallback((mode: 'off'|'nr'|'nr2') => {
-    setNrMode(mode);
-    VibePowerModule?.setNrMode(mode);  // Android: accepted no-op (port pending)
-  }, []);
-
-  // ── NB toggle — native Swift noise blanker ────────────────────────────────
-  const onNb = useCallback((on: boolean) => {
-    setNb(on);
-    VibePowerModule?.setNoiseBlanker(on);  // Android: accepted no-op (port pending)
-  }, []);
-
-  // ── SNR squelch (audio gate) ──────────────────────────────────────────────
-  // The slider/state are in OUR meter's units (spectrum-derived passband
-  // SNR). The server gates on radiod's raw audio-stream SNR, which reads
-  // ~30dB higher (floors at ~30 — madpsy/ka9q_ubersdr#77, same offset the
-  // signal meter compensates for), so shift +30 on the wire.
-  const onSnrSquelch = useCallback((minSnr: number) => {
-    setSnrSquelch(minSnr);
-    sendAudioCmd({ type: 'set_audio_gate', min_snr: minSnr <= -999 ? -999 : minSnr + 30 });
-  }, [sendAudioCmd]);
-
-  // ── FM squelch ────────────────────────────────────────────────────────────
-  const onFmSquelch = useCallback((db: number) => {
-    setFmSquelch(db);
-    sendAudioCmd({ type: 'set_squelch', squelchOpen: db });
-  }, [sendAudioCmd]);
 
   // radiod creates FM channels with its own DEFAULT squelch — entering
   // fm/nfm must re-assert the app's squelch state (default −999 = always
@@ -2814,48 +1643,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     setServerDspParams(p);
   }, []);
 
-  const onServerDsp = useCallback((enabled: boolean) => {
-    setServerDspEnabled(enabled);  // optimistic — dsp_status confirms
-    if (isKiwi) {
-      client.current?.setDsp?.(enabled, dspFilterRef.current, dspParamsRef.current);
-      return;
-    }
-    if (enabled) {
-      sendAudioCmd({ type: 'set_dsp', enabled: true,
-                     filter: dspFilterRef.current, params: dspParamsRef.current });
-      // Server NR replaces client NR — the menu NR button locks to SERV
-      setNrMode('off');
-      VibePowerModule?.setNrMode('off');
-    } else {
-      sendAudioCmd({ type: 'set_dsp', enabled: false });
-    }
-  }, [sendAudioCmd, isKiwi]);
-
-  const onServerDspFilter = useCallback((name: string) => {
-    setServerDspFilter(name);
-    const defs = dspDefaults(dspFiltersRef.current.find((f: DspFilterDesc) => f.name === name));
-    applyDspParams(defs);
-    if (isKiwi) {
-      if (serverDspEnabledRef.current) client.current?.setDspFilter?.(name, defs);
-      return;
-    }
-    if (serverDspEnabledRef.current) {
-      sendAudioCmd({ type: 'set_dsp', enabled: true, filter: name, params: defs });
-    }
-  }, [sendAudioCmd, dspDefaults, applyDspParams, isKiwi]);
-
   // Param edits send the FULL params map, debounced 120ms (skin parity)
   const dspParamTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const onServerDspParam = useCallback((name: string, value: string) => {
-    const next = { ...dspParamsRef.current, [name]: value };
-    applyDspParams(next);
-    if (dspParamTimer.current) clearTimeout(dspParamTimer.current);
-    dspParamTimer.current = setTimeout(() => {
-      if (!serverDspEnabledRef.current) return;
-      if (isKiwi) client.current?.setDspParams?.(dspParamsRef.current);
-      else sendAudioCmd({ type: 'set_dsp_params', params: dspParamsRef.current });
-    }, 120);
-  }, [sendAudioCmd, applyDspParams, isKiwi]);
   useEffect(() => () => {
     if (dspParamTimer.current) clearTimeout(dspParamTimer.current);
   }, []);
@@ -2891,33 +1680,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     onVtsJumpRef.current   = onVtsJump;
     onSearchTuneRef.current = onSearchTune;
   });
-
-  // ── Share — deep link into this station (web-UI URL params; skin parity:
-  //    the skin shared window.location.href which carries the same params) ──
-  const onShareStation = useCallback(async () => {
-    const c = client.current;
-    let url = `${baseUrl.replace(/\/+$/, '')}/?freq=${Math.round(status.frequency)}`
-      + `&mode=${status.mode}`
-      + `&bwl=${Math.round(status.bandwidthLow)}&bwh=${Math.round(status.bandwidthHigh)}`;
-    const v = c?.getView();
-    if (v && v.binBandwidth > 0) {
-      const span = v.binBandwidth * (v.binCount || 1024);
-      if (span < 29_000_000) {  // only when actually zoomed in
-        url += `&zoom_freq=${Math.round(v.centerHz)}&zoom_bw=${v.binBandwidth.toFixed(1)}`;
-      }
-    }
-    const label = `CarFM — ${(status.frequency / 1e3).toFixed(3)} kHz ${status.mode.toUpperCase()}`;
-    // carfm:// app link — opens straight into CarFM (url-form, so it works
-    // for any remote backend). Skip for Local Hardware / RTL-TCP (localhost).
-    const st = route.params.serverType ?? 'ubersdr';
-    const appLink = route.params.isLocal
-      ? null
-      : buildShareLink({ baseUrl, serverType: st, freq: status.frequency, mode: status.mode });
-    try {
-      // Android share targets ignore the url field, so embed it in the message text.
-      await Share.share({ message: appLink ? `${label}\n${url}\nOpen in CarFM: ${appLink}` : `${label}\n${url}` });
-    } catch {}
-  }, [baseUrl, status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh]);
 
   // ── VTS (station/band steward — a11y popup bar only, no tuning guide) ─────
   // Stations come from /api/bookmarks (static config + live EiBi schedule);
@@ -2964,11 +1726,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     AsyncStorage.getItem('lsv_eibi_enabled').then((v) => { if (v === '0') setEibiEnabled(false); }).catch(() => {});
   }, []);
-  const onEibiToggle = useCallback((on: boolean) => {
-    setEibiEnabled(on);
-    AsyncStorage.setItem('lsv_eibi_enabled', on ? '1' : '0').catch(() => {});
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
     const st = route.params.serverType ?? 'ubersdr';
@@ -3046,32 +1803,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     ];
     vtsBookmarks.current = merged;
     setSearchBookmarks(merged);
-    pushCarBrowse(merged);
   }, [serverBookmarks, eibiBookmarks, eibiEnabled, userBookmarks, baseUrl, ituRegion]);
-
-  // Push the car browse tree (Bookmarks + Band Plan folders) to the native
-  // media-browser service. Bookmarks come from the merged list; the band plan is
-  // region-deduped. Native caches it and serves Android Auto / CarPlay; a no-op
-  // until a car connects. mediaId encodes freq|mode|step|isBand for the tap.
-  const pushCarBrowse = useCallback((bookmarks: ServerBookmark[]) => {
-    if (carFm) return;   // the carFm effect below owns the browse payload (Presets + Nearby)
-    const bandSeen = new Set<string>();
-    const bands = BAND_PLAN.filter((b: Band) => {
-      if (b.regions && b.regions.length && ituRegion && !b.regions.includes(ituRegion)) return false;
-      if (bandSeen.has(b.name)) return false;
-      bandSeen.add(b.name);
-      return true;
-    }).map((b: Band) => ({
-      name: b.name, frequency: b.lo, mode: b.mode ?? null, step: b.step ?? 0,
-    }));
-    const payload = {
-      bookmarks: bookmarks.map((b: ServerBookmark) => ({
-        name: b.name, frequency: b.frequency, mode: b.mode ?? null,
-      })),
-      bands,
-    };
-    VibePowerModule?.setBrowseItems?.(JSON.stringify(payload));
-  }, [ituRegion]);
 
   // ── User bookmark management (menu BOOKMARKS pane) ────────────────────────
   const persistUserBookmarks = useCallback((next: UserBookmark[]) => {
@@ -3102,43 +1834,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     () => bookmarksForInstance(userBookmarks, baseUrl),
     [userBookmarks, baseUrl],
   );
-
-  const onDeleteBookmark = useCallback((bm: UserBookmark) => {
-    persistUserBookmarks(userBookmarks.filter(
-      (b: UserBookmark) => !(b.name === bm.name && b.frequency === bm.frequency && b.scope === bm.scope),
-    ));
-  }, [userBookmarks, persistUserBookmarks]);
-
-  const onExportBookmarks = useCallback(() => {
-    const list = userBookmarks;
-    if (!list.length) { Alert.alert('Bookmarks', 'No bookmarks to export.'); return; }
-    // Plain-array JSON — directly importable by desktop UberSDR's
-    // local-bookmarks Import (JSON). Share as text: save/airdrop/paste.
-    Share.share({ message: exportBookmarksJSON(list) }).catch(() => {});
-  }, [userBookmarks]);
-
-  const onImportBookmarks = useCallback((text: string, allInstances: boolean): string => {
-    try {
-      const incoming = parseBookmarksAny(text, allInstances ? '' : baseUrl);
-      if (!incoming.length) return 'No bookmarks found (JSON or YAML).';
-      persistUserBookmarks(mergeBookmarks(userBookmarks, incoming));
-      return `Imported ${incoming.length} bookmark${incoming.length !== 1 ? 's' : ''}.`;
-    } catch {
-      return 'Could not parse that file (need JSON or YAML).';
-    }
-  }, [baseUrl, userBookmarks, persistUserBookmarks]);
-
-  // Pick a bookmark file (JSON/YAML) from the Files app and import it.
-  const onPickImportFile = useCallback(async (allInstances: boolean): Promise<string> => {
-    try {
-      const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
-      if (res.canceled || !res.assets?.length) return '';
-      const text = await FileSystem.readAsStringAsync(res.assets[0].uri);
-      return onImportBookmarks(text, allInstances);
-    } catch {
-      return 'Could not read that file.';
-    }
-  }, [onImportBookmarks]);
 
   const showBandNotif = useCallback((bands: Band[]) => {
     if (!bands.length) return;
@@ -3316,7 +2011,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // display expects — RadioText -> TITLE, station name (PS) -> ARTIST,
       // frequency -> ALBUM. Gadgetbridge relays these three, so this branch is
       // the whole system contract; the general SDR mapping below is bypassed.
-      if (route.params.carFm && status.mode === 'wfm') {
+      if (status.mode === 'wfm') {
         const np = fmNowPlaying({
           ps: liveStation.name, rt: liveStation.text,
           rtArtist: liveStation.rtArtist, rtTitle: liveStation.rtTitle, freqHz: hz,
@@ -3384,9 +2079,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     const m = bm.mode?.toLowerCase();
     if (m && m in MODE_BANDWIDTHS) onMode(m as SDRMode);
   }, [onTuneHz, onMode]);
-  const onVtsPrev = useCallback(() => onVtsJump('left'),  [onVtsJump]);
-  const onVtsNext = useCallback(() => onVtsJump('right'), [onVtsJump]);
-
   // Search result tap: tune (+mode when the bookmark has one) and close menu
   // Tune from a search/list tap. For an explicit BAND selection we also apply
   // that band's demodulator + tune step (band-aware tuning) — a deliberate user
@@ -3413,29 +2105,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
   }, [onTuneHz, onMode, ituRegion]);
 
-  // Menu INSTANCE row — ← BACK returns to the instance picker (it previously
-  // fell back to just closing the menu). The ⟳ RECONNECT button was removed
-  // 2026-06-12: it only recycled the spectrum client while the native audio
-  // WS kept the old session → frozen waterfall, and the zombie watchdog +
-  // revive() already cover real reconnects.
-  const onBackToPicker = useCallback(() => {
-    setMenuOpen(false);
-    navigation.goBack();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Stable handlers — inline lambdas defeat the React.memo on ControlsBar.
-  const onStepOpen  = useCallback(() => setStepOpen(true), []);
-  const onMenuOpen  = useCallback(() => setMenuOpen(true), []);
-  const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
-  const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
-  const onAudioOpen = useCallback(() => setAudioSheetOpen(true), []);
-
   // ── CarFM face wiring ─────────────────────────────────────────────────────
   // Sample the (ref-based) audio SNR on a timer while the FM face is up, so the
   // meter is reactive without re-rendering on every VibeSignal event.
   useEffect(() => {
-    if (!fmFaceActive) return;
     const t = setInterval(() => {
       // The built-in NWD tuner drives the meter from its own signal level (arg);
       // don't overwrite it with the SDR-path audio SNR (which is stale/0 there).
@@ -3444,32 +2117,31 @@ export default function SDRScreen({ route, navigation }: Props) {
       setFmSignalDb(Number.isFinite(v) ? v : null);
     }, 500);
     return () => clearInterval(t);
-  }, [fmFaceActive]);
+  }, []);
 
   // CarFM launch: sweep any offline-queued logos and, at most monthly / on a
   // region change, prefetch logos for the surrounding stations (all background,
   // rate-limited — never blocks). Once per carFm session.
-  useEffect(() => { if (carFm) void initLogoService(); }, [carFm]);
+  useEffect(() => { void initLogoService(); }, []);
 
   // CarFM: an image shared into the app (from the browser logo search) gets
   // assigned to the station the user picked for. Consume on mount + each resume.
   useEffect(() => {
-    if (!carFm) return;
     void consumeSharedLogo();
     const sub = AppState.addEventListener('change', (s) => { if (s === 'active') void consumeSharedLogo(); });
     return () => sub.remove();
-  }, [carFm]);
+  }, []);
 
   // Resolve station identity from the RDS PI (offline, via the bundled DB) so the
   // FM face can name the station before PS arrives. Hex string -> int -> lookup.
   useEffect(() => {
-    if (!carFm || status.mode !== 'wfm' || !liveStation.pi) { setPiIdentity(null); return; }
+    if (status.mode !== 'wfm' || !liveStation.pi) { setPiIdentity(null); return; }
     const pi = parseInt(liveStation.pi, 16);
     if (!Number.isFinite(pi)) { setPiIdentity(null); return; }
     let cancelled = false;
     identifyByPi(pi, liveStation.name).then((id) => { if (!cancelled) setPiIdentity(id); }).catch(() => {});
     return () => { cancelled = true; };
-  }, [carFm, status.mode, liveStation.pi, liveStation.name]);
+  }, [status.mode, liveStation.pi, liveStation.name]);
 
   // Callsign/city hint shown only when PS text is absent (PS always wins, §6).
   const fmCallsignHint = useMemo<string | undefined>(() => {
@@ -3523,7 +2195,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       navigation.replace('SDR', {
         baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware',
         viewMode: route.params.viewMode, serverType: 'ubersdr',
-        isLocal: true, localPort: res.port, localGen: newLocalSession(), carFm: true,
+        isLocal: true, localPort: res.port, localGen: newLocalSession(),
       });
     } catch { /* dongle not ready / permission denied — RETRY tries again */ }
     finally { tunerBusy.current = false; }
@@ -3535,7 +2207,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // radio service. The system dialog does the actual grant; declining is
   // remembered and never re-asked (the setting stays reachable via App info).
   useEffect(() => {
-    if (!carFm) return;
     const Local = (NativeModules as { VibeLocalSDR?: {
       isIgnoringBatteryOptimizations?: () => Promise<boolean>;
       requestIgnoreBatteryOptimizations?: () => void;
@@ -3561,7 +2232,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       } catch { /* best effort */ }
     })();
     return () => { cancelled = true; };
-  }, [carFm]);
+  }, []);
 
   // CarFM settings: theme override + boot autostart, persisted.
   const [fmTheme, setFmTheme] = useState<'system' | 'light' | 'dark'>('system');
@@ -3582,12 +2253,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (nwdActiveRef.current) nwdSetAudio(false);
   }, []);
   useEffect(() => {
-    if (!carFm) return;
     AsyncStorage.getItem('@carfm/theme_v1')
       .then((v: string | null) => { if (v === 'light' || v === 'dark' || v === 'system') setFmTheme(v); })
       .catch(() => {});
     getCarAutostart().then(setFmAutostart).catch(() => {});
-  }, [carFm]);
+  }, []);
   const onFmSetTheme = useCallback((t: 'system' | 'light' | 'dark') => {
     setFmTheme(t);
     AsyncStorage.setItem('@carfm/theme_v1', t).catch(() => {});
@@ -3620,7 +2290,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // (a tunerless session and a live-dongle session have different baseUrls, and
     // legacy presets may carry an old per-URL scope) and dedupe by channel, so a
     // preset survives the tunerless→dongle hot-swap and shows on a no-dongle boot.
-    const src = carFm ? userBookmarks : visibleBookmarks;
+    const src = userBookmarks;
     const byChannel = new Map<string, UserBookmark>();
     for (const b of src) {
       if (!(b.mode === 'wfm' || (b.frequency >= 87_000_000 && b.frequency <= 108_500_000))) continue;
@@ -3635,7 +2305,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     return [...base].sort((a, b) =>
       (pos.get(fmKeyOf(a.frequency)) ?? 1e6 + a.frequency / 1e5)
       - (pos.get(fmKeyOf(b.frequency)) ?? 1e6 + b.frequency / 1e5));
-  }, [carFm, userBookmarks, visibleBookmarks, fmOrder]);
+  }, [userBookmarks, visibleBookmarks, fmOrder]);
+
+  // Warm the preset logos as soon as the list is known, so the strip paints its
+  // art on the first frame instead of each tile resolving its own async chain.
+  useEffect(() => {
+    if (fmPresets.length === 0) return;
+    void warmStationLogos(fmPresets.map((p) => ({ name: p.name, frequencyMhz: p.frequency / 1e6 })));
+  }, [fmPresets]);
 
   // Star: save the tuned station (named from RDS PS), or un-save if it already
   // is a preset. Removal also drops any duplicate bookmarks on that channel.
@@ -3667,45 +2344,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (p) fmRemoveAt(p.frequency);
   }, [fmPresets, fmRemoveAt]);
 
-  // Head-unit preset programming (NWD) — app → unit, MANUAL (Settings), never on
-  // launch. The tuner AIDL forces the shape:
-  //   • saveCurrentFrequency(slot) stores only the CURRENT tuned freq, so writing a
-  //     bank inherently TUNES through each station (audible sweep). It can't be
-  //     silent — so it's a deliberate action, not an automatic one (which was the
-  //     "app changes stations on startup" bug).
-  //   • no clear/blank op is exposed on the AIDL we bind (saveCurrentFrequency only
-  //     overwrites). The service HAS an internal `CleanFMPreFreData` (empties all
-  //     3×6), but there is no confirmed client trigger for it yet — reaching it is
-  //     an open probe investigation. So we write EXACTLY the N app presets (card
-  //     order) into the first N slots and DO NOT touch the rest. NO wrapping — the
-  //     goal is genuinely-blank unused slots (so the wheel skips them), pending the
-  //     clear command; wrapping the presets to fill 18 is explicitly NOT wanted.
-  // `@carfm/nwd_preset_sig_v1` records what we last wrote (the intent), so Settings
-  // can show app-vs-programmed without a (tuning) read-back.
-  const nwdSyncSig = useRef<string | null>(null);
-  const [nwdProgrammedSig, setNwdProgrammedSig] = useState<string | null>(null);
-  const [nwdProgramming, setNwdProgramming] = useState(false);
-  useEffect(() => {
-    AsyncStorage.getItem('@carfm/nwd_preset_sig_v1')
-      .then((v: string | null) => { nwdSyncSig.current = v; setNwdProgrammedSig(v); })
-      .catch(() => {});
-  }, []);
-  const onProgramHeadUnit = useCallback(async () => {
-    if (!nwdActiveRef.current || nwdProgramming) return;
-    const freqs = fmPresets.map((p) => p.frequency / 1e6).slice(0, 18);   // exactly N, card order, NO wrap
-    if (freqs.length === 0) return;
-    setNwdProgramming(true);
-    try {
-      await nwdSyncPresets(freqs);
-      const sig = freqs.map((f) => f.toFixed(1)).join(',');
-      nwdSyncSig.current = sig;
-      setNwdProgrammedSig(sig);
-      AsyncStorage.setItem('@carfm/nwd_preset_sig_v1', sig).catch(() => {});
-    } finally { setNwdProgramming(false); }
-  }, [fmPresets, nwdProgramming]);
-  // app-vs-programmed comparison (intent, no tuning): does the current card set
-  // match what we last wrote to the unit?
-  const nwdPresetsInSync = nwdProgrammedSig === fmPresets.map((p) => (p.frequency / 1e6).toFixed(1)).join(',');
 
   // CarFM media surface: push Presets + Nearby (FCC DB) as the browse tree +
   // queue. Nearby is fetched once per session (offline-first facade) and the
@@ -3713,7 +2351,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // the lock-screen queue stay current.
   const fmNearbyRef = useRef<{ name: string; frequency: number }[]>([]);
   useEffect(() => {
-    if (!carFm) return;
     let cancelled = false;
     (async () => {
       if (fmNearbyRef.current.length === 0) {
@@ -3735,7 +2372,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       }));
     })();
     return () => { cancelled = true; };
-  }, [carFm, fmPresets]);
+  }, [fmPresets]);
 
   // Seek from a media surface (notification / Android Auto custom action):
   // next/previous station in the local FCC list, wrapping. No sweep animation —
@@ -3751,7 +2388,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [status.frequency, onTuneHz]);
 
   useEffect(() => {
-    if (!carFm) return;
     const em = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = em.addListener('VibeCarAction', (e: { action?: string }) => {
       if (e.action === 'save') onFmToggleSave();
@@ -3759,18 +2395,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       else if (e.action === 'seek_down') onFmMediaSeek(-1);
     });
     return () => sub.remove();
-  }, [carFm, onFmToggleSave, onFmMediaSeek]);
+  }, [onFmToggleSave, onFmMediaSeek]);
 
   // ── Vehicle motion (GPS speed → is_moving) + GPS lock state ──────────────────
   // Both wired and ready as DATA only; the UI (speed readout, GPS-lock indicator)
   // comes in a later design handoff. Features can gate on isMoving()/
   // subscribeMotion() and hasGpsFix()/useGpsFix(). Low-rate GPS while the face is up.
   useEffect(() => {
-    if (!carFm) return;
     void startMotion();
     void startGpsFix();
     return () => { stopMotion(); stopGpsFix(); };
-  }, [carFm]);
+  }, []);
 
   // ── Built-in NWD/NOWADA tuner (Backend E) ────────────────────────────────────
   // On a tunerless carFm launch (no SDR dongle) — the normal case on a permanent
@@ -3779,7 +2414,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Audio is analog + MCU-routed; PS/RadioText/PTY/TA/stereo arrive as native
   // callback events. Tune commands route via onTuneHz's nwdActiveRef branch.
   useEffect(() => {
-    if (!carFm || !route.params.tunerless) return;
+    if (!route.params.tunerless) return;
     let cancelled = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     // Auto-probe-on-park: a few seconds after the dial settles on a frequency,
@@ -3959,7 +2594,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       nwdSetAudio(false);   // release the radio audio source before unbinding
       nwdDisconnect();
     };
-  }, [carFm, route.params.tunerless]);
+  }, [route.params.tunerless]);
 
   // While an SDR/dongle is the active source, the built-in FM must NOT run in
   // parallel — no reason for it to, and it would only fight the dongle audio /
@@ -3973,20 +2608,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   // starts moments later.
   const sdrSilencedFm = useRef(false);
   useEffect(() => {
-    if (!carFm || route.params.tunerless) return;   // tunerless = built-in FM owns the tuner
+    if (route.params.tunerless) return;   // tunerless = built-in FM owns the tuner
     if (sdrSilencedFm.current) return;
     sdrSilencedFm.current = true;
     (async () => {
       if (await isNwdAvailable()) { nwdSetAudio(false); diag('SDR active → released built-in FM source (source→0)'); }
     })();
-  }, [carFm, route.params.tunerless]);
+  }, [route.params.tunerless]);
 
   // TA: a real car radio breaks mute for traffic announcements. If TA rises
   // while muted, unmute for the announcement and restore the mute when it
   // ends. Only ever restores a mute THIS effect lifted.
   const taLiftedMute = useRef(false);
   useEffect(() => {
-    if (!carFm) return;
     const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
     if (liveStation.ta && isMutedRef.current && !taLiftedMute.current) {
       taLiftedMute.current = true;
@@ -3995,7 +2629,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       taLiftedMute.current = false;
       VM?.setMuted?.(true);
     }
-  }, [carFm, liveStation.ta]);
+  }, [liveStation.ta]);
 
   // AF-follow: when the signal has been weak for a sustained stretch and the
   // station transmits an AF list, probe an alternative: keep it ONLY if it is
@@ -4011,7 +2645,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   });
   useEffect(() => { afState.current.freqChangedAt = Date.now(); }, [status.frequency]);
   useEffect(() => {
-    if (!carFm || route.params.tunerless) return;
+    if (route.params.tunerless) return;
     const WEAK_DB = 8, HOLD_MS = 10_000, RETRY_MS = 30_000, PROBE_MS = 4_000, IMPROVE_DB = 5;
     const t = setInterval(() => {
       const c = afCtx.current, s = afState.current, now = Date.now();
@@ -4038,7 +2672,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onTuneHzRef.current?.(cand);
     }, 1000);
     return () => clearInterval(t);
-  }, [carFm, route.params.tunerless]);
+  }, [route.params.tunerless]);
 
   // Save a station straight from the Nearby picker (hold a row).
   const onFmSaveStationPreset = useCallback((name: string, freqMhz: number) => {
@@ -4053,69 +2687,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     persistUserBookmarks(mergeBookmarks(userBookmarks, [bm]));
   }, [userBookmarks, persistUserBookmarks]);
 
-  // First-run guided tour (dismissable). Spotlights the drum, step rate, the
-  // disabled back-gesture, and the menu — opening it to show the route back to
-  // the instance list. Fail-safe: always skippable; a target that can't be
-  // measured falls back to a centred card.
-  // A small render of the menu's instance section — shown in the tour instead of
-  // opening the real menu (a second Modal over the coachmark wedges iOS).
-  const menuMock = (
-    <View style={{ borderRadius: 9, borderWidth: 1, borderColor: 'rgba(255,229,102,0.30)', backgroundColor: 'rgba(0,0,0,0.45)', padding: 9, gap: 7 }}>
-      <Text style={{ color: 'rgba(255,255,255,0.45)', fontFamily: 'Atkinson Hyperlegible', fontSize: 9.5, letterSpacing: 2, marginBottom: 1 }}>☰  MENU</Text>
-      <View style={{ borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', borderRadius: 5, paddingVertical: 7, paddingHorizontal: 10 }}>
-        <Text style={{ color: 'rgba(255,255,255,0.82)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11.5, letterSpacing: 0.5 }}>☆  SET DEFAULT</Text>
-      </View>
-      <View style={{ borderWidth: 1.5, borderColor: '#ffe566', backgroundColor: 'rgba(255,229,102,0.12)', borderRadius: 5, paddingVertical: 7, paddingHorizontal: 10 }}>
-        <Text style={{ color: '#ffe566', fontFamily: 'Atkinson Hyperlegible', fontSize: 11.5, fontWeight: 'bold', letterSpacing: 0.5 }}>←  BACK TO INSTANCE LIST</Text>
-      </View>
-      <View style={{ borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', borderRadius: 5, paddingVertical: 7, paddingHorizontal: 10 }}>
-        <Text style={{ color: 'rgba(255,255,255,0.82)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11.5, letterSpacing: 0.5 }}>❔  REPLAY TUTORIAL</Text>
-      </View>
-    </View>
-  );
-
-  const sdrTour = useCoachmarkTour([
-    { id: 'freq', title: 'Set the frequency',
-      body: 'Tap the frequency readout to type one in directly (kHz or MHz).',
-      target: tourRef('freqBox') },
-    { id: 'mode', title: 'Choose the demodulator',
-      body: 'Tap the mode to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more.',
-      target: tourRef('modeBtn') },
-    { id: 'drum', title: 'Fine-tune with the VFO drum',
-      body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall.',
-      target: tourRef('vfoDrum') },
-    { id: 'step', title: 'Step rate',
-      body: 'Sets how far each drum move jumps — a small step for fine tuning, a large one to skip across bands. Tap it to change.',
-      target: tourRef('stepBtn') },
-    { id: 'back', title: 'No back-swipe here',
-      body: "The phone's Back gesture is switched off over the tuning area so it can't fight the drum.",
-      target: tourRef('vfoDrum') },
-    { id: 'menu', title: 'Everything else: the menu',
-      body: 'Bandwidth, modes, noise reduction, the auto notch, decoders, bookmarks and settings all live here. And since Back is off, this is where you return to the server list:',
-      target: tourRef('menuBtn'), illustration: menuMock },
-  ], { storageKey: 'lsv_tour_sdr_v3' });
-  const onReplayTour = useCallback(() => {
-    setMenuOpen(false);
-    setTimeout(() => sdrTour.restart(), 320);
-  }, [sdrTour]);
-  // Auto-start once on the first successful connection, after the controls have
-  // laid out (so the drum/step/menu can be measured).
-  useEffect(() => {
-    if (!connected || carFm) return;   // CarFM: no stock tour over the face
-    // Also wait for the launch splash to clear — a first-launch deep-link or
-    // default-instance auto-connect can reach the SDR screen while the splash is
-    // still holding on the CONTINUE notice; the tour must not draw over it.
-    let t: ReturnType<typeof setTimeout>;
-    const unsub = splashBridge.whenDismissed(() => {
-      t = setTimeout(() => { sdrTour.maybeAutoStart(); }, 1500);
-    });
-    return () => { unsub(); clearTimeout(t); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connected]);
-
   // ── Layout ────────────────────────────────────────────────────────────────
-
-  const bottomInset = insets.bottom;
 
   return (
     <View
@@ -4123,667 +2695,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       // Capture-phase touch sniff (returns false — never steals the touch):
       // marks interaction for smooth tune / idle saver on any Pressable UI.
       onStartShouldSetResponderCapture={() => { markInteract(); return false; }}
-      // Real layout height — Android's Dimensions window height disagrees
-      // with the laid-out root (status/nav bar handling), which pushed every
-      // pillBottom-anchored overlay (spec-ratio popup, VTS bar, decoder
-      // panel) off the bottom on Android.
-      onLayout={(e: { nativeEvent: { layout: { height: number } } }) =>
-        setRootH(e.nativeEvent.layout.height)}
     >
       <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />
-
-      {/* SDR waterfall removed — not used by CarFM (strip item 17). The
-          appearance state (colormap/dbMin/…) is kept for the advanced-view
-          menu controls, which are now inert pending item 19. */}
-
-      {/* Spec ratio overlay — floats above pill */}
-      <SpecRatioOverlay
-        visible={ratioOverlayOpen}
-        isLandscape={isLandscape}
-        portraitRatio={specRatioPortrait}
-        landscapeRatio={specRatioLandscape}
-        bottomOffset={pillBottom + 8}
-        onChange={(p, l) => { setSpecRatioPortrait(p); setSpecRatioLandscape(l); }}
-        onClose={() => setRatioOverlayOpen(false)}
-      />
-      {/* Decoder panel needs vertical space phone landscape doesn't have (skin
-          parity: panel is portrait-only) — decoder keeps running, banner
-          tells the user where it went. Tablets (iPad) have the room, so the
-          panel is allowed in landscape there. */}
-      {isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null) ? (
-        <View style={[styles.rotateBanner, { bottom: pillBottom + 8 }]}
-              pointerEvents="none">
-          <Text style={styles.rotateBannerText}>
-            ⟳ ROTATE TO PORTRAIT TO VIEW DECODER
-          </Text>
-        </View>
-      ) : (
-        <DecoderPanel
-          activeDecoder={activeDecoder}
-          decoderText={decoderText}
-          aircraft={aircraft}
-          decoderStatus={decoderStatus}
-          decoding={decoding}
-          bottomOffset={pillBottom + 8}
-          onClear={() => setDecoderText('')}
-          onClose={closeDecoder}
-          morseQuality={morseQuality}
-          onMorseQuality={onMorseQuality}
-          spotsKind={spotsKind}
-          spots={spots}
-          onTuneHz={onTuneHz}
-          imageRef={decoderImageRef}
-          onImageStatus={setDecoderStatus}
-        />
-      )}
-
-      {/* Chat rotate hint — chat is portrait-only, button stays for unread */}
-      {chatRotateHint && (
-        <View style={[styles.rotateBanner, {
-                bottom: pillBottom + 8 +
-                  (isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null) ? 42 : 0),
-              }]}
-              pointerEvents="none">
-          <Text style={styles.rotateBannerText}>
-            ⟳ ROTATE TO PORTRAIT FOR CHAT
-          </Text>
-        </View>
-      )}
-
-      {/* Reconnect failed (server full / rate-limited) — tap retries */}
-      {reconnectFailedUi && (
-        <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
-          onPress={() => { setReconnectFailedUi(false); setDataSaverOff(false); unmute(); fullReconnect(); }}
-          activeOpacity={0.85}>
-          <Text style={styles.mutedBannerText}>⚠️ RECONNECT FAILED — TAP TO RETRY</Text>
-        </TouchableOpacity>
-      )}
-
-      {/* OWRX server crashed/restarted (common on OWRX). Keep the app alive and
-          tell the user to wait before reconnecting (the server's still booting). */}
-      {!fmFaceActive && serverLost && (() => {
-        const lostLabel = route.params.serverType === 'kiwi' ? 'KiwiSDR'
-                        : route.params.serverType === 'owrx' ? 'OpenWebRX'
-                        : 'SDR';
-        return (
-        <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>{lostLabel} server stopped responding</Text>
-            <Text style={styles.serverLostBody}>{route.params.serverType === 'kiwi'
-              ? "The receiver dropped the connection. KiwiSDR owners with few slots often restrict access: some allow only their own web page, so apps like CarFM are refused the moment they connect; some block broadcast / commercial bands and disconnect you when you tune there. If reconnecting drops the same way it's likely an owner restriction — try another receiver. Otherwise it may just be busy or restarting: wait a minute and reconnect."
-              : `The receiver dropped the connection — ${lostLabel} servers restart from time to time. Please wait a minute, then reconnect — or pick another from the list.`}</Text>
-            <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
-                onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.serverLostBtn}
-                onPress={() => { setServerLost(false); fullReconnect(); }} activeOpacity={0.85}>
-                <Text style={styles.serverLostBtnText}>RECONNECT</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-        );
-      })()}
-
-      {/* Kiwi receiver full (too_busy) — all channels in use. */}
-      {/* Read-only: another client owns the tuner (public SpyServers are usually
-          single-tuner). Passive strip, not a blocking card — you can still listen
-          to whatever they have it tuned to. */}
-      {readOnly && (
-        <View pointerEvents="none" style={{
-          position: 'absolute', top: 0, left: 0, right: 0, alignItems: 'center', zIndex: 40,
-        }}>
-          <View style={{
-            marginTop: 6, paddingHorizontal: 12, paddingVertical: 5, borderRadius: 6,
-            backgroundColor: 'rgba(0,0,0,0.75)', borderWidth: 1, borderColor: '#ffb84d',
-          }}>
-            <Text style={{ color: '#ffb84d', fontSize: 12, textAlign: 'center' }}>
-              Listen-only — another user is controlling this receiver
-            </Text>
-          </View>
-        </View>
-      )}
-
-      {!fmFaceActive && serverBusy && (
-        <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>Receiver unavailable</Text>
-            <Text style={styles.serverLostBody}>This KiwiSDR has no free channel for you right now — it may be full, or its channels may be password-protected or limited to local users (the directory's user count can be out of date). Pick another receiver, or try again shortly.</Text>
-            <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
-                onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.serverLostBtn}
-                onPress={() => { setServerBusy(false); fullReconnect(); }} activeOpacity={0.85}>
-                <Text style={styles.serverLostBtnText}>RETRY</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      )}
-
-      {/* Connection to an UberSDR instance dropped (e.g. it rebooted). It auto-
-          reconnects, but show a clear popup so the app doesn't just look frozen. */}
-      {/* Returning from the background — the spectrum was paused, so show a calm
-          reinitialising notice while the waterfall re-subscribes (no buttons; it
-          clears itself on the first frame, or escalates to "Connection lost"). */}
-      {!fmFaceActive && reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
-        <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>Reinitialising</Text>
-            <Text style={styles.serverLostBody}>
-              Resuming the waterfall and spectrum — this takes a second or two…
-            </Text>
-            <ActivityIndicator color="#ffb84d" style={{ marginBottom: 4 }} />
-          </View>
-        </View>
-      )}
-
-      {/* Audio resumed fine but the waterfall/spectrum never re-subscribed after
-          a background — give the user an escape (the rest of the app is alive). */}
-      {!fmFaceActive && specFailed && !reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
-        <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>Waterfall didn’t resume</Text>
-            <Text style={styles.serverLostBody}>
-              Audio is still running, but the waterfall and spectrum didn’t restart. Reconnect to restore them, or pick another instance.
-            </Text>
-            <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
-                onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.serverLostBtn}
-                onPress={() => { setSpecFailed(false); fullReconnect(); }} activeOpacity={0.85}>
-                <Text style={styles.serverLostBtnText}>RECONNECT</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      )}
-
-      {!fmFaceActive && connLost && !reinit && !specFailed && !dataSaverOff && !serverLost && !serverBusy && (
-        <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>Connection lost</Text>
-            <Text style={styles.serverLostBody}>
-              Lost connection to {instanceName || 'the instance'} — trying to reconnect…
-            </Text>
-            <ActivityIndicator color="#ffb84d" style={{ marginBottom: 14 }} />
-            <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
-                onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.serverLostBtn}
-                onPress={() => { setConnLost(false); fullReconnect(); }} activeOpacity={0.85}>
-                <Text style={styles.serverLostBtnText}>RECONNECT</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      )}
-
-      {/* Initial connect never completed (wedged host/shim/USB). Escape hatch so
-          the app can never be permanently stuck on the connecting spinner. */}
-      {!fmFaceActive && connTimedOut && !connected && !serverLost && !serverBusy && !connLost && !dataSaverOff && (
-        <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>Couldn’t connect</Text>
-            <Text style={styles.serverLostBody}>
-              No response from {instanceName || 'the receiver'}. {route.params.isLocal
-                ? 'Check the SDR is plugged in and try again, or pick another instance.'
-                : isKiwi
-                  ? "It may be offline or a temporary network issue — but if a retry also fails, this KiwiSDR's owner likely only allows their own web page and blocks apps like CarFM. Try another, or use UberSDR / OpenWebRX."
-                  : 'It may be offline or unreachable — try again or pick another instance.'}
-            </Text>
-            <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
-                onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>INSTANCE LIST</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.serverLostBtn}
-                onPress={() => { setConnTimedOut(false); fullReconnect(); }} activeOpacity={0.85}>
-                <Text style={styles.serverLostBtnText}>RETRY</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      )}
-
-      {/* Paused → disconnected — tap does a full from-scratch reconnect */}
-      {!fmFaceActive && dataSaverOff && !reconnectFailedUi && (
-        <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
-          onPress={() => { setDataSaverOff(false); unmute(); fullReconnect(); }} activeOpacity={0.85}>
-          <Text style={styles.mutedBannerText}>⏸ PAUSED — TAP TO RECONNECT</Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Local hardware muted (media-control pause): the RTL/waterfall keep running,
-          only audio is muted. Tap unmutes + clears the media-control paused state.
-          (Network instances disconnect on pause, so this is local-only.) */}
-      {isLocal && isMuted && !dataSaverOff && !reconnectFailedUi && (
-        <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
-          onPress={unmute} activeOpacity={0.85}>
-          <Text style={styles.mutedBannerText}>🔇 AUDIO MUTED — TAP TO UNMUTE</Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Restore chevron when controls are hidden (full-screen waterfall) */}
-      {controlsHidden && (
-        <TouchableOpacity
-          style={[styles.restoreBtn, { bottom: bottomInset + 10 }]}
-          onPress={() => setControlsHidden(false)} activeOpacity={0.8} hitSlop={12}>
-          <Text style={styles.restoreBtnText}>▲</Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Controls pill — absolute overlay, margin 8px each side */}
-      {!fmFaceActive && !controlsHidden && <View
-        style={[styles.pillWrap, { bottom: bottomInset + 8 }]}
-        onLayout={(e: any) => {
-          // Track pill top so bottom-anchored overlays can sit above it
-          const { y } = e.nativeEvent.layout;
-          pillYRef.current = y;
-          setPillBottom((rootH > 0 ? rootH : screenH) - y);
-        }}
-      >
-        <ControlsBar
-          readOnly={readOnly}
-          sessionLeft={sessionLeftMs == null ? null : {
-            text: `${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`,
-            urgent: sessionLeftMs < 120_000,
-          }}
-          frequency={status.frequency}
-          mode={status.mode}
-          step={step}
-          connected={connected}
-          bottomInset={0}
-          instanceHost={instanceName ?? baseUrl}
-          meterBus={meterBus.current}
-          signalMode={signalMode}
-          fmStereo={fmStereo}
-          isRecording={isRecording}
-          recSeconds={recSeconds}
-          chatUnread={chatUnread}
-          onVfoDelta={onVfoDelta}
-          onBwDelta={onBwDelta}
-          onMode={onMode}
-          onStep={onStepOpen}
-          onMenu={onMenuOpen}
-          onChat={openChat}
-          onAudio={onAudioOpen}
-          onFreqTap={onFreqOpen}
-          onModeTap={onModeOpen}
-          freqUnit={freqUnit}
-          chatShareDisabled={isLocal}
-          chatDisabled={isKiwi}
-        />
-      </View>}
-
-      {/* VTS popup — station / band-crossing notifications above the pill */}
-      {!fmFaceActive && !controlsHidden && <VTSBar notif={vtsNotif} bottom={pillBottom + 8} serverType={isLocal ? 'local' : route.params.serverType} />}
-
-      {/* Floating CENTRE ON VFO — unlocked + VFO off-screen (BRIEF §5.8) */}
-      <CenterVfoButton visible={!fmFaceActive && vfoOffscreen && !controlsHidden} bottom={pillBottom + 56} onPress={onCentreVfo} />
-
-      {/* Menu sheet */}
-      <MenuSheet
-        visible={menuOpen}
-        serverType={route.params.serverType ?? 'ubersdr'}
-        dabProgrammes={dabProgrammes}
-        activeDabId={activeDabId}
-        onSelectDab={(id) => { client.current?.setAudioServiceId?.(id); setActiveDabId(id); }}
-        dabSpeed={dabSpeed}
-        onDabSpeed={onDabSpeed}
-        vtsName={vtsMenuName}
-        vtsFreq={vtsMenuFreq}
-        onVtsPrev={onVtsPrev}
-        onVtsNext={onVtsNext}
-        searchBookmarks={searchBookmarks}
-        searchBands={searchBands}
-        onSearchTune={onSearchTune}
-        userBookmarks={visibleBookmarks}
-        currentFreq={status.frequency}
-        currentMode={status.mode}
-        onAddBookmark={onAddBookmark}
-        onDeleteBookmark={onDeleteBookmark}
-        onExportBookmarks={onExportBookmarks}
-        onImportBookmarks={onImportBookmarks}
-        onPickImportFile={onPickImportFile}
-        colormap={colormap}
-        dbMin={dbMin}
-        dbMax={dbMax}
-        filterLow={status.bandwidthLow}
-        filterHigh={status.bandwidthHigh}
-        bwEdgeMax={client.current ? filterEdgeMax(client.current.caps, status.mode) : 6000}
-        nr={nrMode !== 'off'}
-        nb={nb}
-        recording={isRecording}
-        recSeconds={recSeconds}
-        signalMode={signalMode}
-        displayStyle={displayStyle}
-        serverName={instanceName ?? ''}
-        serverUrl={baseUrl}
-        onClose={() => setMenuOpen(false)}
-        onLocalHardware={isLocal ? () => { setMenuOpen(false); setHwOpen(true); } : undefined}
-        isTcp={!!route.params.isTcp}
-        onColormap={setColormap}
-        onDbMin={setDbMin}
-        onDbMax={setDbMax}
-        onFilterLow={onFilterLow}
-        onFilterHigh={onFilterHigh}
-        onFilterBoth={onFilterBoth}
-        onNr={onNrMode}
-        onZoomIn={onZoomIn}
-        onZoomOut={onZoomOut}
-        onZoomMin={onZoomMin}
-        onZoomMax={onZoomMax}
-        onSetDefault={onSetDefault}
-        isDefaultInstance={isDefault}
-        isFavourite={isFavourite}
-        onToggleFavourite={isLocal ? undefined : onToggleFavourite}
-        decMode={selDecoder}
-        decOn={activeDecoder !== null && activeDecoder === selDecoder}
-        onDecToggle={onDecToggle}
-        spotsKind={spotsKind}
-        onSpotsToggle={onSpotsToggle}
-        onServerMap={(k) => { setMenuOpen(false); setMapKind(k); }}
-        onSpotsMap={() => {
-          setMenuOpen(false);
-          // The map plots the live Digital Spots feed — start it if it isn't on.
-          if (spotsKindRef.current !== 'digi') onSpotsToggle('digi');
-          setLocalMapOpen(true);
-        }}
-        rttySettings={rttySettings}
-        onRttySettings={onRttySettings}
-        wefaxLpm={wefaxLpm}
-        onWefaxLpm={onWefaxLpm}
-        onNb={onNb}
-        onRec={toggleRecording}
-        // OWRX/Kiwi have no SNR meter — skip 'snr' in the cycle, stay on S-meter/dBFS.
-        onSignalMode={(m: 'snr' | 'smeter' | 'dbfs') => setSignalMode((isOwrx || isKiwi) && m === 'snr' ? 'smeter' : m)}
-        onDisplayStyle={handleDisplayStyle}
-        onBack={onBackToPicker}
-        onAdminLink={onAdminLink}
-        onReplayTour={onReplayTour}
-        onResetSettings={() => {
-          setDbMin(-120); setDbMax(-20); setColormap('Jet');
-          setStep(1000);
-          setSpecShow(true); setSpecSmoothing(5); setSpecFloor(0);
-          setSpecPeakScale(10); setPeakHold(true);
-          setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
-          setAutoContrast(5); setSpatialSmooth(true);
-          setWfCoarse('auto'); setFrameRate('20fps'); setVfoNeedle('#ffffff'); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3);
-          setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
-          onNrMode('off'); onNb(false);
-          onSnrSquelch(-999); onFmSquelch(-999);
-          if (serverDspEnabled) onServerDsp(false);
-          setMenuOpen(false);
-          // Bookmarks are precious — never clear silently with a reset
-          const instCount = bookmarksForInstance(userBookmarks, baseUrl)
-            .filter((b: UserBookmark) => b.scope === baseUrl).length;
-          if (instCount > 0) {
-            Alert.alert(
-              'Bookmarks',
-              `Keep the ${instCount} bookmark${instCount !== 1 ? 's' : ''} saved for this instance?`,
-              [
-                { text: 'Keep', style: 'default' },
-                { text: 'Clear', style: 'destructive',
-                  onPress: () => persistUserBookmarks(withoutInstance(userBookmarks, baseUrl)) },
-              ],
-            );
-          }
-        }}
-        onSpecRatio={() => { setMenuOpen(false); setRatioOverlayOpen(true); }}
-        vfoNeedle={vfoNeedle}           onVfoNeedle={setVfoNeedle}
-        vfoIntensity={vfoIntensity}       onVfoIntensity={setVfoIntensity}
-        vfoFrost={vfoFrost}               onVfoFrost={setVfoFrost}
-        bgOpacity={bgOpacity}             onBgOpacity={(v: number) => { bgOpacityUserSet.current = true; setBgOpacity(v); }}
-        hasBgImage={bgImageUrl != null}
-        wfCoarse={wfCoarse}             onWfCoarse={setWfCoarse}
-        autoContrast={autoContrast}     onAutoContrast={setAutoContrast}
-        spatialSmooth={spatialSmooth}   onSpatialSmooth={setSpatialSmooth}
-        wfBrightness={wfBrightness}     onWfBrightness={setWfBrightness}
-        wfContrast={wfContrast}         onWfContrast={setWfContrast}
-        wfSharpness={wfSharpness}       onWfSharpness={setWfSharpness}
-        specShow={specShow}             onSpecShow={setSpecShow}
-        specSmoothing={specSmoothing}   onSpecSmoothing={setSpecSmoothing}
-        specFloor={specFloor}           onSpecFloor={setSpecFloor}
-        specPeakScale={specPeakScale}   onSpecPeakScale={setSpecPeakScale}
-        peakHold={peakHold}             onPeakHold={setPeakHold}
-        frameRate={frameRate}           onFrameRate={onFrameRate}
-        smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
-        idleSlow={idleSlow}             onIdleSlow={onIdleSlow}
-        drumMode={drumMode}             onDrumMode={onDrumMode}
-        mediaSkip={mediaSkip}           onMediaSkip={onMediaSkip}
-        hapticsEnabled={hapticsEnabled} onHaptics={onHaptics} hapticsHardware={hapticsHardware}
-        onCentreVfo={onCentreVfo}       onHideControls={onHideControls}
-        vfoLocked={vfoLocked}           onToggleVfoLock={onToggleVfoLock}
-        onDispReset={onDispReset}       onDispSaveServer={onDispSaveServer}
-        onDispSaveGlobal={onDispSaveGlobal}
-        snrSquelch={snrSquelch}         onSnrSquelch={onSnrSquelch}
-        fmSquelch={fmSquelch}           onFmSquelch={onFmSquelch}
-        localSquelch={hwSquelch}        onLocalSquelch={isLocal ? onLocalSquelch : undefined}
-        kiwiSquelch={kiwiSquelch}       onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
-        localNR={hwNrLevel}             onLocalNR={isLocal ? onLocalNR : undefined}
-        notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
-        eibiEnabled={eibiEnabled}        onEibiToggle={onEibiToggle}
-        isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
-        serverDspEnabled={serverDspEnabled}
-        serverDspFilter={serverDspFilter}
-        serverDspParams={serverDspParams}
-        dspFilters={dspFilters}
-        dspError={dspError}
-        onServerDsp={onServerDsp}
-        onServerDspFilter={onServerDspFilter}
-        onServerDspParam={onServerDspParam}
-        serverVersion={serverVersion}
-        serverLabel={serverLabel}
-        onOwrxSquelch={(db) => client.current?.setSquelch?.(db)}
-        onOwrxNr={(th) => client.current?.setNr?.(th)}
-        owrxDspDefaults={owrxDspDefaults}
-        onAbout={() => { setMenuOpen(false); setAboutOpen(true); }}
-        onRecordings={() => { setMenuOpen(false); setRecordingsOpen(true); }}
-      />
-
-      {/* About CarFM — V2 changes, credits, GPL-3.0 */}
-      <AboutOverlay visible={aboutOpen} onClose={() => setAboutOpen(false)} />
-      <RecordingsOverlay
-        visible={recordingsOpen}
-        onClose={() => setRecordingsOpen(false)}
-        onActiveChange={onRecordingsActive}
-      />
-
-      {/* First-run guided tour (dismissable) — renders nothing until active */}
-      {sdrTour.overlay}
-
-      {/* Step picker — bottom sheet */}
-      <StepPicker
-        visible={stepOpen}
-        currentStep={step}
-        steps={stepsForFreq(status.frequency)}
-        onSelect={hz => { setStep(hz); }}
-        onClose={() => setStepOpen(false)}
-      />
-
-      {/* Mode selector */}
-      <ModeSelector
-        visible={modeSelOpen}
-        gainControl={isLocal ? {
-          gains: hwGains, gainTenthDb: hwGain, auto: hwAutoGain, onAuto: onHwAuto, onGain: onHwGain,
-        } : undefined}
-        current={status.mode}
-        modes={isLocal ? LOCAL_MODES : route.params.serverType === 'owrx' ? serverModes : undefined}
-        activeDecoder={route.params.serverType === 'owrx'
-          ? (activeDecoder === 'sstv' ? 'sstv' : activeDecoder === 'wefax' ? 'fax' : undefined)
-          : undefined}
-        filterLow={status.bandwidthLow}
-        filterHigh={status.bandwidthHigh}
-        bwEdgeMax={client.current ? filterEdgeMax(client.current.caps, status.mode) : 6000}
-        onFilterBoth={onFilterBoth}
-        onSelect={onMode}
-        onClose={() => setModeSelOpen(false)}
-      />
-
-      {/* Audio sheet — NR/NB/squelch/notch/REC + server NR */}
-      <AudioSheet
-        visible={audioSheetOpen}
-        onClose={() => setAudioSheetOpen(false)}
-        onDismiss={() => {
-          const p = pendingRecShare.current;
-          if (p) { pendingRecShare.current = null; VibePowerModule?.shareRecording(p); }
-        }}
-        serverType={route.params.serverType ?? 'ubersdr'}
-        isLocal={isLocal}
-        nr={nrMode !== 'off'}
-        onNr={onNrMode}
-        nb={nb}
-        onNb={onNb}
-        recording={isRecording}
-        recSeconds={recSeconds}
-        onRec={toggleRecording}
-        onRecordings={() => { setAudioSheetOpen(false); setRecordingsOpen(true); }}
-        snrSquelch={snrSquelch}          onSnrSquelch={onSnrSquelch}
-        localSquelch={hwSquelch}         onLocalSquelch={isLocal ? onLocalSquelch : undefined}
-        localNR={hwNrLevel}              onLocalNR={isLocal ? onLocalNR : undefined}
-        kiwiSquelch={kiwiSquelch}        onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
-        fmSquelch={fmSquelch}            onFmSquelch={onFmSquelch}
-        isFmMode={status.mode === 'fm' || status.mode === 'nfm'}
-        notchOn={isLocal ? hwNotch : netNotch}   onNotch={isLocal ? onLocalNotch : onNetNotch}
-        onOwrxSquelch={(db) => client.current?.setSquelch?.(db)}
-        onOwrxNr={(th) => client.current?.setNr?.(th)}
-        owrxDspDefaults={owrxDspDefaults}
-        serverDspEnabled={serverDspEnabled}
-        serverDspFilter={serverDspFilter}
-        serverDspParams={serverDspParams}
-        dspFilters={dspFilters}
-        dspError={dspError}
-        onServerDsp={onServerDsp}
-        onServerDspFilter={onServerDspFilter}
-        onServerDspParam={onServerDspParam}
-      />
-
-      {/* v4 local hardware: RTL-SDR controls submenu */}
-      {isLocal ? (
-        <LocalHardwarePanel
-          isSpy={isSpy}
-          visible={hwOpen}
-          onClose={() => setHwOpen(false)}
-          gains={hwGains}
-          gainTenthDb={hwGain}
-          autoGain={hwAutoGain}
-          onAuto={onHwAuto}
-          onGain={onHwGain}
-          ppm={hwPpm}
-          onPpm={onHwPpm}
-          sampleRate={hwSampleRate}
-          onSampleRate={onHwSampleRate}
-          isTcp={!!route.params.isTcp}
-          serverRates={hwServerRates}
-          lockedRate={hwLockedRate}
-          biasTee={hwBiasTee}
-          onBiasTee={onHwBiasTee}
-          agc={hwAgc}
-          onAgc={onHwAgc}
-          directSampling={hwDirectSamp}
-          onDirectSampling={onHwDirectSamp}
-          deemph={hwDeemph}
-          onDeemph={onHwDeemph}
-          stereo={hwStereo}
-          onStereo={onHwStereo}
-        />
-      ) : null}
-
-      {/* Server map overlay (HFDL / Digital / CW — full-screen WebView Leaflet) */}
-      <MapOverlay
-        visible={mapKind !== null}
-        kind={mapKind}
-        baseUrl={baseUrl}
-        sessionUuid={sessionUuid}
-        onClose={() => setMapKind(null)}
-      />
-
-      {/* On-device FT8 spots map (Local/Kiwi): RN-fed spots (each with a grid),
-          receiver position from device GPS / Kiwi gps / a picked city. */}
-      <MapOverlay
-        visible={localMapOpen}
-        kind="digi"
-        local
-        baseUrl={isLocal ? 'https://localhost' : baseUrl}
-        wsBaseOverride={decoderBase}
-        sessionUuid={sessionUuid}
-        rxLat={recvLoc?.lat ?? 0}
-        rxLon={recvLoc?.lon ?? 0}
-        spots={spots}
-        onPickCity={() => setCityPickerOpen(true)}
-        onClose={() => setLocalMapOpen(false)}
-        disconnected={serverLost || serverBusy || connTimedOut}
-        onBackToList={() => { setLocalMapOpen(false); navigation.goBack(); }}
-        onRetry={() => fullReconnect()}
-      />
-
-      <CityPickerModal
-        visible={cityPickerOpen}
-        onClose={() => setCityPickerOpen(false)}
-        onPick={(c) => {
-          recvLocRef.current = { lat: c.lat, lon: c.lon };
-          setRecvLoc({ lat: c.lat, lon: c.lon });
-          setCityPickerOpen(false);
-        }}
-      />
-
-      {/* Frequency modal */}
-      <FreqModal
-        visible={freqModalOpen}
-        currentHz={status.frequency}
-        onConfirm={onTuneHz}
-        onClose={() => setFreqModalOpen(false)}
-        unit={freqUnit}
-        onUnit={setFreqUnit}
-        minHz={client.current?.caps.freqRange[0]}
-        maxHz={client.current?.caps.freqRange[1]}
-        onShare={isLocal ? undefined : onShareStation}
-        profiles={profiles}
-        activeProfileId={activeProfileId}
-        sdrUsage={sdrUsage}
-        clientCount={clientCount}
-        onSelectProfile={(id) => { client.current?.selectProfile?.(id); setActiveProfileId(id); }}
-      />
-
-      {/* Chat drawer */}
-      <ChatDrawer
-        visible={chatOpen}
-        messages={chatMessages}
-        myCallsign={myCallsign}
-        onJoin={handleChatJoin}
-        onSend={handleChatSend}
-        onClose={closeChat}
-        onMute={() => setChatMuted((p: boolean) => !p)}
-        muted={chatMuted}
-        users={chatUsers}
-        syncedUser={syncedUser}
-        zoomSync={zoomSync}
-        onToggleSync={toggleUserSync}
-        onToggleZoomSync={() => setZoomSync((p: boolean) => !p)}
-        onUserTap={chatUserTap}
-        textOnly={isOwrx}
-        onChangeName={() => setMyCallsign(null)}
-      />
-
-      {/* Bypass password — rate-limit recovery (replaces the session) */}
-      <PasswordModal
-        visible={pwPrompt}
-        serverUrl={baseUrl}
-        onSubmit={(pw: string) => {
-          setPwPrompt(false);
-          navigation.replace('SDR', { ...route.params, password: pw });
-        }}
-        onCancel={() => { setPwPrompt(false); navigation.goBack(); }}
-      />
 
       {/* Audio player (renderless) — held until the saved tune is restored
           so the audio WS opens on the CORRECT freq/mode (no race) */}
@@ -4814,120 +2727,49 @@ export default function SDRScreen({ route, navigation }: Props) {
         />
       ) : null}
 
-      {/* CarFM: the FM-only face over the live pipeline. Opaque, so the SDR UI
-          and waterfall below are simply hidden while it's up (spec §5a). */}
-      {fmFaceActive ? (
-        <CarFmFace
-          freqHz={status.frequency}
-          stationName={liveStation.name}
-          callsignHint={fmCallsignHint}
-          // RT+ (when transmitted) gives a clean "Artist – Title"; show that on
-          // the strip instead of the raw RT line with its promo framing.
-          radioText={liveStation.rtArtist && liveStation.rtTitle
-            ? `${liveStation.rtArtist} – ${liveStation.rtTitle}`
-            : liveStation.text}
-          stereo={fmStereo}
-          signalDb={fmSignalDb}
-          rdsOk={!!liveStation.pi || !!liveStation.name}
-          tp={liveStation.tp}
-          ta={liveStation.ta}
-          af={liveStation.af}
-          ptyText={ptyLabel(liveStation.pty, ituRegion === 2)}
-          tunerError={fmTunerError}
-          theme={fmTheme}
-          autostart={fmAutostart}
-          onSetTheme={onFmSetTheme}
-          onSetAutostart={onFmSetAutostart}
-          onRetryTuner={route.params.tunerless ? () => { void tryTunerNow(); } : undefined}
-          nwdActive={nwdActive}
-          onProgramHeadUnit={onProgramHeadUnit}
-          nwdProgramming={nwdProgramming}
-          nwdPresetsInSync={nwdPresetsInSync}
-          nwdPresetCount={fmPresets.length}
-          onHardwareSeek={nwdActive ? onFmHardwareSeek : undefined}
-          presets={fmPresets}
-          onTuneHz={onTuneHz}
-          onToggleSave={onFmToggleSave}
-          onReorderPreset={onFmReorderPreset}
-          onRemovePreset={onFmRemovePreset}
-          onSaveStationPreset={onFmSaveStationPreset}
-          audioActive={fmAudioActive}
-          onClaimAudio={onFmClaimAudio}
-          onReleaseAudio={onFmReleaseAudio}
-          hardwareStep={fmHwStep}
-        />
-      ) : null}
+      {/* The FM face — the whole CarFM UI, over the live pipeline. */}
+      <CarFmFace
+        freqHz={status.frequency}
+        stationName={liveStation.name}
+        callsignHint={fmCallsignHint}
+        // RT+ (when transmitted) gives a clean "Artist – Title"; show that on
+        // the strip instead of the raw RT line with its promo framing.
+        radioText={liveStation.rtArtist && liveStation.rtTitle
+          ? `${liveStation.rtArtist} – ${liveStation.rtTitle}`
+          : liveStation.text}
+        stereo={fmStereo}
+        signalDb={fmSignalDb}
+        rdsOk={!!liveStation.pi || !!liveStation.name}
+        tp={liveStation.tp}
+        ta={liveStation.ta}
+        af={liveStation.af}
+        ptyText={ptyLabel(liveStation.pty, ituRegion === 2)}
+        tunerError={fmTunerError}
+        theme={fmTheme}
+        autostart={fmAutostart}
+        onSetTheme={onFmSetTheme}
+        onSetAutostart={onFmSetAutostart}
+        onRetryTuner={route.params.tunerless ? () => { void tryTunerNow(); } : undefined}
+        nwdActive={nwdActive}
+        onHardwareSeek={nwdActive ? onFmHardwareSeek : undefined}
+        presets={fmPresets}
+        onTuneHz={onTuneHz}
+        onToggleSave={onFmToggleSave}
+        onReorderPreset={onFmReorderPreset}
+        onRemovePreset={onFmRemovePreset}
+        onSaveStationPreset={onFmSaveStationPreset}
+        audioActive={fmAudioActive}
+        onClaimAudio={onFmClaimAudio}
+        onReleaseAudio={onFmReleaseAudio}
+        hardwareStep={fmHwStep}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  rotateBanner: {
-    position: 'absolute', alignSelf: 'center', zIndex: 55,
-    backgroundColor: 'rgba(8,12,6,0.92)', borderWidth: 1,
-    borderColor: 'rgba(120,240,120,0.45)', borderRadius: 8,
-    paddingHorizontal: 14, paddingVertical: 7,
-  },
-  rotateBannerText: {
-    color: 'rgba(140,255,140,0.9)', fontFamily: 'Atkinson Hyperlegible',
-    fontSize: 12, fontWeight: '700', letterSpacing: 0.5,
-  },
-  mutedBanner: {
-    position: 'absolute', alignSelf: 'center', zIndex: 60,
-    backgroundColor: 'rgba(20,6,4,0.92)', borderWidth: 1,
-    borderColor: 'rgba(220,60,60,0.8)', borderRadius: 8,
-    paddingHorizontal: 14, paddingVertical: 8,
-  },
-  mutedBannerText: {
-    color: '#ff7a7a', fontFamily: 'Atkinson Hyperlegible',
-    fontSize: 13, fontWeight: '700', letterSpacing: 0.5,
-  },
-  serverLostWrap: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 90,
-    alignItems: 'center', justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-  },
-  serverLostCard: {
-    maxWidth: 360, marginHorizontal: 28, padding: 20, borderRadius: 14,
-    backgroundColor: 'rgba(16,12,8,0.98)', borderWidth: 1, borderColor: 'rgba(255,184,77,0.55)',
-    alignItems: 'center',
-  },
-  serverLostTitle: {
-    color: '#ffb84d', fontFamily: 'Atkinson Hyperlegible', fontSize: 16,
-    fontWeight: '700', textAlign: 'center', marginBottom: 8,
-  },
-  serverLostBody: {
-    color: 'rgba(255,235,210,0.9)', fontFamily: 'Atkinson Hyperlegible',
-    fontSize: 13, lineHeight: 19, textAlign: 'center', marginBottom: 16,
-  },
-  serverLostBtnRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-  },
-  serverLostBtn: {
-    backgroundColor: '#ffb84d', borderRadius: 8, paddingHorizontal: 22, paddingVertical: 10,
-  },
-  serverLostBtnText: {
-    color: '#1a1206', fontFamily: 'Atkinson Hyperlegible', fontSize: 14,
-    fontWeight: '700', letterSpacing: 0.5,
-  },
-  serverLostBtnAlt: {
-    backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(255,184,77,0.6)',
-  },
-  serverLostBtnAltText: { color: '#ffb84d' },
-  restoreBtn: {
-    position: 'absolute', alignSelf: 'center', zIndex: 60,
-    backgroundColor: 'rgba(10,10,10,0.55)', borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.30)', borderRadius: 16,
-    paddingHorizontal: 18, paddingVertical: 4,
-  },
-  restoreBtnText: { color: 'rgba(255,255,255,0.85)', fontSize: 14 },
   root: {
     flex: 1,
     backgroundColor: '#000',
-  },
-  pillWrap: {
-    position: 'absolute',
-    left:  8,
-    right: 8,
   },
 });

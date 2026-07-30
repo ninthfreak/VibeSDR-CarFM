@@ -30,12 +30,6 @@ const Vibe = NativeModules.VibePowerModule as {
   stopExternalAudio?: () => void;
 } | undefined;
 
-// Native decoder sidecar (decodes the backend audio for the client decoders).
-const VibeLocal = NativeModules.VibeLocalSDR as {
-  feedDecoderPcm?: (b64: string, rate: number) => void;
-  setDecoderFreq?: (hz: number) => void;
-} | undefined;
-
 // Present as a real browser. KiwiSDR classifies connections that jump straight
 // to the WS with a non-browser User-Agent as "ext_api" (API) connections, which
 // many receivers time-limit or refuse — looking like Safari + identifying as
@@ -118,10 +112,8 @@ export class KiwiAdapter implements SDRBackend {
   private followVfo = true;               // VFO lock (true = view follows VFO)
 
   private audioStarted = false;
-  private lastDecoderFreq = -1;          // last dial Hz pushed to the FT8 sidecar
   private audioDec = new ImaAdpcmDecoder('kiwi', -32768, 32767);
   private started = false;
-  private sndReady = false;
   private wfReady = false;
 
   // Connection meter (0–3 bars) from audio-frame inter-arrival — flaky links
@@ -160,10 +152,8 @@ export class KiwiAdapter implements SDRBackend {
       if (!r.ok) return;
       const m = /gps=\(([-\d.]+),\s*([-\d.]+)\)/.exec(await r.text());
       if (m) {
-        const lat = Number(m[1]); const lon = Number(m[2]);
+        const lon = Number(m[2]);
         if (Number.isFinite(lon)) this.cb.onReceiverLon?.(lon);
-        // Full receiver position → spot distances + FT8 map (on-device decoder).
-        if (Number.isFinite(lat) && Number.isFinite(lon)) this.cb.onReceiverLoc?.(lat, lon);
       }
     } catch {}
   }
@@ -441,16 +431,6 @@ export class KiwiAdapter implements SDRBackend {
     if (!this.audioStarted) { Vibe?.startExternalAudio?.(rate, 'reconnect'); this.audioStarted = true; }
     const b64 = bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength));
     Vibe?.pushExternalPcm?.(b64, rate, 1);
-    // Tell the sidecar the dial frequency (when it changes) so FT8 spots get the
-    // right RF freq + band — otherwise they sit at the 100 MHz default (no band
-    // colour, wrong tune-on-tap). Pushed here so the sidecar is already running.
-    if (this.lastDecoderFreq !== this.freq) {
-      this.lastDecoderFreq = this.freq;
-      VibeLocal?.setDecoderFreq?.(this.freq);
-    }
-    // Also feed the native decoder sidecar (RTTY/WEFAX/SSTV/FT8 on Kiwi audio).
-    // No-op natively unless the decoder service is running.
-    VibeLocal?.feedDecoderPcm?.(b64, rate);
   }
 
   // ── waterfall (W/F binary) ─────────────────────────────────────────────────
@@ -673,7 +653,7 @@ export class KiwiAdapter implements SDRBackend {
   destroy(): void {
     this.started = false;
     this.stopKeepalive();
-    if (this.audioStarted) { Vibe?.stopExternalAudio?.(); this.audioStarted = false; this.lastDecoderFreq = -1; }
+    if (this.audioStarted) { Vibe?.stopExternalAudio?.(); this.audioStarted = false; }
     this.closeSocket('sndWs');
     this.closeSocket('wfWs');
   }
@@ -725,7 +705,7 @@ export class KiwiAdapter implements SDRBackend {
     this.stopKeepalive();
     this.closeSocket('sndWs');
     this.closeSocket('wfWs');
-    if (this.audioStarted) { Vibe?.stopExternalAudio?.(); this.audioStarted = false; this.lastDecoderFreq = -1; }
+    if (this.audioStarted) { Vibe?.stopExternalAudio?.(); this.audioStarted = false; }
     this.cb.onLink?.(0);
     this.cb.onDisconnect();
     this.cb.onServerLost?.();

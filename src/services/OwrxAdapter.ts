@@ -17,7 +17,7 @@
 
 import type { SDRMode, SDRStatus } from './UberSDRClient';
 import type {
-  SDRBackend, BackendCallbacks, BackendCapabilities, BackendKind, ProfileInfo, Aircraft,
+  SDRBackend, BackendCallbacks, BackendCapabilities, BackendKind, ProfileInfo,
 } from './SDRBackend';
 import { NativeModules } from 'react-native';
 import { decodeOwrxFftFrame, OwrxAudioDecoder } from './imaAdpcm';
@@ -55,34 +55,6 @@ function commonPrefix(strs: string[]): string {
     if (!pre) break;
   }
   return pre;
-}
-
-const B64_INV = (() => { const t = new Int8Array(128).fill(-1); for (let i = 0; i < B64.length; i++) t[B64.charCodeAt(i)] = i; return t; })();
-/** Minimal base64 → Uint8Array (Hermes has no atob). Ignores '=' padding/whitespace. */
-function base64ToBytes(s: string): Uint8Array {
-  const out: number[] = [];
-  let acc = 0, bits = 0;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    const v = c < 128 ? B64_INV[c] : -1;
-    if (v < 0) continue;                     // '=' / newline / stray char
-    acc = (acc << 6) | v; bits += 6;
-    if (bits >= 8) { bits -= 8; out.push((acc >> bits) & 0xff); }
-  }
-  return Uint8Array.from(out);
-}
-
-/** Unpack OWRX's WEFAX run-length-encoded scanline (MessagePanel.js port):
- *  byte<128 → literal run of (n+1) following bytes; byte>=128 → repeat the next
- *  byte (n-128+2) times. */
-function faxRleDecode(rle: Uint8Array): Uint8Array {
-  const out: number[] = [];
-  for (let x = 0; x < rle.length; ) {
-    const c = rle[x];
-    if (c < 128) { for (let k = 0; k <= c; k++) out.push(rle[x + 1 + k] ?? 0); x += c + 2; }
-    else { const b = rle[x + 1] ?? 0; for (let k = 0; k < c - 128 + 2; k++) out.push(b); x += 2; }
-  }
-  return Uint8Array.from(out);
 }
 
 const OWRX_AUDIO_RATE = 12000;   // output_rate (type-2)
@@ -145,26 +117,6 @@ interface OwrxConfig {
   fftSize: number;
   fftCompression: 'none' | 'adpcm';
   audioCompression: 'none' | 'adpcm';
-}
-
-/** Great-circle distance, km. Aircraft send POSITION; range is ours to compute. */
-function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 +
-            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-            Math.sin(dLon / 2) ** 2;
-  return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
-}
-
-/** Initial bearing from the receiver to the aircraft, degrees. */
-function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const p1 = lat1 * Math.PI / 180, p2 = lat2 * Math.PI / 180;
-  const dl = (lon2 - lon1) * Math.PI / 180;
-  const y = Math.sin(dl) * Math.cos(p2);
-  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
-  return Math.round((Math.atan2(y, x) * 180 / Math.PI + 360) % 360);
 }
 
 export class OwrxAdapter implements SDRBackend {
@@ -232,7 +184,6 @@ export class OwrxAdapter implements SDRBackend {
   private started = false;
   private specPaused = false;   // background/lock: skip FFT processing, keep audio
   private lonSent = false;
-  private receiverPos: { lat: number; lon: number } | null = null;      // receiver longitude emitted once
   private dspStarted = false;     // dspcontrol start re-asserted after demod (web-client order)
   private audioStarted = false;
   private audioDec = new OwrxAudioDecoder();    // type-2 (output_rate, 12k)
@@ -267,12 +218,6 @@ export class OwrxAdapter implements SDRBackend {
       // Receiver location → ITU region (MW 9/10 kHz). Emit once.
       const lon = j?.receiver?.gps?.lon;
       if (typeof lon === 'number' && !this.lonSent) { this.lonSent = true; this.cb.onReceiverLon?.(lon); }
-      // Keep the full position: ADS-B sends aircraft POSITIONS, not distances, so
-      // the range from the receiver has to be computed here.
-      const rlat = j?.receiver?.gps?.lat;
-      if (typeof rlat === 'number' && typeof lon === 'number') {
-        this.receiverPos = { lat: rlat, lon };
-      }
       const sdrs: any[] = Array.isArray(j?.sdrs) ? j.sdrs : [];
 
       // Group the WS profiles by sdrId (the id prefix).
@@ -408,7 +353,6 @@ export class OwrxAdapter implements SDRBackend {
       case 'config':   this.onConfig(json.value || {}); break;
       case 'profiles': this.onProfiles(json.value || []); break;
       case 'clients': { const n = Number(json.value); if (Number.isFinite(n)) this.cb.onClients?.(n); break; }
-      case 'chat_message': this.cb.onChatMessage?.(String(json.name ?? '?'), String(json.text ?? ''), json.color); break;
       case 'modes': {
         const arr = (json.value || []) as any[];
         this.serverModes = arr.map((m) => ({
@@ -448,7 +392,6 @@ export class OwrxAdapter implements SDRBackend {
         }
         break;
       case 'metadata': this.onMetadata(json.value || {}); break;
-      case 'secondary_demod': this.onSecondaryDemod(json.value); break;
       case 'bookmarks':        // server-configured named bookmarks
         this.owrxBookmarks = ((json.value || []) as any[])
           .filter((b) => b && typeof b.frequency === 'number')
@@ -501,7 +444,6 @@ export class OwrxAdapter implements SDRBackend {
 
   private onConfig(c: any): void {
     const profileSwitch = 'sdr_id' in c || 'profile_id' in c;
-    if ('allow_chat' in c) this.cb.onChatEnabled?.(!!c.allow_chat);
     if (!this.cfg) this.cfg = { centerFreq: 0, sampRate: 0, fftSize: 1024, fftCompression: 'none', audioCompression: 'none' };
     if ('center_freq' in c)       this.cfg.centerFreq = c.center_freq;
     if ('samp_rate' in c)         this.cfg.sampRate = c.samp_rate;
@@ -713,163 +655,6 @@ export class OwrxAdapter implements SDRBackend {
         text: typeof v.radiotext === 'string' ? v.radiotext.trim() || undefined : undefined,
         badge: this.rdsPs ? 'RDS' : undefined,
       });
-    }
-  }
-
-  /** Secondary-demod output. OWRX decodes server-side and streams the result over
-   *  the SAME WS once secondary_mod is set. Two shapes:
-   *   • IMAGES (SSTV/Fax) — a size header, per-scanline pixel messages, then a Fax
-   *     end marker → translated to the DecoderImageCanvas contract (onDecoderImage).
-   *   • TEXT RECORDS (Packet/POCSAG/FLEX/DSC/ISM/HFDL/ACARS/ADSB/WSJT) — one JSON
-   *     record per decode, keyed by `mode` → formatted to a line (onDecoderText). */
-  private onSecondaryDemod(v: any): void {
-    // Character-stream decoders (RTTY, CW skimmer, BPSK/PSK, etc.) send the
-    // decoded output as a plain STRING (OWRX secondary_demod_push_data), not a
-    // record. Append it raw (printable + newlines only, like the web client).
-    if (typeof v === 'string') {
-      const txt = v.replace(/[^\n\x20-\x7e]/g, '');
-      if (txt) this.cb.onDecoderText?.(txt, false);
-      return;
-    }
-    if (!v || typeof v !== 'object') return;
-    const kind: 'sstv' | 'fax' | null = v.mode === 'SSTV' ? 'sstv' : v.mode === 'Fax' ? 'fax' : null;
-    if (!kind) {
-      // NB: text records (POCSAG/FLEX/packet) legitimately carry a `message`
-      // field (the page/comment text) — do NOT treat that as a debug skip.
-      const rec = this.secondaryRecordToText(v);
-      if (rec) this.cb.onDecoderText?.(rec.replace ? rec.text : rec.text + '\n', rec.replace);
-      return;
-    }
-    // SSTV/Fax debug messages carry a `message` and no pixels — skip those only.
-    if ('message' in v && v.width == null && v.line == null) return;
-    // Header: dimensions, no scanline → start a fresh image.
-    if (v.width > 0 && v.height > 0 && v.line == null) {
-      this.cb.onDecoderImage?.({ phase: 'start', kind, width: v.width, height: v.height });
-      return;
-    }
-    // Fax end-of-image (crop to received lines).
-    if (v.line >= 0 && v.ended && v.pixels == null) {
-      this.cb.onDecoderImage?.({ phase: 'done', kind });
-      return;
-    }
-    // Scanline.
-    if (v.line >= 0 && v.width > 0 && typeof v.pixels === 'string') {
-      let bytes = base64ToBytes(v.pixels);
-      let px: Uint8Array;
-      if (kind === 'sstv') {
-        // OWRX sends BMP BGR triplets; the canvas wants RGB triplets.
-        const w = v.width as number;
-        px = new Uint8Array(w * 3);
-        for (let x = 0; x < w; x++) {
-          px[x * 3]     = bytes[x * 3 + 2] ?? 0;
-          px[x * 3 + 1] = bytes[x * 3 + 1] ?? 0;
-          px[x * 3 + 2] = bytes[x * 3]     ?? 0;
-        }
-      } else {
-        // Fax: greyscale, optionally RLE-compressed → one byte per pixel.
-        px = v.rle ? faxRleDecode(bytes) : bytes;
-      }
-      this.cb.onDecoderImage?.({ phase: 'line', kind, line: v.line, width: v.width, pixels: px });
-    }
-  }
-
-  /** Format a text-decoder `secondary_demod` record into one readable line (or a
-   *  replacing snapshot for the ADS-B aircraft list). Mirrors the fields the OWRX
-   *  web MessagePanels show, condensed to a single line. Returns null to skip. */
-  private secondaryRecordToText(v: any): { text: string; replace?: boolean } | null {
-    const mode = v?.mode;
-    const hhmmss = (ts: any): string => {
-      // OWRX timestamps are MILLISECOND epochs (e.g. 1781472474000) — the old
-      // code multiplied by 1000 → garbage date. Accept ms or sec epoch + ISO str.
-      let d: Date | null = null;
-      if (typeof ts === 'number' && ts > 0) d = new Date(ts > 1e12 ? ts : ts * 1000);
-      else if (typeof ts === 'string' && ts) { const p = new Date(ts); d = isNaN(p.getTime()) ? null : p; }
-      return d && !isNaN(d.getTime()) ? d.toISOString().slice(11, 19) : '';
-    };
-    const j = (...xs: any[]) => xs.filter((x) => x != null && x !== '').join(' ');
-    switch (mode) {
-      // Packet: APRS / AIS / SONDE
-      case 'APRS': case 'AIS': case 'SONDE': {
-        let m = v;
-        if (m.type === 'thirdparty' && m.data) m = m.data;
-        if (m.type === 'nmea') return null;                       // raw AIS NMEA — skip
-        const src = m.source ?? (m.type === 'item' ? m.item : undefined) ?? m.object;
-        const coord = (m.lat != null && m.lon != null) ? `(${(+m.lat).toFixed(3)},${(+m.lon).toFixed(3)})` : '';
-        return { text: j(src, coord, m.comment ?? m.message) };
-      }
-      case 'Pocsag':                                              // PocsagMessagePanel
-        return { text: j((v.address ?? '') + ':', v.message) };
-      case 'FLEX': case 'POCSAG': {                               // PageMessagePanel (paging)
-        const proto = (v.mode ?? '') + (v.baud ?? '') + (v.channel != null ? '/' + v.channel : '');
-        return { text: j(hhmmss(v.timestamp), v.address, proto, v.message) };
-      }
-      case 'DSC':
-        return { text: j(hhmmss(v.time ?? v.timestamp), v.src, v.dst ? '→ ' + v.dst : '', v.format, v.category, v.data) };
-      case 'ISM': case 'WMBUS': {
-        // ISM = sensor telemetry (TPMS tyre sensors, weather stations, …). Show
-        // the device + its readings, like the desktop's attribute table but on a
-        // line: append every extra scalar field (pressure_kPa, temperature_C, …).
-        const skip = new Set(['mode', 'id', 'model', 'timestamp', 'mic', 'flags', 'channel']);
-        const attrs = Object.entries(v)
-          .filter(([k, val]) => !skip.has(k) && (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') && val !== '')
-          .map(([k, val]) => `${k}=${val}`);
-        return { text: j(hhmmss(v.timestamp), v.id ?? '???', v.model, ...attrs) };
-      }
-      case 'HFDL': case 'VDL2': case 'ACARS': case 'UAT': case 'ADSB':
-        return { text: j(hhmmss(v.timestamp), v.flight ?? v.aircraft ?? v.icao, v.type, v.message ?? v.data) };
-      case 'ADSB-LIST': {                                          // live aircraft table → replace
-        if (!Array.isArray(v.aircraft)) return null;
-
-        // Emit the STRUCTURED list too. Flattening these to text on arrival is why
-        // nothing but the decoder panel could ever use them — and the records are
-        // rich: registry country, altitude, vertical rate, position, squawk.
-        // Distance/bearing are ours to compute: the server sends POSITION, not range.
-        this.cb.onAircraft?.(v.aircraft.map((a: any): Aircraft => {
-          const lat = typeof a.lat === 'number' ? a.lat : undefined;
-          const lon = typeof a.lon === 'number' ? a.lon : undefined;
-          const rp = this.receiverPos;
-          const hasPos = lat != null && lon != null && rp != null;
-          return {
-            icao:     String(a.icao ?? ''),
-            flight:   a.flight ? String(a.flight).trim() : undefined,
-            reg:      a.aircraft ? String(a.aircraft).trim() : undefined,
-            ccode:    a.ccode ? String(a.ccode) : undefined,
-            country:  a.country ? String(a.country) : undefined,
-            altitude: typeof a.altitude === 'number' ? a.altitude : undefined,
-            speed:    typeof a.speed === 'number' ? a.speed : undefined,
-            vspeed:   typeof a.vspeed === 'number' ? a.vspeed : undefined,
-            course:   typeof a.course === 'number' ? a.course : undefined,
-            squawk:   a.squawk ? String(a.squawk) : undefined,
-            rssi:     typeof a.rssi === 'number' ? a.rssi : undefined,
-            msgs:     typeof a.msgs === 'number' ? a.msgs : undefined,
-            lat, lon,
-            distKm:  hasPos ? haversineKm(rp!.lat, rp!.lon, lat!, lon!) : undefined,
-            bearing: hasPos ? bearingDeg(rp!.lat, rp!.lon, lat!, lon!) : undefined,
-          };
-        }));
-
-        const rows = v.aircraft.map((a: any) =>
-          j(a.flight ?? a.aircraft ?? a.icao ?? '?',
-            a.altitude != null ? a.altitude + 'ft' : '',
-            a.speed != null ? a.speed + 'kt' : '',
-            a.rssi != null ? a.rssi + 'dB' : ''));
-        return { text: `── ADS-B aircraft (${v.aircraft.length}) ──\n${rows.join('\n')}\n`, replace: true };
-      }
-      default: {
-        // WSJT family (FT8/FT4/JT65/JT9/WSPR/…): { mode, msg, db, dt, freq, timestamp }
-        if (typeof v?.msg === 'string') {
-          return { text: j(hhmmss(v.timestamp), v.db != null ? v.db + 'dB' : '', v.freq != null ? v.freq + 'Hz' : '', v.msg) };
-        }
-        // Unmapped record shape — show its scalar fields so the decoder never
-        // reads blank (and the real field names are visible for refinement).
-        if (typeof mode === 'string') {
-          const fields = Object.entries(v)
-            .filter(([k, val]) => k !== 'mode' && k !== 'timestamp' && (typeof val === 'string' || typeof val === 'number') && val !== '')
-            .map(([k, val]) => `${k}=${val}`);
-          if (fields.length) return { text: j(hhmmss(v.timestamp), mode, ...fields) };
-        }
-        return null;
-      }
     }
   }
 
@@ -1143,11 +928,6 @@ export class OwrxAdapter implements SDRBackend {
   }
 
   setMode(mode: SDRMode): void {
-    // Leaving ADS-B: clear the aircraft table. The watch routes on the presence of
-    // that table (the wire mode is `empty`+secondary, so the mode string can't be
-    // trusted), so a stale list would strand it on the aircraft screen.
-    if (String(mode) !== 'adsb' && String(this.mode) === 'adsb') this.cb.onAircraft?.([]);
-
     const sel = this.serverModes.find((m) => m.id === String(mode));
     // ALL digimodes are SECONDARY demods (DIG dropdown) — verified on the wire:
     // ADSB needs mod=empty + secondary_mod=adsb (mod=adsb alone decodes nothing).
@@ -1199,15 +979,6 @@ export class OwrxAdapter implements SDRBackend {
     this.audioDec.reset(); this.hdAudioDec.reset();
     this.sendDemod();
     this.cb.onStatus(this.getStatus());
-  }
-
-  /** The active decoder id (for the UI decoder panel + highlight): the secondary
-   *  decoder if one rides on a carrier, else the primary mode itself when it's a
-   *  standalone digimode (ADSB/POCSAG/…). Null for plain analog/voice/DAB modes. */
-  getSecondaryDecoder(): string | null {
-    if (this.secondaryDecoder) return this.secondaryDecoder;
-    const sel = this.serverModes.find((m) => m.id === String(this.mode));
-    return sel?.type === 'digimode' ? sel.id : null;
   }
 
   setBandwidth(low: number, high: number): void {
@@ -1276,13 +1047,6 @@ export class OwrxAdapter implements SDRBackend {
   setNr(threshold: number): void {
     const enabled = threshold > 0;
     this.send({ type: 'connectionproperties', params: { nr_enabled: enabled, nr_threshold: Math.max(0, Math.round(threshold)) } });
-  }
-
-  /** Basic text chat on the main WS. The server broadcasts to all clients incl.
-   *  us (our own message echoes back as a chat_message). */
-  sendChat(text: string, name: string): void {
-    const t = text.trim(); if (!t) return;
-    this.send({ type: 'sendmessage', text: t, name });
   }
 
   // ── status ───────────────────────────────────────────────────────────────

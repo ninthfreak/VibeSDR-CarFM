@@ -60,6 +60,43 @@ const p = (base: string, file: string) => `${logoDir(base)}${file}`;
 // it in memory — the point of this store is fewer I/O round-trips per render.
 const metaCache = new Map<string, LogoMeta | null>();
 
+// ── index.json: ONE read instead of one per station ──────────────────────────
+// Each station's meta.json stays authoritative (a partial write can only corrupt
+// that one station). This is a pure READ cache of all of them, so a cold start
+// costs a single file read rather than N — the last per-tile I/O left on the
+// path between launch and a painted logo.
+const INDEX = `${LOGO_ROOT}index.json`;
+let indexLoaded: Promise<void> | null = null;
+let indexDirty = false;
+let indexTimer: ReturnType<typeof setTimeout> | null = null;
+
+function loadIndex(): Promise<void> {
+  return (indexLoaded ??= (async () => {
+    try {
+      const raw = await FileSystem.readAsStringAsync(INDEX);
+      const all = JSON.parse(raw) as Record<string, LogoMeta>;
+      for (const [k, v] of Object.entries(all)) if (!metaCache.has(k)) metaCache.set(k, v);
+    } catch { /* absent or corrupt — per-station files answer instead, and the
+                 next write rebuilds it */ }
+  })());
+}
+
+/** Persist the index, coalesced — a migration writes meta for every station. */
+function scheduleIndexSave(): void {
+  indexDirty = true;
+  if (indexTimer) return;
+  indexTimer = setTimeout(() => {
+    indexTimer = null;
+    if (!indexDirty) return;
+    indexDirty = false;
+    const all: Record<string, LogoMeta> = {};
+    metaCache.forEach((v, k) => { if (v) all[k] = v; });
+    void ensureDir(LOGO_ROOT)
+      .then(() => FileSystem.writeAsStringAsync(INDEX, JSON.stringify(all)))
+      .catch(() => { indexDirty = true; });   // retry on the next write
+  }, 1500);
+}
+
 /** Subscribers re-read the store after it changes (migration, assign, clear). */
 const storeListeners = new Set<() => void>();
 export function subscribeLogoStore(l: () => void): () => void {
@@ -78,6 +115,7 @@ async function ensureDir(dir: string): Promise<void> {
 // ── meta ─────────────────────────────────────────────────────────────────────
 export async function getMeta(base: string): Promise<LogoMeta | null> {
   const k = safe(base);
+  if (!metaCache.has(k)) await loadIndex();     // one read covers every station
   if (metaCache.has(k)) return metaCache.get(k)!;
   let meta: LogoMeta | null = null;
   try { meta = JSON.parse(await FileSystem.readAsStringAsync(p(base, 'meta.json'))) as LogoMeta; }
@@ -95,6 +133,7 @@ export async function setMeta(base: string, patch: Partial<LogoMeta>): Promise<v
 async function writeMeta(base: string, meta: LogoMeta): Promise<void> {
   await ensureDir(logoDir(base));
   metaCache.set(safe(base), meta);
+  scheduleIndexSave();
   try { await FileSystem.writeAsStringAsync(p(base, 'meta.json'), JSON.stringify(meta)); } catch { /* best effort */ }
 }
 
@@ -243,13 +282,15 @@ export async function clearDark(base: string): Promise<void> {
 export async function listBases(): Promise<string[]> {
   try {
     // Skip bookkeeping dotfiles (the migration marker) — they aren't stations.
-    return (await FileSystem.readDirectoryAsync(LOGO_ROOT)).filter((n) => !n.startsWith('.'));
+    return (await FileSystem.readDirectoryAsync(LOGO_ROOT))
+      .filter((n) => !n.startsWith('.') && n !== 'index.json');
   } catch { return []; }
 }
 
 export async function removeLogo(base: string): Promise<void> {
   try { await FileSystem.deleteAsync(logoDir(base), { idempotent: true }); } catch { /* gone */ }
   metaCache.delete(safe(base));
+  scheduleIndexSave();
   notifyLogosChanged();
 }
 
@@ -259,8 +300,17 @@ export async function clearAllLogoFiles(): Promise<number> {
   try { await FileSystem.deleteAsync(LOGO_ROOT, { idempotent: true }); } catch { /* gone */ }
   await ensureDir(LOGO_ROOT);
   metaCache.clear();
+  indexLoaded = Promise.resolve();   // tree is gone; nothing to re-read
+  indexDirty = false;
   notifyLogosChanged();
   return bases.length;
+}
+
+/** Which of these stations DO have a stored logo — one directory listing, no
+ *  per-station stat. Callers resolving many rows should filter with this first. */
+export async function basesWithLogo(bases: string[]): Promise<string[]> {
+  const have = new Set((await listBases()).map((s) => s.toUpperCase()));
+  return bases.filter((b) => have.has(safe(b)));
 }
 
 /** Which of these stations have NO stored logo. */

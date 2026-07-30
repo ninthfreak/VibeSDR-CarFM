@@ -36,7 +36,7 @@ import { diag } from '../services/diag';
 import SidePresetCard, { PEEK_OPACITY, PEEK_SCALE } from './carfm/SidePresetCard';
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
 import { cleanCall, DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT, type CarFmPalette } from './carfm/tokens';
-import { resolveEgg, eggTokens, BAND_FONTS_READY } from './carfm/bandThemes';
+import { resolveEgg, eggTokens, areBandFontsReady, subscribeBandFonts } from './carfm/bandThemes';
 import { BandGear, AcdcHorn, AcdcBolt, CardFrame } from './carfm/bandArt';
 
 export interface CarFmPreset {
@@ -76,10 +76,6 @@ export interface CarFmFaceProps {
    *  tuner-source detection in settings). */
   nwdActive?: boolean;
   /** Head-unit preset programming (Settings). Manual only — writing sweeps. */
-  onProgramHeadUnit?: () => void;
-  nwdProgramming?: boolean;
-  nwdPresetsInSync?: boolean;
-  nwdPresetCount?: number;
   /** Hardware seek (built-in tuner): when set, SEEK uses the tuner's own
    *  next-station scan instead of the FCC-DB sweep. */
   onHardwareSeek?: (dir: 1 | -1) => void;
@@ -466,7 +462,6 @@ export default function CarFmFace(props: CarFmFaceProps) {
     freqHz, stationName, callsignHint, radioText, stereo, signalDb,
     rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
     onSetAutostart, onSetTheme, onRetryTuner, presets, nwdActive, onHardwareSeek,
-    onProgramHeadUnit, nwdProgramming, nwdPresetsInSync, nwdPresetCount,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
     audioActive, onClaimAudio, onReleaseAudio, hardwareStep,
   } = props;
@@ -501,7 +496,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const eggHideLogos = !!egg?.suppressLogos;
   // Themed type — applied only once the display faces are bundled (BAND_FONTS_READY).
   // Values are registered RN family names; undefined → the default face falls through.
-  const eggFontOn = BAND_FONTS_READY && !!egg;
+  const [bandFonts, setBandFonts] = useState(areBandFontsReady());
+  useEffect(() => subscribeBandFonts(() => setBandFonts(areBandFontsReady())), []);
+  const eggFontOn = bandFonts && !!egg;
   // Beatles hero stays PLAIN (EASTER-EGGS §4: the SgtPeppers cut is outline-only and
   // its intended solid/lined treatments can't be produced — no hero font, no effects).
   const eggHeroFont = eggFontOn && egg?.motif !== 'submarine' ? (egg?.heroFont ?? egg?.font) : undefined;
@@ -635,10 +632,57 @@ export default function CarFmFace(props: CarFmFaceProps) {
       Math.round(h * 0.42)).toString()).join('/')}`);
   }, [trackSig, tall, landscape, h, L]);
 
-  const mhz = mhzOf(freqHz);
+  // ── Commit-to-target: gloss over the two-tune wrestle ──────────────────────
+  // A wheel press makes the vendor radio service tune to ITS preset slot, and
+  // CarFM then tunes over the top to the app's (see NwdRadioModule panel keys).
+  // Both tunes emit frequency/PS callbacks, so every value derived from the live
+  // dial churns mid-change: the hero shows the old station, flips between old and
+  // new, briefly shows a THIRD preset (the service's own drifting slot pointer),
+  // and the preset highlight jitters between two or three tiles.
+  //
+  // So a deliberate, bounded exception to showing the truth: from the moment a
+  // preset change is committed until the dial settles on it, the FACE renders the
+  // TARGET and ignores the live tuner. Purely cosmetic and time-boxed; outside
+  // this window the face is honest as always, and if the tune ends up somewhere
+  // else the display corrects when the lock lifts.
+  //
+  // This also fixes a real bug, not just a visual one: stepPreset derived "next"
+  // from the LIVE frequency, so a second press arriving mid-wrestle stepped from
+  // whatever the vendor service had landed on — walking the wrong way through the
+  // list. The pending target is now the source of truth for stepping.
+  const rawMhz = mhzOf(freqHz);
+  const [pending, setPending] = useState<{ mhz: number; name: string } | null>(null);
+  useEffect(() => {
+    if (!pending) return;
+    // Settled: the dial reached the target → resume honest rendering.
+    if (Math.abs(rawMhz - pending.mhz) < 0.05) { setPending(null); return; }
+    // Cap: never let a failed/ignored tune freeze the display. On expiry the face
+    // simply shows reality again (fading, not snapping — the values it reads are
+    // the same ones it was already animating).
+    const t = setTimeout(() => setPending(null), 2000);
+    return () => clearTimeout(t);
+  }, [pending, rawMhz]);
+
+  /** Commit the face to a station before the tuner gets there. */
+  const commitTo = useCallback((targetMhz: number, name: string) => {
+    setPending({ mhz: targetMhz, name });
+  }, []);
+
+  // Everything below derives from the EFFECTIVE dial: the committed target while a
+  // change is in flight, the real one otherwise.
+  const mhz = pending ? pending.mhz : rawMhz;
   const inBand = mhz >= FM_MIN_MHZ - 0.05 && mhz <= FM_MAX_MHZ + 0.05;
-  const ps = (stationName ?? '').trim();
-  const rt = (radioText ?? '').trim();
+  // RDS from the outgoing station is stale the instant a change is committed, and
+  // it drives the hero identity AND the band theme — so hold it steady through the
+  // window rather than letting a stale PS name or a themed palette flash past.
+  const psRaw = (stationName ?? '').trim();
+  const rtRaw = (radioText ?? '').trim();
+  const heldRds = useRef({ ps: psRaw, rt: rtRaw });
+  if (!pending) heldRds.current = { ps: psRaw, rt: rtRaw };
+  // While pending, drop PS entirely: identity then resolves from the TARGET
+  // frequency via the FCC lookup, which is exactly the station we're moving to.
+  const ps = pending ? '' : psRaw;
+  const rt = pending ? heldRds.current.rt : rtRaw;
   const callsign = cleanCall(ps || callsignHint || '');
   // Hero real-logo model (§4.5): a real logo replaces the big call sign, which
   // becomes a small label beneath; no logo → big call sign, no monogram. The
@@ -839,10 +883,14 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const stepPreset = useCallback((dir: 1 | -1) => {
     if (items.length === 0) return;
     if (!off) startFlip(dir);   // §4.7/§8: instant swaps (no hero animation) while audio is released
+    // activeIndex already reflects the committed target (it derives from the
+    // effective dial), so rapid presses walk the list one step at a time instead
+    // of re-deriving from whatever the vendor service last tuned.
     const i = activeIndex >= 0 ? activeIndex : (dir > 0 ? -1 : 0);
     const n = ((i + dir) % items.length + items.length) % items.length;
+    commitTo(items[n].frequencyMhz, items[n].name);
     onTuneHz(Math.round(items[n].frequencyMhz * 1e6));
-  }, [items, activeIndex, onTuneHz, startFlip, off]);
+  }, [items, activeIndex, onTuneHz, startFlip, off, commitTo]);
 
   // Steering-wheel / media ⏮⏭ (parent bumps hardwareStep.seq): run the animated
   // stepPreset so the wheel gets the hero-swap FLIP and steps in DISPLAYED order —
@@ -1281,7 +1329,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
         twoRows={twoRows}
         landscape={landscape}
         k={k}
-        onSelect={(p) => onTuneHz(Math.round(p.frequencyMhz * 1e6))}
+        onSelect={(p) => { commitTo(p.frequencyMhz, p.name); onTuneHz(Math.round(p.frequencyMhz * 1e6)); }}
         onEnterReorder={() => setReordering(true)}
         onExitReorder={() => setReordering(false)}
         onReorder={onReorderPreset}
@@ -1339,10 +1387,6 @@ export default function CarFmFace(props: CarFmFaceProps) {
         onSetTheme={(t) => onSetTheme?.(t)}
         forcedEggId={forcedEgg}
         onForceEgg={setForcedEgg}
-        onProgramHeadUnit={onProgramHeadUnit}
-        nwdProgramming={nwdProgramming}
-        nwdPresetsInSync={nwdPresetsInSync}
-        nwdPresetCount={nwdPresetCount}
         onClose={() => setSettingsOpen(false)}
       />
       {/* Preset logo-search window (design §6.4). */}

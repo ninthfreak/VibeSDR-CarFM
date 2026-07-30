@@ -26,7 +26,6 @@ config.transformer.transformIgnorePatterns = [
     'react-native-safe-area-context',
     '@react-native-async-storage',
     'react-native-get-random-values',
-    'expo-blur',
     'expo-keep-awake',
     'uuid',
   ].join('|') +

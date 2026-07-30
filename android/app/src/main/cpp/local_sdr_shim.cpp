@@ -69,10 +69,6 @@
 #include "vibedsp/vibedsp.h"        // V5 clean-room GPL-free DSP engine (RxPipeline)
 #include "net_shim.h"
 #include "spyserver/spyserver_client.h"               // V5 clean-room GPL-free TCP socket wrapper
-#include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
-#include "decoders/wefax_decoder.h" // WEFAX (audio-extension decoder)
-#include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
-#include "decoders/sstv_decoder.h"  // SSTV (audio-extension image decoder)
 #include "decoders/audio_nr.h"      // self-contained spectral-subtraction audio NR
 #include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
 #include "vibe_web_page.h"          // GENERATED: the web client served from GET /
@@ -870,7 +866,6 @@ std::string queryParam(const std::string& reqLine, const char* key) {
 
 // ── Impl ────────────────────────────────────────────────────────────────────
 struct LocalSdrShim::Impl {
-    bool decoderOnly = false;             // sidecar mode: decoders only, no RTL
     std::vector<float> pcmResid;          // upsample carry (fractional sample pos)
     double pcmAcc = 0.0;
     // device / params
@@ -1201,26 +1196,6 @@ struct LocalSdrShim::Impl {
     uint64_t vsRateLastSpec = 0, vsRateLastAudio = 0;
     int64_t  vsRateLastMs = 0;
     std::atomic<float> spectrumSnr{0.0f};   // peak−floor (dB), centre vs edges
-
-    // Audio-extension decoder (RTTY etc.) on /ws/dxcluster — fed the demod audio.
-    std::mutex decoderMtx;
-    FskDecoder* decoder = nullptr;
-    WefaxDecoder* wefax = nullptr;          // active image decoder (WEFAX), or null
-    // FT8/FT4 digital-spots decoders (independent of the text/image decoders).
-    std::mutex spotsMtx;
-    Ft8Decoder* ft8 = nullptr;
-    Ft8Decoder* ft4 = nullptr;
-    bool spotsActive = false;
-    int  spotDecim = 0;                      // 48k→12k decimation counter
-    float spotAcc = 0.0f;                    // box-average accumulator
-    // SSTV image decoder (audio-extension). Runs a video-decode thread, so all
-    // dxClient sends are serialised through dxSendMtx.
-    SstvDecoder* sstv = nullptr;
-    int  sstvDecim = 0; float sstvAcc = 0.0f;
-    std::mutex dxSendMtx;
-    std::shared_ptr<net::Socket> dxClient;
-    std::string decTextBuf;                 // decoded chars awaiting flush (UTF-8)
-    std::mutex decBufMtx;
 
     // server
     std::shared_ptr<net::Listener> listener;
@@ -1583,13 +1558,8 @@ struct LocalSdrShim::Impl {
 
     void onAudio(stereo_t* data, int count, int ch) {
         if (count <= 0) return;
-        // Feed the audio-extension decoder (mono int16) — runs even with no audio
-        // WS client. The decoder's onChar/onState push frames to the dxcluster WS.
-        feedDecoder(data, count);
-        feedSpots(data, count);
-
         // Squelch: mute the audio when the tuned-channel power (pre-AGC, from the
-        // FFT) is below threshold. Applied AFTER the decoders so they see raw audio.
+        // FFT) is below threshold.
         if (squelchOn.load() && channelDb.load() < squelchDb.load()) {
             for (int i = 0; i < count; i++) { data[i].l = 0.0f; data[i].r = 0.0f; }
         }
@@ -1649,127 +1619,6 @@ struct LocalSdrShim::Impl {
             for (int i = 0; i < count; i++) pcm[i] = cvt(data[i].l);
         }
         sendAudioPcm(sock, pcm.data(), count, ch);
-    }
-
-    // ── Audio-extension decoder (RTTY) ─────────────────────────────────────
-    void feedDecoder(stereo_t* data, int count) {
-        std::lock_guard<std::mutex> lk(decoderMtx);
-        if (!decoder && !wefax && !sstv) return;
-        // SSTV runs at 12 kHz — decimate 48k→12k (box-average 4) and feed.
-        if (sstv) {
-            std::vector<int16_t> dec; dec.reserve((size_t)count/4 + 1);
-            for (int i = 0; i < count; i++) {
-                sstvAcc += data[i].l;
-                if (++sstvDecim >= 4) {
-                    int s = (int)lround(sstvAcc / 4.0f * 32767.0f);
-                    dec.push_back((int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s)));
-                    sstvDecim = 0; sstvAcc = 0.0f;
-                }
-            }
-            if (!dec.empty()) sstv->process(dec.data(), (int)dec.size());
-            return;
-        }
-        std::vector<int16_t> mono((size_t)count);
-        for (int i = 0; i < count; i++) {
-            int s = (int)lround(data[i].l * 32767.0f);
-            mono[i] = (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
-        }
-        if (wefax) { wefax->process(mono.data(), count); return; }
-        decoder->process(mono.data(), count);
-        // Flush any decoded text to the dxcluster client.
-        std::string text;
-        { std::lock_guard<std::mutex> bl(decBufMtx); if (!decTextBuf.empty()) { text.swap(decTextBuf); } }
-        if (!text.empty()) {
-            std::shared_ptr<net::Socket> dx;
-            { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-            if (dx && dx->isOpen()) {
-                std::vector<uint8_t> msg(13 + text.size());
-                msg[0] = 0x01;
-                uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::seconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
-                for (int i = 0; i < 8; i++) msg[1 + i] = (uint8_t)(ts >> ((7 - i) * 8));   // big-endian
-                uint32_t len = (uint32_t)text.size();
-                msg[9] = (uint8_t)(len >> 24); msg[10] = (uint8_t)(len >> 16);
-                msg[11] = (uint8_t)(len >> 8); msg[12] = (uint8_t)len;
-                std::memcpy(msg.data() + 13, text.data(), text.size());
-                sendWs(dx, 0x2, msg.data(), msg.size());
-            }
-        }
-    }
-    void sendDecoderState(int st) {
-        std::shared_ptr<net::Socket> dx;
-        { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-        if (dx && dx->isOpen()) { uint8_t m[2] = { 0x03, (uint8_t)st }; sendWs(dx, 0x2, m, 2); }
-    }
-
-    // ── FT8/FT4 digital spots ──────────────────────────────────────────────
-    static const char* bandFor(double hz) {
-        double m = hz / 1e6;
-        if (m >= 1.8  && m < 2.0)   return "160m";
-        if (m >= 3.5  && m < 4.0)   return "80m";
-        if (m >= 5.3  && m < 5.5)   return "60m";
-        if (m >= 7.0  && m < 7.3)   return "40m";
-        if (m >= 10.1 && m < 10.15) return "30m";
-        if (m >= 14.0 && m < 14.35) return "20m";
-        if (m >= 18.0 && m < 18.2)  return "17m";
-        if (m >= 21.0 && m < 21.45) return "15m";
-        if (m >= 24.8 && m < 25.0)  return "12m";
-        if (m >= 28.0 && m < 29.7)  return "10m";
-        if (m >= 50.0 && m < 54.0)  return "6m";
-        return "";
-    }
-    void emitSpot(bool isFt4, const std::string& callTo, const std::string& callDe,
-                  const std::string& grid, int snr, float audioHz) {
-        (void)callTo;
-        std::shared_ptr<net::Socket> dx;
-        { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-        if (!dx || !dx->isOpen()) return;
-        double rfHz = audioFreq.load() + audioHz;     // dial (USB) + audio offset
-        uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-        char buf[384];
-        int n = snprintf(buf, sizeof(buf),
-            "{\"type\":\"digital_spot\",\"data\":{\"mode\":\"%s\",\"callsign\":\"%s\","
-            "\"snr\":%d,\"frequency\":%.0f,\"band\":\"%s\",\"grid\":\"%s\",\"timestamp\":%llu}}",
-            isFt4 ? "FT4" : "FT8", callDe.c_str(), snr, rfHz, bandFor(rfHz),
-            grid.c_str(), (unsigned long long)ts);
-        if (n > 0) sendText(dx, std::string(buf, (size_t)n));
-    }
-    void startSpots() {
-        std::lock_guard<std::mutex> lk(spotsMtx);
-        if (spotsActive) return;
-        delete ft8; delete ft4;
-        ft8 = new Ft8Decoder(12000, false);
-        ft4 = new Ft8Decoder(12000, true);
-        ft8->onSpot = [this](const std::string& to, const std::string& de, const std::string& g, int s, float f) { emitSpot(false, to, de, g, s, f); };
-        ft4->onSpot = [this](const std::string& to, const std::string& de, const std::string& g, int s, float f) { emitSpot(true,  to, de, g, s, f); };
-        spotDecim = 0; spotAcc = 0.0f;
-        spotsActive = true;
-        LOGI("digital spots (FT8/FT4) started");
-    }
-    void stopSpots() {
-        std::lock_guard<std::mutex> lk(spotsMtx);
-        spotsActive = false;
-        delete ft8; ft8 = nullptr;
-        delete ft4; ft4 = nullptr;
-    }
-    void feedSpots(stereo_t* data, int count) {
-        std::lock_guard<std::mutex> lk(spotsMtx);
-        if (!spotsActive) return;
-        // Decimate 48k→12k by box-averaging 4 samples (mono).
-        std::vector<int16_t> dec;
-        dec.reserve((size_t)count / 4 + 1);
-        for (int i = 0; i < count; i++) {
-            spotAcc += data[i].l;
-            if (++spotDecim >= 4) {
-                int s = (int)lround(spotAcc / 4.0f * 32767.0f);
-                dec.push_back((int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s)));
-                spotDecim = 0; spotAcc = 0.0f;
-            }
-        }
-        if (dec.empty()) return;
-        if (ft8) ft8->process(dec.data(), (int)dec.size());
-        if (ft4) ft4->process(dec.data(), (int)dec.size());
     }
 
     // ── Demod chain (re)build ──────────────────────────────────────────────
@@ -2241,8 +2090,6 @@ struct LocalSdrShim::Impl {
         }
         bool wsSpec  = reqLine.find("/ws/user-spectrum") != std::string::npos;
         bool wsAudio = reqLine.find("/ws/audio") != std::string::npos;
-        bool wsDx    = reqLine.find("/ws/dxcluster") != std::string::npos;
-
         // VibeServer PIN pre-flight: the client fetches a nonce here, computes
         // HMAC(pin, nonce), then opens the WS with ?vs_nonce=&vs_auth=. When no
         // PIN is set we say so (required:false) and everything behaves as UberSDR.
@@ -2266,13 +2113,7 @@ struct LocalSdrShim::Impl {
             return;
         }
 
-        if (wsDx && !wsKey.empty()) {
-            // PIN-gate this like the other sockets. It was open: anyone who could
-            // reach the port could attach decoders and start the FT8 engine without
-            // the PIN — burning the host's CPU on an unattended (solar) server.
-            if (!vsAuthOk(sock, reqLine)) { sock->close(); return; }
-            acceptDxcluster(sock, wsKey);
-        } else if ((wsSpec || wsAudio) && !wsKey.empty()) {
+        if ((wsSpec || wsAudio) && !wsKey.empty()) {
             if (!vsAuthOk(sock, reqLine)) { sock->close(); return; }
             acceptWs(sock, wsKey, wsAudio);
         } else if (reqLine.find("/connection") != std::string::npos) {
@@ -2412,157 +2253,6 @@ struct LocalSdrShim::Impl {
           if (audioClient == sock) audioClient = nullptr; }
         sock->close();
         LOGI("%s WS disconnected", isAudio ? "audio" : "spectrum");
-    }
-
-    void startDecoder(const std::string& msg) {
-        std::string ext = jsonStr(msg, "extension_name");
-        if (ext == "wefax") { startWefax(msg); return; }
-        if (ext == "sstv")  { startSstv(msg);  return; }
-        bool navtex = (ext == "navtex");
-        if (ext != "fsk" && !navtex) return;   // RTTY / NAVTEX
-        double cf, sh, baud; bool inv = msg.find("\"inverted\":true") != std::string::npos;
-        if (!jsonNum(msg, "center_frequency", cf)) cf = navtex ? 500.0 : 1000.0;
-        if (!jsonNum(msg, "shift", sh)) sh = navtex ? 170.0 : 170.0;
-        if (!jsonNum(msg, "baud_rate", baud)) baud = navtex ? 100.0 : 45.45;
-        std::string enc = jsonStr(msg, "encoding"); if (enc.empty()) enc = navtex ? "CCIR476" : "ITA2";
-        std::string framing = jsonStr(msg, "framing"); if (framing.empty()) framing = navtex ? "4/7" : "5N1.5";
-        std::lock_guard<std::mutex> lk(decoderMtx);
-        delete decoder;
-        decoder = new FskDecoder(48000, cf, sh, baud, framing, enc, inv);
-        decoder->onChar = [this](char32_t ch) {
-            std::lock_guard<std::mutex> bl(decBufMtx);
-            // RTTY/ITA2 is ASCII; encode minimally as UTF-8.
-            if (ch < 0x80) decTextBuf.push_back((char)ch);
-            else if (ch < 0x800) { decTextBuf.push_back((char)(0xC0|(ch>>6))); decTextBuf.push_back((char)(0x80|(ch&0x3F))); }
-        };
-        decoder->onState = [this](int st) { sendDecoderState(st); };
-        LOGI("decoder attached: fsk cf=%.0f shift=%.0f baud=%.2f enc=%s", cf, sh, baud, enc.c_str());
-    }
-    void startWefax(const std::string& msg) {
-        WefaxDecoder::Config cfg;
-        double v;
-        if (jsonNum(msg, "lpm", v))         cfg.lpm        = (int)v;
-        if (jsonNum(msg, "image_width", v)) cfg.imageWidth = (int)v;
-        if (jsonNum(msg, "carrier", v))     cfg.carrier    = v;
-        if (jsonNum(msg, "deviation", v))   cfg.deviation  = v;
-        if (jsonNum(msg, "bandwidth", v))   cfg.bandwidth  = (int)v;
-        cfg.usePhasing = msg.find("\"use_phasing\":false") == std::string::npos;
-        cfg.autoStop   = msg.find("\"auto_stop\":true")    != std::string::npos;
-        cfg.autoStart  = msg.find("\"auto_start\":true")   != std::string::npos;
-        std::lock_guard<std::mutex> lk(decoderMtx);
-        delete decoder; decoder = nullptr;
-        delete wefax;
-        wefax = new WefaxDecoder(48000, cfg);
-        wefax->onLine = [this](uint32_t ln, uint32_t w, const uint8_t* px) {
-            std::shared_ptr<net::Socket> dx;
-            { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-            if (!dx || !dx->isOpen()) return;
-            std::vector<uint8_t> m(9 + w);
-            m[0] = 0x01;
-            m[1] = (uint8_t)(ln >> 24); m[2] = (uint8_t)(ln >> 16); m[3] = (uint8_t)(ln >> 8); m[4] = (uint8_t)ln;
-            m[5] = (uint8_t)(w >> 24);  m[6] = (uint8_t)(w >> 16);  m[7] = (uint8_t)(w >> 8);  m[8] = (uint8_t)w;
-            std::memcpy(m.data() + 9, px, w);
-            sendWs(dx, 0x2, m.data(), m.size());
-        };
-        wefax->onStart = [this]() {
-            std::shared_ptr<net::Socket> dx;
-            { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-            if (dx && dx->isOpen()) { uint8_t b = 0x02; sendWs(dx, 0x2, &b, 1); }
-        };
-        wefax->onStop = [this]() {
-            std::shared_ptr<net::Socket> dx;
-            { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-            if (dx && dx->isOpen()) { uint8_t b = 0x03; sendWs(dx, 0x2, &b, 1); }
-        };
-        LOGI("decoder attached: wefax lpm=%d width=%d carrier=%.0f", cfg.lpm, cfg.imageWidth, cfg.carrier);
-    }
-    // ── SSTV ───────────────────────────────────────────────────────────────
-    void dxSend(const uint8_t* d, size_t n) {
-        std::shared_ptr<net::Socket> dx;
-        { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-        if (!dx || !dx->isOpen()) return;
-        std::lock_guard<std::mutex> sl(dxSendMtx);
-        sendWs(dx, 0x2, d, n);
-    }
-    static void put32(std::vector<uint8_t>& v, uint32_t x) {
-        v.push_back((uint8_t)(x>>24)); v.push_back((uint8_t)(x>>16));
-        v.push_back((uint8_t)(x>>8));  v.push_back((uint8_t)x);
-    }
-    void startSstv(const std::string& msg) {
-        (void)msg;
-        std::lock_guard<std::mutex> lk(decoderMtx);
-        delete decoder; decoder = nullptr;
-        delete wefax;   wefax = nullptr;
-        delete sstv;
-        sstv = new SstvDecoder(12000);
-        sstvDecim = 0; sstvAcc = 0.0f;
-        sstv->onImageStart = [this](int w, int h) {
-            std::vector<uint8_t> m; m.push_back(0x07); put32(m,(uint32_t)w); put32(m,(uint32_t)h);
-            dxSend(m.data(), m.size());
-        };
-        sstv->onLine = [this](int y, int w, const uint8_t* rgb) {
-            std::vector<uint8_t> m; m.reserve(9 + (size_t)w*3);
-            m.push_back(0x01); put32(m,(uint32_t)y); put32(m,(uint32_t)w);
-            m.insert(m.end(), rgb, rgb + (size_t)w*3);
-            dxSend(m.data(), m.size());
-        };
-        sstv->onMode = [this](uint8_t, const std::string& name) {
-            std::vector<uint8_t> m; m.push_back(0x02);
-            m.push_back((uint8_t)(name.size()>>8)); m.push_back((uint8_t)name.size());
-            m.insert(m.end(), name.begin(), name.end());
-            dxSend(m.data(), m.size());
-        };
-        sstv->onStatus = [this](const std::string& s) {
-            std::vector<uint8_t> m; m.push_back(0x03); m.push_back(0x00);
-            m.push_back((uint8_t)(s.size()>>8)); m.push_back((uint8_t)s.size());
-            m.insert(m.end(), s.begin(), s.end());
-            dxSend(m.data(), m.size());
-        };
-        sstv->onSync = [this]() { uint8_t b = 0x04; dxSend(&b, 1); };
-        sstv->onComplete = [this]() { std::vector<uint8_t> m; m.push_back(0x05); put32(m,0); dxSend(m.data(), m.size()); };
-        sstv->onRedrawStart = [this]() { uint8_t b = 0x08; dxSend(&b, 1); };
-        LOGI("decoder attached: sstv");
-    }
-    void stopDecoder() {
-        std::lock_guard<std::mutex> lk(decoderMtx);
-        delete decoder; decoder = nullptr;
-        delete wefax;   wefax = nullptr;
-        delete sstv;    sstv = nullptr;
-        { std::lock_guard<std::mutex> bl(decBufMtx); decTextBuf.clear(); }
-    }
-
-    void acceptDxcluster(std::shared_ptr<net::Socket> sock, const std::string& wsKey) {
-        std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-        uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
-        sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-                      "Sec-WebSocket-Accept: " + base64(digest, 20) + "\r\n\r\n");
-        { std::lock_guard<std::mutex> lk(clientMtx); dxClient = sock; }
-        LOGI("dxcluster (decoder) WS connected");
-        while (serverRunning.load() && sock->isOpen()) {
-            std::string payload;
-            int op = recvWs(sock, payload);
-            if (op < 0 || op == 0x8) break;
-            if (op == 0x9) { sendWs(sock, 0xA, (const uint8_t*)payload.data(), payload.size()); continue; }
-            if (op != 0x1) continue;
-            std::string type = jsonStr(payload, "type");
-            if (type == "audio_extension_attach") {
-                startDecoder(payload);
-                sendText(sock, "{\"type\":\"audio_extension_attached\"}");
-            } else if (type == "audio_extension_detach") {
-                stopDecoder();
-                sendText(sock, "{\"type\":\"audio_extension_detached\"}");
-            } else if (type == "subscribe_digital_spots") {
-                startSpots();    // local FT8/FT4 decoder feeds digital_spot frames
-            } else if (type == "unsubscribe_digital_spots") {
-                stopSpots();
-            }
-            // chat / cw-spot / subscribe_chat messages are ignored (no server here).
-        }
-        stopDecoder();
-        stopSpots();
-        { std::lock_guard<std::mutex> lk(clientMtx); if (dxClient == sock) dxClient = nullptr; }
-        sock->close();
-        LOGI("dxcluster WS disconnected");
     }
 
     // ── IQ producer (runs on the libusb/socket reader thread) ───────────────
@@ -3125,7 +2815,7 @@ void LocalSdrShim::stopLocked() {
     { std::lock_guard<std::mutex> lk(impl->clientMtx);
       if (impl->specClient) impl->specClient->close();
       if (impl->audioClient) impl->audioClient->close();
-      if (impl->dxClient) impl->dxClient->close(); }
+      }
 
     // Stop the IQ source. USB: cancel the async read. RTL-TCP: clear the run flag
     // and close the socket so the blocked recv() returns and the read thread exits.
@@ -3145,8 +2835,6 @@ void LocalSdrShim::stopLocked() {
     impl->teardownAudio();
     impl->rx.stop();
 
-    impl->stopDecoder();
-    impl->stopSpots();
     { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; }
     { std::lock_guard<std::mutex> lk(impl->notchMtx); delete impl->notchEng; impl->notchEng = nullptr; }
     // NOTE: do NOT call listener->stop() here. acceptLoop polls accept() with a
@@ -3168,52 +2856,6 @@ void LocalSdrShim::stopLocked() {
     if (impl->usbFd >= 0) { ::close(impl->usbFd); impl->usbFd = -1; }
     delete impl;
     LOGI("local SDR stopped");
-}
-
-// ── Decoder-only sidecar (network backends) ───────────────────────────────────
-int LocalSdrShim::startDecoderService(std::string& err) {
-    std::lock_guard<std::mutex> life(g_lifecycle);
-    if (p) { LOGI("stale shim found on decoder-service start — tearing down"); stopLocked(); }
-    Impl* impl = new Impl();
-    impl->decoderOnly = true;
-    impl->sampleRate = 48000.0;            // decoders run at 48 kHz
-    int chosen = -1;
-    for (int port = 48050; port < 48100; port++) {   // above the local-SDR range
-        try { impl->listener = net::listen("127.0.0.1", port); chosen = port; break; }
-        catch (...) { impl->listener = nullptr; }
-    }
-    if (!impl->listener) { err = "could not bind localhost port"; delete impl; return -1; }
-    impl->port = chosen;
-    impl->serverRunning.store(true);
-    impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
-    p = impl;
-    LOGI("decoder service started: port=%d", chosen);
-    return chosen;
-}
-
-void LocalSdrShim::feedDecoderPcm(const int16_t* pcm, int n, int rate) {
-    if (!p || !p->decoderOnly || n < 2 || rate <= 0) return;
-    // Upsample to the decoders' 48 kHz (linear interp), build a mono stereo_t
-    // buffer (l=r) and feed the decoder + digital-spots paths.
-    double ratio = 48000.0 / (double)rate;
-    double srcStep = 1.0 / ratio;
-    std::vector<stereo_t> buf;
-    buf.reserve((size_t)(n * ratio) + 2);
-    for (double s = 0; s < n - 1; s += srcStep) {
-        int i = (int)s; double f = s - i;
-        float v = (float)(((1.0 - f) * pcm[i] + f * pcm[i + 1]) / 32768.0);
-        buf.push_back({ v, v });
-    }
-    if (buf.empty()) return;
-    p->feedDecoder(buf.data(), (int)buf.size());
-    p->feedSpots(buf.data(), (int)buf.size());
-}
-
-void LocalSdrShim::setDecoderFreq(double hz) {
-    if (!p || hz <= 0) return;
-    // Dial frequency for the sidecar: FT8 spots are emitted at audioFreq + offset,
-    // so without this they'd land at the 100 MHz default (empty band, wrong freq).
-    p->audioFreq.store(hz);
 }
 
 // ── Hardware controls ─────────────────────────────────────────────────────────

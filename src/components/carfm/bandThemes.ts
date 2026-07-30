@@ -59,7 +59,23 @@ export type Egg = {
  *  faces from the v1.12.0 handoff, registered under the family names below verbatim
  *  (Squealer, BeatlesYellowSub, SgtPeppers, MadieRoger, PermanentMarker, Onyx,
  *  Gridnik, Singothic, Anton). No stand-ins. Set false to fall back to Atkinson. */
-export const BAND_FONTS_READY = true;
+// The nine band-theme display faces are decorative and load in the BACKGROUND —
+// blocking first paint on them cost seconds of blank screen at every launch. A
+// theme only applies its typeface once they've actually arrived; until then it
+// falls back to the default face. Eggs resolve off RadioText, which lands well
+// after startup, so in practice they are always ready by the time one triggers.
+let bandFontsReady = false;
+const bandFontListeners = new Set<() => void>();
+export function areBandFontsReady(): boolean { return bandFontsReady; }
+export function setBandFontsReady(v: boolean): void {
+  if (bandFontsReady === v) return;
+  bandFontsReady = v;
+  bandFontListeners.forEach((l) => { try { l(); } catch { /* ignore */ } });
+}
+export function subscribeBandFonts(l: () => void): () => void {
+  bandFontListeners.add(l);
+  return () => { bandFontListeners.delete(l); };
+}
 
 /** Build the theme registry against the active palette. It's a function (not a
  *  const) because two themes (Nirvana, NIN) deliberately keep the DEFAULT palette

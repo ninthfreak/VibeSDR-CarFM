@@ -6,13 +6,11 @@ import { Animated, ActivityIndicator, LogBox, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFonts } from 'expo-font';
+import { setBandFontsReady } from './src/components/carfm/bandThemes';
 LogBox.ignoreAllLogs();
 
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import SDRScreen            from './src/screens/SDRScreen';
-import RtlTcpServerScreen   from './src/screens/RtlTcpServerScreen';
-import ServerModeScreen     from './src/screens/ServerModeScreen';
-import TunerScreen          from './src/screens/TunerScreen';
 import CrashBoundary        from './src/components/CrashBoundary';
 import { installCrashGuard } from './src/services/crashGuard';
 import { ThemeProvider }    from './src/contexts/ThemeContext';
@@ -40,7 +38,6 @@ export type RootStackParamList = {
     viewMode:        ViewMode;
     serverLongitude?: number | null;
     serverType?:     'ubersdr' | 'kiwi' | 'owrx';   // v3 multi-backend; default ubersdr
-    // NB FM-DX servers route to the 'Tuner' screen instead (see below), not here.
     // V4 local hardware (Android): connect to the on-device shim on localhost.
     // Audio comes from its /ws/audio (external-PCM engine), not the UberSDR /ws.
     isLocal?:        boolean;
@@ -70,30 +67,10 @@ export type RootStackParamList = {
     initialFreq?:    number;
     initialMode?:    SDRMode;
     initialZoom?:    number;
-    // CarFM fork: this is the car FM-radio use (local USB dongle or rtl_tcp dev
-    // loop). Switches the MediaSession to the RDS->MediaMetadata mapping the
-    // ESP32 display expects (RT->title, PS->artist, freq->album) and defaults
-    // media ⏮/⏭ to stepping presets. Non-car SDR sessions leave it unset.
-    carFm?:          boolean;
-    // CarFM launched with NO tuner present: no backend client is created; the
+    // Launched with NO tuner present: no backend client is created; the
     // FM face renders with the tuner-error pill and the screen polls for a
     // dongle, replacing itself with a real local session when one appears.
     tunerless?:      boolean;
-  };
-  // Server mode (Android): pick a sharing protocol (VibeServer / RTL-TCP) for
-  // this device's USB dongle, with shared PIN + auto-discovery options.
-  ServerMode: { name?: string } | undefined;
-  // RTL-TCP server (Android): share this device's USB dongle over the network.
-  // `advertise` (default true) lets the Server-mode picker honour the shared
-  // auto-discovery toggle.
-  RtlTcpServer: { name?: string; advertise?: boolean } | undefined;
-  // FM-DX Webserver (v7): single shared FM tuner, server-side demod + RDS, MP3
-  // audio. Distinct tuner UI (no waterfall) — see TunerScreen.
-  Tuner: {
-    baseUrl:       string;
-    instanceName?: string;
-    viewMode:      ViewMode;
-    initialFreq?:  number;   // deep-link retune (retunes the shared tuner for all)
   };
 };
 
@@ -128,15 +105,23 @@ export default function App() {
   // the whole app; recover to the picker with a server-attributed message.
   useEffect(() => { installCrashGuard(navigationRef); }, []);
 
+  // FIRST PAINT waits only on the three UI faces. The nine band-theme display
+  // faces (§12 Easter eggs) are decorative — gating render on all twelve meant a
+  // blank screen until every one of them had loaded, which is a large part of the
+  // slow startup. They load in parallel and announce themselves when ready; a
+  // theme falls back to the default face until then, and eggs resolve off
+  // RadioText (seconds after launch) so they are always ready in practice.
   const [fontsLoaded] = useFonts({
     'Nixie One':              require('./assets/fonts/NixieOne-Regular.ttf'),
     'Atkinson Hyperlegible':  require('./assets/fonts/AtkinsonHyperlegible-Regular.ttf'),
     // Real bold cut as its own family: Android fake-bolds a single family,
     // which reads lighter than the design's true 700 (design handoff §3).
     'AtkinsonHyperlegible-Bold': require('./assets/fonts/AtkinsonHyperlegible-Bold.ttf'),
-    // Band-theme display faces (§12 Easter eggs) — the REAL supplied faces from the
-    // v1.12.0 handoff (fonts/), bundled as res/font. No stand-ins, no network fetch;
-    // a theme's identity is its typeface (EASTER-EGGS-BUILD §1.1, family names verbatim).
+  });
+  // Band-theme display faces — the REAL supplied faces from the v1.12.0 handoff
+  // (fonts/), bundled as res/font. No stand-ins, no network fetch; a theme's
+  // identity is its typeface (EASTER-EGGS-BUILD §1.1, family names verbatim).
+  const [bandFontsLoaded] = useFonts({
     'Squealer':         require('./assets/fonts/Squealer.otf'),          // AC/DC
     'BeatlesYellowSub': require('./assets/fonts/BeatlesYellowSub.ttf'),  // The Beatles (body)
     'SgtPeppers':       require('./assets/fonts/SgtPeppers.ttf'),        // The Beatles (hero — see EASTER-EGGS §4)
@@ -147,6 +132,7 @@ export default function App() {
     'Singothic':        require('./assets/fonts/Singothic.ttf'),         // Nine Inch Nails (genre/RT/freq)
     'Anton':            require('./assets/fonts/Anton-Regular.ttf'),     // Talking Heads
   });
+  useEffect(() => { setBandFontsReady(!!bandFontsLoaded); }, [bandFontsLoaded]);
 
   const [splashDone, setSplashDone]   = useState(false);
   const splashOpacity = useRef(new Animated.Value(1)).current;
@@ -209,9 +195,6 @@ export default function App() {
           >
             <Stack.Screen name="InstancePicker" component={InstancePickerScreen} options={{ headerShown: false }} />
             <Stack.Screen name="SDR"            component={SDRScreen}            options={{ headerShown: false, gestureEnabled: false }} />
-            <Stack.Screen name="ServerMode"     component={ServerModeScreen}     options={{ headerShown: false }} />
-            <Stack.Screen name="RtlTcpServer"   component={RtlTcpServerScreen}   options={{ headerShown: false }} />
-            <Stack.Screen name="Tuner"          component={TunerScreen}          options={{ headerShown: false }} />
           </Stack.Navigator>
         </NavigationContainer>
         </CrashBoundary>
