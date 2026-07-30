@@ -24,6 +24,11 @@ gap noted. If unsure whether something counts as done, under-claim, not over.
 
 # Report in lists, not prose
 
+When asked for the whole to-do list, give ONLY the number and the short title,
+one per line. Category headings are fine. No nutshells, no commentary, no
+ordering notes. The detail lives on each task; asking for the list is asking
+for the index.
+
 Asked for twice, broken twice — so it lives here now. When reporting work,
 give three plain bulleted lists: what was DONE, what was NOT done, and what is
 LEFT. Uniform grammar within a list (all imperative, or all statements — not a
