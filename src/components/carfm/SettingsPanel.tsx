@@ -16,7 +16,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BatteryBolt, SignalWaves, WarningTriangle } from './icons';
 import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 import { EGG_MENU } from './bandThemes';
-import { snapshotDate, clearAllLogos } from '../../services/stationDb';
+import { snapshotDate, clearAllStationPrefs } from '../../services/stationDb';
+import { clearAllLogoFiles } from '../../services/logoStore';
 import { clearLogoCache } from '../../services/stationLogoCache';
 import { invalidateLogoTile, invalidateStationDisplay } from './LogoTile';
 import { isNwdAvailable, nwdRequestAudioSource, nwdProbe } from '../../services/nwdRadio';
@@ -172,8 +173,9 @@ export default function SettingsPanel({
           onPress: () => {
             setClearing(true);
             (async () => {
-              const n = await clearAllLogos();
-              await clearLogoCache().catch(() => {});
+              const n = await clearAllLogoFiles();     // the image files
+              await clearAllStationPrefs();            // hero show-call/freq choices
+              await clearLogoCache().catch(() => {});  // legacy PI-keyed file cache
               invalidateLogoTile();          // drop in-memory tile/hero caches
               invalidateStationDisplay();
               setClearing(false);

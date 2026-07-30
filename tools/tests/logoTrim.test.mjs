@@ -38,5 +38,33 @@ for(const [n,im] of Object.entries(cases)){
   if(!ok)fail++;
   console.log(`${ok?'ok  ':'FAIL'} ${n.padEnd(30)} ${im.w}x${im.h} -> ${kept?'original kept':t.w+'x'+t.h}`);
 }
+
+// ── resampleRaster: the pre-rendered size ladder ───────────────────────────
+const rsSrc = src.match(/export function resampleRaster[\s\S]*?\n}\n/)[0]
+  .replace('export ','').replace(/:\s*Raster/g,'').replace(/:\s*number/g,'');
+const resample = new Function(rsSrc+'\nreturn resampleRaster;')();
+{
+  // 1px stripes: area-averaging gives a flat mid grey; a single-tap sampler
+  // (what Skia's decode scaler does) would alias to hard 0/255 bands.
+  const w=512,h=64,rgba=new Uint8ClampedArray(w*h*4);
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){const j=(y*w+x)*4;const v=(x%2)?255:0;rgba[j]=rgba[j+1]=rgba[j+2]=v;rgba[j+3]=255;}
+  const o=resample({w,h,rgba},128);
+  let min=255,max=0;
+  for(let i=0;i<o.w*o.h;i++){const v=o.rgba[i*4];if(v<min)min=v;if(v>max)max=v;}
+  const ok = o.w===128 && min>=120 && max<=136;
+  if(!ok)fail++;
+  console.log(`${ok?'ok  ':'FAIL'} resample antialiases stripes -> ${o.w}px, luma ${min}..${max}`);
+}
+{
+  // Alpha-weighted: transparent padding must not darken the opaque mark.
+  const w=256,h=256,rgba=new Uint8ClampedArray(w*h*4);
+  for(let y=100;y<156;y++)for(let x=100;x<156;x++){const j=(y*w+x)*4;rgba[j]=255;rgba[j+3]=255;}
+  const o=resample({w,h,rgba},64);
+  const j=((32*o.w)+32)*4;
+  const ok = o.rgba[j]===255 && o.rgba[j+3]===255;
+  if(!ok)fail++;
+  console.log(`${ok?'ok  ':'FAIL'} resample keeps mark colour over transparent padding rgba(${o.rgba[j]},${o.rgba[j+1]},${o.rgba[j+2]},${o.rgba[j+3]})`);
+}
+
 console.log(fail?`\nlogoTrim: ${fail} FAILED`:'\nlogoTrim: ALL PASS');
 process.exit(fail?1:0);

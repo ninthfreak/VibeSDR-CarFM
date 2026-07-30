@@ -15,7 +15,8 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Image, Modal, Pressable, Text, View } from 'react-native';
 
 import { processLogoForDark, hexToUnitRgb, treatmentToEnum, type ProcessResult, type EncodedCandidate } from '../../services/logoDark/adapt';
-import { saveDarkLogo } from '../../services/stationDb';
+import { putDark } from '../../services/logoStore';
+import { prepareDarkLadder } from '../../services/logoPrep';
 import { invalidateLogoTile } from './LogoTile';
 import { FONT_BOLD, type CarFmPalette } from './tokens';
 
@@ -52,7 +53,8 @@ export default function LogoDarkPicker({ visible, base, logoUri, darkBg, pal, on
     if (!cand) return;
     setBusy(true);
     try {
-      await saveDarkLogo(base, treatmentToEnum(cand.treatment), cand.pngBase64, sel !== result.pick);
+      await putDark(base, treatmentToEnum(cand.treatment), cand.pngBase64, sel !== result.pick);
+      await prepareDarkLadder(base);
       invalidateLogoTile(base);
     } finally {
       setBusy(false);

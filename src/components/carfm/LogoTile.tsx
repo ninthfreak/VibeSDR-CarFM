@@ -12,7 +12,8 @@ import React, { useEffect, useState } from 'react';
 import { Image, Text, View } from 'react-native';
 
 import { getStationLogo, callsignForFreq } from '../../services/stationFinder';
-import { getStationPrefs, getDarkLogo } from '../../services/stationDb';
+import { getStationPrefs } from '../../services/stationDb';
+import { darkUri } from '../../services/logoStore';
 import { regenerateDarkLogo } from '../../services/logoDark/regenerate';
 import { callsignBase } from '../../services/piCallsign';
 import { brandColor, cleanCall, monogram, FONT_BOLD, DARK, LOGO_DARK_BG, type CarFmPalette } from './tokens';
@@ -35,7 +36,8 @@ export function callsignFrom(name?: string): string | null {
 export function invalidateLogoTile(base?: string): void {
   if (base) {
     const b = base.toUpperCase();
-    cache.delete(b);
+    // keys are `${base}|${boxDp}` — drop every size variant for this station
+    for (const k of Array.from(cache.keys())) if (k === b || k.startsWith(`${b}|`)) cache.delete(k);
     darkCache.delete(b);
   } else { cache.clear(); darkCache.clear(); }
   listeners.forEach((l) => l());
@@ -44,12 +46,15 @@ export function invalidateLogoTile(base?: string): void {
 /** Resolve a station's callsign base + logo data-URI. Shared by LogoTile and the
  *  surfaces that must branch their layout on `hasLogo` (hero replaces the call
  *  sign with the logo; tiles/peek hide their text). */
-export function useStationLogo(name?: string, freqMhz?: number): {
+export function useStationLogo(name?: string, freqMhz?: number, boxDp?: number): {
   base: string | null; uri: string | null; hasLogo: boolean;
 } {
   const nameBase = callsignFrom(name) ? callsignBase(callsignFrom(name)!) : null;
+  // Cache per (station, requested size) — a chip and the hero want different
+  // pre-rendered files for the same station.
+  const ck = (b: string) => `${b}|${boxDp ?? 0}`;
   const [base, setBase] = useState<string | null>(nameBase);
-  const [uri, setUri] = useState<string | null>(nameBase ? cache.get(nameBase) ?? null : null);
+  const [uri, setUri] = useState<string | null>(nameBase ? cache.get(ck(nameBase)) ?? null : null);
   const [tick, setTick] = useState(0);
 
   // Re-read when invalidateLogoTile() fires (a new logo was just assigned).
@@ -71,12 +76,14 @@ export function useStationLogo(name?: string, freqMhz?: number): {
   useEffect(() => {
     let cancelled = false;
     if (!base) { setUri(null); return; }
-    if (cache.has(base)) { setUri(cache.get(base)!); return; }
-    getStationLogo(base)
-      .then((u) => { cache.set(base, u); if (!cancelled) setUri(u); })
+    const k = ck(base);
+    if (cache.has(k)) { setUri(cache.get(k)!); return; }
+    getStationLogo(base, boxDp)
+      .then((u) => { cache.set(k, u); if (!cancelled) setUri(u); })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [base, tick]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [base, tick, boxDp]);
 
   return { base, uri, hasLogo: !!uri };
 }
@@ -100,9 +107,9 @@ export function useDarkLogo(base: string | null, active: boolean): { uri: string
     let cancelled = false;
     if (!base || !active || !key) { setV(null); return; }
     if (darkCache.has(key)) { setV(darkCache.get(key)!); return; }
-    getDarkLogo(base)
+    darkUri(base)
       .then((d) => {
-        const val = d ? { uri: d.dataUri, treatment: d.treatment } : null;
+        const val = d ? { uri: d.uri, treatment: d.treatment } : null;
         darkCache.set(key, val);
         if (!cancelled) setV(val);
         // No variant yet for a station that HAS a logo (active only when a logo
@@ -236,7 +243,8 @@ export function PresetPlate({ name, freqMhz, w, h, radius, pal, freqSize, suppre
   suppressLogo?: boolean;  // band theme (§12) hides logos → force the call-sign box
   fill?: boolean;          // preset chips: flex-grow box + text row (LOGO-SIZING §3)
 }) {
-  const { base, uri } = useStationLogo(name, freqMhz);
+  // Chips/peeks are small: ask for the pre-rendered small file, not the master.
+  const { base, uri } = useStationLogo(name, freqMhz, fill ? 128 : Math.max(w ?? 0, h ?? 0) || 192);
   const dark = pal === DARK;
   const darkVariant = useDarkLogo(base, dark && !!uri);
   // Measured size of the flex box — only needed to scale the no-logo call letters.

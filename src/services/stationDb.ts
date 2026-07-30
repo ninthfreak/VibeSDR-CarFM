@@ -4,8 +4,14 @@
  * The DB (assets/db/stations.sqlite) is produced by tools/build_station_db/ from
  * the FCC LMS files and shipped in the APK. At runtime it's copied once into the
  * SQLite dir (a WRITABLE location) and opened. Station rows are read-only
- * reference data; **logos live in the SAME db** (the `logos` table, blobs) and
- * are written at runtime, plus a `logo_wanted` queue for stations seen offline.
+ * reference data.
+ *
+ * Logo IMAGES no longer live here — they are FILES under <docs>/carfm-logos/
+ * (see logoStore.ts), because a DB blob forced every render through a base64
+ * `data:` URI that Android's image cache cannot key. The blob tables remain only
+ * so the one-time migration can drain them; what stays in the DB is the non-image
+ * metadata (genre/homepage/source/TTL), the `logo_wanted` queue, and the
+ * per-station hero display prefs.
  *
  * When the bundled data is refreshed (DB_ASSET_VERSION bump) the copy is replaced
  * with the new asset, so runtime-acquired logos + the wanted queue are MIGRATED
@@ -263,139 +269,44 @@ export async function saveLogo(
   } catch (e) { console.warn('[stationDb] saveLogo failed', e); }
 }
 
-/** Assign a logo by hand (sticky — auto sources won't overwrite it). */
-export async function setManualLogo(base: string, img: Uint8Array, mime: string): Promise<void> {
-  await saveLogo(base, img, mime, null, null, 'manual');
-  // A NEW original invalidates every rendition derived from the old one.
-  await clearLogoRenditions(base);
-}
+// ── images live on the FILESYSTEM now (see logoStore.ts) ─────────────────────
+// Logo IMAGES were SQLite blobs, which forced every render through a base64
+// `data:` URI — 33% bigger, shipped across the JS bridge as a string, and
+// re-decoded each time because the native image cache cannot key a data URI.
+// They are now files under <docs>/carfm-logos/ addressed by `file://` URI.
+// The two helpers below exist ONLY so the one-time migration can drain the old
+// tables; nothing else in the app reads or writes logo bytes here.
 
-// ── derived renditions (never overwrite the original) ────────────────────────
-// `logos.img` is the ORIGINAL AS SUPPLIED and is written exactly once per
-// assignment — nothing in the app mutates it afterwards. Every alternative
-// version (the trimmed display rendition, and any future per-size rendition) is
-// pre-rendered at assign time from a COPY of that original and stored HERE,
-// keyed (station, kind). Dark-mode variants live in `dark_logos` on the same
-// principle. All of it is derived: safe to drop and regenerate from the original.
-
-/** Store one derived rendition. Never touches `logos`. */
-export async function saveLogoRendition(
-  base: string, kind: string, img: Uint8Array, mime: string, w: number, h: number,
-): Promise<void> {
+/** Every logo still stored as a blob — the migration's input. */
+export async function allStoredLogos(): Promise<
+  Array<{ base: string; img: Uint8Array; mime: string | null; source: string | null }>
+> {
   const d = await db();
-  if (!d || !base) return;
+  if (!d) return [];
   try {
-    await d.runAsync(
-      `INSERT INTO logo_renditions(callsign_base,kind,img,mime,w,h,updated_at) VALUES (?,?,?,?,?,?,?)
-       ON CONFLICT(callsign_base,kind) DO UPDATE SET
-         img=excluded.img, mime=excluded.mime, w=excluded.w, h=excluded.h, updated_at=excluded.updated_at`,
-      [base.toUpperCase(), kind, img, mime, w, h, Date.now()]);
-  } catch (e) { console.warn('[stationDb] saveLogoRendition failed', e); }
+    const rows = await d.getAllAsync<{ callsign_base: string; img: Uint8Array | null; mime: string | null; source: string | null }>(
+      'SELECT callsign_base, img, mime, source FROM logos WHERE img IS NOT NULL');
+    return rows.filter((r) => r.img?.length)
+      .map((r) => ({ base: r.callsign_base, img: r.img as Uint8Array, mime: r.mime, source: r.source }));
+  } catch { return []; }
 }
 
-/** A derived rendition as a data URI (plus its pixel size), or null. */
-export async function getLogoRendition(
-  base: string, kind: string,
-): Promise<{ dataUri: string; w: number; h: number } | null> {
+/** Empty every image table so no stale second copy survives on disk. */
+export async function dropAllLogoBlobs(): Promise<void> {
   const d = await db();
-  if (!d || !base) return null;
+  if (!d) return;
   try {
-    const r = await d.getFirstAsync<{ img: Uint8Array | null; mime: string | null; w: number | null; h: number | null }>(
-      `SELECT img, mime, w, h FROM logo_renditions WHERE callsign_base = ? AND kind = ?`,
-      [base.toUpperCase(), kind]);
-    if (!r?.img) return null;
-    return { dataUri: `data:${r.mime || 'image/png'};base64,${bytesToBase64(r.img)}`, w: r.w ?? 0, h: r.h ?? 0 };
-  } catch { return null; }
+    await d.execAsync('DELETE FROM logos; DELETE FROM dark_logos; DELETE FROM logo_renditions;');
+  } catch (e) { console.warn('[stationDb] dropAllLogoBlobs failed', e); }
 }
 
-/** Drop a station's derived renditions (the original is left untouched). */
-export async function clearLogoRenditions(base: string): Promise<void> {
+/** Clear the per-station hero display choices (they default off a logo's
+ *  existence, so a logo wipe must take them with it). */
+export async function clearAllStationPrefs(): Promise<void> {
   const d = await db();
-  if (!d || !base) return;
-  try { await d.runAsync('DELETE FROM logo_renditions WHERE callsign_base = ?', [base.toUpperCase()]); }
-  catch { /* derived data — ignore */ }
-}
-
-/** The image to DISPLAY for a station: the trimmed rendition when one has been
- *  pre-rendered, else the untouched original. */
-export async function getDisplayLogoDataUri(base: string): Promise<string | null> {
-  return (await getLogoRendition(base, 'display'))?.dataUri ?? (await getLogoDataUri(base));
-}
-
-/** Wipe every stored logo — originals, derived renditions, dark variants, the
- *  wanted queue, and the per-station hero display choices (those default off a
- *  logo's existence, so they must not outlive it). Returns how many stations had
- *  a logo. Station reference data is untouched. */
-export async function clearAllLogos(): Promise<number> {
-  const d = await db();
-  if (!d) return 0;
-  let n = 0;
-  try {
-    n = (await d.getFirstAsync<{ n: number }>(
-      'SELECT COUNT(*) AS n FROM logos WHERE img IS NOT NULL'))?.n ?? 0;
-    await d.execAsync(
-      'DELETE FROM logos; DELETE FROM logo_renditions; DELETE FROM dark_logos;'
-      + ' DELETE FROM logo_wanted; DELETE FROM station_prefs;');
-  } catch (e) { console.warn('[stationDb] clearAllLogos failed', e); }
-  return n;
-}
-
-// ── dark-mode logo variants (derived cache, keyed by station) ─────────────────
-// One row per station: the chosen treatment + its rendered PNG. `chosen=1` marks
-// a user pick (survives reprocessing); `chosen=0` is the pipeline's auto-pick.
-// The PNG is BACKGROUND-INDEPENDENT — the remap clears paper to transparency
-// rather than painting it, so one variant reads on every dark surface (incl. a
-// future night/dusk theme); only the gate uses the bg, at process time. Hence
-// the key is the station alone. DERIVED data — safe to drop and regenerate, so
-// it is not carried across a DB_ASSET_VERSION bump.
-
-export type DarkLogo = { treatment: string; chosen: boolean; dataUri: string };
-
-/** The cached dark variant for a station, or null. */
-export async function getDarkLogo(base: string): Promise<DarkLogo | null> {
-  const d = await db();
-  if (!d || !base) return null;
-  try {
-    const r = await d.getFirstAsync<{ treatment: string; chosen: number | null; img: Uint8Array | null }>(
-      `SELECT treatment, chosen, img FROM dark_logos WHERE callsign_base = ?`, [base.toUpperCase()]);
-    if (!r?.img) return null;
-    return { treatment: r.treatment, chosen: r.chosen === 1, dataUri: `data:image/png;base64,${bytesToBase64(r.img)}` };
-  } catch { return null; }
-}
-
-/** Just the chosen treatment + whether it was a user pick — for the reprocess
- *  decision (keep a user override, replace an auto-pick). null if none cached. */
-export async function getDarkTreatment(base: string): Promise<{ treatment: string; chosen: boolean } | null> {
-  const d = await db();
-  if (!d || !base) return null;
-  try {
-    const r = await d.getFirstAsync<{ treatment: string; chosen: number | null }>(
-      `SELECT treatment, chosen FROM dark_logos WHERE callsign_base = ?`, [base.toUpperCase()]);
-    return r ? { treatment: r.treatment, chosen: r.chosen === 1 } : null;
-  } catch { return null; }
-}
-
-/** Store (upsert) the chosen dark variant for a station. `pngBase64` is bare
- *  base64 (no data-URI prefix). `chosen` = true for a user pick. */
-export async function saveDarkLogo(base: string, treatment: string, pngBase64: string, chosen: boolean): Promise<void> {
-  const d = await db();
-  if (!d || !base) return;
-  try {
-    await d.runAsync(
-      `INSERT INTO dark_logos(callsign_base,treatment,chosen,img,updated_at) VALUES (?,?,?,?,?)
-       ON CONFLICT(callsign_base) DO UPDATE SET
-         treatment=excluded.treatment, chosen=excluded.chosen, img=excluded.img, updated_at=excluded.updated_at`,
-      [base.toUpperCase(), treatment, chosen ? 1 : 0, base64ToBytes(pngBase64), Date.now()]);
-  } catch (e) { console.warn('[stationDb] saveDarkLogo failed', e); }
-}
-
-/** Drop the cached dark variant for a station — call when its source logo
- *  changes or is removed, so a stale adaptation can't linger. */
-export async function clearDarkLogo(base: string): Promise<void> {
-  const d = await db();
-  if (!d || !base) return;
-  try { await d.runAsync('DELETE FROM dark_logos WHERE callsign_base = ?', [base.toUpperCase()]); }
-  catch (e) { console.warn('[stationDb] clearDarkLogo failed', e); }
+  if (!d) return;
+  try { await d.execAsync('DELETE FROM station_prefs; DELETE FROM logo_wanted;'); }
+  catch (e) { console.warn('[stationDb] clearAllStationPrefs failed', e); }
 }
 
 // ── per-station hero display prefs (§6.4 Display Call Sign / Display Frequency) ──
