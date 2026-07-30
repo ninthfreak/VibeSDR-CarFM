@@ -6,6 +6,7 @@ import { Animated, ActivityIndicator, LogBox, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFonts } from 'expo-font';
+import { setBandFontsReady } from './src/components/carfm/bandThemes';
 LogBox.ignoreAllLogs();
 
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
@@ -128,15 +129,23 @@ export default function App() {
   // the whole app; recover to the picker with a server-attributed message.
   useEffect(() => { installCrashGuard(navigationRef); }, []);
 
+  // FIRST PAINT waits only on the three UI faces. The nine band-theme display
+  // faces (§12 Easter eggs) are decorative — gating render on all twelve meant a
+  // blank screen until every one of them had loaded, which is a large part of the
+  // slow startup. They load in parallel and announce themselves when ready; a
+  // theme falls back to the default face until then, and eggs resolve off
+  // RadioText (seconds after launch) so they are always ready in practice.
   const [fontsLoaded] = useFonts({
     'Nixie One':              require('./assets/fonts/NixieOne-Regular.ttf'),
     'Atkinson Hyperlegible':  require('./assets/fonts/AtkinsonHyperlegible-Regular.ttf'),
     // Real bold cut as its own family: Android fake-bolds a single family,
     // which reads lighter than the design's true 700 (design handoff §3).
     'AtkinsonHyperlegible-Bold': require('./assets/fonts/AtkinsonHyperlegible-Bold.ttf'),
-    // Band-theme display faces (§12 Easter eggs) — the REAL supplied faces from the
-    // v1.12.0 handoff (fonts/), bundled as res/font. No stand-ins, no network fetch;
-    // a theme's identity is its typeface (EASTER-EGGS-BUILD §1.1, family names verbatim).
+  });
+  // Band-theme display faces — the REAL supplied faces from the v1.12.0 handoff
+  // (fonts/), bundled as res/font. No stand-ins, no network fetch; a theme's
+  // identity is its typeface (EASTER-EGGS-BUILD §1.1, family names verbatim).
+  const [bandFontsLoaded] = useFonts({
     'Squealer':         require('./assets/fonts/Squealer.otf'),          // AC/DC
     'BeatlesYellowSub': require('./assets/fonts/BeatlesYellowSub.ttf'),  // The Beatles (body)
     'SgtPeppers':       require('./assets/fonts/SgtPeppers.ttf'),        // The Beatles (hero — see EASTER-EGGS §4)
@@ -147,6 +156,7 @@ export default function App() {
     'Singothic':        require('./assets/fonts/Singothic.ttf'),         // Nine Inch Nails (genre/RT/freq)
     'Anton':            require('./assets/fonts/Anton-Regular.ttf'),     // Talking Heads
   });
+  useEffect(() => { setBandFontsReady(!!bandFontsLoaded); }, [bandFontsLoaded]);
 
   const [splashDone, setSplashDone]   = useState(false);
   const splashOpacity = useRef(new Animated.Value(1)).current;

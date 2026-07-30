@@ -36,7 +36,7 @@ import { diag } from '../services/diag';
 import SidePresetCard, { PEEK_OPACITY, PEEK_SCALE } from './carfm/SidePresetCard';
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
 import { cleanCall, DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT, type CarFmPalette } from './carfm/tokens';
-import { resolveEgg, eggTokens, BAND_FONTS_READY } from './carfm/bandThemes';
+import { resolveEgg, eggTokens, areBandFontsReady, subscribeBandFonts } from './carfm/bandThemes';
 import { BandGear, AcdcHorn, AcdcBolt, CardFrame } from './carfm/bandArt';
 
 export interface CarFmPreset {
@@ -501,7 +501,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const eggHideLogos = !!egg?.suppressLogos;
   // Themed type — applied only once the display faces are bundled (BAND_FONTS_READY).
   // Values are registered RN family names; undefined → the default face falls through.
-  const eggFontOn = BAND_FONTS_READY && !!egg;
+  const [bandFonts, setBandFonts] = useState(areBandFontsReady());
+  useEffect(() => subscribeBandFonts(() => setBandFonts(areBandFontsReady())), []);
+  const eggFontOn = bandFonts && !!egg;
   // Beatles hero stays PLAIN (EASTER-EGGS §4: the SgtPeppers cut is outline-only and
   // its intended solid/lined treatments can't be produced — no hero font, no effects).
   const eggHeroFont = eggFontOn && egg?.motif !== 'submarine' ? (egg?.heroFont ?? egg?.font) : undefined;
