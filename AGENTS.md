@@ -22,6 +22,25 @@ even if the substitute seems adequate. When marking a tracked task completed,
 the same bar applies: completed means the full spec, or it stays open with the
 gap noted. If unsure whether something counts as done, under-claim, not over.
 
+# Report in lists, not prose
+
+Asked for twice, broken twice — so it lives here now. When reporting work,
+give three plain bulleted lists: what was DONE, what was NOT done, and what is
+LEFT. Uniform grammar within a list (all imperative, or all statements — not a
+mix). No narrative, no apology, no commentary folded into items, no parentheses
+carrying editorial asides. If a list of tasks is being shown, every entry gets
+the same shape and roughly the same length.
+
+# Claims need their evidence attached
+
+A mechanical check (a command that ran, its output) is reliable; a
+characterisation ("this is done", "that's covered", "this file is unrelated") is
+not, and has been wrong every time it went unchecked. So: never report an item
+as done, safe to delete, or already handled without opening the thing and
+showing what proved it. Judging a file by its header, or a checklist item by its
+title, is the specific failure to avoid. When summarising status, re-read the
+source of truth — do not generalise from "a lot of work happened."
+
 # Expo HAS CHANGED
 
 Read the exact versioned docs at https://docs.expo.dev/versions/v56.0.0/ before writing any code.
