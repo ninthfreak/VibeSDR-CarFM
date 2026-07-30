@@ -40,12 +40,6 @@
       "expo-font",
       "expo-audio",
       "expo-status-bar"
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "117da7dc-3041-493f-a4d2-b79fa2fed326"
-      }
-    },
-    "owner": "stuey3d"
+    ]
   }
 }

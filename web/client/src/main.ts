@@ -1,5 +1,5 @@
 /**
- * main.ts — VibeSDR web client entry.
+ * main.ts — CarFM web client entry.
  *
  * Talks to the VibeServer shim running on a phone. Same origin when served by
  * the shim itself (GET /), so the WS URLs are relative; in dev the splash takes
@@ -1072,7 +1072,7 @@ function updateMediaSession() {
   navigator.mediaSession.metadata = new MediaMetadata({
     title: station && station !== '—' ? station : freq,
     artist: station && station !== '—' ? `${freq} · ${spec.mode.toUpperCase()}` : spec.mode.toUpperCase(),
-    album: 'VibeSDR',
+    album: 'CarFM',
     artwork: [{ src: artSrc, sizes: '512x512', type: 'image/png' }],
   });
   navigator.mediaSession.playbackState = audio?.muted ? 'paused' : 'playing';
@@ -1574,7 +1574,7 @@ function nearestStation(hz: number): NearStation | null {
 
 function recordingName(hz: number, mode: string, at: Date): string {
   const stamp = at.toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  return `VibeSDR_${(hz / 1e6).toFixed(3)}MHz_${mode.toUpperCase()}_${stamp}.wav`;
+  return `CarFM_${(hz / 1e6).toFixed(3)}MHz_${mode.toUpperCase()}_${stamp}.wav`;
 }
 
 function initRecorder() {

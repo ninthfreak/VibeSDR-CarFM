@@ -1509,34 +1509,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idleSlow, baseUrl]); // baseUrl: new client starts at divisor 1
 
-  // ── Drum sensitivity (NORMAL / PRECISE) ──────────────────────────────────
-  const [drumMode, setDrumMode] = useState<'normal'|'precise'>('normal');
-  const drumModeRef = useRef<'normal'|'precise'>('normal');
-  useEffect(() => {
-    AsyncStorage.getItem('lsv_drum_sens').then((v: string | null) => {
-      if (v === 'normal' || v === 'precise') { setDrumMode(v); drumModeRef.current = v; }
-    }).catch(() => {});
-  }, []);
-  // ✦ HAPTICS toggle — was UI-only (props never passed from here, and the
-  // drums ticked unconditionally). Module-level switch in DrumWheel.
-  const [hapticsEnabled, setHapticsEnabled] = useState(true);
-  useEffect(() => {
-    AsyncStorage.getItem('lsv_haptics').then((v: string | null) => {
-      if (v === '0') { setHapticsEnabled(false); }
-    }).catch(() => {});
-  }, []);
-  // Whether this device has a haptic motor at all — hide the HAPTICS toggle if
-  // not (it's a dead button otherwise). iPads have no Taptic Engine; on Android
-  // we ask the native Vibrator (some tablets genuinely have no motor).
-  const [hapticsHardware, setHapticsHardware] = useState(true);
-  useEffect(() => {
-    const mod = NativeModules.VibePowerModule as
-      | { hasVibrator?: () => Promise<boolean> } | undefined;
-    mod?.hasVibrator?.()
-      .then((has) => setHapticsHardware(has !== false))
-      .catch(() => setHapticsHardware(true));
-  }, []);
-
   // ── BW drum ───────────────────────────────────────────────────────────────
 
   // Gesture accumulator: drum ticks arrive as small px deltas (rounding them

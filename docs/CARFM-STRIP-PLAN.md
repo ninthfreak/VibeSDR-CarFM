@@ -10,7 +10,12 @@ demands risky surgery. Work top-down (🟢 first). Scope decisions already made:
   pod, app.json ios block, `Platform.OS==='ios'` branches, BrowserOverlay, Apple
   Watch (watchProvider/watchBoot + all call sites), Siri + CarPlay (Android Auto
   kept).
-- ⬜ **Items 10–19 remaining** (below).
+- **Items 10–19: SIX done, FOUR part-done** (2026-07-30) — per-item marks below.
+  Done outright: 14 decoders, 15 chat, 16 maps/aircraft, 17 waterfall, 19 the
+  advanced-SDR UI (24 components, and `carFm` collapsed to always-true so the
+  `!fmFaceActive` tree is gone with its dev entry points). Part-done: 10, 11, 12,
+  13, 18 — in each case the UI went and something deliberate or load-bearing
+  stayed. SDRScreen 4,898 → 2,747 lines.
 - ⬜ **Other open items** from earlier in the project — see the last section so
   they aren't lost.
 
@@ -56,23 +61,45 @@ demands risky surgery. Work top-down (🟢 first). Scope decisions already made:
 ## 🟡 MODERATE harm — bounded surgery (inline overlays / shared screens / iOS wiring)
 8. **Apple Watch** — `watchProvider.ts` (~45 KB) + `watchBoot.ts`. iOS-only, but invoked from App.tsx **boot logic**, SDRScreen (~30 calls), TunerScreen (~15), WaterfallView; `watchBoot.claimed` is also read by the **Android carFm boot branch** (App.tsx:288). Untangle the boot gate carefully.
 9. **Siri + CarPlay** — iOS voice/car blocks in SDRScreen (~186–262, 1491, 1904, 1910). Bounded, but the **Android Auto** side is shared — keep that when cutting CarPlay.
-10. **Recording** — RecordingsOverlay.tsx + AudioSheet.tsx (12 SDRScreen refs). Shared with **TunerScreen** — edit both call sites. Keep AudioPlayer/`VibePowerModule`.
-11. **Browser/server-sharing screens** — ServerModeScreen + RtlTcpServerScreen (+ rtlTcpServer, vibeServer, vibeAuth, mdns). Clean screen deletes, but **backend-adjacent** (you deferred backend decisions) → confirm before cutting.
-12. **FM-DX client** — TunerScreen + FmdxDial (+ FmdxAdapter, fmdxDirectory). Clean screen-level removal, but FM-DX is a **reception source you deferred** → decide as a set.
-13. **VTS + HF bookmarks** — VTSBar.tsx + services `stations`, `eibi` (shortwave schedules), `userBookmarks`. HF/ham band-plan engine, no FM role.
+10. 🟨 **Recording — UI gone, native pipeline still there.** RecordingsOverlay,
+    AudioSheet and TunerScreen are deleted, so nothing can start a recording. The
+    Kotlin side (`startRecordingNative`/`stopRecordingNative`, the MediaStore
+    publish, `VibeStreamModule.startRecording`) is untouched and now unreachable.
+    Original item: RecordingsOverlay.tsx + AudioSheet.tsx (12 SDRScreen refs). Shared with **TunerScreen** — edit both call sites. Keep AudioPlayer/`VibePowerModule`.
+11. 🟨 **Server-sharing — screens gone, services KEPT by decision.**
+    ServerModeScreen and RtlTcpServerScreen are deleted; `rtlTcpServer`,
+    `vibeServer`, `vibeAuth` and `mdns` stay (owner: "Server sharing: keep for
+    now"), which leaves them present but unreachable from the UI.
+    Original item: ServerModeScreen + RtlTcpServerScreen (+ rtlTcpServer, vibeServer, vibeAuth, mdns). Clean screen deletes, but **backend-adjacent** (you deferred backend decisions) → confirm before cutting.
+12. 🟨 **FM-DX — screen gone, adapter KEPT by decision.** TunerScreen, FmdxDial
+    and `fmdxDirectory` are deleted; `FmdxAdapter` stays (owner: "Remote SDR
+    backends: keep").
+    Original item: TunerScreen + FmdxDial (+ FmdxAdapter, fmdxDirectory). Clean screen-level removal, but FM-DX is a **reception source you deferred** → decide as a set.
+13. 🟨 **VTS + HF bookmarks — only the BAR went.** VTSBar.tsx is deleted, but
+    `stations`, `eibi` and `userBookmarks` are all still live in SDRScreen —
+    and `userBookmarks` IS the preset store, so it can never go. Treat this item
+    as "retire the HF/shortwave parts of stations + eibi", not a delete.
+    Original item: VTSBar.tsx + services `stations`, `eibi` (shortwave schedules), `userBookmarks`. HF/ham band-plan engine, no FM role.
 
 ## 🔴 HIGH harm — deep SDRScreen surgery / shared pipeline (do last, carefully)
-14. **Decoders** — DecoderPanel + DecoderImageCanvas + `DecoderClient` + native `cpp/decoders`. **76 SDRScreen refs** — the most coupled subsystem. `DecoderClient` is the shared backbone for **decoders + chat + map spots**, so items 14/15/16 must be planned together.
-15. **Chat** — ChatDrawer.tsx + DecoderClient chat transport. Shared with TunerScreen; rides on DecoderClient.
-16. **Maps & aircraft** — MapOverlay.tsx + AircraftPanel.tsx. Shares DecoderClient spot rows.
-17. **GPU waterfall** — WaterfallView.tsx (1353 LOC, inline Skia shaders). **39 SDRScreen refs**, ~40 wired props; also read by watchProvider. Hidden under the CarFM overlay anyway.
-18. **Non-FM demod modes** — ModeSelector + StepPicker + the mode/step **state machine** in SDRScreen + `dataModes` (DAB/ADS-B). CarFM forces `wfm`; stripping the rest is state-machine surgery.
+14. ✅ **Decoders — DONE** (JS, native `cpp/decoders` + ft8_lib, and the web client's panel). **Decoders** — DecoderPanel + DecoderImageCanvas + `DecoderClient` + native `cpp/decoders`. **76 SDRScreen refs** — the most coupled subsystem. `DecoderClient` is the shared backbone for **decoders + chat + map spots**, so items 14/15/16 must be planned together.
+15. ✅ **Chat — DONE** (drawer, SDRScreen state, OWRX + FM-DX transports). **Chat** — ChatDrawer.tsx + DecoderClient chat transport. Shared with TunerScreen; rides on DecoderClient.
+16. ✅ **Maps & aircraft — DONE.** **Maps & aircraft** — MapOverlay.tsx + AircraftPanel.tsx. Shares DecoderClient spot rows.
+17. ✅ **GPU waterfall — DONE** (2026-07-21). **GPU waterfall** — WaterfallView.tsx (1353 LOC, inline Skia shaders). **39 SDRScreen refs**, ~40 wired props; also read by watchProvider. Hidden under the CarFM overlay anyway.
+18. 🟨 **Non-FM demod modes — only the pickers went.** ModeSelector and
+    StepPicker are deleted, but the mode/step state machine in SDRScreen and
+    `dataModes` (DAB/ADS-B predicates) are untouched — that's the state-machine
+    surgery this item warned about, still outstanding.
+    Original item: ModeSelector + StepPicker + the mode/step **state machine** in SDRScreen + `dataModes` (DAB/ADS-B). CarFM forces `wfm`; stripping the rest is state-machine surgery.
 19. **The whole "Advanced SDR view"** — ControlsBar (978) + MenuSheet (1691) + DrumWheel + the entire non-car UI branch of SDRScreen. Only visible when NOT in CarFM. Biggest cut: means splitting SDRScreen's FM-wiring from its SDR-UI. Highest harm; likely the final step.
    - 🟨 **Escape hatch REMOVED** (2026-07-21): the CarFM→advanced route is gone —
      `advancedOpen` state, `onOpenAdvanced` prop, the SettingsPanel "Advanced SDR
      view" row, and the `◂ FM` return button are all deleted; `fmFaceActive` is
      now just `carFm`. Confirmed: CarFM can no longer reach the stock SDR UI.
-   - ⬜ **Still to do — the actual component deletion.** The SDR-UI branch
+   - ✅ **DONE (2026-07-30) — the component deletion.** All 24 components are
+     gone and the `carFm` route param with them, so there is no longer a launch
+     path that renders anything but the face. Superseded note follows.
+   - 🗄️ **(superseded)** The SDR-UI branch
      (`!fmFaceActive`: ControlsBar, MenuSheet, DrumWheel, ModeSelector, VTSBar,
      CenterVfoButton, waterfall-appearance state) still EXISTS and still renders
      for **non-carFm / dev launches** (InstancePicker's remote-server connect
@@ -113,24 +140,33 @@ Threads raised across the project that are NOT part of the strip list.
   Android package rename showed the JNI symbols must move atomically or the app
   crashes (UnsatisfiedLinkError), and the `vibeserver`/`vibesdr.local` markers are
   load-bearing for server detection. Do as a deliberate, tsc+build-gated pass.
-- ⬜ **EAS `projectId` + `owner: stuey3d`** in `app.json` — still the original
-  author's Expo account; run your own `eas init` before building.
-- ⬜ **Internal docs still say "VibeSDR"** — `docs/STORE-SUBMISSION.md`, the
-  `BRIEF-*.md` set, `files/*.md`. Not shipped, but inconsistent.
-- ⬜ **Native VibeServer web-page title** — `android/app/src/main/cpp/vibe_web_page.h`
-  still `<title>VibeSDR</title>` (native; out of the scope you set earlier).
+- ✅ **DONE — EAS `projectId` + `owner: stuey3d`** removed from `app.json`. They
+  pointed at the original author's Expo account. Local gradle builds don't care;
+  run your own `eas init` if you ever want cloud builds.
+- ⬜ **Internal docs still say "VibeSDR"** — the remaining root `BRIEF-*.md`
+  (SpyServer ×2, FM-DX adapter, the two URI-scheme briefs) and
+  `BUGFIX-vibeserver-squelch-indication.md`. These describe subsystems that are
+  still here, so they're kept; only the naming is inconsistent. The store notes,
+  `files/*.md` and the three feature briefs for things CarFM doesn't do were
+  deleted 2026-07-30.
+- ✅ **DONE — served web-page branding.** `web/client/index.html` title, the
+  MediaSession album and the recording filename prefix now say CarFM;
+  `vibe_web_page.h` is regenerated from them by `scripts/build-web.mjs`.
 - ⬜ **`APPSTORE-EXCEPTION.md`** — Stuart's GPLv3 §7 store-distribution exception;
   moot for an Android-only fork. Decide keep vs remove.
 - ⬜ **README positioning** — currently "a fork of VibeSDR, a mobile SDR receiver"
   (what the code is). If CarFM is really the *car FM radio* product, give the
   positioning and it gets refocused.
 
-## C. About screen — authored content (needs your voice, I won't fabricate)
-- ⬜ **`AboutOverlay.tsx` personal message** is still **Stuart's** first-person
-  origin story (PSKR badge, M9PSY, "Pocket UberSDR"). Offered to *neutralize* it
-  to a factual fork note rather than rewrite it in your voice — pending your call.
-- ⬜ **Changelog / version history** in AboutOverlay is VibeSDR's release history
-  (App Store, TestFlight, "new in vN") — inherited, not CarFM's. Decide keep/trim.
+## C. About screen — REPLACED, not just edited
+`AboutOverlay.tsx` was deleted with the SDR chrome on 2026-07-30: it was only ever
+reachable from the SDR menu, which CarFM never shows. That disposed of the
+inherited content (Stuart's first-person origin story, VibeSDR's App Store /
+TestFlight changelog) without anyone having to rewrite it.
+- ⬜ **Credits + GPL-3.0 notice have nowhere to live.** The settings panel shows
+  `CarFM · v0.9.2 · FCC station data as of …` — a version line, not a licence
+  notice or an upstream attribution. For a GPL fork that's worth an About row in
+  the CarFM settings sheet. Needs your call on wording.
 
 ## D. Logos — future polish (feature works; these are refinements)
 - ⬜ **Logo sizing / fit** — better optimize how fetched logos are sized and laid

@@ -24,8 +24,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getNearbyStations, callsignForFreq } from '../services/stationFinder';
 import type { NearbyStation } from '../services/stationTypes';
 import { GearIcon, GpsSatellite, MagnifierTower, MotionCar, PowerIcon, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
-import { useMotion } from '../services/motion';
+import { useIsMoving } from '../services/motion';
 import { useGpsFix } from '../services/gps';
+import { blockedWhileDriving, closeOnMotion, subscribeDriveBlocked } from '../services/driveLock';
 import LogoTile, { callsignFrom, useStationLogo, useStationDisplay, useDarkLogo } from './carfm/LogoTile';
 import LogoSearchOverlay, { type LogoSearchTarget } from './carfm/LogoSearchOverlay';
 import NearbyPicker from './carfm/NearbyPicker';
@@ -137,28 +138,71 @@ function waveStrength(db: number | null): number {
  * amber, slow-pulsing ~2.6s. Driven by the unified GPS engine (services/gps +
  * services/motion).
  */
-function DrivingStatusIcons({ pal }: { pal: CarFmPalette }) {
-  const { hasFix } = useGpsFix();
-  const { isMoving } = useMotion();
+/**
+ * The vehicle-in-motion car (§4.6), and the drive-lock refusal it doubles as.
+ *
+ * Blocking an action silently reads as the app being broken, so every refusal
+ * (services/driveLock) makes this glyph SWELL to ~2.6x for about half a second
+ * and settle back — the same tell wherever the block came from.
+ *
+ * `persistent` is the wide/landscape track, where §4.6 has the car up for as
+ * long as the car is moving. The tall track has no driving icons at all in the
+ * design, so there the car is drawn ONLY for the length of a flash: the refusal
+ * still lands without adding permanent chrome §4.6 doesn't specify. Callers
+ * place the non-persistent one absolutely, so appearing shifts no layout.
+ */
+function MotionCarGlyph({ pal, persistent }: { pal: CarFmPalette; persistent?: boolean }) {
+  const moving = useIsMoving();
+  const [flashing, setFlashing] = useState(false);
   const pulse = useRef(new Animated.Value(0)).current;
+  const block = useRef(new Animated.Value(0)).current;
+
   useEffect(() => {
-    if (!isMoving) return;
+    if (!moving) return;
     const loop = Animated.loop(Animated.sequence([
       Animated.timing(pulse, { toValue: 1, duration: 1300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
       Animated.timing(pulse, { toValue: 0, duration: 1300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
     ]));
     loop.start();
     return () => { loop.stop(); pulse.setValue(0); };
-  }, [isMoving, pulse]);
+  }, [moving, pulse]);
+
+  useEffect(() => subscribeDriveBlocked(() => {
+    // Re-trigger cleanly if the driver jabs at a locked control repeatedly:
+    // stop whatever is running and replay from the top rather than stacking.
+    block.stopAnimation();
+    block.setValue(0);
+    setFlashing(true);
+    Animated.sequence([
+      Animated.timing(block, { toValue: 1, duration: 150, easing: Easing.out(Easing.back(1.5)), useNativeDriver: true }),
+      Animated.delay(240),
+      Animated.timing(block, { toValue: 0, duration: 230, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+    ]).start(({ finished }) => { if (finished) setFlashing(false); });
+  }), [block]);
+
+  if (!flashing && !(persistent && moving)) return null;
+
   const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 0.4] });
-  const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.07] });
+  // The idle breathe and the refusal swell multiply, so a block mid-pulse reads
+  // as one movement instead of the two fighting over `scale`.
+  const scale = Animated.multiply(
+    pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.07] }),
+    block.interpolate({ inputRange: [0, 1], outputRange: [1, 2.6] }),
+  );
+  return (
+    <Animated.View
+      style={{ opacity, transform: [{ scale }], zIndex: 5 }}
+      accessibilityLabel={flashing ? 'Not available while driving' : 'Vehicle in motion'}>
+      <MotionCar size={34} color={pal.amber} />
+    </Animated.View>
+  );
+}
+
+function DrivingStatusIcons({ pal }: { pal: CarFmPalette }) {
+  const { hasFix } = useGpsFix();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-      {isMoving ? (
-        <Animated.View style={{ opacity, transform: [{ scale }] }} accessibilityLabel="Vehicle in motion">
-          <MotionCar size={34} color={pal.amber} />
-        </Animated.View>
-      ) : null}
+      <MotionCarGlyph pal={pal} persistent />
       {/* §4.6: no fix → full text color at 32% + the same faint 1px light emboss. */}
       <View
         style={[
@@ -540,6 +584,13 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const [numpadOpen, setNumpadOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [reordering, setReordering] = useState(false);
+  // Drive lock: if the car pulls away mid-edit, close reorder mode itself. The
+  // subscription only exists while the mode is open, so the face doesn't
+  // re-render on motion the rest of the time (the car glyph self-subscribes).
+  useEffect(() => {
+    if (!reordering) return;
+    return closeOnMotion(() => setReordering(false));
+  }, [reordering]);
   const [logoSearch, setLogoSearch] = useState<LogoSearchTarget | null>(null);
   const [scan, setScan] = useState<{ dir: 1 | -1; display: number } | null>(null);
   const scanTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1025,8 +1076,16 @@ export default function CarFmFace(props: CarFmFaceProps) {
             while reordering, since the presets band no longer hosts it here. */}
         <View style={[styles.headerRight, tall && styles.zoneRight]}>
           <View style={styles.headerTopRow}>
-            {/* Driving-status icons (§4.6): GPS lock + motion, wide/landscape only. */}
-            {!tall ? <DrivingStatusIcons pal={pal} /> : null}
+            {/* Driving-status icons (§4.6): GPS lock + motion, wide/landscape only.
+                The tall track gets no persistent driving icons (§4.6 doesn't give
+                it any), but a drive-lock refusal still has to be visible — so the
+                car appears there for the flash alone, absolutely placed left of
+                the gear so its arrival shifts nothing. */}
+            {!tall ? <DrivingStatusIcons pal={pal} /> : (
+              <View pointerEvents="none" style={styles.tallDriveFlash}>
+                <MotionCarGlyph pal={pal} />
+              </View>
+            )}
             <Pressable
               onPress={() => setSettingsOpen(true)}
               hitSlop={2}
@@ -1330,7 +1389,8 @@ export default function CarFmFace(props: CarFmFaceProps) {
         landscape={landscape}
         k={k}
         onSelect={(p) => { commitTo(p.frequencyMhz, p.name); onTuneHz(Math.round(p.frequencyMhz * 1e6)); }}
-        onEnterReorder={() => setReordering(true)}
+        // Drive lock: rearranging presets is a two-handed, eyes-down task.
+        onEnterReorder={() => { if (blockedWhileDriving()) return; setReordering(true); }}
         onExitReorder={() => setReordering(false)}
         onReorder={onReorderPreset}
         onRemove={onRemovePreset}
@@ -1415,6 +1475,11 @@ const styles = StyleSheet.create({
   headerLeft: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, flexShrink: 1 },
   headerRight: { alignItems: 'center', gap: 12, flexShrink: 0 },
   headerTopRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  // Tall track only: the drive-lock car flash, parked just left of the gear and
+  // out of flow so it can appear and swell without moving anything.
+  // right = gearBtn width (44) + the row's 6 gap + a little air, so the car sits
+  // where the wide track draws it rather than under the gear.
+  tallDriveFlash: { position: 'absolute', right: 56, top: 0, bottom: 0, justifyContent: 'center' },
   // Tall-track status zones (§4.1 v1.5.0): flexed sides center the wrap-content
   // middle column; the signal side and controls side each take weight 1.
   zoneSide: { flex: 1, minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 10 },
