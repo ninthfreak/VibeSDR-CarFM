@@ -69,12 +69,12 @@ export async function getNearbyStations(opts: NearbyOptions = {}): Promise<Nearb
 
   const rows = await dbNearby(location.lat, location.lon, radiusKm, opts.limit ?? 100);
 
-  const stations: NearbyStation[] = await Promise.all(rows.map(async (r) => ({
-    ...r,
-    logoUri: await displayUri(r.callsignBase, 96),   // nearby rows are small tiles
-    genre: r.genre,
-    homepage: r.homepage,
-  })));
+  const stations: NearbyStation[] = await Promise.all(rows.map(async (r) => {
+    // `r.hasLogo` is the DB's (l.img IS NOT NULL), which is always false now that
+    // images are files — derive it from the store instead.
+    const logoUri = await displayUri(r.callsignBase, 96);   // nearby rows are small tiles
+    return { ...r, hasLogo: !!logoUri, logoUri, genre: r.genre, homepage: r.homepage };
+  }));
 
   if (opts.enrich !== false) void lazyResolve(rows.filter((r) => r.service === 'FM'));
   return { location, radiusKm, stations, snapshotDate: snap };
@@ -380,7 +380,9 @@ export async function sweepWantedLogos(cap = 100): Promise<void> {
 /** Prefetch logos for stations around a location (throttled inside resolveLogo). */
 async function regionalPrefetch(lat: number, lon: number, radiusKm = 100, cap = 60): Promise<void> {
   const rows = await dbNearby(lat, lon, radiusKm, 200);
-  const fm = rows.filter((r) => r.service === 'FM' && !r.hasLogo);
+  // Don't pre-filter on r.hasLogo: that DB flag is always false now (images are
+  // files). basesWithoutLogo is the real check.
+  const fm = rows.filter((r) => r.service === 'FM');
   const missing = new Set(await basesWithoutLogo(fm.map((r) => r.callsignBase)));
   fm.filter((r) => missing.has(r.callsignBase)).slice(0, cap)
     .forEach((r) => { void resolveLogo(toLogoStation(r)); });

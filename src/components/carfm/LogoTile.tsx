@@ -1,5 +1,6 @@
 /**
- * Station brand logo. A real image from the stations DB when we have one — rendered
+ * Station brand logo. A real image from the logo store (files, logoStore.ts) when
+ * we have one — rendered
  * FIT (`object-fit: contain`): never cropped, never overflowing, centered in a
  * fixed-geometry plate — else a colored monogram cube. Real logos are assigned only
  * via the preset logo-search window (LogoSearchOverlay); on save it calls
@@ -13,7 +14,7 @@ import { Image, Text, View } from 'react-native';
 
 import { getStationLogo, callsignForFreq } from '../../services/stationFinder';
 import { getStationPrefs } from '../../services/stationDb';
-import { darkUri } from '../../services/logoStore';
+import { darkUri, subscribeLogoStore } from '../../services/logoStore';
 import { regenerateDarkLogo } from '../../services/logoDark/regenerate';
 import { callsignBase } from '../../services/piCallsign';
 import { brandColor, cleanCall, monogram, FONT_BOLD, DARK, LOGO_DARK_BG, type CarFmPalette } from './tokens';
@@ -23,6 +24,10 @@ const darkCache = new Map<string, { uri: string; treatment: string } | null>();
 const regenTried = new Set<string>();   // one lazy regen attempt per (base|bg) per session
 const listeners = new Set<() => void>();
 const dispListeners = new Set<() => void>();
+
+// The store fires when logos land or are wiped outside the assign flow — chiefly
+// the one-time DB→filesystem migration, which finishes AFTER the first render.
+subscribeLogoStore(() => invalidateLogoTile());
 
 /** Extract a plausible callsign base ("WJJO-FM" / "94.1 WJJO" → "WJJO"). */
 export function callsignFrom(name?: string): string | null {
@@ -38,7 +43,7 @@ export function invalidateLogoTile(base?: string): void {
     const b = base.toUpperCase();
     // keys are `${base}|${boxDp}` — drop every size variant for this station
     for (const k of Array.from(cache.keys())) if (k === b || k.startsWith(`${b}|`)) cache.delete(k);
-    darkCache.delete(b);
+    for (const k of Array.from(darkCache.keys())) if (k === b || k.startsWith(`${b}|`)) darkCache.delete(k);
   } else { cache.clear(); darkCache.clear(); }
   listeners.forEach((l) => l());
 }
@@ -94,8 +99,10 @@ export function useStationLogo(name?: string, freqMhz?: number, boxDp?: number):
  *  so this needs no bg. Re-reads when invalidateLogoTile() fires. The returned
  *  `uri` is a transparent-background PNG (remap/halo/as-is) or the keyed logo for
  *  `PLATE`; `treatment` is the enum so the caller knows whether to add a plate. */
-export function useDarkLogo(base: string | null, active: boolean): { uri: string | null; treatment: string | null } {
-  const key = base && active ? base.toUpperCase() : null;
+export function useDarkLogo(base: string | null, active: boolean, boxDp?: number): { uri: string | null; treatment: string | null } {
+  // Key by size too, so a chip and the hero can hold different pre-rendered
+  // dark files for the same station (the ladder is useless otherwise).
+  const key = base && active ? `${base.toUpperCase()}|${boxDp ?? 0}` : null;
   const [v, setV] = useState<{ uri: string; treatment: string } | null>(key ? darkCache.get(key) ?? null : null);
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -107,7 +114,7 @@ export function useDarkLogo(base: string | null, active: boolean): { uri: string
     let cancelled = false;
     if (!base || !active || !key) { setV(null); return; }
     if (darkCache.has(key)) { setV(darkCache.get(key)!); return; }
-    darkUri(base)
+    darkUri(base, boxDp)
       .then((d) => {
         const val = d ? { uri: d.uri, treatment: d.treatment } : null;
         darkCache.set(key, val);
@@ -115,15 +122,15 @@ export function useDarkLogo(base: string | null, active: boolean): { uri: string
         // No variant yet for a station that HAS a logo (active only when a logo
         // exists) → adapt once in the background (gate bg = the canonical dark
         // surface), then re-read. Guarded so a decode failure doesn't loop.
-        if (!d && !regenTried.has(key)) {
-          regenTried.add(key);
-          regenerateDarkLogo(base, LOGO_DARK_BG).then(() => { darkCache.delete(key); invalidateLogoTile(base); }).catch(() => {});
+        if (!d && !regenTried.has(base)) {
+          regenTried.add(base);
+          regenerateDarkLogo(base, LOGO_DARK_BG).then(() => invalidateLogoTile(base)).catch(() => {});
         }
       })
       .catch(() => {});
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base, active, tick]);
+  }, [base, active, tick, boxDp]);
   return { uri: v?.uri ?? null, treatment: v?.treatment ?? null };
 }
 
@@ -244,9 +251,10 @@ export function PresetPlate({ name, freqMhz, w, h, radius, pal, freqSize, suppre
   fill?: boolean;          // preset chips: flex-grow box + text row (LOGO-SIZING §3)
 }) {
   // Chips/peeks are small: ask for the pre-rendered small file, not the master.
-  const { base, uri } = useStationLogo(name, freqMhz, fill ? 128 : Math.max(w ?? 0, h ?? 0) || 192);
+  const boxDp = fill ? 128 : Math.max(w ?? 0, h ?? 0) || 192;
+  const { base, uri } = useStationLogo(name, freqMhz, boxDp);
   const dark = pal === DARK;
-  const darkVariant = useDarkLogo(base, dark && !!uri);
+  const darkVariant = useDarkLogo(base, dark && !!uri, boxDp);
   // Measured size of the flex box — only needed to scale the no-logo call letters.
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
   const label = base ? cleanCall(base) : (cleanCall(name).slice(0, 4) || name?.trim().slice(0, 4).toUpperCase() || '·');

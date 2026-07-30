@@ -24,7 +24,7 @@ import { flattenCheckerboard } from './logoDark/stages';
 import type { Raster } from './logoDark/oklab';
 import {
   readOriginalDataUri, putDerivedPng, setMeta, getMeta, hasOriginal,
-  SIZE_LADDER,
+  clearDerived, darkUri, SIZE_LADDER,
 } from './logoStore';
 
 /** Trim ratio below which the crop isn't worth a separate file. */
@@ -134,18 +134,29 @@ export function resampleRaster(img: Raster, maxEdge: number): Raster {
   return { w, h, rgba: out };
 }
 
-/** Write the size ladder for one raster under the given file prefix. */
+/**
+ * Write the size ladder for one raster under the given file prefix.
+ *
+ * PROGRESSIVE: each step downscales the PREVIOUS (already smaller) output rather
+ * than re-scanning the full master, so building 512/256/128 costs roughly one
+ * master pass instead of three — this is pure-JS pixel work on the head unit's
+ * JS thread, and it also gives a better result than one big jump.
+ * Yields to the event loop between sizes so a multi-logo migration can't freeze
+ * the UI for seconds at a stretch.
+ */
 async function writeLadder(base: string, raster: Raster, prefix: 'd' | 'k'): Promise<number[]> {
   const written: number[] = [];
-  for (const size of SIZE_LADDER) {
-    if (Math.max(raster.w, raster.h) <= size) continue;    // master already smaller
-    const small = resampleRaster(raster, size);
-    const b64 = encodeRasterPng(small);
+  let cur = raster;
+  for (const size of [...SIZE_LADDER].sort((a, b) => b - a)) {   // largest first
+    if (Math.max(cur.w, cur.h) <= size) continue;                // already smaller
+    cur = resampleRaster(cur, size);
+    const b64 = encodeRasterPng(cur);
     if (!b64) continue;
     await putDerivedPng(base, `${prefix}-${size}.png`, b64);
     written.push(size);
+    await new Promise((r) => setTimeout(r, 0));                  // let the UI breathe
   }
-  return written;
+  return written.sort((a, b) => a - b);
 }
 
 /**
@@ -190,7 +201,6 @@ export async function prepareDarkLadder(base: string): Promise<void> {
   try {
     const meta = await getMeta(base);
     if (!meta?.dark) return;
-    const { darkUri } = await import('./logoStore');
     const d = await darkUri(base);
     if (!d) return;
     const raster = decodeToRaster(await uriToDataUri(d.uri));
@@ -208,7 +218,6 @@ async function uriToDataUri(fileUri: string): Promise<string> {
 
 /** Drop and rebuild a station's renditions from the untouched master. */
 export async function regenerateLogoRenditions(base: string): Promise<boolean> {
-  const { clearDerived } = await import('./logoStore');
   await clearDerived(base);
   return prepareLogoRenditions(base);
 }

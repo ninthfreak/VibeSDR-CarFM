@@ -9,12 +9,13 @@
  * payload, decoded bitmaps reused across screens. The DB is out of the image
  * path entirely (its blob tables are migrated once, then emptied).
  *
- * MASTER RULE: `original.bin` is the bytes exactly as downloaded. It is written
- * once per assignment and NEVER altered. Everything else in the folder is
- * derived from a copy of it and can be deleted and rebuilt at any time:
+ * MASTER RULE: `original.<ext>` is the bytes exactly as downloaded (extension
+ * from its mime, so it stays a renderable last-resort source). It is written once
+ * per assignment and NEVER altered. Everything else in the folder is derived from
+ * a copy of it and can be deleted and rebuilt at any time:
  *
  *   <docs>/carfm-logos/<BASE>/
- *     original.bin        master — never altered
+ *     original.<ext>      master — never altered
  *     display.png         trimmed master (baked-in margin removed, §4.5)
  *     dark.png            dark-adapted master
  *     d-<N>.png           display size ladder (N = longest edge in px)
@@ -36,6 +37,8 @@ export const LOGO_ROOT = `${FileSystem.documentDirectory}carfm-logos/`;
 export const SIZE_LADDER = [128, 256, 512] as const;
 
 export interface LogoMeta {
+  /** Master's filename, e.g. "original.png" (older folders: "original.bin"). */
+  file?: string;
   mime: string;
   source: string;                 // 'manual' | 'ddg' | …
   fetchedAt: number;
@@ -53,6 +56,18 @@ const safe = (base: string) => base.toUpperCase().replace(/[^A-Z0-9_-]/g, '_');
 export const logoDir = (base: string) => `${LOGO_ROOT}${safe(base)}/`;
 const p = (base: string, file: string) => `${logoDir(base)}${file}`;
 
+// Meta is read on every logo lookup (18 preset tiles per frame pass), so cache
+// it in memory — the point of this store is fewer I/O round-trips per render.
+const metaCache = new Map<string, LogoMeta | null>();
+
+/** Subscribers re-read the store after it changes (migration, assign, clear). */
+const storeListeners = new Set<() => void>();
+export function subscribeLogoStore(l: () => void): () => void {
+  storeListeners.add(l);
+  return () => { storeListeners.delete(l); };
+}
+export function notifyLogosChanged(): void { storeListeners.forEach((l) => { try { l(); } catch { /* ignore */ } }); }
+
 async function exists(uri: string): Promise<boolean> {
   try { return (await FileSystem.getInfoAsync(uri)).exists; } catch { return false; }
 }
@@ -62,17 +77,25 @@ async function ensureDir(dir: string): Promise<void> {
 
 // ── meta ─────────────────────────────────────────────────────────────────────
 export async function getMeta(base: string): Promise<LogoMeta | null> {
-  try {
-    const s = await FileSystem.readAsStringAsync(p(base, 'meta.json'));
-    return JSON.parse(s) as LogoMeta;
-  } catch { return null; }
+  const k = safe(base);
+  if (metaCache.has(k)) return metaCache.get(k)!;
+  let meta: LogoMeta | null = null;
+  try { meta = JSON.parse(await FileSystem.readAsStringAsync(p(base, 'meta.json'))) as LogoMeta; }
+  catch { meta = null; }
+  metaCache.set(k, meta);
+  return meta;
 }
 
 export async function setMeta(base: string, patch: Partial<LogoMeta>): Promise<void> {
   const cur = (await getMeta(base)) ?? { mime: 'image/png', source: 'manual', fetchedAt: Date.now() };
-  const next = { ...cur, ...patch };
+  await writeMeta(base, { ...cur, ...patch });
+}
+
+/** Replace meta wholesale (no merge) — used when a new master lands. */
+async function writeMeta(base: string, meta: LogoMeta): Promise<void> {
   await ensureDir(logoDir(base));
-  try { await FileSystem.writeAsStringAsync(p(base, 'meta.json'), JSON.stringify(next)); } catch { /* best effort */ }
+  metaCache.set(safe(base), meta);
+  try { await FileSystem.writeAsStringAsync(p(base, 'meta.json'), JSON.stringify(meta)); } catch { /* best effort */ }
 }
 
 // ── master ───────────────────────────────────────────────────────────────────
@@ -85,21 +108,55 @@ export async function putOriginal(
   base: string, bytes: Uint8Array, mime: string, source = 'manual',
 ): Promise<void> {
   await clearDerived(base);
+  await removeMasters(base);
   await ensureDir(logoDir(base));
-  await FileSystem.writeAsStringAsync(p(base, 'original.bin'), bytesToBase64(bytes),
+  // Keep the master's real extension so it is still a renderable <Image> source
+  // if prep ever fails (a ".bin" makes the loader guess at the format).
+  const file = `original.${extFor(mime)}`;
+  await FileSystem.writeAsStringAsync(p(base, file), bytesToBase64(bytes),
     { encoding: FileSystem.EncodingType.Base64 });
-  await setMeta(base, { mime, source, fetchedAt: Date.now(), sizes: [], darkSizes: [], w: undefined, h: undefined, aspect: undefined });
+  // OVERWRITE meta, never merge: a replaced logo must not inherit the previous
+  // one's dark treatment (a stale chosen=true would force the OLD treatment onto
+  // the NEW image) or its recorded aspect/ladder.
+  await writeMeta(base, { file, mime, source, fetchedAt: Date.now(), sizes: [], darkSizes: [] });
+}
+
+const EXT: Record<string, string> = {
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg',
+  'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/bmp': 'bmp',
+};
+function extFor(mime: string): string { return EXT[mime.toLowerCase()] ?? 'png'; }
+
+/** Delete any existing master file(s) so a mime change can't leave two behind. */
+async function removeMasters(base: string): Promise<void> {
+  const dir = logoDir(base);
+  try {
+    const names = await FileSystem.readDirectoryAsync(dir);
+    await Promise.all(names.filter((n) => n.startsWith('original.'))
+      .map((n) => FileSystem.deleteAsync(dir + n, { idempotent: true }).catch(() => {})));
+  } catch { /* no folder yet */ }
+}
+
+/** Absolute path of the master, honouring the extension recorded in meta (older
+ *  folders wrote `original.bin`). */
+async function masterPath(base: string): Promise<string | null> {
+  const meta = await getMeta(base);
+  const cands = [meta?.file, 'original.png', 'original.jpg', 'original.webp', 'original.bin']
+    .filter((f): f is string => !!f);
+  for (const f of cands) if (await exists(p(base, f))) return p(base, f);
+  return null;
 }
 
 export async function hasOriginal(base: string): Promise<boolean> {
-  return exists(p(base, 'original.bin'));
+  return (await masterPath(base)) != null;
 }
 
 /** The master as base64 (no data-URI prefix) — the input for every derivation. */
 export async function readOriginalBase64(base: string): Promise<string | null> {
-  try {
-    return await FileSystem.readAsStringAsync(p(base, 'original.bin'), { encoding: FileSystem.EncodingType.Base64 });
-  } catch { return null; }
+  const path = await masterPath(base);
+  if (!path) return null;
+  try { return await FileSystem.readAsStringAsync(path, { encoding: FileSystem.EncodingType.Base64 }); }
+  catch { return null; }
 }
 
 /** The master as a data URI (only for pipelines that need encoded bytes). */
@@ -123,7 +180,7 @@ export async function clearDerived(base: string): Promise<void> {
   try {
     const names = await FileSystem.readDirectoryAsync(dir);
     await Promise.all(names
-      .filter((n) => n !== 'original.bin' && n !== 'meta.json')
+      .filter((n) => !n.startsWith('original.') && n !== 'meta.json')
       .map((n) => FileSystem.deleteAsync(dir + n, { idempotent: true }).catch(() => {})));
   } catch { /* no folder yet */ }
 }
@@ -145,23 +202,20 @@ function ladderFor(boxDp: number | undefined, available: number[] | undefined): 
  */
 export async function displayUri(base: string, boxDp?: number): Promise<string | null> {
   const meta = await getMeta(base);
-  const n = ladderFor(boxDp, meta?.sizes);
-  if (n != null) return `${p(base, `d-${n}.png`)}`;
-  if (await exists(p(base, 'display.png'))) return p(base, 'display.png');
-  return (await hasOriginal(base)) ? p(base, 'original.bin') : null;
+  if (!meta) return null;                       // no folder → no logo, no I/O
+  const n = ladderFor(boxDp, meta.sizes);
+  if (n != null) return p(base, `d-${n}.png`);  // prep wrote it; no need to stat
+  // `w` is only set once display.png has been written (prepareLogoRenditions).
+  if (meta.w != null) return p(base, 'display.png');
+  return masterPath(base);
 }
 
 /** The dark-adapted image as a `file://` URI, or null if none is cached. */
 export async function darkUri(base: string, boxDp?: number): Promise<{ uri: string; treatment: string } | null> {
   const meta = await getMeta(base);
-  if (!meta?.dark) return null;
+  if (!meta?.dark) return null;   // meta.dark is only set once dark.png is written
   const n = ladderFor(boxDp, meta.darkSizes);
-  const file = n != null ? `k-${n}.png` : 'dark.png';
-  if (!(await exists(p(base, file)))) {
-    if (!(await exists(p(base, 'dark.png')))) return null;
-    return { uri: p(base, 'dark.png'), treatment: meta.dark.treatment };
-  }
-  return { uri: p(base, file), treatment: meta.dark.treatment };
+  return { uri: p(base, n != null ? `k-${n}.png` : 'dark.png'), treatment: meta.dark.treatment };
 }
 
 export async function getDarkInfo(base: string): Promise<{ treatment: string; chosen: boolean } | null> {
@@ -195,6 +249,8 @@ export async function listBases(): Promise<string[]> {
 
 export async function removeLogo(base: string): Promise<void> {
   try { await FileSystem.deleteAsync(logoDir(base), { idempotent: true }); } catch { /* gone */ }
+  metaCache.delete(safe(base));
+  notifyLogosChanged();
 }
 
 /** Delete every stored logo. Returns how many stations were removed. */
@@ -202,6 +258,8 @@ export async function clearAllLogoFiles(): Promise<number> {
   const bases = await listBases();
   try { await FileSystem.deleteAsync(LOGO_ROOT, { idempotent: true }); } catch { /* gone */ }
   await ensureDir(LOGO_ROOT);
+  metaCache.clear();
+  notifyLogosChanged();
   return bases.length;
 }
 
@@ -233,17 +291,30 @@ export async function migrateLogosFromDb(): Promise<number> {
     const db = await import('./stationDb');
     const rows = await db.allStoredLogos();
     const prep = await import('./logoPrep');
+    let failed = 0;
     for (const r of rows) {
       if (!r.img?.length) continue;
       try {
         await putOriginal(r.base, r.img, r.mime || 'image/png', r.source || 'manual');
-        await prep.prepareLogoRenditions(r.base);
+        // Only drop the blob once its bytes are safely on disk — dropping the
+        // whole table regardless would destroy any logo that failed to migrate.
+        await db.dropLogoBlob(r.base);
         moved++;
-      } catch { /* skip a bad row */ }
+        // Renditions are rebuildable, so a prep failure must not fail the row.
+        await prep.prepareLogoRenditions(r.base);
+        await new Promise((res) => setTimeout(res, 0));   // don't hog the JS thread
+      } catch { failed++; }
     }
-    await db.dropAllLogoBlobs();     // the DB is out of the image business
-  } catch { /* DB unreadable — nothing to migrate */ }
-  try { await FileSystem.writeAsStringAsync(MIGRATED_MARK, String(Date.now())); } catch { /* retry next launch */ }
+    // Marker only on a clean pass: a transient write error then retries next
+    // launch instead of orphaning those logos forever.
+    if (failed === 0) {
+      await db.dropAllLogoBlobs();   // sweeps recorded misses / stale dark rows
+      try { await FileSystem.writeAsStringAsync(MIGRATED_MARK, String(Date.now())); } catch { /* retry */ }
+    }
+  } catch { /* DB unreadable — retry next launch */ }
+  // The first render happens before this finishes, so nothing would show the
+  // migrated logos until some other event invalidated the tiles.
+  if (moved > 0) notifyLogosChanged();
   return moved;
 }
 

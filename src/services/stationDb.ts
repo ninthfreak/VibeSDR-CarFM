@@ -14,8 +14,10 @@
  * per-station hero display prefs.
  *
  * When the bundled data is refreshed (DB_ASSET_VERSION bump) the copy is replaced
- * with the new asset, so runtime-acquired logos + the wanted queue are MIGRATED
- * forward first (bundled logos, if any, take precedence; runtime ones fill gaps).
+ * with the new asset and the wanted queue is carried forward. Logo images are no
+ * longer affected by a bump at all — they live outside the DB, so they simply
+ * survive it (the blob carry-forward below is vestigial, kept for a device that
+ * hasn't run the filesystem migration yet).
  *
  * Everything degrades to "empty" if the DB is unbuilt (placeholder ships 0 rows),
  * so the feature never crashes.
@@ -26,7 +28,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as SQLite from 'expo-sqlite';
 
 import { boundingBox, haversineKm, receivabilityScore } from './stationGeo';
-import { bytesToBase64, base64ToBytes } from './base64';
+
 import type { StationRow } from './stationTypes';
 
 const DB_NAME = 'stations.sqlite';
@@ -182,6 +184,8 @@ export async function nearbyStations(
   let raw: RawRow[];
   try {
     raw = await d.getAllAsync<RawRow>(
+      // has_logo is LEGACY and always 0 now (images are files): the join is kept
+      // for genre/homepage. stationFinder overrides hasLogo from the logo store.
       `SELECT s.*, (l.img IS NOT NULL) AS has_logo, l.genre AS genre, l.homepage AS homepage
          FROM stations s LEFT JOIN logos l ON l.callsign_base = s.callsign_base
         WHERE s.lat BETWEEN ? AND ? AND s.lon BETWEEN ? AND ?`,
@@ -226,19 +230,6 @@ export async function snapshotDate(): Promise<string | null> {
       `SELECT value FROM meta WHERE key = 'lms_snapshot_date'`);
     const v = row?.value ?? null;
     return v && v !== 'unbuilt' ? v : null;
-  } catch { return null; }
-}
-
-// ── logos (same db) ──────────────────────────────────────────────────────────
-/** Logo as a data URI for RN <Image>, or null if none stored. */
-export async function getLogoDataUri(base: string): Promise<string | null> {
-  const d = await db();
-  if (!d || !base) return null;
-  try {
-    const row = await d.getFirstAsync<{ img: Uint8Array | null; mime: string | null }>(
-      `SELECT img, mime FROM logos WHERE callsign_base = ?`, [base.toUpperCase()]);
-    if (!row?.img) return null;
-    return `data:${row.mime || 'image/png'};base64,${bytesToBase64(row.img)}`;
   } catch { return null; }
 }
 
@@ -291,6 +282,18 @@ export async function allStoredLogos(): Promise<
   } catch { return []; }
 }
 
+/** Drop ONE station's image blob, once its bytes are safely on the filesystem. */
+export async function dropLogoBlob(base: string): Promise<void> {
+  const d = await db();
+  if (!d) return;
+  const key = base.toUpperCase();
+  try {
+    await d.runAsync('UPDATE logos SET img = NULL, mime = NULL WHERE callsign_base = ?', [key]);
+    await d.runAsync('DELETE FROM dark_logos WHERE callsign_base = ?', [key]);
+    await d.runAsync('DELETE FROM logo_renditions WHERE callsign_base = ?', [key]);
+  } catch (e) { console.warn('[stationDb] dropLogoBlob failed', e); }
+}
+
 /** Empty every image table so no stale second copy survives on disk. */
 export async function dropAllLogoBlobs(): Promise<void> {
   const d = await db();
@@ -336,17 +339,6 @@ export async function setStationPrefs(base: string, showCall: boolean, showFreq:
   } catch (e) { console.warn('[stationDb] setStationPrefs failed', e); }
 }
 
-/** The source that last set a station's stored logo, or null. */
-export async function logoSourceOf(base: string): Promise<string | null> {
-  const d = await db();
-  if (!d || !base) return null;
-  try {
-    const r = await d.getFirstAsync<{ source: string | null }>(
-      `SELECT source FROM logos WHERE callsign_base = ?`, [base.toUpperCase()]);
-    return r?.source ?? null;
-  } catch { return null; }
-}
-
 /**
  * When a station's logo was last fetched — for hits AND recorded misses — so the
  * network layer can honour a TTL and not re-hit. null = never attempted.
@@ -359,17 +351,6 @@ export async function logoFetchedAt(base: string): Promise<number | null> {
       `SELECT fetched_at FROM logos WHERE callsign_base = ?`, [base.toUpperCase()]);
     return r ? (r.fetched_at ?? 0) : null;
   } catch { return null; }
-}
-
-/** True if a real logo (non-null blob) is stored for this station. */
-export async function hasLogo(base: string): Promise<boolean> {
-  const d = await db();
-  if (!d || !base) return false;
-  try {
-    const r = await d.getFirstAsync<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM logos WHERE callsign_base = ? AND img IS NOT NULL`, [base.toUpperCase()]);
-    return (r?.n ?? 0) > 0;
-  } catch { return false; }
 }
 
 /** Mark a station's logo as wanted (seen offline / fetch failed). */
@@ -395,18 +376,4 @@ export async function wantedBases(limit = 200): Promise<string[]> {
       `SELECT callsign_base FROM logo_wanted ORDER BY marked_at ASC LIMIT ?`, [limit]);
     return rows.map((r) => r.callsign_base);
   } catch { return []; }
-}
-
-/** Of the given bases, which have no stored logo yet (need fetching). */
-export async function basesMissingLogo(bases: string[]): Promise<string[]> {
-  const d = await db();
-  if (!d || bases.length === 0) return [];
-  const up = bases.map((b) => b.toUpperCase());
-  try {
-    const placeholders = up.map(() => '?').join(',');
-    const have = await d.getAllAsync<{ callsign_base: string }>(
-      `SELECT callsign_base FROM logos WHERE img IS NOT NULL AND callsign_base IN (${placeholders})`, up);
-    const haveSet = new Set(have.map((r) => r.callsign_base));
-    return up.filter((b) => !haveSet.has(b));
-  } catch { return up; }
 }
