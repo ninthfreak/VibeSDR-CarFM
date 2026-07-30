@@ -68,3 +68,12 @@ android/app/src/main/cpp/vibedsp/test/build/
 # vibedsp host harness binary + cmake build dir
 android/app/src/main/cpp/vibedsp/test/fm_probe
 android/app/src/main/cpp/vibedsp/test/build/
+
+# ── Slimming (2026-07-31) ───────────────────────────────────────────────────
+# Raw FCC LMS bulk data: ~176 MB of build INPUT for tools/build_station_db,
+# referenced by nothing at runtime and re-fetchable with
+#   python3 tools/build_station_db/build_station_db.py fetch
+# The shipped artifact is assets/db/stations.sqlite, which IS tracked.
+assets/fcc_source/
+# Expo iOS export leftovers — this fork is Android-only.
+dist-ios-tmp/
