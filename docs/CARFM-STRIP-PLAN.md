@@ -10,7 +10,10 @@ demands risky surgery. Work top-down (🟢 first). Scope decisions already made:
   pod, app.json ios block, `Platform.OS==='ios'` branches, BrowserOverlay, Apple
   Watch (watchProvider/watchBoot + all call sites), Siri + CarPlay (Android Auto
   kept).
-- ⬜ **Items 10–19 remaining** (below).
+- ✅ **Items 10–19 DONE** (2026-07-30): the advanced-SDR UI (24 components), the
+  map/ADS-B overlays, the three unreachable screens, the decoder stack in JS +
+  native + web client, and the `carFm` true/false dichotomy — `carFm` was always
+  true, so the whole `!fmFaceActive` tree was dead. SDRScreen 4,898 → 2,747 lines.
 - ⬜ **Other open items** from earlier in the project — see the last section so
   they aren't lost.
 
@@ -113,24 +116,33 @@ Threads raised across the project that are NOT part of the strip list.
   Android package rename showed the JNI symbols must move atomically or the app
   crashes (UnsatisfiedLinkError), and the `vibeserver`/`vibesdr.local` markers are
   load-bearing for server detection. Do as a deliberate, tsc+build-gated pass.
-- ⬜ **EAS `projectId` + `owner: stuey3d`** in `app.json` — still the original
-  author's Expo account; run your own `eas init` before building.
-- ⬜ **Internal docs still say "VibeSDR"** — `docs/STORE-SUBMISSION.md`, the
-  `BRIEF-*.md` set, `files/*.md`. Not shipped, but inconsistent.
-- ⬜ **Native VibeServer web-page title** — `android/app/src/main/cpp/vibe_web_page.h`
-  still `<title>VibeSDR</title>` (native; out of the scope you set earlier).
+- ✅ **DONE — EAS `projectId` + `owner: stuey3d`** removed from `app.json`. They
+  pointed at the original author's Expo account. Local gradle builds don't care;
+  run your own `eas init` if you ever want cloud builds.
+- ⬜ **Internal docs still say "VibeSDR"** — the remaining root `BRIEF-*.md`
+  (SpyServer ×2, FM-DX adapter, the two URI-scheme briefs) and
+  `BUGFIX-vibeserver-squelch-indication.md`. These describe subsystems that are
+  still here, so they're kept; only the naming is inconsistent. The store notes,
+  `files/*.md` and the three feature briefs for things CarFM doesn't do were
+  deleted 2026-07-30.
+- ✅ **DONE — served web-page branding.** `web/client/index.html` title, the
+  MediaSession album and the recording filename prefix now say CarFM;
+  `vibe_web_page.h` is regenerated from them by `scripts/build-web.mjs`.
 - ⬜ **`APPSTORE-EXCEPTION.md`** — Stuart's GPLv3 §7 store-distribution exception;
   moot for an Android-only fork. Decide keep vs remove.
 - ⬜ **README positioning** — currently "a fork of VibeSDR, a mobile SDR receiver"
   (what the code is). If CarFM is really the *car FM radio* product, give the
   positioning and it gets refocused.
 
-## C. About screen — authored content (needs your voice, I won't fabricate)
-- ⬜ **`AboutOverlay.tsx` personal message** is still **Stuart's** first-person
-  origin story (PSKR badge, M9PSY, "Pocket UberSDR"). Offered to *neutralize* it
-  to a factual fork note rather than rewrite it in your voice — pending your call.
-- ⬜ **Changelog / version history** in AboutOverlay is VibeSDR's release history
-  (App Store, TestFlight, "new in vN") — inherited, not CarFM's. Decide keep/trim.
+## C. About screen — REPLACED, not just edited
+`AboutOverlay.tsx` was deleted with the SDR chrome on 2026-07-30: it was only ever
+reachable from the SDR menu, which CarFM never shows. That disposed of the
+inherited content (Stuart's first-person origin story, VibeSDR's App Store /
+TestFlight changelog) without anyone having to rewrite it.
+- ⬜ **Credits + GPL-3.0 notice have nowhere to live.** The settings panel shows
+  `CarFM · v0.9.2 · FCC station data as of …` — a version line, not a licence
+  notice or an upstream attribution. For a GPL fork that's worth an About row in
+  the CarFM settings sheet. Needs your call on wording.
 
 ## D. Logos — future polish (feature works; these are refinements)
 - ⬜ **Logo sizing / fit** — better optimize how fetched logos are sized and laid
