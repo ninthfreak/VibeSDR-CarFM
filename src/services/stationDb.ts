@@ -40,7 +40,10 @@ const LOGO_DDL = `
   CREATE TABLE IF NOT EXISTS station_prefs (
     callsign_base TEXT PRIMARY KEY, show_call INTEGER, show_freq INTEGER);
   CREATE TABLE IF NOT EXISTS dark_logos (
-    callsign_base TEXT PRIMARY KEY, treatment TEXT, chosen INTEGER, img BLOB, updated_at INTEGER);`;
+    callsign_base TEXT PRIMARY KEY, treatment TEXT, chosen INTEGER, img BLOB, updated_at INTEGER);
+  CREATE TABLE IF NOT EXISTS logo_renditions (
+    callsign_base TEXT, kind TEXT, img BLOB, mime TEXT, w INTEGER, h INTEGER, updated_at INTEGER,
+    PRIMARY KEY (callsign_base, kind));`;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase | null> | null = null;
 
@@ -263,6 +266,78 @@ export async function saveLogo(
 /** Assign a logo by hand (sticky — auto sources won't overwrite it). */
 export async function setManualLogo(base: string, img: Uint8Array, mime: string): Promise<void> {
   await saveLogo(base, img, mime, null, null, 'manual');
+  // A NEW original invalidates every rendition derived from the old one.
+  await clearLogoRenditions(base);
+}
+
+// ── derived renditions (never overwrite the original) ────────────────────────
+// `logos.img` is the ORIGINAL AS SUPPLIED and is written exactly once per
+// assignment — nothing in the app mutates it afterwards. Every alternative
+// version (the trimmed display rendition, and any future per-size rendition) is
+// pre-rendered at assign time from a COPY of that original and stored HERE,
+// keyed (station, kind). Dark-mode variants live in `dark_logos` on the same
+// principle. All of it is derived: safe to drop and regenerate from the original.
+
+/** Store one derived rendition. Never touches `logos`. */
+export async function saveLogoRendition(
+  base: string, kind: string, img: Uint8Array, mime: string, w: number, h: number,
+): Promise<void> {
+  const d = await db();
+  if (!d || !base) return;
+  try {
+    await d.runAsync(
+      `INSERT INTO logo_renditions(callsign_base,kind,img,mime,w,h,updated_at) VALUES (?,?,?,?,?,?,?)
+       ON CONFLICT(callsign_base,kind) DO UPDATE SET
+         img=excluded.img, mime=excluded.mime, w=excluded.w, h=excluded.h, updated_at=excluded.updated_at`,
+      [base.toUpperCase(), kind, img, mime, w, h, Date.now()]);
+  } catch (e) { console.warn('[stationDb] saveLogoRendition failed', e); }
+}
+
+/** A derived rendition as a data URI (plus its pixel size), or null. */
+export async function getLogoRendition(
+  base: string, kind: string,
+): Promise<{ dataUri: string; w: number; h: number } | null> {
+  const d = await db();
+  if (!d || !base) return null;
+  try {
+    const r = await d.getFirstAsync<{ img: Uint8Array | null; mime: string | null; w: number | null; h: number | null }>(
+      `SELECT img, mime, w, h FROM logo_renditions WHERE callsign_base = ? AND kind = ?`,
+      [base.toUpperCase(), kind]);
+    if (!r?.img) return null;
+    return { dataUri: `data:${r.mime || 'image/png'};base64,${bytesToBase64(r.img)}`, w: r.w ?? 0, h: r.h ?? 0 };
+  } catch { return null; }
+}
+
+/** Drop a station's derived renditions (the original is left untouched). */
+export async function clearLogoRenditions(base: string): Promise<void> {
+  const d = await db();
+  if (!d || !base) return;
+  try { await d.runAsync('DELETE FROM logo_renditions WHERE callsign_base = ?', [base.toUpperCase()]); }
+  catch { /* derived data — ignore */ }
+}
+
+/** The image to DISPLAY for a station: the trimmed rendition when one has been
+ *  pre-rendered, else the untouched original. */
+export async function getDisplayLogoDataUri(base: string): Promise<string | null> {
+  return (await getLogoRendition(base, 'display'))?.dataUri ?? (await getLogoDataUri(base));
+}
+
+/** Wipe every stored logo — originals, derived renditions, dark variants, the
+ *  wanted queue, and the per-station hero display choices (those default off a
+ *  logo's existence, so they must not outlive it). Returns how many stations had
+ *  a logo. Station reference data is untouched. */
+export async function clearAllLogos(): Promise<number> {
+  const d = await db();
+  if (!d) return 0;
+  let n = 0;
+  try {
+    n = (await d.getFirstAsync<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM logos WHERE img IS NOT NULL'))?.n ?? 0;
+    await d.execAsync(
+      'DELETE FROM logos; DELETE FROM logo_renditions; DELETE FROM dark_logos;'
+      + ' DELETE FROM logo_wanted; DELETE FROM station_prefs;');
+  } catch (e) { console.warn('[stationDb] clearAllLogos failed', e); }
+  return n;
 }
 
 // ── dark-mode logo variants (derived cache, keyed by station) ─────────────────

@@ -15,10 +15,11 @@ import { getUserLocation } from './instancesApi';
 import { haversineKm } from './stationGeo';
 import {
   nearbyStations as dbNearby, stationsForCallsignBase, snapshotDate,
-  getLogoDataUri, markWanted, wantedBases, basesMissingLogo,
+  getLogoDataUri, getDisplayLogoDataUri, markWanted, wantedBases, basesMissingLogo,
   setManualLogo, logoSourceOf,
   type NearbyDbResult,
 } from './stationDb';
+import { prepareLogoRenditions } from './logoPrep';
 import { resolveLogo, fetchImage, fetchImageResult, base64ToBytes, type LogoStation } from './logoResolver';
 import { stationLogoQuery } from './logoDuckDuckGo';
 import { piToCallsign, callsignBase } from './piCallsign';
@@ -116,6 +117,16 @@ export async function noteEncountered(st: LogoStation): Promise<void> {
 
 /** On-demand logo (data: URI) for one station (e.g. a row scrolled into view). */
 export async function getStationLogo(base: string): Promise<string | null> {
+  // The DISPLAY image: the pre-rendered trimmed rendition when one exists, else
+  // the untouched original (§4.5 prep-on-assign; see logoPrep.ts). The original
+  // itself is never modified — renditions live in their own table.
+  return getDisplayLogoDataUri(base);
+}
+
+/** The ORIGINAL as supplied, untouched — the input every derived rendition is
+ *  computed from (dark-mode adaptation, future size variants). Never chain a
+ *  derivation off the display copy. */
+export async function getStationLogoOriginal(base: string): Promise<string | null> {
   return getLogoDataUri(base);
 }
 
@@ -251,7 +262,11 @@ export async function setStationLogoFromUrls(
   let lastErr = 'the image couldn’t be downloaded';
   for (const url of cands) {
     const r = await fetchImageResult(url);
-    if ('bytes' in r) { await setManualLogo(base, r.bytes, r.mime); return { ok: true }; }
+    if ('bytes' in r) {
+      await setManualLogo(base, r.bytes, r.mime);          // stores the ORIGINAL, untouched
+      await prepareLogoRenditions(base);                   // derives the trimmed display copy
+      return { ok: true };
+    }
     lastErr = r.error;
   }
   return { ok: false, error: lastErr };
@@ -264,7 +279,8 @@ export async function setStationLogoFromUrls(
 export async function setStationLogoFromUrl(base: string, url: string): Promise<boolean> {
   const img = await fetchImage(url);
   if (!img) return false;
-  await setManualLogo(base, img.bytes, img.mime);
+  await setManualLogo(base, img.bytes, img.mime);   // ORIGINAL, untouched
+  await prepareLogoRenditions(base);                // derived trimmed display copy
   return true;
 }
 
@@ -338,6 +354,7 @@ export async function consumeSharedLogo(): Promise<string | null> {
   await AsyncStorage.removeItem(PENDING_LOGO_TARGET);
   try {
     await setManualLogo(base, base64ToBytes(shared.base64), shared.mime || 'image/png');
+    await prepareLogoRenditions(base);   // derived trimmed display copy
     return base;
   } catch {
     return null;

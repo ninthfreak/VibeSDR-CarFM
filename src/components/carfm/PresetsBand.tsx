@@ -145,7 +145,10 @@ function Tile({
           <Pressable
             onPress={onSearchLogo}
             hitSlop={8}
-            style={[styles.logoEdit, { backgroundColor: pal.blue, borderColor: pal.panel }]}
+            style={({ pressed }) => [
+              styles.logoEdit, { backgroundColor: pal.blue, borderColor: pal.panel },
+              pressed && { opacity: 0.6, transform: [{ scale: 0.92 }] },
+            ]}
             accessibilityRole="button" accessibilityLabel={`Find logo for ${p.name}`}
           >
             <LogoSearchIcon size={26} />

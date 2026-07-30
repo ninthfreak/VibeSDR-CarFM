@@ -1139,6 +1139,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
             {(heroDisp.showFreq || !heroIdent) ? (
               <Pressable
                 onPress={() => setNumpadOpen(true)}
+                style={({ pressed }) => (pressed ? { opacity: 0.6 } : null)}
                 accessibilityRole="button"
                 accessibilityLabel={`Frequency ${fmt(mhz)} megahertz. Tap to enter a frequency.`}
               >

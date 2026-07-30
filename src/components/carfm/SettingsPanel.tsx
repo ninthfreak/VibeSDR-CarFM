@@ -16,8 +16,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BatteryBolt, SignalWaves, WarningTriangle } from './icons';
 import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 import { EGG_MENU } from './bandThemes';
-import { snapshotDate } from '../../services/stationDb';
+import { snapshotDate, clearAllLogos } from '../../services/stationDb';
 import { clearLogoCache } from '../../services/stationLogoCache';
+import { invalidateLogoTile, invalidateStationDisplay } from './LogoTile';
 import { isNwdAvailable, nwdRequestAudioSource, nwdProbe } from '../../services/nwdRadio';
 import { diag, isDiagEnabled, setDiagEnabled, diagLines, diagText, clearDiag, subscribeDiag } from '../../services/diag';
 
@@ -151,7 +152,40 @@ export default function SettingsPanel({
   const toggleLogos = useCallback(() => {
     setLogosOn((v) => { const nv = !v; AsyncStorage.setItem(LOGOS_KEY, nv ? '1' : '0').catch(() => {}); return nv; });
   }, []);
-  const doClearLogos = useCallback(() => { clearLogoCache().catch(() => {}); }, []);
+  // Wipe every stored logo. The old implementation called clearLogoCache() alone,
+  // which only empties the legacy PI-keyed FILE cache — logos have lived in the
+  // SQLite blob tables since the logo rework, so the button did nothing visible.
+  // Now it clears originals + derived renditions + dark variants (and the legacy
+  // cache), then refreshes the tiles in place.
+  const [clearing, setClearing] = useState(false);
+  const doClearLogos = useCallback(() => {
+    Alert.alert(
+      'Clear all logos?',
+      'Removes every station logo — the originals you assigned, their dark-mode '
+      + 'versions, and the per-station call sign / frequency choices. Presets and '
+      + 'station data are untouched. You can search for logos again at any time.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear all',
+          style: 'destructive',
+          onPress: () => {
+            setClearing(true);
+            (async () => {
+              const n = await clearAllLogos();
+              await clearLogoCache().catch(() => {});
+              invalidateLogoTile();          // drop in-memory tile/hero caches
+              invalidateStationDisplay();
+              setClearing(false);
+              Alert.alert('Logos cleared', n > 0
+                ? `Removed logos for ${n} station${n === 1 ? '' : 's'}.`
+                : 'There were no stored logos.');
+            })().catch(() => setClearing(false));
+          },
+        },
+      ],
+    );
+  }, []);
   const fixBattery = useCallback(() => { Local?.requestIgnoreBatteryOptimizations?.(); }, [Local]);
 
   const backends: BackendDef[] = [
@@ -247,7 +281,8 @@ export default function SettingsPanel({
                   <Pressable
                     key={b.id}
                     onPress={() => pickBackend(b.id, b.available)}
-                    style={[
+                    style={({ pressed }) => [
+                      pressed && b.available && { opacity: 0.65 },
                       styles.backendRow,
                       { backgroundColor: active ? pal.blueFill : 'transparent', borderColor: active ? pal.blue : 'transparent', opacity: b.available ? 1 : 0.5 },
                     ]}
@@ -270,7 +305,7 @@ export default function SettingsPanel({
               })}
 
               <View style={[styles.divider, { backgroundColor: pal.border }]} />
-              <Pressable style={styles.switchRow} onPress={() => onSetAutostart(!autostart)} accessibilityRole="switch" accessibilityState={{ checked: autostart }}>
+              <Pressable style={({ pressed }) => [styles.switchRow, pressed && { backgroundColor: pal.raised }]} onPress={() => onSetAutostart(!autostart)} accessibilityRole="switch" accessibilityState={{ checked: autostart }}>
                 <View style={styles.textWrap}>
                   <Text style={[styles.rowTitle, { color: pal.text }]}>Start radio on boot</Text>
                   <Text style={[styles.rowSub, { color: pal.dim }]}>Resume FM automatically when the head unit powers up</Text>
@@ -336,7 +371,7 @@ export default function SettingsPanel({
               </View>
 
               <View style={[styles.divider, { backgroundColor: pal.border }]} />
-              <Pressable style={styles.switchRow} onPress={toggleLogos} accessibilityRole="switch" accessibilityState={{ checked: logosOn }}>
+              <Pressable style={({ pressed }) => [styles.switchRow, pressed && { backgroundColor: pal.raised }]} onPress={toggleLogos} accessibilityRole="switch" accessibilityState={{ checked: logosOn }}>
                 <View style={styles.textWrap}>
                   <Text style={[styles.rowTitle, { color: pal.text }]}>Station logos</Text>
                   <Text style={[styles.rowSub, { color: pal.dim }]}>
@@ -346,18 +381,26 @@ export default function SettingsPanel({
                 </View>
                 <Toggle on={logosOn} pal={pal} onToggle={toggleLogos} label="Station logos auto-download" />
               </Pressable>
-              {logosOn ? (
-                <Pressable style={styles.clearRow} onPress={doClearLogos} accessibilityRole="button" accessibilityLabel="Clear downloaded logos">
-                  <Text style={[styles.clearText, { color: pal.blue }]}>Clear downloaded logos</Text>
-                  <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
-                </Pressable>
-              ) : null}
+              {/* Always available: logos are assigned BY HAND, so clearing them must
+                  not be gated behind the auto-download toggle (it was, so with
+                  auto-download off the row wasn't even on screen). */}
+              <Pressable
+                style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill, opacity: 0.9 }]}
+                onPress={doClearLogos}
+                disabled={clearing}
+                accessibilityRole="button" accessibilityLabel="Clear all station logos"
+              >
+                <Text style={[styles.clearText, { color: pal.blue }]}>
+                  {clearing ? 'Clearing…' : 'Clear all station logos'}
+                </Text>
+                <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
+              </Pressable>
             </View>
 
             {/* ── DIAGNOSTICS ── (head-unit substitute for adb logcat) */}
             <SectionLabel text="DIAGNOSTICS" pal={pal} />
             <View style={[styles.group, { backgroundColor: pal.panel, borderColor: pal.border }]}>
-              <Pressable style={styles.switchRow} onPress={toggleDiag} accessibilityRole="switch" accessibilityState={{ checked: diagOn }}>
+              <Pressable style={({ pressed }) => [styles.switchRow, pressed && { backgroundColor: pal.raised }]} onPress={toggleDiag} accessibilityRole="switch" accessibilityState={{ checked: diagOn }}>
                 <View style={styles.textWrap}>
                   <Text style={[styles.rowTitle, { color: pal.text }]}>Tuner log</Text>
                   <Text style={[styles.rowSub, { color: pal.dim }]}>
@@ -379,26 +422,26 @@ export default function SettingsPanel({
                       <Text allowFontScaling={false} style={[styles.diagLogLine, { color: pal.dim }]}>No events yet — tune a station.</Text>
                     )}
                   </ScrollView>
-                  <Pressable style={styles.clearRow} onPress={saveLog} accessibilityRole="button" accessibilityLabel="Save log to a file">
+                  <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={saveLog} accessibilityRole="button" accessibilityLabel="Save log to a file">
                     <Text style={[styles.clearText, { color: pal.blue }]}>Save to file</Text>
                     <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                   </Pressable>
                   {nwdActive ? (
                     <>
                       <View style={[styles.divider, { backgroundColor: pal.border }]} />
-                      <Pressable style={styles.clearRow} onPress={runProbe} accessibilityRole="button" accessibilityLabel="Run RDS probe">
+                      <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={runProbe} accessibilityRole="button" accessibilityLabel="Run RDS probe">
                         <Text style={[styles.clearText, { color: pal.blue }]}>Run RDS probe (dumps every tuner getter)</Text>
                         <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                       </Pressable>
                     </>
                   ) : null}
                   <View style={[styles.divider, { backgroundColor: pal.border }]} />
-                  <Pressable style={styles.clearRow} onPress={() => nwdRequestAudioSource()} accessibilityRole="button" accessibilityLabel="Test audio source switch">
+                  <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={() => nwdRequestAudioSource()} accessibilityRole="button" accessibilityLabel="Test audio source switch">
                     <Text style={[styles.clearText, { color: pal.blue }]}>Test audio source (launches stock app)</Text>
                     <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                   </Pressable>
                   <View style={[styles.divider, { backgroundColor: pal.border }]} />
-                  <Pressable style={styles.clearRow} onPress={clearDiag} accessibilityRole="button" accessibilityLabel="Clear log">
+                  <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={clearDiag} accessibilityRole="button" accessibilityLabel="Clear log">
                     <Text style={[styles.clearText, { color: pal.blue }]}>Clear log</Text>
                     <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                   </Pressable>
