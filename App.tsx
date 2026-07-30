@@ -67,12 +67,7 @@ export type RootStackParamList = {
     initialFreq?:    number;
     initialMode?:    SDRMode;
     initialZoom?:    number;
-    // CarFM fork: this is the car FM-radio use (local USB dongle or rtl_tcp dev
-    // loop). Switches the MediaSession to the RDS->MediaMetadata mapping the
-    // ESP32 display expects (RT->title, PS->artist, freq->album) and defaults
-    // media ⏮/⏭ to stepping presets. Non-car SDR sessions leave it unset.
-    carFm?:          boolean;
-    // CarFM launched with NO tuner present: no backend client is created; the
+    // Launched with NO tuner present: no backend client is created; the
     // FM face renders with the tuner-error pill and the screen polls for a
     // dongle, replacing itself with a real local session when one appears.
     tunerless?:      boolean;

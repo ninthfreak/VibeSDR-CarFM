@@ -529,18 +529,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   const lastLiveLogoKey = useRef('');
   const [fmStereo, setFmStereo] = useState(false);   // WFM stereo pilot (local hardware)
 
-  // CarFM: the FM-only face covers the full SDR UI when active. "Advanced" lets
-  // the normal SDR UI (waterfall/decoders/all modes) back in without leaving.
-  const carFm = !!route.params.carFm;
-  // CarFM has no advanced-SDR escape hatch: the face IS the whole UI in a carFm
-  // session. (The stock SDR view still exists for non-carFm/dev launches — see
-  // the !fmFaceActive branch below — but nothing in CarFM can reach it.)
-  const fmFaceActive = carFm;
-  // Ref mirror for the per-frame onSpectrum closure (avoids a stale capture): the
-  // FM face is opaque and self-contained, so all waterfall/meter work is wasted
-  // while it's up.
-  const fmFaceActiveRef = useRef(fmFaceActive);
-  fmFaceActiveRef.current = fmFaceActive;
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
   // True while the head unit's built-in NWD tuner is driving the face (a
   // tunerless carFm launch on an NWD/NOWADA unit). Routes tune commands to it.
@@ -579,8 +567,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [status, setStatus]       = useState<SDRStatus>({
     // CarFM starts on the FM dial (matters for a tunerless launch, where no
     // last-tune restore runs — the face must not show the ham default).
-    frequency: route.params.carFm ? 98_500_000 : 14_074_000,
-    mode: route.params.carFm ? 'wfm' : 'usb',
+    frequency: 98_500_000,
+    mode: 'wfm',
     bandwidthLow: -3000, bandwidthHigh: 3000,
     binCount: 1024, binBandwidth: 0, centerHz: 0, bwHz: 0,
   });
@@ -970,11 +958,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onSearchTuneRef = useRef<((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean) => void) | null>(null);
   const fmHwStepRef    = useRef<((dir: 1 | -1) => void) | null>(null);   // CarFM: steering-wheel ⏮⏭ → animated preset step
 
-  // ── Media skip mode: lock-screen ⏮⏭ tune by step or jump bookmarks ───────
-  // CarFM defaults to bookmark stepping so steering-wheel / ESP32 ⏮⏭ move
-  // between presets (spec §5b); a stored user choice below still overrides it.
-  const [mediaSkip, setMediaSkip] = useState<'step' | 'bookmark'>(
-    route.params.carFm ? 'bookmark' : 'step');
+  // ── Media skip mode: lock-screen ⏮⏭ jump between presets ────────────────
+  // Steering-wheel / ESP32 ⏮⏭ move between presets (spec §5b).
+  const [mediaSkip, setMediaSkip] = useState<'step' | 'bookmark'>('bookmark');
   const mediaSkipRef = useRef(mediaSkip);
   useEffect(() => { mediaSkipRef.current = mediaSkip; }, [mediaSkip]);
   // Lock-screen ⏮⏭ step-tune for backends whose tuning lives in JS (OWRX/Kiwi):
@@ -1300,11 +1286,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       const dir = e.direction === 'prev' ? 'left' : 'right';
       // DAB: cycle programmes within the ensemble (the VFO is locked there).
       if (String(client.current?.getStatus().mode) === 'dab') { dabSkipRef.current?.(dir); return; }
-      // CarFM: drive the FACE's animated preset step (hero-swap FLIP, steps in
+      // Drive the FACE's animated preset step (hero-swap FLIP, steps in
       // displayed/card order) — not onVtsJump, which silently retuned by frequency.
-      if (carFm) { fmHwStepRef.current?.(dir === 'left' ? -1 : 1); return; }
-      if (mediaSkipRef.current === 'bookmark') onVtsJumpRef.current?.(dir);
-      else mediaStepSkipRef.current?.(dir);
+      fmHwStepRef.current?.(dir === 'left' ? -1 : 1);
     });
     // DIAGNOSTIC: raw media-button keycodes from the service's MediaSession. On
     // the built-in NWD path this confirms the steering wheel actually reaches
@@ -1591,13 +1575,6 @@ export default function SDRScreen({ route, navigation }: Props) {
           prev.binCount === s.binCount &&
           Math.abs(prev.binBandwidth - s.binBandwidth) < 1e-6
             ? prev : s);
-        // The FM face is opaque and draws its own meter from the audio SNR, so the
-        // per-frame bin math below is pure waste while it's up. Skip it.
-        if (fmFaceActiveRef.current) return;
-        // ── Derive signal level + SNR from bins (advanced-view meter only) ──
-        // Full data rate (~10Hz) — updates only re-render the two meter leaf
-        // widgets via the bus, so there's no need to throttle anymore.
-        // Find peak bin power in the current bandwidth window
       },
       onError: (msg) => {
         if (destroyed.current) return;
@@ -2260,32 +2237,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     ];
     vtsBookmarks.current = merged;
     setSearchBookmarks(merged);
-    pushCarBrowse(merged);
   }, [serverBookmarks, eibiBookmarks, eibiEnabled, userBookmarks, baseUrl, ituRegion]);
-
-  // Push the car browse tree (Bookmarks + Band Plan folders) to the native
-  // media-browser service. Bookmarks come from the merged list; the band plan is
-  // region-deduped. Native caches it and serves Android Auto / CarPlay; a no-op
-  // until a car connects. mediaId encodes freq|mode|step|isBand for the tap.
-  const pushCarBrowse = useCallback((bookmarks: ServerBookmark[]) => {
-    if (carFm) return;   // the carFm effect below owns the browse payload (Presets + Nearby)
-    const bandSeen = new Set<string>();
-    const bands = BAND_PLAN.filter((b: Band) => {
-      if (b.regions && b.regions.length && ituRegion && !b.regions.includes(ituRegion)) return false;
-      if (bandSeen.has(b.name)) return false;
-      bandSeen.add(b.name);
-      return true;
-    }).map((b: Band) => ({
-      name: b.name, frequency: b.lo, mode: b.mode ?? null, step: b.step ?? 0,
-    }));
-    const payload = {
-      bookmarks: bookmarks.map((b: ServerBookmark) => ({
-        name: b.name, frequency: b.frequency, mode: b.mode ?? null,
-      })),
-      bands,
-    };
-    VibePowerModule?.setBrowseItems?.(JSON.stringify(payload));
-  }, [ituRegion]);
 
   // ── User bookmark management (menu BOOKMARKS pane) ────────────────────────
   const persistUserBookmarks = useCallback((next: UserBookmark[]) => {
@@ -2493,7 +2445,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // display expects — RadioText -> TITLE, station name (PS) -> ARTIST,
       // frequency -> ALBUM. Gadgetbridge relays these three, so this branch is
       // the whole system contract; the general SDR mapping below is bypassed.
-      if (route.params.carFm && status.mode === 'wfm') {
+      if (status.mode === 'wfm') {
         const np = fmNowPlaying({
           ps: liveStation.name, rt: liveStation.text,
           rtArtist: liveStation.rtArtist, rtTitle: liveStation.rtTitle, freqHz: hz,
@@ -2591,7 +2543,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Sample the (ref-based) audio SNR on a timer while the FM face is up, so the
   // meter is reactive without re-rendering on every VibeSignal event.
   useEffect(() => {
-    if (!fmFaceActive) return;
     const t = setInterval(() => {
       // The built-in NWD tuner drives the meter from its own signal level (arg);
       // don't overwrite it with the SDR-path audio SNR (which is stale/0 there).
@@ -2600,32 +2551,31 @@ export default function SDRScreen({ route, navigation }: Props) {
       setFmSignalDb(Number.isFinite(v) ? v : null);
     }, 500);
     return () => clearInterval(t);
-  }, [fmFaceActive]);
+  }, []);
 
   // CarFM launch: sweep any offline-queued logos and, at most monthly / on a
   // region change, prefetch logos for the surrounding stations (all background,
   // rate-limited — never blocks). Once per carFm session.
-  useEffect(() => { if (carFm) void initLogoService(); }, [carFm]);
+  useEffect(() => { void initLogoService(); }, []);
 
   // CarFM: an image shared into the app (from the browser logo search) gets
   // assigned to the station the user picked for. Consume on mount + each resume.
   useEffect(() => {
-    if (!carFm) return;
     void consumeSharedLogo();
     const sub = AppState.addEventListener('change', (s) => { if (s === 'active') void consumeSharedLogo(); });
     return () => sub.remove();
-  }, [carFm]);
+  }, []);
 
   // Resolve station identity from the RDS PI (offline, via the bundled DB) so the
   // FM face can name the station before PS arrives. Hex string -> int -> lookup.
   useEffect(() => {
-    if (!carFm || status.mode !== 'wfm' || !liveStation.pi) { setPiIdentity(null); return; }
+    if (status.mode !== 'wfm' || !liveStation.pi) { setPiIdentity(null); return; }
     const pi = parseInt(liveStation.pi, 16);
     if (!Number.isFinite(pi)) { setPiIdentity(null); return; }
     let cancelled = false;
     identifyByPi(pi, liveStation.name).then((id) => { if (!cancelled) setPiIdentity(id); }).catch(() => {});
     return () => { cancelled = true; };
-  }, [carFm, status.mode, liveStation.pi, liveStation.name]);
+  }, [status.mode, liveStation.pi, liveStation.name]);
 
   // Callsign/city hint shown only when PS text is absent (PS always wins, §6).
   const fmCallsignHint = useMemo<string | undefined>(() => {
@@ -2679,7 +2629,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       navigation.replace('SDR', {
         baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware',
         viewMode: route.params.viewMode, serverType: 'ubersdr',
-        isLocal: true, localPort: res.port, localGen: newLocalSession(), carFm: true,
+        isLocal: true, localPort: res.port, localGen: newLocalSession(),
       });
     } catch { /* dongle not ready / permission denied — RETRY tries again */ }
     finally { tunerBusy.current = false; }
@@ -2691,7 +2641,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // radio service. The system dialog does the actual grant; declining is
   // remembered and never re-asked (the setting stays reachable via App info).
   useEffect(() => {
-    if (!carFm) return;
     const Local = (NativeModules as { VibeLocalSDR?: {
       isIgnoringBatteryOptimizations?: () => Promise<boolean>;
       requestIgnoreBatteryOptimizations?: () => void;
@@ -2717,7 +2666,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       } catch { /* best effort */ }
     })();
     return () => { cancelled = true; };
-  }, [carFm]);
+  }, []);
 
   // CarFM settings: theme override + boot autostart, persisted.
   const [fmTheme, setFmTheme] = useState<'system' | 'light' | 'dark'>('system');
@@ -2738,12 +2687,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (nwdActiveRef.current) nwdSetAudio(false);
   }, []);
   useEffect(() => {
-    if (!carFm) return;
     AsyncStorage.getItem('@carfm/theme_v1')
       .then((v: string | null) => { if (v === 'light' || v === 'dark' || v === 'system') setFmTheme(v); })
       .catch(() => {});
     getCarAutostart().then(setFmAutostart).catch(() => {});
-  }, [carFm]);
+  }, []);
   const onFmSetTheme = useCallback((t: 'system' | 'light' | 'dark') => {
     setFmTheme(t);
     AsyncStorage.setItem('@carfm/theme_v1', t).catch(() => {});
@@ -2776,7 +2724,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // (a tunerless session and a live-dongle session have different baseUrls, and
     // legacy presets may carry an old per-URL scope) and dedupe by channel, so a
     // preset survives the tunerless→dongle hot-swap and shows on a no-dongle boot.
-    const src = carFm ? userBookmarks : visibleBookmarks;
+    const src = userBookmarks;
     const byChannel = new Map<string, UserBookmark>();
     for (const b of src) {
       if (!(b.mode === 'wfm' || (b.frequency >= 87_000_000 && b.frequency <= 108_500_000))) continue;
@@ -2791,14 +2739,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     return [...base].sort((a, b) =>
       (pos.get(fmKeyOf(a.frequency)) ?? 1e6 + a.frequency / 1e5)
       - (pos.get(fmKeyOf(b.frequency)) ?? 1e6 + b.frequency / 1e5));
-  }, [carFm, userBookmarks, visibleBookmarks, fmOrder]);
+  }, [userBookmarks, visibleBookmarks, fmOrder]);
 
   // Warm the preset logos as soon as the list is known, so the strip paints its
   // art on the first frame instead of each tile resolving its own async chain.
   useEffect(() => {
-    if (!carFm || fmPresets.length === 0) return;
+    if (fmPresets.length === 0) return;
     void warmStationLogos(fmPresets.map((p) => ({ name: p.name, frequencyMhz: p.frequency / 1e6 })));
-  }, [carFm, fmPresets]);
+  }, [fmPresets]);
 
   // Star: save the tuned station (named from RDS PS), or un-save if it already
   // is a preset. Removal also drops any duplicate bookmarks on that channel.
@@ -2837,7 +2785,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // the lock-screen queue stay current.
   const fmNearbyRef = useRef<{ name: string; frequency: number }[]>([]);
   useEffect(() => {
-    if (!carFm) return;
     let cancelled = false;
     (async () => {
       if (fmNearbyRef.current.length === 0) {
@@ -2859,7 +2806,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       }));
     })();
     return () => { cancelled = true; };
-  }, [carFm, fmPresets]);
+  }, [fmPresets]);
 
   // Seek from a media surface (notification / Android Auto custom action):
   // next/previous station in the local FCC list, wrapping. No sweep animation —
@@ -2875,7 +2822,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [status.frequency, onTuneHz]);
 
   useEffect(() => {
-    if (!carFm) return;
     const em = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = em.addListener('VibeCarAction', (e: { action?: string }) => {
       if (e.action === 'save') onFmToggleSave();
@@ -2883,18 +2829,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       else if (e.action === 'seek_down') onFmMediaSeek(-1);
     });
     return () => sub.remove();
-  }, [carFm, onFmToggleSave, onFmMediaSeek]);
+  }, [onFmToggleSave, onFmMediaSeek]);
 
   // ── Vehicle motion (GPS speed → is_moving) + GPS lock state ──────────────────
   // Both wired and ready as DATA only; the UI (speed readout, GPS-lock indicator)
   // comes in a later design handoff. Features can gate on isMoving()/
   // subscribeMotion() and hasGpsFix()/useGpsFix(). Low-rate GPS while the face is up.
   useEffect(() => {
-    if (!carFm) return;
     void startMotion();
     void startGpsFix();
     return () => { stopMotion(); stopGpsFix(); };
-  }, [carFm]);
+  }, []);
 
   // ── Built-in NWD/NOWADA tuner (Backend E) ────────────────────────────────────
   // On a tunerless carFm launch (no SDR dongle) — the normal case on a permanent
@@ -2903,7 +2848,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Audio is analog + MCU-routed; PS/RadioText/PTY/TA/stereo arrive as native
   // callback events. Tune commands route via onTuneHz's nwdActiveRef branch.
   useEffect(() => {
-    if (!carFm || !route.params.tunerless) return;
+    if (!route.params.tunerless) return;
     let cancelled = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     // Auto-probe-on-park: a few seconds after the dial settles on a frequency,
@@ -3083,7 +3028,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       nwdSetAudio(false);   // release the radio audio source before unbinding
       nwdDisconnect();
     };
-  }, [carFm, route.params.tunerless]);
+  }, [route.params.tunerless]);
 
   // While an SDR/dongle is the active source, the built-in FM must NOT run in
   // parallel — no reason for it to, and it would only fight the dongle audio /
@@ -3097,20 +3042,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   // starts moments later.
   const sdrSilencedFm = useRef(false);
   useEffect(() => {
-    if (!carFm || route.params.tunerless) return;   // tunerless = built-in FM owns the tuner
+    if (route.params.tunerless) return;   // tunerless = built-in FM owns the tuner
     if (sdrSilencedFm.current) return;
     sdrSilencedFm.current = true;
     (async () => {
       if (await isNwdAvailable()) { nwdSetAudio(false); diag('SDR active → released built-in FM source (source→0)'); }
     })();
-  }, [carFm, route.params.tunerless]);
+  }, [route.params.tunerless]);
 
   // TA: a real car radio breaks mute for traffic announcements. If TA rises
   // while muted, unmute for the announcement and restore the mute when it
   // ends. Only ever restores a mute THIS effect lifted.
   const taLiftedMute = useRef(false);
   useEffect(() => {
-    if (!carFm) return;
     const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
     if (liveStation.ta && isMutedRef.current && !taLiftedMute.current) {
       taLiftedMute.current = true;
@@ -3119,7 +3063,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       taLiftedMute.current = false;
       VM?.setMuted?.(true);
     }
-  }, [carFm, liveStation.ta]);
+  }, [liveStation.ta]);
 
   // AF-follow: when the signal has been weak for a sustained stretch and the
   // station transmits an AF list, probe an alternative: keep it ONLY if it is
@@ -3135,7 +3079,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   });
   useEffect(() => { afState.current.freqChangedAt = Date.now(); }, [status.frequency]);
   useEffect(() => {
-    if (!carFm || route.params.tunerless) return;
+    if (route.params.tunerless) return;
     const WEAK_DB = 8, HOLD_MS = 10_000, RETRY_MS = 30_000, PROBE_MS = 4_000, IMPROVE_DB = 5;
     const t = setInterval(() => {
       const c = afCtx.current, s = afState.current, now = Date.now();
@@ -3162,7 +3106,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onTuneHzRef.current?.(cand);
     }, 1000);
     return () => clearInterval(t);
-  }, [carFm, route.params.tunerless]);
+  }, [route.params.tunerless]);
 
   // Save a station straight from the Nearby picker (hold a row).
   const onFmSaveStationPreset = useCallback((name: string, freqMhz: number) => {
@@ -3223,116 +3167,49 @@ export default function SDRScreen({ route, navigation }: Props) {
         />
       ) : null}
 
-      {/* CarFM: the FM-only face over the live pipeline. Opaque, so the SDR UI
-          and waterfall below are simply hidden while it's up (spec §5a). */}
-      {fmFaceActive ? (
-        <CarFmFace
-          freqHz={status.frequency}
-          stationName={liveStation.name}
-          callsignHint={fmCallsignHint}
-          // RT+ (when transmitted) gives a clean "Artist – Title"; show that on
-          // the strip instead of the raw RT line with its promo framing.
-          radioText={liveStation.rtArtist && liveStation.rtTitle
-            ? `${liveStation.rtArtist} – ${liveStation.rtTitle}`
-            : liveStation.text}
-          stereo={fmStereo}
-          signalDb={fmSignalDb}
-          rdsOk={!!liveStation.pi || !!liveStation.name}
-          tp={liveStation.tp}
-          ta={liveStation.ta}
-          af={liveStation.af}
-          ptyText={ptyLabel(liveStation.pty, ituRegion === 2)}
-          tunerError={fmTunerError}
-          theme={fmTheme}
-          autostart={fmAutostart}
-          onSetTheme={onFmSetTheme}
-          onSetAutostart={onFmSetAutostart}
-          onRetryTuner={route.params.tunerless ? () => { void tryTunerNow(); } : undefined}
-          nwdActive={nwdActive}
-          onHardwareSeek={nwdActive ? onFmHardwareSeek : undefined}
-          presets={fmPresets}
-          onTuneHz={onTuneHz}
-          onToggleSave={onFmToggleSave}
-          onReorderPreset={onFmReorderPreset}
-          onRemovePreset={onFmRemovePreset}
-          onSaveStationPreset={onFmSaveStationPreset}
-          audioActive={fmAudioActive}
-          onClaimAudio={onFmClaimAudio}
-          onReleaseAudio={onFmReleaseAudio}
-          hardwareStep={fmHwStep}
-        />
-      ) : null}
+      {/* The FM face — the whole CarFM UI, over the live pipeline. */}
+      <CarFmFace
+        freqHz={status.frequency}
+        stationName={liveStation.name}
+        callsignHint={fmCallsignHint}
+        // RT+ (when transmitted) gives a clean "Artist – Title"; show that on
+        // the strip instead of the raw RT line with its promo framing.
+        radioText={liveStation.rtArtist && liveStation.rtTitle
+          ? `${liveStation.rtArtist} – ${liveStation.rtTitle}`
+          : liveStation.text}
+        stereo={fmStereo}
+        signalDb={fmSignalDb}
+        rdsOk={!!liveStation.pi || !!liveStation.name}
+        tp={liveStation.tp}
+        ta={liveStation.ta}
+        af={liveStation.af}
+        ptyText={ptyLabel(liveStation.pty, ituRegion === 2)}
+        tunerError={fmTunerError}
+        theme={fmTheme}
+        autostart={fmAutostart}
+        onSetTheme={onFmSetTheme}
+        onSetAutostart={onFmSetAutostart}
+        onRetryTuner={route.params.tunerless ? () => { void tryTunerNow(); } : undefined}
+        nwdActive={nwdActive}
+        onHardwareSeek={nwdActive ? onFmHardwareSeek : undefined}
+        presets={fmPresets}
+        onTuneHz={onTuneHz}
+        onToggleSave={onFmToggleSave}
+        onReorderPreset={onFmReorderPreset}
+        onRemovePreset={onFmRemovePreset}
+        onSaveStationPreset={onFmSaveStationPreset}
+        audioActive={fmAudioActive}
+        onClaimAudio={onFmClaimAudio}
+        onReleaseAudio={onFmReleaseAudio}
+        hardwareStep={fmHwStep}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  rotateBanner: {
-    position: 'absolute', alignSelf: 'center', zIndex: 55,
-    backgroundColor: 'rgba(8,12,6,0.92)', borderWidth: 1,
-    borderColor: 'rgba(120,240,120,0.45)', borderRadius: 8,
-    paddingHorizontal: 14, paddingVertical: 7,
-  },
-  rotateBannerText: {
-    color: 'rgba(140,255,140,0.9)', fontFamily: 'Atkinson Hyperlegible',
-    fontSize: 12, fontWeight: '700', letterSpacing: 0.5,
-  },
-  mutedBanner: {
-    position: 'absolute', alignSelf: 'center', zIndex: 60,
-    backgroundColor: 'rgba(20,6,4,0.92)', borderWidth: 1,
-    borderColor: 'rgba(220,60,60,0.8)', borderRadius: 8,
-    paddingHorizontal: 14, paddingVertical: 8,
-  },
-  mutedBannerText: {
-    color: '#ff7a7a', fontFamily: 'Atkinson Hyperlegible',
-    fontSize: 13, fontWeight: '700', letterSpacing: 0.5,
-  },
-  serverLostWrap: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 90,
-    alignItems: 'center', justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-  },
-  serverLostCard: {
-    maxWidth: 360, marginHorizontal: 28, padding: 20, borderRadius: 14,
-    backgroundColor: 'rgba(16,12,8,0.98)', borderWidth: 1, borderColor: 'rgba(255,184,77,0.55)',
-    alignItems: 'center',
-  },
-  serverLostTitle: {
-    color: '#ffb84d', fontFamily: 'Atkinson Hyperlegible', fontSize: 16,
-    fontWeight: '700', textAlign: 'center', marginBottom: 8,
-  },
-  serverLostBody: {
-    color: 'rgba(255,235,210,0.9)', fontFamily: 'Atkinson Hyperlegible',
-    fontSize: 13, lineHeight: 19, textAlign: 'center', marginBottom: 16,
-  },
-  serverLostBtnRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-  },
-  serverLostBtn: {
-    backgroundColor: '#ffb84d', borderRadius: 8, paddingHorizontal: 22, paddingVertical: 10,
-  },
-  serverLostBtnText: {
-    color: '#1a1206', fontFamily: 'Atkinson Hyperlegible', fontSize: 14,
-    fontWeight: '700', letterSpacing: 0.5,
-  },
-  serverLostBtnAlt: {
-    backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(255,184,77,0.6)',
-  },
-  serverLostBtnAltText: { color: '#ffb84d' },
-  restoreBtn: {
-    position: 'absolute', alignSelf: 'center', zIndex: 60,
-    backgroundColor: 'rgba(10,10,10,0.55)', borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.30)', borderRadius: 16,
-    paddingHorizontal: 18, paddingVertical: 4,
-  },
-  restoreBtnText: { color: 'rgba(255,255,255,0.85)', fontSize: 14 },
   root: {
     flex: 1,
     backgroundColor: '#000',
-  },
-  pillWrap: {
-    position: 'absolute',
-    left:  8,
-    right: 8,
   },
 });
