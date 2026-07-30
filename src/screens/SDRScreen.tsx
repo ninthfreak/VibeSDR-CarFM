@@ -69,7 +69,7 @@ import { setReceiverIso } from '../services/rdsCountry';
  *  watch gets a STEADY 10fps locked or awake. Headroom is what buys steadiness
  *  here; the frames we drop cost nothing, and the ones we keep are on time. */
 const WATCH_BG_DIVISOR = 1;
-import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme, type Aircraft } from '../services/SDRBackend';
+import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind,
@@ -99,8 +99,6 @@ import ChatDrawer,
 import DecoderPanel,
   { type DecoderType } from '../components/DecoderPanel';
 import SpecRatioOverlay  from '../components/SpecRatioOverlay';
-import MapOverlay, { type MapKind } from '../components/MapOverlay';
-import CityPickerModal from '../components/CityPickerModal';
 import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
@@ -605,9 +603,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [dabProgrammes, setDabProgrammes] = useState<DabProgramme[]>([]);  // OWRX DAB ensemble
   const [activeDabId, setActiveDabId] = useState<number>(0);
   const [dabEnsemble, setDabEnsemble] = useState('');
-  /** OWRX ADS-B: the live aircraft table. Structured — it used to be flattened to
-   *  text on arrival, which is why nothing but the decoder panel could use it. */
-  const [aircraft, setAircraft] = useState<Aircraft[]>([]);
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
   const [liveStation, setLiveStation] = useState<LiveStation>({});
@@ -943,11 +938,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [menuOpen,      setMenuOpen]      = useState(false);
   const [freqModalOpen, setFreqModalOpen] = useState(false);
 
-  // Server map overlays (HFDL / Digital spots / CW spots — skin parity)
-  const [mapKind, setMapKind] = useState<MapKind | null>(null);
-  // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
-  const [localMapOpen, setLocalMapOpen]   = useState(false);
-  const [cityPickerOpen, setCityPickerOpen] = useState(false);
 
   // Admin pages (skin menu Admin section) — in-app browser overlay
   const [adminPage, setAdminPage] = useState<{ url: string; title: string } | null>(null);
@@ -2008,7 +1998,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         // UberSDR's fetched bookmarks: VTS station readout + search bar.
         if (!destroyed.current) setServerBookmarks(list.map((b) => ({ name: b.name, frequency: b.frequency, mode: b.mode, repeater: b.repeater, source: 'server' as const })));
       },
-      onAircraft: (list) => { if (!destroyed.current) setAircraft(list); },
 
       onDecoderText: (line, replace) => {
         // OWRX server-side text decoders (Packet/POCSAG/ADSB/…) → the decoder
@@ -4130,7 +4119,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         <DecoderPanel
           activeDecoder={activeDecoder}
           decoderText={decoderText}
-          aircraft={aircraft}
           decoderStatus={decoderStatus}
           decoding={decoding}
           bottomOffset={pillBottom + 8}
@@ -4460,13 +4448,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         onDecToggle={onDecToggle}
         spotsKind={spotsKind}
         onSpotsToggle={onSpotsToggle}
-        onServerMap={(k) => { setMenuOpen(false); setMapKind(k); }}
-        onSpotsMap={() => {
-          setMenuOpen(false);
-          // The map plots the live Digital Spots feed — start it if it isn't on.
-          if (spotsKindRef.current !== 'digi') onSpotsToggle('digi');
-          setLocalMapOpen(true);
-        }}
         rttySettings={rttySettings}
         onRttySettings={onRttySettings}
         wefaxLpm={wefaxLpm}
@@ -4667,43 +4648,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         />
       ) : null}
 
-      {/* Server map overlay (HFDL / Digital / CW — full-screen WebView Leaflet) */}
-      <MapOverlay
-        visible={mapKind !== null}
-        kind={mapKind}
-        baseUrl={baseUrl}
-        sessionUuid={sessionUuid}
-        onClose={() => setMapKind(null)}
-      />
-
-      {/* On-device FT8 spots map (Local/Kiwi): RN-fed spots (each with a grid),
-          receiver position from device GPS / Kiwi gps / a picked city. */}
-      <MapOverlay
-        visible={localMapOpen}
-        kind="digi"
-        local
-        baseUrl={isLocal ? 'https://localhost' : baseUrl}
-        wsBaseOverride={decoderBase}
-        sessionUuid={sessionUuid}
-        rxLat={recvLoc?.lat ?? 0}
-        rxLon={recvLoc?.lon ?? 0}
-        spots={spots}
-        onPickCity={() => setCityPickerOpen(true)}
-        onClose={() => setLocalMapOpen(false)}
-        disconnected={serverLost || serverBusy || connTimedOut}
-        onBackToList={() => { setLocalMapOpen(false); navigation.goBack(); }}
-        onRetry={() => fullReconnect()}
-      />
-
-      <CityPickerModal
-        visible={cityPickerOpen}
-        onClose={() => setCityPickerOpen(false)}
-        onPick={(c) => {
-          recvLocRef.current = { lat: c.lat, lon: c.lon };
-          setRecvLoc({ lat: c.lat, lon: c.lon });
-          setCityPickerOpen(false);
-        }}
-      />
 
       {/* Frequency modal */}
       <FreqModal

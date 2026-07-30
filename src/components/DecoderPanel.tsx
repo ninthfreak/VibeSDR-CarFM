@@ -25,8 +25,6 @@ import { useTheme } from '../contexts/ThemeContext';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/DecoderClient';
 import { abbrCountry } from '../assets/countryAbbr';
-import AircraftPanel from './AircraftPanel';
-import type { Aircraft } from '../services/SDRBackend';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -36,10 +34,6 @@ const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv'];
 export interface DecoderPanelProps {
   activeDecoder: DecoderType;
   decoderText:   string;
-  /** ADS-B: the structured aircraft table. When present it REPLACES the text body —
-   *  the records carry far more than the flattened "CALLSIGN 39700ft 434kt -25dB"
-   *  line ever could (registry country, vertical trend, range and bearing). */
-  aircraft?:     Aircraft[];
   decoderStatus: string;   // 'listening…' | 'decoding…' | custom
   decoding:      boolean;  // true = green dot
   bottomOffset:  number;   // distance from bottom of screen (pillTop - 8)
@@ -146,7 +140,7 @@ const FONT = 'Atkinson Hyperlegible';
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function DecoderPanel({
-  activeDecoder, decoderText, aircraft, decoderStatus, decoding,
+  activeDecoder, decoderText, decoderStatus, decoding,
   bottomOffset, onClear, onClose,
   imageRef, onImageStatus,
   morseQuality = 'all', onMorseQuality,
@@ -154,7 +148,6 @@ export default function DecoderPanel({
 }: DecoderPanelProps) {
   const isSpotsMode = spotsKind !== null;
   const isImageMode = !isSpotsMode && IMAGE_DECODERS.includes(activeDecoder);
-  const isAircraftMode = !isSpotsMode && !!aircraft?.length;
 
   // Spots filters — header cyclers (skin sf-mode/sf-band/sf-age)
   const [sfMode, setSfMode] = useState('ALL');
@@ -368,17 +361,7 @@ export default function DecoderPanel({
             />
           </View>
         )}
-        {/* ADS-B gets a real table rather than the text blob.
-            HEIGHT, not maxHeight: dp.body only caps the height, and AircraftPanel is
-            flex-based — so with nothing to flex INSIDE it collapsed to zero and the
-            box rendered empty. The text body doesn't hit this because a ScrollView
-            sizes to its content. */}
-        {!minimised && isAircraftMode && (
-          <View style={[dp.bodyContent, { height: 200 }]}>
-            <AircraftPanel aircraft={aircraft!} />
-          </View>
-        )}
-        {!minimised && !isImageMode && !isSpotsMode && !isAircraftMode && (
+        {!minimised && !isImageMode && !isSpotsMode && (
           <ScrollView
             ref={outputRef}
             style={dp.body}
