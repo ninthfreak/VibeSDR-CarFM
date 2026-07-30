@@ -75,3 +75,12 @@ export function useMotion(): Motion {
   useEffect(() => subscribeMotion(setM), []);
   return m;
 }
+
+/** The is-moving BOOLEAN only. Prefer this over useMotion() when the speed
+ *  itself isn't shown: useMotion() re-renders its component on every ~1 Hz
+ *  speed sample, this one only on the moving/stopped transition. */
+export function useIsMoving(): boolean {
+  const [v, setV] = useState<boolean>(state.isMoving);
+  useEffect(() => subscribeMotion((m) => setV(m.isMoving)), []);
+  return v;
+}
