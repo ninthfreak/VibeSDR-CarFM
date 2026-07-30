@@ -467,3 +467,48 @@ next)` should appear on every wheel press.
 ## Ethics/scope
 Interoperability RE of our own device's interface, read-only, local. Do not
 redistribute decompiled code, modified APKs, or firmware.
+
+## Cross-check against public prior art (web search, 2026-07-30)
+
+Searched for independent confirmation of the panel-key broadcast and the wider
+NWD/MCU picture. Summary: **the panel-key path above is not publicly documented
+anywhere I could find**, but the surrounding architecture and — importantly — a
+better answer to the wheel-suppression problem both are.
+
+**No hits.** `com.nwd.action.ACTION_KEY_VALUE`, `extra_key_value`,
+`handlePanelKey`, and the 62/63 preset codes return nothing relevant. Our
+decompile appears to be an independent finding.
+
+**Confirmed by others.** `kapi21/OpenRadioFM` (Apache-2.0) targets the same
+family incl. "QS NWD" and independently uses `ACTION_CHANGE_SOURCE` /
+`ACTION_REQUEST_CHANGE_SOURCE` for source switching (exactly our audio claim/
+release), reports **18 preset slots**, and had to add retry/`DeadObjectException`
+handling plus a broadcast-monitoring "shadow motor" because *"the AIDL service
+collapses unpredictably"* — a robustness gap CarFM does not yet cover.
+
+**New leads from that project, worth trying on our unit:**
+- Settings keys `nwd_radio_current_freq` and `nwd_radio_current_source` — a
+  cheaper, more reliable frequency feed than our 1.5s `getCurrentFrequency` poll,
+  and a direct read of the source state (we currently read `mcu_current_source`).
+- Their NWD MCU-frame work is explicitly *"proprietary/under research"*, so
+  direct MCU framing is unsolved publicly too — consistent with our conclusion
+  that tuner control is only reachable through the vendor service.
+
+**The wheel-suppression answer we were missing: an AccessibilityService.**
+OpenRadioFM's K706 path uses an accessibility service (`FactoryRadioHijackerService`)
+to intercept physical radio-button and KeyEvent broadcasts, gated by a
+`pref_a11y_forward_media_keys` preference. Android's `AccessibilityService.onKeyEvent`
+receives key events **before** applications and **consumes** them when it returns
+true (`android:canRequestFilterKeyEvents="true"` +
+`accessibilityFlag="flagRequestFilterKeyEvents"`).
+
+⇒ Our broadcast receiver *observes* the wheel but cannot cancel a normal
+broadcast, so the vendor service still jumps to its own slot. An accessibility
+service is the one documented mechanism that could actually **suppress** the
+event. Caveat: it filters *key events*, and on this unit the wheel arrives as a
+**broadcast**, not a key event — so it may not apply here at all. It is worth
+testing only if the panel-key receiver proves insufficient, and it costs the user
+a manual accessibility-permission grant.
+
+Sources: github.com/kapi21/OpenRadioFM · developer.android.com AccessibilityService
+· source.android.com/docs/automotive/displays/key_input · XDA NavRadio+ threads.
