@@ -244,6 +244,15 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
     private var audioFocusRequest: AudioFocusRequest? = null
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        // NWD control mode: focus is held ONLY to win the media-key routing — the
+        // FM audio is analog/MCU-routed, we play nothing. Never stop the service
+        // or mute on a focus change here; just log + surface it so a drive log
+        // shows exactly who takes focus away (that's the routing fight we're in).
+        if (nwdControl) {
+            Log.i(TAG, "NWD-control focus change: $change")
+            emitEvent("VibeFocus") { it.putInt("change", change); it.putBoolean("granted", false) }
+            return@OnAudioFocusChangeListener
+        }
         when (change) {
             // Permanent loss = another media app took over for good. Relinquish
             // fully like iOS does — stop the engine and tear down the foreground
@@ -592,12 +601,12 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         }
     }
 
-    private fun requestAudioFocus() {
+    private fun requestAudioFocus(): Int {
         val attrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
             .build()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                 .setAudioAttributes(attrs)
                 .setOnAudioFocusChangeListener(focusListener, mainHandler)
@@ -685,19 +694,30 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     // ── Built-in NWD/NOWADA FM: media-buttons-only control session ────────────
     // The MCU routes the analog FM audio itself — this service produces NO audio
-    // for the built-in tuner. Its ONLY job here is to hold an ACTIVE, PLAYING
-    // MediaSession so Android routes the steering-wheel ⏮⏭ media keys to CarFM
-    // (the same way they'd go to any media app that's playing — cf. Plexamp /
-    // Android Auto). onSkipToNext/Previous → tuneByStep → VibeSkip → JS steps
-    // CarFM's own preset list (app order, unwanted slots don't exist) and animates
-    // the hero swap. Crucially it does NOT requestAudioFocus (that would duck/kill
-    // the MCU's FM audio) and opens NO AudioTrack.
+    // for the built-in tuner (no AudioTrack). Its ONLY job here is to make CarFM
+    // the media-key target so the steering-wheel ⏮⏭ keys drive ITS preset list.
+    // onSkipToNext/Previous → tuneByStep → VibeSkip → JS steps CarFM's presets
+    // (app order, unwanted slots don't exist) and animates the hero swap.
+    //
+    // The first cut held an active PLAYING session but deliberately skipped
+    // requestAudioFocus (fear of disturbing the MCU audio). Device test
+    // 2026-07-29: the wheel STILL went to the radio service — zero
+    // onMediaButtonEvent across ~25 presses — i.e. this unit routes media keys
+    // by AUDIO-FOCUS ownership, not by session playback state alone. So the
+    // session now TAKES audio focus (the Plexamp condition: wheel works there,
+    // and Plexamp holds focus). The focusListener is neutered while nwdControl
+    // is set — a focus change here never stops the service or mutes, it only
+    // logs — and whether the grab disturbs the analog FM audio is exactly what
+    // the next drive log (+ the VibeFocus events) is for.
     fun startNwdControlSession() {
         Log.i(TAG, "startNwdControlSession")
         if (externalAudio || fmdxAudio) return   // a real audio path already owns the session
         nwdControl = true
         running = true
         muted = false
+        val granted = requestAudioFocus()
+        Log.i(TAG, "nwd control audio focus granted=${granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED} ($granted)")
+        emitEvent("VibeFocus") { it.putInt("change", 0); it.putBoolean("granted", granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) }
         mediaSession?.isActive = true
         updateMetadataSession()
         updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)   // "playing" → media keys target us
@@ -709,9 +729,35 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         if (!nwdControl) return
         nwdControl = false
         running = false
+        abandonAudioFocus()
         mediaSession?.isActive = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
         else { @Suppress("DEPRECATION") stopForeground(true) }
+    }
+
+    /** Activity-injected key events (MainActivity.dispatchKeyEvent). Some head
+     *  units deliver the steering-wheel buttons as plain INPUT key events to the
+     *  foreground activity instead of (or as well as) media-button broadcasts —
+     *  the second capture path this unit might use. Logs every key DOWN (so a
+     *  drive log reveals what the wheel actually sends); while the NWD control
+     *  session is active, consumes media next/prev and steps CarFM's presets.
+     *  Returns true when the event was consumed. */
+    fun onActivityKeyEvent(keyCode: Int, action: Int): Boolean {
+        if (action == android.view.KeyEvent.ACTION_DOWN) {
+            val name = android.view.KeyEvent.keyCodeToString(keyCode)
+            Log.i(TAG, "activity key $keyCode ($name) nwdControl=$nwdControl")
+            emitEvent("VibeHwKey") {
+                it.putInt("keyCode", keyCode)
+                it.putString("keyName", name)
+                it.putBoolean("nwdControl", nwdControl)
+            }
+        }
+        if (!nwdControl) return false
+        return when (keyCode) {
+            android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> { if (action == android.view.KeyEvent.ACTION_DOWN) tuneByStep(+1); true }
+            android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { if (action == android.view.KeyEvent.ACTION_DOWN) tuneByStep(-1); true }
+            else -> false
+        }
     }
 
     // ── Local hardware audio (V4) — native /ws/audio consumer ────────────────
