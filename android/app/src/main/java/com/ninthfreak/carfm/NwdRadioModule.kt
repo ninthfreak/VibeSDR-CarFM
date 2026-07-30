@@ -1,7 +1,9 @@
 package com.ninthfreak.carfm
 
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
+import android.content.IntentFilter
 import android.content.Intent
 import android.content.ServiceConnection
 import android.media.AudioManager
@@ -89,6 +91,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
                 promise.reject("bind", "bindService returned false — NWD radio service not found/bindable")
             } else {
                 bound = true
+                startPanelKeyWatch()
             }
         } catch (e: Throwable) {
             connectPromise = null
@@ -96,8 +99,75 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    // ── Steering-wheel / panel keys (the REAL transport) ─────────────────────────
+    // The wheel is NOT a media key on this unit. The MCU broadcasts
+    // `com.nwd.action.ACTION_KEY_VALUE` with a byte `extra_key_value`, and the
+    // vendor RadioService registers for it WITHOUT a permission, then routes it
+    // through handlePanelKey() — gated on Settings.System `mcu_current_source == 4`
+    // (FM). That is why MediaSession capture and Activity.dispatchKeyEvent both saw
+    // nothing: the event never enters Android's input pipeline at all.
+    //
+    // Because the receiver is unprotected, CarFM can listen for the same broadcast.
+    // Panel-key codes (from the service's own dispatch table):
+    //   4 changeBand · 5/60 search up · 6/59 search down · 16/17 seek up/down
+    //   46 AMS (auto-store) · 61 INTRO · 62 preset NEXT · 63 preset PREV
+    //   72 changeFmBand · 73 changeAmBand
+    // 62/63 call prefeb(), which steps the service's own mCurPrefNum and tunes
+    // mPrefFrequency[band][n-1] — i.e. the HARDWARE preset banks. We can't cancel a
+    // normal broadcast, so the service still acts; JS reasserts CarFM's own preset
+    // immediately after, which is what makes the app's order win.
+    private var panelReceiver: BroadcastReceiver? = null
+
+    private fun startPanelKeyWatch() {
+        if (panelReceiver != null) return
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, i: Intent?) {
+                val a = i?.action ?: return
+                val key = when (a) {
+                    "com.nwd.action.ACTION_KEY_VALUE" -> i.getByteExtra("extra_key_value", (-1).toByte()).toInt()
+                    "com.nwd.action.ACTION_TEST_KEY" -> i.getIntExtra("extra_key_value", -1)
+                    else -> -1
+                }
+                if (key < 0) return
+                Log.i(TAG, "panel key $key ($a)")
+                val m = Arguments.createMap()
+                m.putInt("key", key)
+                m.putString("action", a)
+                emit("NwdPanelKey", m)
+            }
+        }
+        val f = IntentFilter().apply {
+            addAction("com.nwd.action.ACTION_KEY_VALUE")
+            addAction("com.nwd.action.ACTION_TEST_KEY")
+        }
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                reactContext.registerReceiver(r, f, Context.RECEIVER_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag") reactContext.registerReceiver(r, f)
+            }
+            panelReceiver = r
+            Log.i(TAG, "panel-key watch registered")
+        } catch (e: Throwable) { Log.w(TAG, "panel-key watch failed", e) }
+    }
+
+    private fun stopPanelKeyWatch() {
+        panelReceiver?.let { try { reactContext.unregisterReceiver(it) } catch (_: Throwable) {} }
+        panelReceiver = null
+    }
+
+    /** Send a panel key AS IF the wheel/panel had been pressed (same unprotected
+     *  broadcast the MCU uses). Lets the probe exercise the service's own dispatch
+     *  table — e.g. 46 = AMS auto-store — without physical buttons. */
+    @ReactMethod
+    fun sendPanelKey(key: Int) {
+        reactContext.sendBroadcast(
+            Intent("com.nwd.action.ACTION_KEY_VALUE").putExtra("extra_key_value", key.toByte()))
+    }
+
     @ReactMethod
     fun disconnect() {
+        stopPanelKeyWatch()
         try { radio?.unRegistCallback(callback) } catch (_: Throwable) {}
         if (bound) { try { reactContext.unbindService(conn) } catch (_: Throwable) {} }
         bound = false
