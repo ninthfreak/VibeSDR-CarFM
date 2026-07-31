@@ -83,7 +83,10 @@ values. **Do not port `support.js`** — reimplement natively in React Native.
    tower, signal waves, stereo waves, star, chevron-free hero.
 
 ## Known / already-accepted deviations (report status; don't re-litigate unless wrong)
-- **Side-card slide animation** (clone-FLIP) NOT implemented — cards swap instantly.
+- ~~**Side-card slide animation** (clone-FLIP) NOT implemented — cards swap instantly.~~
+  RESOLVED — the clone-FLIP is implemented (CarFmFace `flip` state, 520ms, clone
+  overlay shrinking into the peek slot). This entry was stale from 19 July; do not
+  report it as a deviation.
 - **Side-card edge fade** = react-native-svg background-gradient overlay, not a true
   alpha mask (RN has no CSS mask; `masked-view` / `expo-linear-gradient` aren't deps).
 - **Settings diagnostics** device / USB-ID / sample-rate are representative strings,

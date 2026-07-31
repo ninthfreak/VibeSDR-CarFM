@@ -9,7 +9,7 @@
  * The surfaces (hero / preset tile / peek card) branch their WHOLE layout on whether
  * a real logo exists, so the resolution lives in a shared `useStationLogo` hook.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Image, Text, View } from 'react-native';
 
 import { getStationLogo, callsignForFreq } from '../../services/stationFinder';
@@ -83,8 +83,17 @@ export function useStationLogo(name?: string, freqMhz?: number, boxDp?: number):
   // Cache per (station, requested size) — a chip and the hero want different
   // pre-rendered files for the same station.
   const ck = (b: string) => `${b}|${boxDp ?? 0}`;
-  const [base, setBase] = useState<string | null>(nameBase);
-  const [uri, setUri] = useState<string | null>(nameBase ? cache.get(ck(nameBase)) ?? null : null);
+  // base and uri MUST move together. They used to be two useStates, and the gap
+  // between them is what made the hero flash the OUTGOING station's logo on every
+  // swap: `base` updated when callsignForFreq resolved, but `uri` kept the old
+  // station's image until getStationLogo came back — so for those frames the card
+  // showed the new frequency wearing the old logo. Worse, a superseded async
+  // resolve could land late and repaint a station the dial had already left,
+  // which is how a THIRD station's logo (one the vendor service transited) could
+  // appear. One state object, written only when it still matches the live base.
+  const [{ base, uri }, setResolved] = useState<{ base: string | null; uri: string | null }>(
+    () => ({ base: nameBase, uri: nameBase ? cache.get(ck(nameBase)) ?? null : null }),
+  );
   const [tick, setTick] = useState(0);
 
   // Re-read when invalidateLogoTile() fires (a new logo was just assigned).
@@ -94,22 +103,36 @@ export function useStationLogo(name?: string, freqMhz?: number, boxDp?: number):
     return () => { listeners.delete(l); };
   }, []);
 
+  // Adopt a new base and its logo in ONE write. The uri comes from the warm cache
+  // when it is there (presets are pre-warmed, so a swap between presets is
+  // seamless) and otherwise starts null — a logo-less frame, which the hero
+  // already handles by showing the call sign. Never the previous station's image.
+  const adopt = useCallback((b: string | null) => {
+    setResolved((prev) => (prev.base === b ? prev : { base: b, uri: b ? cache.get(ck(b)) ?? null : null }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boxDp]);
+
   // Identity is the callsign: from `name` if it carries one, else resolved from
   // the dial frequency via the FCC DB (a bare "FM 88.7" preset name has none).
   useEffect(() => {
     let cancelled = false;
-    if (nameBase) { setBase(nameBase); return; }
-    callsignForFreq(freqMhz).then((b) => { if (!cancelled) setBase(b); }).catch(() => {});
+    if (nameBase) { adopt(nameBase); return; }
+    callsignForFreq(freqMhz).then((b) => { if (!cancelled) adopt(b); }).catch(() => {});
     return () => { cancelled = true; };
-  }, [nameBase, freqMhz]);
+  }, [nameBase, freqMhz, adopt]);
 
   useEffect(() => {
     let cancelled = false;
-    if (!base) { setUri(null); return; }
+    if (!base) return;                       // adopt() already cleared the uri
     const k = ck(base);
-    if (cache.has(k)) { setUri(cache.get(k)!); return; }
+    if (cache.has(k)) return;                // adopt() already took the cached one
     getStationLogo(base, boxDp)
-      .then((u) => { cache.set(k, u); if (!cancelled) setUri(u); })
+      .then((u) => {
+        cache.set(k, u);
+        // Only paint if the dial is STILL on this station. A late resolve for a
+        // frequency the vendor service merely transited must not repaint it.
+        if (!cancelled) setResolved((prev) => (prev.base === base ? { base, uri: u } : prev));
+      })
       .catch(() => {});
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -128,7 +151,14 @@ export function useDarkLogo(base: string | null, active: boolean, boxDp?: number
   // Key by size too, so a chip and the hero can hold different pre-rendered
   // dark files for the same station (the ladder is useless otherwise).
   const key = base && active ? `${base.toUpperCase()}|${boxDp ?? 0}` : null;
-  const [v, setV] = useState<{ uri: string; treatment: string } | null>(key ? darkCache.get(key) ?? null : null);
+  // Same rule as useStationLogo: the value is stored WITH the key it belongs to,
+  // and is only displayed while that key is still current. Otherwise a swap shows
+  // the outgoing station's dark variant until the new one decodes — the dark-mode
+  // twin of the light-logo flash.
+  const [st, setSt] = useState<{ key: string | null; val: { uri: string; treatment: string } | null }>(
+    () => ({ key, val: key ? darkCache.get(key) ?? null : null }),
+  );
+  const v = st.key === key ? st.val : (key ? darkCache.get(key) ?? null : null);
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const l = () => setTick((n) => n + 1);
@@ -137,13 +167,14 @@ export function useDarkLogo(base: string | null, active: boolean, boxDp?: number
   }, []);
   useEffect(() => {
     let cancelled = false;
-    if (!base || !active || !key) { setV(null); return; }
-    if (darkCache.has(key)) { setV(darkCache.get(key)!); return; }
+    if (!base || !active || !key) { setSt({ key: null, val: null }); return; }
+    if (darkCache.has(key)) { setSt({ key, val: darkCache.get(key)! }); return; }
     darkUri(base, boxDp)
       .then((d) => {
         const val = d ? { uri: d.uri, treatment: d.treatment } : null;
         darkCache.set(key, val);
-        if (!cancelled) setV(val);
+        // Late resolves for a station the dial has already left are dropped.
+        if (!cancelled) setSt((prev) => (prev.key === key || prev.key === null ? { key, val } : prev));
         // No variant yet for a station that HAS a logo (active only when a logo
         // exists) → adapt once in the background (gate bg = the canonical dark
         // surface), then re-read. Guarded so a decode failure doesn't loop.
