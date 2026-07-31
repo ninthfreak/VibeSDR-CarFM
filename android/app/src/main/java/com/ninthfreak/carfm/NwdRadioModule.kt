@@ -264,7 +264,11 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
      *  the RDS-enable selectors, presets and radio/scan state. Purely read-only;
      *  safe to call any time after connect. Returns a formatted multi-line string
      *  that JS writes to the tuner diagnostics log. */
-    // ── android.os.Hardware JSON channel (decompile, 2026-07-31) ────────────────
+    // ── android.os.Hardware JSON channel — DISPROVEN on this ROM ────────────────
+    // Kept because the decompile findings below are still correct about the
+    // VENDOR's design; only our guess at the transport class was wrong. The
+    // device result that settles it is directly beneath.
+    //
     // The vendor service does NOT get signal or RDS over the AIDL we bind — it
     // goes around it. RadioService picks ArmRadioManager when
     // RadioJsonNative.getRadioIc() == "SI47925" (a Silicon Labs Si4792x), and
@@ -283,72 +287,78 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     // things the AIDL genuinely cannot: TRUE signal strength and raw RDS (hence
     // RadioText, which ArmRadioManager.getRtMessage() hardcodes to "").
     //
-    // UNPROVEN until this probe runs on the unit: it may throw on the class
-    // lookup (different ROM), on access (hidden-API), or return an error string
-    // (permission / wrong UID). All three are reported verbatim rather than
-    // swallowed. Read-only queries only — nothing here changes tuner state.
-    // 2026-07-30 device run: Class.forName SUCCEEDED (no ClassNotFoundException)
-    // but getMethod threw NoSuchMethodException. getMethod only sees PUBLIC
-    // methods; the vendor's own ReflectUtil.invokeStatic uses getDeclaredMethod
-    // + setAccessible, which reaches package-private and private ones too. So the
-    // class is here and this was the wrong lookup, not a missing channel.
-    private fun hardwareParseJson(json: String): String {
+    // SETTLED ON DEVICE, 2026-07-30 21:23 — the JSON channel is NOT on this class.
+    //
+    // Run 1: getMethod("parseJson") threw NoSuchMethodException. That was an
+    // inconclusive result, because getMethod only sees PUBLIC methods and the
+    // vendor's own ReflectUtil.invokeStatic uses getDeclaredMethod +
+    // setAccessible. Run 2 added the getDeclaredMethod fallback AND a dump of
+    // every method the class declares. Both came back negative:
+    //
+    //   * getDeclaredMethod("parseJson", String) → NoSuchMethodException. That
+    //     call searches the class's own declarations at every visibility, so
+    //     parseJson is not declared on android.os.Hardware, private or otherwise.
+    //   * getMethod also failed, so it is not public anywhere up the hierarchy
+    //     either.
+    //   * The dump listed 180 methods, none named parseJson or anything
+    //     JSON-shaped. There is no String-in/String-out entry point at all
+    //     besides setDSP_ak7604_status(String), which is an AK7604 DSP setter.
+    //
+    // So RadioJsonNative reaches the MCU through something other than
+    // android.os.Hardware on this firmware, and finding it needs another
+    // decompile pass — not another device run. RSSI and raw RDS stay unavailable
+    // until then; do NOT re-add speculative parseJson calls without new evidence.
+    //
+    // What the dump DID give us is a set of real, read-only radio getters, which
+    // is what this probe now reads. They are the honest replacement for the
+    // representative strings in the settings diagnostics.
+    private val hardwareGetters = listOf(
+        "isArmFmSupported",      // is the FM front-end the ARM/Si module path?
+        "getRadioModuleArm",     // which radio module the MCU reports
+        "getMcuType",
+        "getAudioICState",
+        "getCameraICType",       // String; names the board's IC family
+        "getTouchScreenVersion", // String; a firmware fingerprint for the unit
+    )
+
+    /** Call a no-arg static getter on android.os.Hardware and format the result.
+     *  Read-only by construction: only names from `hardwareGetters` are invoked,
+     *  and every one of them is a getter. Nothing here changes tuner state. */
+    private fun hardwareGet(name: String): String {
         val cls = Class.forName("android.os.Hardware")
         val m = try {
-            cls.getMethod("parseJson", String::class.java)
+            cls.getMethod(name)
         } catch (_: NoSuchMethodException) {
-            cls.getDeclaredMethod("parseJson", String::class.java).apply { isAccessible = true }
+            cls.getDeclaredMethod(name).apply { isAccessible = true }
         }
-        return m.invoke(null, json)?.toString() ?: "(null)"
+        return m.invoke(null)?.toString() ?: "(null)"
     }
 
-    /** Every method android.os.Hardware actually declares, with its signature.
-     *  If parseJson(String) is genuinely absent this names what IS callable
-     *  instead — turning "guess again" into a fact. */
-    private fun hardwareMethodDump(): String {
-        return try {
-            val cls = Class.forName("android.os.Hardware")
-            val ms = cls.declaredMethods
-            if (ms.isEmpty()) return "  (class found, declares no methods)"
-            ms.sortedBy { it.name }.joinToString("\n") { m ->
-                val params = m.parameterTypes.joinToString(", ") { it.simpleName }
-                val mods = if (java.lang.reflect.Modifier.isStatic(m.modifiers)) "static " else ""
-                "  $mods${m.returnType.simpleName} ${m.name}($params)"
-            }
-        } catch (e: Throwable) {
-            "  (method dump failed: ${e.javaClass.name}: ${e.message})"
-        }
-    }
-
-    /** Try the JSON channel and report exactly what happened, success or failure. */
+    /** Read the radio-related getters the firmware actually exposes and report
+     *  exactly what happened for each, success or failure. */
     @ReactMethod
     fun probeJsonHardware(promise: Promise) {
-        val sb = StringBuilder("JSON-HARDWARE PROBE (android.os.Hardware.parseJson)\n")
-        fun q(label: String, key: String) {
-            sb.append("  ").append(label).append(" = ")
+        val sb = StringBuilder("HARDWARE PROBE (android.os.Hardware getters)\n")
+        // Confirm the negative result stays true on any unit this runs on, in one
+        // line rather than the four identical ERR lines the old probe emitted.
+        sb.append("  parseJson(String) present? = ")
+        sb.append(
+            try { Class.forName("android.os.Hardware").getDeclaredMethod("parseJson", String::class.java); "YES" }
+            catch (e: Throwable) { "no (${e.javaClass.simpleName})" },
+        ).append('\n')
+        for (name in hardwareGetters) {
+            sb.append("  ").append(name).append("() = ")
             try {
-                sb.append('"').append(hardwareParseJson(
-                    """{"MODULE":"radio","ACTION":"get","$key":"query"}""")).append('"')
+                sb.append(hardwareGet(name))
             } catch (e: Throwable) {
                 // The exception TYPE is the diagnosis: ClassNotFoundException =
-                // this ROM has no such class; NoSuchMethodException = different
-                // signature; SecurityException / InvocationTargetException =
+                // this ROM has no such class; NoSuchMethodException = absent on
+                // this firmware; SecurityException / InvocationTargetException =
                 // reachable but refused.
                 sb.append("ERR ").append(e.javaClass.name).append(": ").append(e.message)
             }
             sb.append('\n')
         }
-        q("IC   (expect SI47925)", "IC")
-        q("RSSI (expect a number)", "RSSI")
-        q("RDS  (expect 16 hex chars)", "RDS")
-        // A second RDS read a moment later: RDS arrives group by group, so two
-        // identical non-zero reads still prove the channel is live.
-        Thread.sleep(300)
-        q("RDS  (2nd read)", "RDS")
-        // Always dump the real surface. On success this confirms the signature we
-        // called; on failure it is the whole point of the run.
-        sb.append("  --- android.os.Hardware declared methods ---\n")
-        sb.append(hardwareMethodDump()).append('\n')
         promise.resolve(sb.toString())
     }
 
