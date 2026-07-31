@@ -38,10 +38,6 @@ type Props = NativeStackScreenProps<RootStackParamList, 'InstancePicker'>;
  * down from the auto-connect so they can own the session.
  */
 export default function InstancePickerScreen({ navigation, route }: Props) {
-  // Android boots straight into the CarFM face; hold a plain dark splash until
-  // then so nothing flashes up. Cleared only if we end up NOT redirecting
-  // (non-Android, deep link, or noAutoConnect dev paths).
-  const [booting,     setBooting]       = useState(Platform.OS === 'android');
   const [connecting,  setConnecting]    = useState(false);
   const [defaultInst, setDefaultInst]   = useState<DefaultInstance | null>(null);
   // Tell native the default-instance name (or '' = none) so it can auto-connect,
@@ -112,10 +108,6 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         });
         return;
       }
-
-      // Reached only when we did NOT redirect into CarFM (non-Android, deep link,
-      // noAutoConnect) — so reveal the (now blank) screen instead of the splash.
-      if (!cancelled) setBooting(false);
 
       // A default instance still auto-connects straight through — unless a
       // carfm:// deep link is driving this launch (it owns the session and
