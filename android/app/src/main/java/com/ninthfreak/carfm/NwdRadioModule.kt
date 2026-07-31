@@ -303,10 +303,20 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     //     JSON-shaped. There is no String-in/String-out entry point at all
     //     besides setDSP_ak7604_status(String), which is an AK7604 DSP setter.
     //
-    // So RadioJsonNative reaches the MCU through something other than
-    // android.os.Hardware on this firmware, and finding it needs another
-    // decompile pass — not another device run. RSSI and raw RDS stay unavailable
-    // until then; do NOT re-add speculative parseJson calls without new evidence.
+    // That decompile pass is now DONE (2026-07-31) and it found the answer:
+    // ReflectUtil.invokeStatic returns null (it logs "Can't find …") instead of
+    // throwing when a method is absent, so getRadioIc() yields "", the
+    // getRadioIc()=="SI47925" test in RadioService.onCreate fails, and this unit
+    // never selects ArmRadioManager at all — it runs the Allwinner path. The JSON
+    // channel belongs to the Si4792x variant; it was never ours to reach.
+    //
+    // The transport THIS unit uses is the vendor framework class
+    // com.nwd.app.NwdFmManager, via com.nwd.radio.arm.allwinner.AWNative:
+    //   getRadioRDSDataArm() -> String, raw RDS      getRadioRDSFunArm() -> 1 if supported
+    //   getFreAndStrength()  -> hi16 = strength      getStationStereoState() -> real stereo
+    // See docs/BUILTIN-TUNER-FINDINGS.md, "The REAL transport found". Repointing
+    // this probe at NwdFmManager is the next step; until that runs, RSSI and raw
+    // RDS stay unavailable. Do NOT re-add speculative parseJson calls.
     //
     // What the dump DID give us is a set of real, read-only radio getters, which
     // is what this probe now reads. They are the honest replacement for the
