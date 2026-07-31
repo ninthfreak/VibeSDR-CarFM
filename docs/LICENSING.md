@@ -92,31 +92,50 @@ tracking; a real pre-distribution pass wants `license-checker` or an SBOM.
 
 ## ⚠️ Fonts — the largest open item
 
-12 files in `assets/fonts`, bundled into the APK. Two groups, very different risk.
+12 files in `assets/fonts`, bundled into the APK. No licence file accompanies any
+of them, so the evidence below is the **embedded name-table metadata**, read with
+`strings -e b` (the table is UTF-16, which plain `strings` misses).
 
-**Cleared:**
+**✅ Cleared — licence embedded in the file:**
 
-| Font | Licence |
+| Font | Evidence |
 |---|---|
-| `AtkinsonHyperlegible-{Regular,Bold}` | OFL — Braille Institute, credited in README |
-| `Anton-Regular` | OFL (Google Fonts) |
-| `PermanentMarker` | Apache-2.0 (Google Fonts) |
-| `NixieOne-Regular` | OFL |
+| `AtkinsonHyperlegible-{Regular,Bold}` | "licensed under the SIL Open Font License" + scripts.sil.org/OFL |
+| `NixieOne-Regular` | same OFL text embedded |
+| `Squealer` | "Released in 2022 under CC0 license. No rights reserved." |
 
-**⚠️ Unverified — the band-theme set (task #24).** None is credited anywhere, and
-none has an accompanying licence file:
+`Squealer` being CC0 is a correction in the favourable direction — an earlier
+pass listed it with the risky band faces on the assumption that an AC/DC-styled
+face must be fan-made.
 
-`Squealer` · `BeatlesYellowSub` · `SgtPeppers` · `MadieRoger` · `Onyx` ·
-`Gridnik` · `Singothic`
+**🟡 Probably fine, but not proven by the file:**
 
-These are band-identity typefaces. Faces in this category are typically either
-**fan-made recreations with no distribution grant**, or **commercial licences
-that do not permit app embedding**. `bandThemes.ts` has a `BAND_FONTS_READY` flag
-that falls the whole system back to Atkinson — that flag is the kill switch if
-any of these cannot be cleared.
+| Font | Embedded string | Gap |
+|---|---|---|
+| `Anton-Regular` | "Copyright 2020 The Anton Project Authors (github.com/googlefonts/AntonFont)" | Google Fonts project, so OFL in practice, but no licence grant is embedded |
+| `PermanentMarker` | "Copyright (c) 2010 by Font Diner, Inc. **All rights reserved.**" | Google Fonts distributes it under Apache-2.0, but THIS file carries no grant — only a reservation. An earlier pass recorded it as Apache-2.0; that was inference, not evidence. |
 
-**To resolve:** establish provenance and licence per face. Expect some to need
-replacing with cleared lookalikes or dropping to the Atkinson fallback.
+**⚠️ Confirmed commercial — foundry copyright, no grant:**
+
+| Font | Embedded string |
+|---|---|
+| `Gridnik` | "The digitally encoded machine readable outline data for producing…" — the standard restrictive foundry EULA boilerplate |
+| `Onyx` | "The Monotype Corporation plc/Type Solutions, Inc. 1990-1991 All Rights Reserved" |
+| `MadieRoger` | "7NTypes. 2023. All Rights Reserved" |
+
+These are not "unverified" — they are commercial faces carrying an explicit
+rights reservation and no distribution grant.
+
+**⚠️ No metadata at all:**
+
+`BeatlesYellowSub` · `SgtPeppers` · `Singothic`
+
+Stripped name tables are characteristic of fan-made or re-distributed rips.
+Absence of a claim is not a grant.
+
+**To resolve:** clear or replace the six in the last two groups. `bandThemes.ts`
+has a `BAND_FONTS_READY` flag that drops the whole band-theme system back to
+Atkinson — that is the kill switch if they cannot be cleared.
 
 ---
 
@@ -166,7 +185,7 @@ hand-written from the interface rather than decompiler output, and document that
 
 | # | Item | Severity |
 |---|---|---|
-| 1 | Band fonts, 7 faces, provenance unknown | ⚠️ High — bundled in the APK |
+| 1 | Band fonts — 3 confirmed commercial, 3 with no metadata | ⚠️ High — bundled in the APK |
 | 2 | Band artwork, trademarked logos | ⚠️ High — trademark, not just copyright |
 | 3 | Vendor `.java` parcelables in `com.nwd.*` | ⚠️ Medium — confirm provenance |
 | 4 | `sdr-kit` prebuilts, no licence texts, GPL-2.0-only risk | ⚠️ Medium — mechanical to fix |
