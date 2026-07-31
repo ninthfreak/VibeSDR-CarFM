@@ -119,6 +119,9 @@ interface FlipDescriptor {
   cloneOpacity: Animated.Value; // leaving far peek 0.6 → 0
   cloneRect: Rect;
   cloneName: string;
+  /** The station this swap is heading to. The morph must not start until the
+   *  cards actually HOLD the new stations — see the arming effect. */
+  targetMhz: number;
 }
 
 const mhzOf = (hz: number) => Math.round(hz / CHANNEL_HZ) / 10;
@@ -908,9 +911,12 @@ export default function CarFmFace(props: CarFmFaceProps) {
     left: null, center: null, right: null,
   }).current;
   const [flip, setFlip] = useState<FlipDescriptor | null>(null);
+  // Latched separately from `flip` so a later dial change cannot re-trigger or
+  // restart a morph that is already running.
+  const [flipArmed, setFlipArmed] = useState(false);
   const flipProg = useRef(new Animated.Value(0)).current;
 
-  const startFlip = useCallback((dir: 1 | -1): boolean => {
+  const startFlip = useCallback((dir: 1 | -1, targetMhz: number): boolean => {
     const { left, center, right } = slotRects;
     if (!left || !center || !right || !prevP || !nextP) return false;
     const source = dir > 0 ? right : left;        // new center emerges from here
@@ -946,18 +952,57 @@ export default function CarFmFace(props: CarFmFaceProps) {
       { scaleY: track(center.h / landing.h, PEEK_SCALE, easeScale) },
     ];
     flipProg.setValue(0);
+    setFlipArmed(false);
     setFlip({
       dir, nearSide, farSide, centerTransform, landTransform,
       enterOpacity: new Animated.Value(0),
       cloneOpacity: new Animated.Value(PEEK_OPACITY),
-      cloneRect: landing, cloneName,
+      cloneRect: landing, cloneName, targetMhz,
     });
     return true;
   }, [slotRects, prevP, nextP, flipProg]);
 
-  // Run the four animations once the descriptor is in place (data has updated).
+  // ARM the morph only once the cards actually HOLD the new stations.
+  //
+  // This is a FLIP: at progress 0 every card is placed at its PRE-swap geometry,
+  // so the morph is only meaningful if the slots already contain the post-swap
+  // content. They did not. `setFlip` and the commit-to-target were separate state
+  // updates, and the animation — running on the UI thread via the native driver —
+  // began before the new content had mounted. So the morph played out on the OLD
+  // cards: on a NEXT press the video shows the LEFT peek growing into the centre
+  // and the old hero shrinking to the RIGHT, which is the PREV motion, and then
+  // the content snaps to the correct arrangement partway through. That is the
+  // "card slides in and becomes a different station" reported on 31 July.
+  //
+  // Holding at progress 0 is free: it is exactly where the cards already are, so
+  // waiting shows no movement at all rather than a wrong one.
+  //
+  // Two gates, and they are guarding different things. `mhz` reaching the target
+  // proves the JS side committed the swap — but `pending` sets that synchronously,
+  // so on its own it is nearly a no-op. The real lag is the NATIVE MOUNT: the
+  // morph is native-driven and starts on the UI thread as soon as .start() is
+  // called, while the new card content is still being mounted. Hence one frame of
+  // slack. One frame is enough now that the hero resolves its identity, logo and
+  // size tier in a single render; when each of those was its own async round trip
+  // the content could trail by ~150ms and no fixed delay would have been right.
   useEffect(() => {
-    if (!flip) return;
+    if (!flip || flipArmed) return;
+    if (Math.abs(mhz - flip.targetMhz) < 0.05) {
+      const r = requestAnimationFrame(() => setFlipArmed(true));
+      return () => cancelAnimationFrame(r);
+    }
+    // A tune that never lands must not freeze the cards in the pre-swap pose.
+    // Dropping the descriptor returns them to their resting layout.
+    const bail = setTimeout(() => {
+      diag(`face: FLIP dropped — content never reached ${flip.targetMhz.toFixed(1)}`);
+      setFlip(null);
+    }, 400);
+    return () => clearTimeout(bail);
+  }, [flip, flipArmed, mhz]);
+
+  // Run the four animations once the descriptor is in place AND armed.
+  useEffect(() => {
+    if (!flip || !flipArmed) return;
     const anim = Animated.parallel([
       Animated.timing(flipProg, { toValue: 1, duration: 520, easing: Easing.linear, useNativeDriver: true }),
       Animated.timing(flip.cloneOpacity, { toValue: 0, duration: 520, easing: Easing.bezier(0.25, 0.1, 0.25, 1), useNativeDriver: true }),
@@ -979,12 +1024,14 @@ export default function CarFmFace(props: CarFmFaceProps) {
     // §4.7/§8: instant swaps (no hero animation) while audio is released.
     // startFlip returns false when the slots are unmeasured or there is no
     // prev/next card — a silent no-animation case worth naming in the log.
-    const flipped = off ? false : startFlip(dir);
     // activeIndex already reflects the committed target (it derives from the
     // effective dial), so rapid presses walk the list one step at a time instead
     // of re-deriving from whatever the vendor service last tuned.
     const i = activeIndex >= 0 ? activeIndex : (dir > 0 ? -1 : 0);
     const n = ((i + dir) % items.length + items.length) % items.length;
+    // The target must be known BEFORE the descriptor is built — the morph is
+    // armed against it, so it can wait for the cards to hold the new stations.
+    const flipped = off ? false : startFlip(dir, items[n].frequencyMhz);
     diag(`face: step ${dir > 0 ? '+1' : '-1'} idx ${i}→${n} of ${items.length}, `
        + `target ${items[n].frequencyMhz.toFixed(1)} "${items[n].name}"`
        + `${flipped ? '' : off ? ' [flip skipped: audio released]' : ' [FLIP SKIPPED]'}`);
