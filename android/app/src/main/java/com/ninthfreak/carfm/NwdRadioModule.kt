@@ -49,7 +49,6 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     private var radio: RadioFeature? = null
     private var bound = false
     private var registered = false
-    private var initialStereo = false
     private var initialRt = ""
     private var initialPty = -1
     private var connectPromise: Promise? = null
@@ -188,10 +187,10 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
                     freqMult = if (fv > 50000) 1000 else if (fv > 5000) 100 else if (fv > 500) 10 else 1
                 }
             } catch (e: Throwable) { Log.w(TAG, "getCurrentFrequency failed", e) }
-            // Read the CURRENT stereo state: a stable-stereo station never fires
-            // notifyStereo (that only fires on change), so without this the face
-            // is stuck at its mono default on a rock-solid stereo signal.
-            initialStereo = try { r.isStreroOn() } catch (_: Throwable) { false }
+            // NO initial stereo read: isStreroOn() is stuck true on this firmware
+            // (it reads true on dead air), so seeding from it put a false STEREO on
+            // the face that nothing corrected. notifyStereo is the only trustworthy
+            // source; until it fires, the face shows its "unknown" pill.
             initialRt = try { r.getRtMessage() ?: "" } catch (_: Throwable) { "" }
             initialPty = try { r.getPTYType().toInt() } catch (_: Throwable) { -1 }
             // RDS on by default (selector byte 0 — same guess the spike confirmed works).
@@ -493,7 +492,6 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         putInt("band", fmBand.toInt())
         putInt("freqMult", freqMult)
         putBoolean("registered", registered)
-        putBoolean("stereo", initialStereo)
         putString("rt", initialRt)
         putInt("pty", initialPty)
         try { radio?.getCurrentFrequency()?.let {

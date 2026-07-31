@@ -419,7 +419,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const liveStationRef = useRef<string>('');
   const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
   const lastLiveLogoKey = useRef('');
-  const [fmStereo, setFmStereo] = useState(false);   // WFM stereo pilot (local hardware)
+  // WFM stereo pilot. null = UNKNOWN — nothing has told us yet, so the face shows
+  // a blank pill rather than asserting MONO. The head-unit tuner only reports on a
+  // CHANGE (NwdRadioStereo), and its one-shot getter is stuck true, so "unknown"
+  // is the honest state between connect and the first callback.
+  const [fmStereo, setFmStereo] = useState<boolean | null>(null);
 
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
   // True while the head unit's built-in NWD tuner is driving the face (a
@@ -2497,7 +2501,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // service's own preset list. No audio is produced by that session — the
         // MCU keeps routing the analog FM audio.
         (VibePowerModule as any)?.startNwdControl?.();
-        diag(`NWD connected: registered=${info.registered} band=${info.band} freqMult=${info.freqMult} mhz=${info.mhz ?? '?'} ps='${info.ps ?? ''}' stereo=${info.stereo} rt='${info.rt ?? ''}' pty=${info.pty}; RDS on`);
+        diag(`NWD connected: registered=${info.registered} band=${info.band} freqMult=${info.freqMult} mhz=${info.mhz ?? '?'} ps='${info.ps ?? ''}' rt='${info.rt ?? ''}' pty=${info.pty}; RDS on`);
         // Station names come from the FCC-DB callsign lookup, which needs GPS
         // location — if that's null on the head unit, every station shows
         // "Tuning…". Log the location once so the next log confirms whether this
@@ -2505,9 +2509,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         getUserLocation()
           .then((loc) => diag(`location: ${loc ? `${loc.lat},${loc.lon}` : 'null (no GPS fix / permission denied) → names cannot resolve'}`))
           .catch((e) => diag(`location: error ${String(e)}`));
-        // Seed the INITIAL tuner state — stereo/RT/PTY only push notify* on a
-        // CHANGE, so a stable station would otherwise leave the face at defaults.
-        if (typeof info.stereo === 'boolean') setFmStereo(info.stereo);
+        // Seed the INITIAL tuner state — RT/PTY only push notify* on a CHANGE, so
+        // a stable station would otherwise leave the face at defaults. Stereo is
+        // deliberately NOT seeded: its getter is stuck true, so fmStereo stays
+        // null (blank pill) until NwdRadioStereo reports something real.
         setLiveStation((prev) => ({
           ...prev,
           name: info.ps || prev.name,

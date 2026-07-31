@@ -50,7 +50,8 @@ export interface CarFmFaceProps {
   stationName?: string;     // RDS PS
   callsignHint?: string;    // PI-derived callsign (·city), shown only when PS absent
   radioText?: string;       // RDS RT
-  stereo: boolean;
+  /** true = STEREO, false = MONO, null = UNKNOWN (blank pill — nothing has reported yet). */
+  stereo: boolean | null;
   signalDb: number | null;
   /** RDS decoder has a lock (PI/PS seen) — drives the RDS tell. */
   rdsOk?: boolean;
@@ -1073,8 +1074,11 @@ export default function CarFmFace(props: CarFmFaceProps) {
     </View>
   );
   // §4.7 off: the STEREO/MONO pill goes EMPTY (outline, no waves, no text) and all
-  // tells drop to their dim/off state.
-  const so = stereo && !off;
+  // tells drop to their dim/off state. stereo === null (nothing has reported yet)
+  // renders that same empty pill — asserting MONO before the tuner speaks would be
+  // a guess, and on this firmware it was a wrong one.
+  const so = stereo === true && !off;
+  const stereoBlank = off || stereo == null;
   // AC/DC bolt art (supplied PNGs) flanking the STEREO pill (EASTER-EGGS §2.1):
   // slot 20×28 wide / 28×40 tall, art height 24/34, −2 outward inset, dark-filtered.
   const fanFilter: any = egg?.stereoArtFilter ? { filter: [{ grayscale: 1 }, { brightness: 2.3 }, { contrast: 0.85 }] } : null;
@@ -1098,7 +1102,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
       }]}>
         {so ? <StereoWave color={pal.blue} flip w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
         <Text style={[styles.stereoText, { fontSize: L.stereoFont, color: so ? pal.blue : pal.dim }]}>
-          {off ? '' : stereo ? 'STEREO' : 'MONO'}
+          {stereoBlank ? '' : stereo ? 'STEREO' : 'MONO'}
         </Text>
         {so ? <StereoWave color={pal.blue} w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
       </View>

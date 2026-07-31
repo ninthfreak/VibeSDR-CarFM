@@ -31,7 +31,9 @@ type NwdNative = {
 
 export type NwdConnectInfo = {
   band: number; freqMult: number; mhz?: number; ps?: string;
-  registered?: boolean; stereo?: boolean; rt?: string; pty?: number;
+  // No `stereo` here on purpose: the connect map no longer carries one (the
+  // native getter is stuck true). Stereo arrives only via NwdRadioStereo.
+  registered?: boolean; rt?: string; pty?: number;
 };
 
 const native: NwdNative | undefined =
