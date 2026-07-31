@@ -287,10 +287,37 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     // lookup (different ROM), on access (hidden-API), or return an error string
     // (permission / wrong UID). All three are reported verbatim rather than
     // swallowed. Read-only queries only — nothing here changes tuner state.
+    // 2026-07-30 device run: Class.forName SUCCEEDED (no ClassNotFoundException)
+    // but getMethod threw NoSuchMethodException. getMethod only sees PUBLIC
+    // methods; the vendor's own ReflectUtil.invokeStatic uses getDeclaredMethod
+    // + setAccessible, which reaches package-private and private ones too. So the
+    // class is here and this was the wrong lookup, not a missing channel.
     private fun hardwareParseJson(json: String): String {
         val cls = Class.forName("android.os.Hardware")
-        val m = cls.getMethod("parseJson", String::class.java)
+        val m = try {
+            cls.getMethod("parseJson", String::class.java)
+        } catch (_: NoSuchMethodException) {
+            cls.getDeclaredMethod("parseJson", String::class.java).apply { isAccessible = true }
+        }
         return m.invoke(null, json)?.toString() ?: "(null)"
+    }
+
+    /** Every method android.os.Hardware actually declares, with its signature.
+     *  If parseJson(String) is genuinely absent this names what IS callable
+     *  instead — turning "guess again" into a fact. */
+    private fun hardwareMethodDump(): String {
+        return try {
+            val cls = Class.forName("android.os.Hardware")
+            val ms = cls.declaredMethods
+            if (ms.isEmpty()) return "  (class found, declares no methods)"
+            ms.sortedBy { it.name }.joinToString("\n") { m ->
+                val params = m.parameterTypes.joinToString(", ") { it.simpleName }
+                val mods = if (java.lang.reflect.Modifier.isStatic(m.modifiers)) "static " else ""
+                "  $mods${m.returnType.simpleName} ${m.name}($params)"
+            }
+        } catch (e: Throwable) {
+            "  (method dump failed: ${e.javaClass.name}: ${e.message})"
+        }
     }
 
     /** Try the JSON channel and report exactly what happened, success or failure. */
@@ -318,6 +345,10 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         // identical non-zero reads still prove the channel is live.
         Thread.sleep(300)
         q("RDS  (2nd read)", "RDS")
+        // Always dump the real surface. On success this confirms the signature we
+        // called; on failure it is the whole point of the run.
+        sb.append("  --- android.os.Hardware declared methods ---\n")
+        sb.append(hardwareMethodDump()).append('\n')
         promise.resolve(sb.toString())
     }
 

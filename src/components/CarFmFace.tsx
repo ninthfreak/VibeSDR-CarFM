@@ -706,11 +706,20 @@ export default function CarFmFace(props: CarFmFaceProps) {
   useEffect(() => {
     if (!pending) return;
     // Settled: the dial reached the target → resume honest rendering.
-    if (Math.abs(rawMhz - pending.mhz) < 0.05) { setPending(null); return; }
+    if (Math.abs(rawMhz - pending.mhz) < 0.05) {
+      diag(`face: settled on ${pending.mhz.toFixed(1)} — hold released`);
+      setPending(null); return;
+    }
+    // The vendor service steps ITS OWN preset list on the same wheel press, so
+    // the dial visits frequencies we never asked for. Log each one we ride out.
+    diag(`face: holding ${pending.mhz.toFixed(1)}, dial went to ${rawMhz.toFixed(1)}`);
     // Cap: never let a failed/ignored tune freeze the display. On expiry the face
     // simply shows reality again (fading, not snapping — the values it reads are
     // the same ones it was already animating).
-    const t = setTimeout(() => setPending(null), 2000);
+    const t = setTimeout(() => {
+      diag(`face: HOLD CAP expired — target ${pending.mhz.toFixed(1)} never reached, dial=${rawMhz.toFixed(1)}`);
+      setPending(null);
+    }, 2000);
     return () => clearTimeout(t);
   }, [pending, rawMhz]);
 
@@ -932,13 +941,19 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // PREV/NEXT step through presets in their DISPLAYED order (wrapping). Fire the
   // hero-swap FLIP first (it captures resting geometry), then tune.
   const stepPreset = useCallback((dir: 1 | -1) => {
-    if (items.length === 0) return;
-    if (!off) startFlip(dir);   // §4.7/§8: instant swaps (no hero animation) while audio is released
+    if (items.length === 0) { diag('face: step ignored — no presets'); return; }
+    // §4.7/§8: instant swaps (no hero animation) while audio is released.
+    // startFlip returns false when the slots are unmeasured or there is no
+    // prev/next card — a silent no-animation case worth naming in the log.
+    const flipped = off ? false : startFlip(dir);
     // activeIndex already reflects the committed target (it derives from the
     // effective dial), so rapid presses walk the list one step at a time instead
     // of re-deriving from whatever the vendor service last tuned.
     const i = activeIndex >= 0 ? activeIndex : (dir > 0 ? -1 : 0);
     const n = ((i + dir) % items.length + items.length) % items.length;
+    diag(`face: step ${dir > 0 ? '+1' : '-1'} idx ${i}→${n} of ${items.length}, `
+       + `target ${items[n].frequencyMhz.toFixed(1)} "${items[n].name}"`
+       + `${flipped ? '' : off ? ' [flip skipped: audio released]' : ' [FLIP SKIPPED]'}`);
     commitTo(items[n].frequencyMhz, items[n].name);
     onTuneHz(Math.round(items[n].frequencyMhz * 1e6));
   }, [items, activeIndex, onTuneHz, startFlip, off, commitTo]);
