@@ -10,7 +10,7 @@ import { setBandFontsReady } from './src/components/carfm/bandThemes';
 LogBox.ignoreAllLogs();
 
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
-import SDRScreen            from './src/screens/SDRScreen';
+import RadioScreen            from './src/screens/RadioScreen';
 import CrashBoundary        from './src/components/CrashBoundary';
 import { installCrashGuard } from './src/services/crashGuard';
 import { ThemeProvider }    from './src/contexts/ThemeContext';
@@ -31,7 +31,7 @@ export type RootStackParamList = {
      *  chose. This says "be here, but don't take over". */
     noAutoConnect?: boolean;
   } | undefined;
-  SDR: {
+  Radio: {
     baseUrl:         string;
     password?:       string;
     instanceName?:   string;
@@ -194,7 +194,7 @@ export default function App() {
             }}
           >
             <Stack.Screen name="InstancePicker" component={InstancePickerScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="SDR"            component={SDRScreen}            options={{ headerShown: false, gestureEnabled: false }} />
+            <Stack.Screen name="Radio"          component={RadioScreen}            options={{ headerShown: false, gestureEnabled: false }} />
           </Stack.Navigator>
         </NavigationContainer>
         </CrashBoundary>

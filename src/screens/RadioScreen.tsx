@@ -1,8 +1,8 @@
 /**
- * SDRScreen — main receiver screen for CarFM v2.
+ * RadioScreen — main receiver screen for CarFM v2.
  *
  * Hierarchy:
- *   SDRScreen
+ *   RadioScreen
  *   ├── ControlsBar           (drums, sig-frame, freq/mode pill, step, menu — absolute overlay)
  *   ├── MenuSheet             (slide-up panel)
  *   ├── StepPicker            (bottom-sheet step selector)
@@ -79,7 +79,7 @@ import { getUserLocation } from '../services/instancesApi';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type Props = NativeStackScreenProps<RootStackParamList, 'SDR'>;
+type Props = NativeStackScreenProps<RootStackParamList, 'Radio'>;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -126,7 +126,7 @@ function liveStationEqual(a: LiveStation, b: LiveStation): boolean {
     a.pi === b.pi && sameNums(a.afMhz, b.afMhz);
 }
 
-export default function SDRScreen({ route, navigation }: Props) {
+export default function RadioScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName, password } = route.params;
   useKeepAwake();
 
@@ -2049,7 +2049,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       });
       if (tunerSwapDone.current) return;
       tunerSwapDone.current = true;
-      navigation.replace('SDR', {
+      navigation.replace('Radio', {
         baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware',
         viewMode: route.params.viewMode, serverType: 'ubersdr',
         isLocal: true, localPort: res.port, localGen: newLocalSession(),

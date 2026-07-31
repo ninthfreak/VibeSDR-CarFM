@@ -87,7 +87,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       if (!cancelled && await tryUsbLaunchRef.current?.(mode)) return;
       // CarFM: a permanent install boots with the dongle already attached, so no
       // USB_DEVICE_ATTACHED fires. If a dongle is present and autostart is on,
-      // connect it and drop into the FM face — the SDR screen restores the last
+      // connect it and drop into the FM face — the radio screen restores the last
       // station. Guarded like the default-instance connect below (link).
       if (!cancelled && !isDeepLinkActive()
           && !route.params?.noAutoConnect
@@ -101,7 +101,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       if (!cancelled && Platform.OS === 'android'
           && !isDeepLinkActive()
           && !route.params?.noAutoConnect) {
-        navigation.navigate('SDR', {
+        navigation.navigate('Radio', {
           baseUrl: 'ws://127.0.0.1:1', instanceName: 'Local Hardware',
           viewMode: mode, serverType: 'ubersdr',
           isLocal: true, tunerless: true,
@@ -119,7 +119,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // `noAutoConnect` is the durable "stand down" form.
       if (route.params?.noAutoConnect) return;
       if (!cancelled && dEarly && !isDeepLinkActive()) {
-        navigation.navigate('SDR', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: null });
+        navigation.navigate('Radio', { baseUrl: dEarly.url, instanceName: dEarly.name, viewMode: mode, serverLongitude: null });
       }
     }
 
@@ -130,13 +130,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const firstFocusRef = useRef(true);
   useFocusEffect(useCallback(() => {
     getViewMode().then(mode => { if (mode) setViewModeState(mode); });
-    // Re-read the default on every focus — the SDR menu can set/clear it, and
+    // Re-read the default on every focus — the radio screen can set/clear it, and
     // returning here doesn't remount (keeps the native default-instance name in
     // sync via the effect above).
     getDefaultInstance().then(d => setDefaultInst(d)).catch(() => {});
     // Skip the initial focus (loadAndInit owns the launch-time USB check — running
     // it here too would race the read-and-clear flag). On LATER focuses (returning
-    // from an SDR session), pick up an RTL-SDR that was plugged in while away.
+    // from a radio session), pick up an RTL-SDR that was plugged in while away.
     if (firstFocusRef.current) { firstFocusRef.current = false; return; }
     tryUsbLaunchRef.current?.();
   }, []));
@@ -159,7 +159,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         centerFreq: 100_000_000, sampleRate: 2_400_000, fftSize: 8192, fftRate: 10, mode: 'wfm',
       }) as { port: number; wsBaseUrl: string };
       setConnecting(false);
-      navigation.navigate('SDR', {
+      navigation.navigate('Radio', {
         baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware', viewMode: modeOverride ?? viewMode,
         serverType: 'ubersdr', isLocal: true, localPort: res.port,
         localGen: newLocalSession(),
@@ -221,7 +221,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         centerFreq: 100_000_000, fftSize: 8192, fftRate: 10, mode: 'wfm',
       }) as { port: number; wsBaseUrl: string };
       setConnecting(false);
-      navigation.navigate('SDR', {
+      navigation.navigate('Radio', {
         baseUrl: res.wsBaseUrl, instanceName: name || `${host}:${port}`, viewMode,
         serverType: 'ubersdr', isLocal: true, isTcp: true, localPort: res.port,
         tcpHost: host, tcpPort: port, localGen: newLocalSession(),

@@ -4,7 +4,7 @@
  * CarFM drives one face from several tuner sources: the head unit's built-in NWD
  * chip, an RTL-SDR dongle, and remote SDR servers. They differ in what they can
  * report, and those differences currently leak through the app as branches on
- * source IDENTITY — `nwdActive ? … : …` — in 59 places in SDRScreen, 21 in
+ * source IDENTITY — `nwdActive ? … : …` — in 59 places in RadioScreen, 21 in
  * SettingsPanel and 10 in CarFmFace.
  *
  * That doesn't scale past two sources: every new engine has to be taught to
@@ -61,7 +61,7 @@ export interface TunerCapabilities {
    *   'on-change' — pushed ONLY when it changes, so it is unknown until the
    *                 first callback. This is why the pill has a blank state.
    *   'none'      — not reported.
-   * MIGRATES: SDRScreen.tsx `fmStereo` init and the CarFmFace `stereo` prop,
+   * MIGRATES: RadioScreen.tsx `fmStereo` init and the CarFmFace `stereo` prop,
    * which today encode 'on-change' implicitly as `boolean | null`.
    */
   readonly stereo: 'live' | 'on-change' | 'none';
@@ -79,7 +79,7 @@ export interface TunerCapabilities {
    * How long metadata takes to settle after a tune, in ms. Drives debounces so
    * a fringe station doesn't strobe the UI. A source with instant metadata
    * declares 0 and the same code does the right thing with no branch.
-   * MIGRATES: the hardcoded 2000ms stereo debounce in SDRScreen.
+   * MIGRATES: the hardcoded 2000ms stereo debounce in RadioScreen.
    */
   readonly metadataSettleMs: number;
 

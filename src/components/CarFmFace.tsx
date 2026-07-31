@@ -6,7 +6,7 @@
  * plus the direct-entry numpad and Nearby picker modals.
  *
  * Renders as a full-screen opaque layer OVER the existing SDR pipeline (spec §4):
- * SDRScreen keeps doing all the connect / audio / RDS work; this presents the
+ * RadioScreen keeps doing all the connect / audio / RDS work; this presents the
  * tuner and calls back. Readable at a glance, in a moving car, in sunlight.
  *
  * Accessibility (spec §6): no state is encoded red-vs-green — amber/blue/neutral
