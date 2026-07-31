@@ -815,6 +815,37 @@ export default function SDRScreen({ route, navigation }: Props) {
   // animated stepPreset (hero-swap FLIP + step in DISPLAYED/card order). Bumping the
   // seq each press is what makes a repeat press in the same direction re-fire.
   const [fmHwStep, setFmHwStep] = useState<{ dir: 1 | -1; seq: number } | undefined>(undefined);
+  // DEVICE-CONFIRMED frequency, in MHz — written ONLY where the tuner itself told
+  // us where it is (the NwdRadioFrequency callback and the getter poll). Never by
+  // onTuneHz, which writes status.frequency optimistically the instant we ASK for
+  // a tune.
+  //
+  // That distinction is the whole point. CarFmFace holds the hero on a committed
+  // target until the dial arrives, but it was comparing the target against
+  // status.frequency — i.e. against our own echo of the request — so the hold
+  // released in the same React commit that opened it, every single time. The
+  // 30 July drive log proves it: six preset steps, six instant "settled" lines,
+  // and not one "holding" line. With the hold gone, the vendor service's own
+  // preset walk (it steps ITS list on the same wheel press, transiting 98.1,
+  // 100.7, 100.9, 101.1 …) painted straight onto the hero for a second or so
+  // before our tune landed. That is the jitter.
+  // Carries a `seq` because the frequency alone is not enough. If the face commits
+  // to the station the tuner is ALREADY sitting on (press prev then next, landing
+  // back where you started), a bare frequency match would settle instantly — and
+  // then the vendor's transit away-and-back would jitter the hero anyway. The face
+  // records the seq at commit time and only accepts a LATER report, so "already
+  // there" still waits for the round trip.
+  //
+  // Change-gated on purpose: the 1 Hz getter poll must not bump the seq when it
+  // merely re-reports the same frequency, or this would re-render every second and
+  // the seq would carry no information.
+  const [fmDevice, setFmDevice] = useState<{ mhz: number; seq: number } | null>(null);
+  const fmDeviceSeq = useRef(0);
+  const reportDeviceMhz = useCallback((mhz: number) => {
+    setFmDevice((prev) => (prev && Math.abs(prev.mhz - mhz) < 0.005
+      ? prev
+      : { mhz, seq: ++fmDeviceSeq.current }));
+  }, []);
   const fmHwSeq = useRef(0);
   const fmDoHwStep = useCallback((dir: 1 | -1) => {
     fmHwSeq.current += 1;
@@ -2485,6 +2516,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       subs.push(onNwd('NwdRadioFrequency', (p) => {
         liveStationRef.current = p.ps ?? '';
         setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(p.mhz * 1e6) }));
+        reportDeviceMhz(p.mhz);
         setLiveStation((prev) => ({ ...prev, name: p.ps || undefined }));
         // `arg` is the preset-slot index, NOT signal (confirmed on-device: it equals
         // the frequency's position in the factory preset list, −1 otherwise). The
@@ -2524,6 +2556,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (cancelled || !p) return;
         if (typeof p.mhz === 'number' && p.mhz > 0) {
           setStatus((prev: SDRStatus) => Math.round(p.mhz! * 1e6) === prev.frequency ? prev : ({ ...prev, frequency: Math.round(p.mhz! * 1e6) }));
+          reportDeviceMhz(p.mhz!);
           scheduleProbe(p.mhz);
         }
         if (p.ps) liveStationRef.current = p.ps;
@@ -2734,6 +2767,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onClaimAudio={onFmClaimAudio}
         onReleaseAudio={onFmReleaseAudio}
         hardwareStep={fmHwStep}
+        device={fmDevice}
       />
     </View>
   );

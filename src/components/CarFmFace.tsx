@@ -96,6 +96,11 @@ export interface CarFmFaceProps {
    *  direction) to run the SAME animated stepPreset as the on-screen PREV/NEXT —
    *  hero-swap FLIP + step in DISPLAYED order — instead of a silent tune. */
   hardwareStep?: { dir: 1 | -1; seq: number };
+  /** Where the TUNER says it is — device reports only, never our own optimistic
+   *  echo of a tune we just requested. `seq` rises on each genuine change and is
+   *  what releases the commit-to-target hold below. Null when no built-in tuner
+   *  is reporting. */
+  device?: { mhz: number; seq: number } | null;
 }
 
 const CHANNEL_HZ = 100_000;             // 0.1 MHz — the design's tune/seek step
@@ -507,7 +512,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
     rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
     onSetAutostart, onSetTheme, onRetryTuner, presets, nwdActive, onHardwareSeek,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
-    audioActive, onClaimAudio, onReleaseAudio, hardwareStep,
+    audioActive, onClaimAudio, onReleaseAudio, hardwareStep, device,
   } = props;
   const insets = useSafeAreaInsets();
   const scheme = useColorScheme();
@@ -702,30 +707,59 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // whatever the vendor service had landed on — walking the wrong way through the
   // list. The pending target is now the source of truth for stepping.
   const rawMhz = mhzOf(freqHz);
-  const [pending, setPending] = useState<{ mhz: number; name: string } | null>(null);
+  // `sinceSeq` is the device-report counter as of the commit: only a LATER report
+  // can release the hold.
+  const [pending, setPending] = useState<{ mhz: number; name: string; sinceSeq: number } | null>(null);
+  // Release on the DEVICE's word, not on `rawMhz`. onTuneHz writes the requested
+  // frequency into status.frequency synchronously, so rawMhz already EQUALS the
+  // target by the time this effect first runs — the old comparison released the
+  // hold in the same commit that opened it, always. The 30 July drive log shows it
+  // exactly: six steps, six instant "settled" lines, not one "holding" line, and
+  // the vendor's transit frequencies painting the hero for ~1 s after each.
+  //
+  // With no built-in tuner (device == null) there is no second opinion to wait
+  // for, so fall back to rawMhz and let the cap do the bounding.
   useEffect(() => {
     if (!pending) return;
-    // Settled: the dial reached the target → resume honest rendering.
-    if (Math.abs(rawMhz - pending.mhz) < 0.05) {
+    if (!device) {
+      if (Math.abs(rawMhz - pending.mhz) < 0.05) {
+        diag(`face: settled on ${pending.mhz.toFixed(1)} — hold released`);
+        setPending(null);
+      }
+      return;
+    }
+    if (device.seq <= pending.sinceSeq) return;   // nothing new from the tuner yet
+    // Settled: the TUNER itself reported the target → resume honest rendering.
+    if (Math.abs(device.mhz - pending.mhz) < 0.05) {
       diag(`face: settled on ${pending.mhz.toFixed(1)} — hold released`);
       setPending(null); return;
     }
     // The vendor service steps ITS OWN preset list on the same wheel press, so
     // the dial visits frequencies we never asked for. Log each one we ride out.
-    diag(`face: holding ${pending.mhz.toFixed(1)}, dial went to ${rawMhz.toFixed(1)}`);
-    // Cap: never let a failed/ignored tune freeze the display. On expiry the face
-    // simply shows reality again (fading, not snapping — the values it reads are
-    // the same ones it was already animating).
+    diag(`face: holding ${pending.mhz.toFixed(1)}, dial went to ${device.mhz.toFixed(1)}`);
+  }, [pending, device, rawMhz]);
+
+  // Cap: never let a failed or ignored tune freeze the display. On expiry the face
+  // simply shows reality again (fading, not snapping — the values it reads are the
+  // same ones it was already animating).
+  //
+  // Keyed on `pending` ALONE so the 2 s runs from the moment of commit. Keying it
+  // on the dial as well would restart the clock on every transit report the vendor
+  // emits, which is exactly the churn the cap exists to bound.
+  useEffect(() => {
+    if (!pending) return;
     const t = setTimeout(() => {
-      diag(`face: HOLD CAP expired — target ${pending.mhz.toFixed(1)} never reached, dial=${rawMhz.toFixed(1)}`);
+      diag(`face: HOLD CAP expired — target ${pending.mhz.toFixed(1)} never reached`);
       setPending(null);
     }, 2000);
     return () => clearTimeout(t);
-  }, [pending, rawMhz]);
+  }, [pending]);
 
   /** Commit the face to a station before the tuner gets there. */
+  const deviceSeqRef = useRef(0);
+  deviceSeqRef.current = device?.seq ?? 0;
   const commitTo = useCallback((targetMhz: number, name: string) => {
-    setPending({ mhz: targetMhz, name });
+    setPending({ mhz: targetMhz, name, sinceSeq: deviceSeqRef.current });
   }, []);
 
   // Everything below derives from the EFFECTIVE dial: the committed target while a
