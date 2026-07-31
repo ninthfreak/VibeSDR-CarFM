@@ -154,10 +154,11 @@ Threads raised across the project that are NOT part of the strip list.
   ENABLED". A completed work item, not a description of live behaviour.
 - ✅ **DONE — `Reference/` deleted 2026-07-31.** Three VibeSDR planning briefs
   (V4 local-SDR architecture ×2, V5 clean-room DSP) for iOS App Store and
-  GPL-removal work this fork does not do. NOTE: the V5 brief carried the only
-  written GPL audit — SDR++ Brown in `local_sdr_shim.cpp` (still shipped), plus
-  FFTW GPLv2+ and VOLK GPLv3 on the retired iOS side. That licence position is
-  unchanged; recover the table from git history if it is ever needed.
+  GPL-removal work this fork does not do. The V5 brief described that work as
+  *planned*; it has since SHIPPED — `local_sdr_shim.cpp` is headed "NATIVE-ONLY,
+  GPL-free", and `build.gradle:164` records volk/fftw as no longer linked. The
+  brief was therefore a stale plan, not a live audit. The current licence
+  position is inventoried in `docs/LICENSING.md`.
 - ✅ **DONE — served web-page branding.** `web/client/index.html` title, the
   MediaSession album and the recording filename prefix now say CarFM;
   `vibe_web_page.h` is regenerated from them by `scripts/build-web.mjs`.
