@@ -144,11 +144,20 @@ Threads raised across the project that are NOT part of the strip list.
   pointed at the original author's Expo account. Local gradle builds don't care;
   run your own `eas init` if you ever want cloud builds.
 - ⬜ **Internal docs still say "VibeSDR"** — the remaining root `BRIEF-*.md`
-  (SpyServer ×2, FM-DX adapter, the two URI-scheme briefs) and
-  `BUGFIX-vibeserver-squelch-indication.md`. These describe subsystems that are
-  still here, so they're kept; only the naming is inconsistent. The store notes,
-  `files/*.md` and the three feature briefs for things CarFM doesn't do were
-  deleted 2026-07-30.
+  (SpyServer ×2, FM-DX adapter, the two URI-scheme briefs). These describe
+  subsystems that are still here, so they're kept; only the naming is
+  inconsistent. The store notes, `files/*.md` and the three feature briefs for
+  things CarFM doesn't do were deleted 2026-07-30.
+- ✅ **DONE — `BUGFIX-vibeserver-squelch-indication.md` deleted 2026-07-31.** It
+  was marked "Ready to implement", but the fix is already in: `audio.ts` carries
+  the `squelched` health state and `main.ts` renders "NO AUDIO — SQUELCH
+  ENABLED". A completed work item, not a description of live behaviour.
+- ✅ **DONE — `Reference/` deleted 2026-07-31.** Three VibeSDR planning briefs
+  (V4 local-SDR architecture ×2, V5 clean-room DSP) for iOS App Store and
+  GPL-removal work this fork does not do. NOTE: the V5 brief carried the only
+  written GPL audit — SDR++ Brown in `local_sdr_shim.cpp` (still shipped), plus
+  FFTW GPLv2+ and VOLK GPLv3 on the retired iOS side. That licence position is
+  unchanged; recover the table from git history if it is ever needed.
 - ✅ **DONE — served web-page branding.** `web/client/index.html` title, the
   MediaSession album and the recording filename prefix now say CarFM;
   `vibe_web_page.h` is regenerated from them by `scripts/build-web.mjs`.
