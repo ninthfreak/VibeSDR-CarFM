@@ -13,9 +13,9 @@
 //
 // There is no React runtime here, so this file has two halves with very
 // different strength, and it is worth being blunt about which is which:
-//   * The SOURCE GUARD checks below are the actual regression detector. Run
-//     against the pre-fix LogoTile.tsx all four fail; against the fixed file all
-//     four pass. Those are what will catch a revert.
+//   * The SOURCE GUARD checks below are the actual regression detector — they
+//     read the shipped files and fail if the fix is reverted. Those are what will
+//     catch a revert.
 //   * The MODEL cases are hand-written from the fixed machine, so they pass on
 //     broken source too. They are executable documentation of the intended
 //     semantics — they pin down what "correct" means so a future rewrite has a
@@ -30,10 +30,20 @@ let bad = 0;
 const check = (name, cond) => { if (!cond) bad++; console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`); };
 
 // ── SOURCE GUARDS: these fail on the pre-fix file ────────────────────────────
-check('base+uri stored as ONE state object',
-  /setResolved\b/.test(src) && !/\bsetUri\s*\(/.test(src));
-check('light: late resolve guarded by base identity',
-  /prev\.base === base \? \{ base, uri: u \} : prev/.test(src));
+check('light: identity is derived during render, not adopted in an effect',
+  /const base = syncBase \?\? \(lateBase\.freq === \(freqMhz \?\? null\) \? lateBase\.base : null\)/.test(src)
+  && !/\badopt\s*\(/.test(src));
+check('light: uri is derived from base, so the two can never disagree',
+  /const key = base \? ck\(base\) : null/.test(src)
+  && /cache\.has\(key\) \? cache\.get\(key\)! : \(lateUri\?\.key === key \? lateUri\.uri : null\)/.test(src));
+check('light: awaited values are tagged with the input they answer',
+  /setLateBase\(\{ freq: f, base: b \}\)/.test(src) && /setLateUri\(\{ key, uri: u \}\)/.test(src));
+check('light: the callsign is read synchronously when the map is loaded',
+  /callsignForFreqSync\(freqMhz\)/.test(src));
+check('prefs are read synchronously so the size tier is picked once',
+  /getStationPrefsSync\(base\)/.test(src));
+check('the hero size (no boxDp -> key |0) is warmed',
+  /const sizes: Array<number \| undefined> = \[undefined, 128, 192\]/.test(src));
 check('dark: value stored with its key',
   /setSt\b/.test(src) && /st\.key === key \? st\.val/.test(src));
 check('dark: late resolve guarded by key identity',
@@ -92,6 +102,48 @@ const mk = () => {
   h.land('B', 'b.png');
   const s = h.get();
   check('rapid stepping settles on the last station', s.base === 'B' && s.uri === 'b.png');
+}
+
+// ── The hero SIZE TIER through a swap ────────────────────────────────────────
+// Reported 31 July: "it flickers between a couple different sizes ... overshooting
+// the size ... back and forth sizing". The hero's logo height is picked from how
+// many of (call sign, frequency) are hidden, and BOTH inputs used to settle
+// asynchronously and separately, so the tier was chosen up to three times per
+// swap. Wide track: 0 hidden = 144, 1 = 205, 2 = 256.
+const TIER = (showCall, showFreq) => {
+  const hidden = (showCall ? 0 : 1) + (showFreq ? 0 : 1);
+  return hidden === 0 ? 144 : hidden === 1 ? 205 : 256;
+};
+const dflt = (hasLogo) => (hasLogo ? { showCall: false, showFreq: false } : { showCall: true, showFreq: true });
+
+// The station in the video: a logo, and an explicit pref to show the call sign.
+const STORED = { showCall: true, showFreq: false };
+
+// OLD: identity, logo and prefs each land on their own tick.
+{
+  const seen = [];
+  let p = dflt(false); seen.push(TIER(p.showCall, p.showFreq));   // no base, no logo yet
+  p = dflt(true);      seen.push(TIER(p.showCall, p.showFreq));   // logo arrives
+  p = STORED;          seen.push(TIER(p.showCall, p.showFreq));   // SQLite answers
+  check('OLD machine walked three tiers in one swap', new Set(seen).size === 3);
+  check('OLD machine overshot, then came back down',
+    seen[1] > seen[2] && seen[2] > seen[0]);
+}
+
+// NEW: warm logo cache + prefs memo, so everything is known on the first frame.
+{
+  const warmLogo = true, memo = STORED;
+  const p = memo ?? dflt(warmLogo);
+  const seen = [TIER(p.showCall, p.showFreq)];
+  check('warm swap picks exactly one tier', new Set(seen).size === 1);
+  check('warm swap never overshoots', seen[0] === 205);
+}
+
+// A station with NO stored pref must still settle in one step, on the default.
+{
+  const warmLogo = true, memo = null;   // null = known to have no explicit choice
+  const p = memo ?? dflt(warmLogo);
+  check('unset prefs still settle in one step', TIER(p.showCall, p.showFreq) === 256);
 }
 
 console.log(`\nlogoSwap: ${bad ? bad + ' FAILED' : 'ALL PASS'}`);

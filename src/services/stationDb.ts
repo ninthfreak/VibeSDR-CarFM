@@ -308,8 +308,10 @@ export async function dropAllLogoBlobs(): Promise<void> {
 export async function clearAllStationPrefs(): Promise<void> {
   const d = await db();
   if (!d) return;
-  try { await d.execAsync('DELETE FROM station_prefs; DELETE FROM logo_wanted;'); }
-  catch (e) { console.warn('[stationDb] clearAllStationPrefs failed', e); }
+  try {
+    await d.execAsync('DELETE FROM station_prefs; DELETE FROM logo_wanted;');
+    prefsMemo.clear();
+  } catch (e) { console.warn('[stationDb] clearAllStationPrefs failed', e); }
 }
 
 // ── per-station hero display prefs (§6.4 Display Call Sign / Display Frequency) ──
@@ -317,15 +319,38 @@ export async function clearAllStationPrefs(): Promise<void> {
  *  user explicitly set it in the logo window — or `null` when unset. The default
  *  is logo-dependent (v1.9.0: logo → both off, no logo → both on) and is applied
  *  by the caller, which knows whether a logo exists. Affects the hero only. */
+// Memo of every base this process has already asked about. `null` is a REAL
+// answer here ("no explicit choice stored"), so absence from the map is the only
+// thing that means "not looked up yet" — hence has() rather than a null check at
+// the read site.
+//
+// This exists for the hero swap. These prefs pick the hero's logo SIZE TIER, and
+// a SQLite round-trip per swap meant the tier was chosen twice: once from the
+// logo-dependent default, then again when the row came back. On screen that is a
+// logo that appears at one size and then jumps to another, which is exactly the
+// "back and forth sizing" reported from the car on 31 July.
+const prefsMemo = new Map<string, { showCall: boolean; showFreq: boolean } | null>();
+
+/** The stored prefs if this process has already read them, else `undefined` for
+ *  "unknown". Never touches the database — pair it with getStationPrefs(), which
+ *  is what fills the memo. */
+export function getStationPrefsSync(base: string | null): { showCall: boolean; showFreq: boolean } | null | undefined {
+  if (!base) return undefined;
+  const k = base.toUpperCase();
+  return prefsMemo.has(k) ? prefsMemo.get(k) : undefined;
+}
+
 export async function getStationPrefs(base: string): Promise<{ showCall: boolean; showFreq: boolean } | null> {
   const d = await db();
   if (!d || !base) return null;
+  const k = base.toUpperCase();
   try {
     const r = await d.getFirstAsync<{ show_call: number | null; show_freq: number | null }>(
-      `SELECT show_call, show_freq FROM station_prefs WHERE callsign_base = ?`, [base.toUpperCase()]);
-    if (!r) return null;
-    return { showCall: r.show_call !== 0, showFreq: r.show_freq !== 0 };
-  } catch { return null; }
+      `SELECT show_call, show_freq FROM station_prefs WHERE callsign_base = ?`, [k]);
+    const val = r ? { showCall: r.show_call !== 0, showFreq: r.show_freq !== 0 } : null;
+    prefsMemo.set(k, val);
+    return val;
+  } catch { return null; }   // deliberately NOT memoised: a failed read is not an answer
 }
 
 export async function setStationPrefs(base: string, showCall: boolean, showFreq: boolean): Promise<void> {
@@ -336,6 +361,7 @@ export async function setStationPrefs(base: string, showCall: boolean, showFreq:
       `INSERT INTO station_prefs(callsign_base,show_call,show_freq) VALUES (?,?,?)
        ON CONFLICT(callsign_base) DO UPDATE SET show_call=excluded.show_call, show_freq=excluded.show_freq`,
       [base.toUpperCase(), showCall ? 1 : 0, showFreq ? 1 : 0]);
+    prefsMemo.set(base.toUpperCase(), { showCall, showFreq });
   } catch (e) { console.warn('[stationDb] setStationPrefs failed', e); }
 }
 
