@@ -24,6 +24,7 @@ type NwdNative = {
   setAudioEnabled(on: boolean): void;
   sendPanelKey?(key: number): void;
   probeJsonHardware?(): Promise<string>;
+  probeNwdFmManager?(): Promise<string>;
   requestAudioSource(): void;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
@@ -125,6 +126,22 @@ export function nwdSendPanelKey(key: number): void { native?.sendPanelKey?.(key)
  */
 export async function nwdProbeJsonHardware(): Promise<string> {
   try { return (await native?.probeJsonHardware?.()) ?? 'module unavailable'; }
+  catch (e) { return `probe threw: ${String((e as Error)?.message ?? e)}`; }
+}
+
+/**
+ * Probe `com.nwd.app.NwdFmManager` — the vendor framework class this unit's
+ * radio manager actually reads through (via AWNative), as opposed to the
+ * android.os.Hardware JSON channel, which belongs to the Si4792x variant and is
+ * absent here. Carries the three things the AIDL cannot: signal strength, raw
+ * RDS groups, and a real per-station stereo state. Also reports the two MCU
+ * settings that gate RDS. Read-only; changes no tuner state.
+ *
+ * Takes ~1s — it bursts the RDS read, since a single poll usually returns the
+ * all-zero "no data" sentinel and would read like a failure.
+ */
+export async function nwdProbeFmManager(): Promise<string> {
+  try { return (await native?.probeNwdFmManager?.()) ?? 'module unavailable'; }
   catch (e) { return `probe threw: ${String((e as Error)?.message ?? e)}`; }
 }
 

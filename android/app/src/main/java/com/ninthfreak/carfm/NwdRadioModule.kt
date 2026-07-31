@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.media.AudioManager
 import android.os.IBinder
+import android.provider.Settings
 import android.util.Log
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -368,6 +369,132 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             }
             sb.append('\n')
         }
+        promise.resolve(sb.toString())
+    }
+
+    // ── The transport this unit ACTUALLY uses ────────────────────────────────
+    // NewRdsManager reads RDS through com.nwd.radio.arm.allwinner.AWNative, and
+    // AWNative is a thin reflection shim over the vendor framework class
+    // com.nwd.app.NwdFmManager. Every name below is a GETTER lifted verbatim from
+    // that dump — no setter appears here, so this probe cannot change tuner state.
+    //
+    // The open question is REACHABILITY: the radio service is a system app and we
+    // are not. Encouraging sign — android.os.Hardware resolved fine from our
+    // process (that probe failed on the METHOD, not the class), so ROM framework
+    // classes are on our classloader and not hidden-API blocked.
+    private val nwdFmManagerClass = "com.nwd.app.NwdFmManager"
+
+    private val nwdFmGetters = listOf(
+        "getRadioRDSFunArm" to "1 = hardware supports RDS",
+        "getRadioRDSDataArm" to "16 hex chars = one raw RDS group",
+        "getCurrentFrequency" to "frequency, possibly packed with strength",
+        "getStationStereoState" to "real per-station stereo (vs the stuck isStreroOn)",
+        "getStereo" to "stereo mode flag",
+        "getLoc" to "local/DX",
+        "getRadioModuleArm" to "which module the MCU reports",
+        "getVolue" to "vendor's spelling; a cheap reachability canary",
+    )
+
+    /** One RDS read almost always returns the all-zero "no data this poll"
+     *  sentinel, which reads like a failure. Burst it so a real group has a
+     *  chance to land. */
+    private val rdsBurstReads = 8
+    private val rdsBurstGapMs = 120L
+
+    /** Invoke a no-arg static getter on the vendor framework class. Read-only by
+     *  construction: only names from `nwdFmGetters` reach this. */
+    private fun nwdFmGet(name: String): Any? {
+        val cls = Class.forName(nwdFmManagerClass)
+        val m = try {
+            cls.getMethod(name)
+        } catch (_: NoSuchMethodException) {
+            cls.getDeclaredMethod(name).apply { isAccessible = true }
+        }
+        return m.invoke(null)
+    }
+
+    /** Read an MCU settings key, trying each table in turn. Read-only. */
+    private fun settingsRead(key: String): String {
+        val cr = reactContext.contentResolver
+        try { Settings.System.getString(cr, key)?.let { return "$it (system)" } } catch (_: Throwable) {}
+        try { Settings.Global.getString(cr, key)?.let { return "$it (global)" } } catch (_: Throwable) {}
+        try { Settings.Secure.getString(cr, key)?.let { return "$it (secure)" } } catch (_: Throwable) {}
+        return "(not present in system/global/secure)"
+    }
+
+    /** Probe com.nwd.app.NwdFmManager for signal, raw RDS and a real stereo read,
+     *  plus the two MCU settings that gate RDS. Reports the verbatim value or the
+     *  exact exception type for every call. Read-only throughout. */
+    @ReactMethod
+    fun probeNwdFmManager(promise: Promise) {
+        val sb = StringBuilder("NWDFMMANAGER PROBE ($nwdFmManagerClass)\n")
+        // The decisive line. If the CLASS does not resolve, nothing below can and
+        // this transport is out of reach for an unprivileged app — same shape of
+        // answer the android.os.Hardware probe gave, one level earlier.
+        var cls: Class<*>? = null
+        sb.append("  class resolves? = ")
+        try {
+            cls = Class.forName(nwdFmManagerClass)
+            sb.append("YES (").append(cls.declaredMethods.size).append(" declared methods)")
+        } catch (e: Throwable) {
+            sb.append("NO — ").append(e.javaClass.name).append(": ").append(e.message)
+        }
+        sb.append('\n')
+
+        if (cls == null) {
+            sb.append("  (class absent — skipping the getters; the transport is not reachable here)\n")
+            promise.resolve(sb.toString())
+            return
+        }
+
+        for ((name, note) in nwdFmGetters) {
+            sb.append("  ").append(name).append("() = ")
+            try {
+                sb.append(nwdFmGet(name)?.toString() ?: "(null)")
+            } catch (e: Throwable) {
+                // The exception TYPE is the diagnosis: NoSuchMethodException =
+                // different signature on this firmware; SecurityException /
+                // InvocationTargetException = reachable but refused.
+                sb.append("ERR ").append(e.javaClass.name).append(": ").append(e.message)
+            }
+            sb.append("   // ").append(note).append('\n')
+        }
+
+        // AWNative.getFreAndStrength formats this as %08x and splits it: the low 4
+        // hex digits are the frequency, the high 4 are signal strength. Show both
+        // readings of whatever came back rather than guessing which it is.
+        try {
+            val raw = nwdFmGet("getCurrentFrequency")
+            if (raw is Int) {
+                sb.append("  getCurrentFrequency unpacked: freq=").append(raw and 0xFFFF)
+                    .append(" strength=").append((raw ushr 16) and 0xFFFF)
+                    .append("   // per AWNative.getFreAndStrength\n")
+            }
+        } catch (_: Throwable) {}
+
+        sb.append("  getRadioRDSDataArm() x").append(rdsBurstReads).append(":\n")
+        val seen = LinkedHashMap<String, Int>()
+        repeat(rdsBurstReads) {
+            val v = try {
+                nwdFmGet("getRadioRDSDataArm")?.toString() ?: "(null)"
+            } catch (e: Throwable) {
+                "ERR ${e.javaClass.simpleName}"
+            }
+            seen[v] = (seen[v] ?: 0) + 1
+            try { Thread.sleep(rdsBurstGapMs) } catch (_: InterruptedException) {}
+        }
+        for ((v, n) in seen) sb.append("      ").append(v).append("  x").append(n).append('\n')
+        sb.append("      (all-zero = no group that poll; anything else = LIVE RAW RDS)\n")
+
+        // NewRdsManager.updateRdsState enables RDS only when the area is 0 or 5.
+        // That gate is in the service's Java layer, so reading the data directly
+        // bypasses it — but if the area is wrong the MCU may not emit groups either,
+        // which is exactly what the burst above settles.
+        sb.append("  mcu_radio_area_current = ").append(settingsRead("mcu_radio_area_current"))
+            .append("   // NewRdsManager needs 0 or 5\n")
+        sb.append("  mcu_current_source     = ").append(settingsRead("mcu_current_source"))
+            .append("   // 4 = FM\n")
+
         promise.resolve(sb.toString())
     }
 
