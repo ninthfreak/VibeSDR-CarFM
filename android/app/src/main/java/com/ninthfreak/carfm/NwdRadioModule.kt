@@ -371,7 +371,12 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             try { sb.append(v()) } catch (e: Throwable) { sb.append("ERR(").append(e.javaClass.simpleName).append(')') }
             sb.append('\n')
         }
-        sb.append("NWD PROBE (freqMult=$freqMult band=$fmBand)\n")
+        // Ask the tuner for its band rather than printing our tracked copy: the
+        // header is how a log reader knows WHICH bank the `presets` line below is
+        // showing, since getPrefabFrequency() always returns the current band's.
+        // On 31 July the header claimed band=0 while the body read band=1.
+        val liveBand = try { r.getCurrentFrequency()?.band?.toString() ?: "?" } catch (_: Throwable) { "?" }
+        sb.append("NWD PROBE (freqMult=$freqMult band=$liveBand tracked=$fmBand)\n")
         line("radioType") { r.getRadioType() }
         line("radioState") { r.getRadioState().toInt() }
         line("scanState") { r.getCurrentScanState() }
@@ -387,7 +392,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         line("bandPlan") {
             val arr = r.getRadioPoint()
             if (arr == null) "null"
-            else arr.joinToString("; ", "[${arr.size}] ") { "max=${it.max} min=${it.min} step=${it.step}" }
+            else arr.joinToString("; ", "[${arr.size}] ") { "lo=${it.lo} hi=${it.hi} step=${it.step}" }
         }
         line("presets") {
             val arr = r.getPrefabFrequency()
@@ -454,6 +459,15 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         override fun notifyState(s: Byte) = emit("NwdRadioState", Arguments.createMap().apply { putInt("state", s.toInt()) })
         override fun notifyCurrentFrequency(band: Byte, freq: Int, ps: String?, arg: Int) =
             emit("NwdRadioFrequency", Arguments.createMap().apply {
+                // TRACK the band. It was captured once at connect and never updated,
+                // yet tune() passes it to setCurrentFrequency on every tune — so the
+                // moment the head unit was switched FM1 -> FM2 we carried on tuning
+                // against the old band. The 31 July log caught exactly that: at
+                // 07:28 the tuner reported band=0 with the user's own six presets,
+                // and by 07:55 band=1 with the factory list, while our connect-time
+                // value stayed 0 for the whole session. Each band has its OWN preset
+                // bank, which is also what `arg` indexes into.
+                fmBand = band
                 putInt("band", band.toInt()); putInt("freq", freq)
                 putDouble("mhz", freq.toDouble() / freqMult); putString("ps", ps ?: "")
                 // `arg` = the tuner's preset-slot index in the CURRENT bank (1-6), or

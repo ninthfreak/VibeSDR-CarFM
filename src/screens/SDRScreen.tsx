@@ -2435,15 +2435,24 @@ export default function SDRScreen({ route, navigation }: Props) {
         lastProbedMhz = mhz;
         const dump = await nwdProbe();
         if (cancelled) return;
-        diag(`— probe @ ${mhz.toFixed(1)} —`);
+        // Label the block with the frequency the DUMP itself reports, not the one
+        // that scheduled it. The probe is debounced by 4s and the dial can move in
+        // that time: the 31 July log carries "— probe @ 101.5 —" above a body
+        // reading freq=10590, and looked up the callsign for 101.5 while the tuner
+        // sat on 105.9. A diagnostic that pairs a stale heading with live values is
+        // worse than no heading at all.
+        const mult = Number(/freqMult=(\d+)/.exec(dump)?.[1]) || 100;
+        const raw = Number(/freq=band=\d+\s+freq=(\d+)/.exec(dump)?.[1]);
+        const at = isFinite(raw) && raw > 0 ? raw / mult : mhz;
+        diag(`— probe @ ${at.toFixed(1)}${Math.abs(at - mhz) >= 0.05 ? ` (scheduled at ${mhz.toFixed(1)})` : ''} —`);
         for (const l of dump.split('\n')) if (l.trim()) diag(l);
         // Does the name lookup actually resolve for this station? null here while
         // the audio is fine = the "Tuning…" bug is the FCC lookup (location), not
         // the tuner.
         try {
-          const cs = await callsignForFreq(mhz);
-          if (!cancelled) diag(`  callsign@${mhz.toFixed(1)}=${cs ?? 'null'}`);
-        } catch (e) { if (!cancelled) diag(`  callsign@${mhz.toFixed(1)}=error ${String(e)}`); }
+          const cs = await callsignForFreq(at);
+          if (!cancelled) diag(`  callsign@${at.toFixed(1)}=${cs ?? 'null'}`);
+        } catch (e) { if (!cancelled) diag(`  callsign@${at.toFixed(1)}=error ${String(e)}`); }
       }, 4000);
     };
     // Stereo debounce: the NwdRadioStereo callback is the TRUTH (it flaps with the
