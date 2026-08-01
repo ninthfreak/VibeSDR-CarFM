@@ -721,10 +721,13 @@ and `NwdFmManager.setRadioAreaBandArm` are the vendor's own writers).
   probe answers, this is a candidate real source for the stereo pill, which
   currently shows blank until `notifyStereo` fires.
 - **`NewRdsManager.transformFlagToFreq`** maps flag 0..205 → `8750 + n*10` and
-  206..210 → `8700 + (n-206)*10`, i.e. a **0.1 MHz** grid over 87.5–108.0. That is
-  indirect evidence for the open "0.1 or 0.2 MHz tune step" question — it is the
-  MCU's preset-flag encoding, not necessarily the tune step, so treat it as a
-  lead rather than an answer.
+  206..210 → `8700 + (n-206)*10`. This was written up as a lead on the tune-step
+  question. **Disregard it** — the question was already answered, and by better
+  evidence: `getRadioPoint()` on the unit (2026-07-31) reports FM `lo=8750
+  hi=10790 step=20` in units of 10 kHz, i.e. 87.5–107.9 MHz on a **200 kHz**
+  grid. `transformFlagToFreq` is a preset-flag encoding and says nothing about
+  tuning. What remains in task #52 is the product decision — the app tunes in
+  100 kHz — not a question about the hardware.
 
 ## Ethics/scope
 

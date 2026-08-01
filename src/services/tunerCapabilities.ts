@@ -114,9 +114,9 @@ export interface TunerCapabilities {
   readonly seek: 'hardware' | 'station-db';
 
   /**
-   * Channel spacing in Hz, or null when the source tunes continuously.
-   * NWD is UNRESOLVED — NewRdsManager.transformFlagToFreq implies a 0.1 MHz
-   * grid, but that is a preset-flag encoding, not proof of the tune step.
+   * The SOURCE's channel spacing in Hz, or null when it tunes continuously.
+   * This is what the hardware says, not what the app currently does — the app's
+   * step is a separate product choice (task #52).
    */
   readonly tuneStepHz: number | null;
 }
@@ -148,7 +148,11 @@ export const NWD_CAPABILITIES: TunerCapabilities = {
   lockState: 'none',              // radioState is global, not per-channel
   presetStepping: 'external',     // the wheel drives the vendor service's own banks
   seek: 'hardware',               // search(), not seek() — seek nudges one step
-  tuneStepHz: null,               // open: see task #52
+  // getRadioPoint() on the unit, 2026-07-31: FM lo=8750 hi=10790 step=20 in units
+  // of 10 kHz — 87.5-107.9 MHz on a 200 kHz grid. That also explains the old "why
+  // does seek move 0.2 MHz" note: the hardware step IS 0.2, never a seek bug.
+  // The app still tunes in 100 kHz; reconciling the two is task #52's decision.
+  tuneStepHz: 200_000,
 };
 
 /**
