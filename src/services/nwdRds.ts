@@ -40,6 +40,12 @@ export interface RdsState {
 
 const BLANK: RdsState = { pi: null, pty: null, tp: false, ta: false, ps: '', rt: '' };
 
+/** Identical PIs required before a value is trusted, or before a disagreement is
+ *  accepted as a real station change. RDS runs ~11.4 groups/s, so 3 is about a
+ *  quarter-second — fast enough to feel instant, long enough that scattered
+ *  block corruption never clears it. */
+const PI_CONFIRM = 3;
+
 /** RDS uses a restricted character set; anything unprintable becomes a space so
  *  a corrupt block degrades the text rather than injecting control codes. */
 function chr(byte: number): string {
@@ -68,6 +74,11 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
   let rtEnd: number | null = null;      // index of the 0x0D terminator, once seen
   let rtAb: number | null = null;       // A/B flag; a flip means a new message
   let rtCandidate = '';                 // previous COMPLETE message; must repeat to publish
+  let piConfirmed: number | null = null;// the PI we trust; groups not carrying it are dropped
+  let piPending: number | null = null;  // candidate PI awaiting repeats
+  let piPendingCount = 0;
+  let ptyPending: number | null = null; // block B is corrupted independently of block A
+  let ptyCount = 0;
 
   const reset = () => {
     st = { ...BLANK };
@@ -79,6 +90,10 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     rtEnd = null;
     rtAb = null;
     rtCandidate = '';
+    ptyPending = null;
+    ptyCount = 0;
+    // piConfirmed is deliberately NOT cleared here: reset() runs as part of
+    // adopting a new station, and the caller sets it immediately after.
   };
 
   const push = (hex: string): RdsState | null => {
@@ -93,21 +108,63 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
 
     const before = JSON.stringify(st);
 
-    // Block A is PI. A PI change means a different station: everything
-    // accumulated belongs to the previous one.
-    if (st.pi !== null && st.pi !== a) reset();
-    st.pi = a;
+    // ── PI consensus: the error check this decoder was missing ──────────────
+    //
+    // These groups arrive with NO error correction applied. On a real drive
+    // (2026-08-01 16:12, WERN 88.7, true PI a6ff) block A came back as a6ff,
+    // a63e, 2631, a699, a6b8, d86f, c6fe, 47ff, 26f5 … — most groups corrupt.
+    //
+    // PI is repeated in EVERY group precisely so a receiver can use it to reject
+    // bad blocks, and treating each new value as a station change was the single
+    // cause of four separate faults: accumulated PS/RT wiped on every corrupt
+    // group (RadioText never filled in), PTY republished from garbage (the genre
+    // label flickering through random genres), and a corrupt PI reaching the
+    // callsign lookup (WIBA showing "KDTI-ROCHE…").
+    //
+    // So: adopt a PI only after it repeats, and DISCARD every group that does not
+    // carry the adopted PI. A genuine station change is persistent — every group
+    // carries the new PI — so it clears the threshold in a fraction of a second,
+    // while scattered corruption never does.
+    if (piConfirmed === null) {
+      if (a === piPending) piPendingCount++;
+      else { piPending = a; piPendingCount = 1; }
+      if (piPendingCount < PI_CONFIRM) return null;   // not yet trusted
+      piConfirmed = a;
+      st.pi = a;
+    } else if (a !== piConfirmed) {
+      if (a === piPending) piPendingCount++;
+      else { piPending = a; piPendingCount = 1; }
+      if (piPendingCount < PI_CONFIRM) return null;   // corrupt block — drop it
+      // Persistent disagreement: a real station change.
+      reset();
+      piConfirmed = a;
+      piPending = a;
+      piPendingCount = PI_CONFIRM;
+      st.pi = a;
+    } else {
+      piPendingCount = 0;   // a good group resets the dissent counter
+    }
 
-    // Block B carries the same header in every group.
+    // Block B needs the SAME treatment, independently. A correct PI does not mean
+    // a correct header: on the same drive, groups carrying the true a6ff reported
+    // PTY 22, 15, 6, 8, 17 and 5 — block A survived while block B did not. That is
+    // the genre label flickering between random genres, and PI consensus alone
+    // does not touch it.
     const groupType = (b >>> 12) & 0xf;
     const versionB = ((b >>> 11) & 1) === 1;
-    st.tp = ((b >>> 10) & 1) === 1;
-    st.pty = (b >>> 5) & 0x1f;
+    const pty = (b >>> 5) & 0x1f;
+    if (pty === ptyPending) ptyCount++;
+    else { ptyPending = pty; ptyCount = 1; }
+    if (ptyCount >= PI_CONFIRM) {
+      st.pty = pty;
+      st.tp = ((b >>> 10) & 1) === 1;
+    }
 
     if (groupType === 0) {
       // 0A / 0B — Programme Service name. Two chars per group in block D, and
       // the segment index is the low 2 bits. TA rides in bit 4.
-      st.ta = ((b >>> 4) & 1) === 1;
+      // TA rides in the same block as PTY, so it inherits the same trust gate.
+      if (ptyCount >= PI_CONFIRM) st.ta = ((b >>> 4) & 1) === 1;
       const seg = b & 0x3;
       psBuf[seg * 2] = chr((d >>> 8) & 0xff);
       psBuf[seg * 2 + 1] = chr(d & 0xff);
@@ -168,8 +225,13 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
       // and "Z104son's #1 Hit Music Station" — one message bleeding into the next
       // because many stations change RadioText without toggling the A/B flag.
       if (rtEnd !== null || rtSeen === 0xffff) {
+        // ONE complete cycle publishes. Requiring two was costing several seconds
+        // on air and was the "RadioText took forever" complaint; it was only ever
+        // guarding against corruption that PI/PTY consensus now rejects earlier,
+        // and against cross-message mixing that clearing the buffer each cycle
+        // already prevents structurally.
         const msg = (rtEnd !== null ? rtBuf.slice(0, rtEnd) : rtBuf).join('').trimEnd();
-        if (msg === rtCandidate) st.rt = msg;
+        st.rt = msg;
         rtCandidate = msg;
         rtSeen = 0;
         rtEnd = null;
