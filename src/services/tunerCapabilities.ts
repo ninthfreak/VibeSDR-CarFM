@@ -128,8 +128,11 @@ export interface TunerCapabilities {
 export const NWD_CAPABILITIES: TunerCapabilities = {
   id: 'nwd',
   label: 'Built-in FM radio',
-  // No RSSI. Confirmed 2026-08-01: getCurrentFrequency() returns 0, so the
-  // strength-packed-in-the-high-16-bits route implied by AWNative is a dead end.
+  // No RSSI *yet*. getCurrentFrequency() returns 0, but that only rules out that
+  // method as the source of the packed freq+strength int — an xref shows the sole
+  // producer is NwdFmManager.seek(freq), whose return value AWNative.seek() splits
+  // into frequency and strength. Untested because seek() commands the tuner rather
+  // than reading it. See task #58.
   signal: 'estimated',
   // LIVE as of 2026-08-01 — not via the AIDL (getRtMessage() is still hardcoded
   // "" and RDS is still region-gated at mcu_radio_area_current=1), but by reading

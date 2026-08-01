@@ -3,8 +3,15 @@
 Reverse-engineering scout for **Backend E** (the head unit's built-in FM tuner),
 per `docs/design/handoff/TUNER-BACKENDS-ADDENDUM.md §6` and the built-in-tuner
 scouting addendum. Interoperability RE of the interface for driving the tuner
-from our own UI. Static analysis only — no decompiled code, APKs, or firmware are
-redistributed; the map below is a description of the interface, not vendor source.
+from our own UI.
+
+Static analysis only — no decompiled code, APKs, or firmware are redistributed;
+the map below is a description of the interface, not vendor source.
+
+> **Looking for how to DO this rather than how it was found?** See
+> `docs/NWD-RADIO-INTEGRATION.md` — a standalone guide to driving the same radio
+> from any app, without CarFM. This file is the investigation log, in order,
+> including the wrong turns.
 
 **Important correction to the scouting brief:** that brief targeted FYT/DUDUOS
 `com.syu.ms` (a numeric register/command scheme). This unit is a **different
@@ -754,9 +761,14 @@ mcu_current_source     = 4 (system)
   service's Java layer. Reading the getter directly bypasses it entirely. The
   MCU emits groups regardless.
 - **A real stereo read exists.** `getStationStereoState() = 1`.
-- **RSSI is still out of reach.** `getCurrentFrequency()` returns 0, so the
-  strength-in-the-high-16-bits idea taken from `AWNative.getFreAndStrength` is
-  disproven. The DB+GPS estimate stays.
+- **RSSI: the getter route is out, the seek route is NOT.** `getCurrentFrequency()`
+  returns 0 — but that only rules out *that method* as the source of the packed
+  freq+strength int. CORRECTED 2026-08-01 by an xref over the service APK:
+  `getFreAndStrength` has exactly two callers, `AWNative.seek` and
+  `AWNative.seekDown`, and the packed value is the **return of
+  `NwdFmManager.seek(frequency)`**. The hardware does report a level; it is a
+  by-product of the scan primitive, not a passive getter. Untested because seek()
+  commands the tuner. See `docs/NWD-RADIO-INTEGRATION.md` §10 and task #58.
 
 ## The groups decode
 
