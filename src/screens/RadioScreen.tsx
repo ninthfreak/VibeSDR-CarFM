@@ -2405,6 +2405,12 @@ export default function RadioScreen({ route, navigation }: Props) {
         if (p.key === PANEL_KEY.PRESET_NEXT) fmHwStepRef.current?.(1);
         else if (p.key === PANEL_KEY.PRESET_PREV) fmHwStepRef.current?.(-1);
       }));
+      // Headlights → day/night. Logs only; nothing drives the palette from this
+      // yet. The pairing is the answer: if uiMode flips with the broadcast, the
+      // ROM does set Android night mode and the face should already follow it.
+      subs.push(onNwd('NwdIllState', (p) => {
+        diag(`ILL ${p.action} [${p.extras}] androidUiMode=${p.uiMode}`);
+      }));
       subs.push(onNwd('NwdRadioRt', (p) => { setLiveStation((prev) => ({ ...prev, text: p.rt || undefined })); diag(`RT '${p.rt}'`); }));
       subs.push(onNwd('NwdRadioStereo', (p) => { setStereoDebounced(p.on); diag(`stereo ${p.on}`); }));
       subs.push(onNwd('NwdRadioPty', (p) => { setLiveStation((prev) => ({ ...prev, pty: p.pty })); diag(`PTY ${p.pty}`); }));

@@ -99,6 +99,12 @@ export type NwdEvents = {
    *  `com.nwd.action.ACTION_KEY_VALUE` broadcast (see NwdRadioModule). 62 =
    *  preset next, 63 = preset prev; see PANEL_KEY below. */
   NwdPanelKey: { key: number; action: string };
+  /** Vendor illumination (headlights) broadcast `com.nwd.ACTION_ILL_STATE_CHANGE`.
+   *  `extras` is a verbatim dump — the type of `extra_ill_state` is unknown, so
+   *  the probe does not guess a getter. `uiMode` is Android's own night flag read
+   *  at the same instant, which is what says whether this ROM sets night mode at
+   *  all or only signals day/night through its own broadcast. */
+  NwdIllState: { action: string; extras: string; uiMode: string };
 };
 
 /** The vendor service's own panel-key dispatch table (decompiled from
