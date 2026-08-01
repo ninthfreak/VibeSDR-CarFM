@@ -4,7 +4,7 @@
 // the target for an instant, then jumped to a station the user never asked for,
 // then landed. Six steps, six times.
 //
-// Cause: onTuneHz (SDRScreen) writes the REQUESTED frequency into
+// Cause: onTuneHz (RadioScreen) writes the REQUESTED frequency into
 // status.frequency synchronously, before the tuner has moved. The face's hold
 // compared its target against that same value — its own echo — so the hold
 // released in the very commit that opened it. The log is unambiguous: six
@@ -28,7 +28,7 @@
 import { readFileSync } from 'fs';
 
 const face = readFileSync(new URL('../../src/components/CarFmFace.tsx', import.meta.url), 'utf8');
-const screen = readFileSync(new URL('../../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
+const screen = readFileSync(new URL('../../src/screens/RadioScreen.tsx', import.meta.url), 'utf8');
 
 let bad = 0;
 const check = (name, cond) => { if (!cond) bad++; console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`); };

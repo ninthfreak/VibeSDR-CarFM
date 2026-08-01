@@ -225,6 +225,23 @@ async function refreshFreqMap(): Promise<void> {
   finally { freqRefreshing = false; }
 }
 
+/**
+ * The same answer as callsignForFreq(), but WITHOUT a promise — null when the map
+ * has not been loaded yet or does not know this frequency.
+ *
+ * The hero needs this. On a preset step the face commits to the target frequency
+ * in one React commit, but the station's IDENTITY came back a tick or two later
+ * because even a pure map lookup was behind an `async`. That gap rendered the
+ * hero with no callsign at all — a blank card — and then again with the plain
+ * call sign before the logo arrived. Reading the map synchronously collapses
+ * that to a single frame. The async version stays the entry point that LOADS the
+ * map; this one only ever reads what is already there.
+ */
+export function callsignForFreqSync(freqMhz?: number): string | null {
+  if (freqMhz == null || !isFinite(freqMhz) || !freqCallsignCache) return null;
+  return freqCallsignCache.map.get(Math.round(freqMhz * 10)) ?? null;
+}
+
 export async function callsignForFreq(freqMhz?: number): Promise<string | null> {
   if (freqMhz == null || !isFinite(freqMhz)) return null;
   const k = Math.round(freqMhz * 10);

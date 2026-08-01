@@ -9,11 +9,11 @@
  * The surfaces (hero / preset tile / peek card) branch their WHOLE layout on whether
  * a real logo exists, so the resolution lives in a shared `useStationLogo` hook.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Image, Text, View } from 'react-native';
 
-import { getStationLogo, callsignForFreq } from '../../services/stationFinder';
-import { getStationPrefs } from '../../services/stationDb';
+import { getStationLogo, callsignForFreq, callsignForFreqSync } from '../../services/stationFinder';
+import { getStationPrefs, getStationPrefsSync } from '../../services/stationDb';
 import { darkUri, subscribeLogoStore } from '../../services/logoStore';
 import { regenerateDarkLogo } from '../../services/logoDark/regenerate';
 import { callsignBase } from '../../services/piCallsign';
@@ -57,17 +57,27 @@ export function invalidateLogoTile(base?: string): void {
 export async function warmStationLogos(
   items: Array<{ name?: string; frequencyMhz?: number }>,
 ): Promise<void> {
-  const sizes = [128, 192];   // chip (fill) and peek/hero-ish default
+  // `undefined` is the HERO's size — it calls useStationLogo without a boxDp, so
+  // its cache key is `${base}|0`. That key was missing here, which meant every
+  // hero swap missed the warm cache and painted the bare call sign until the file
+  // read came back. Warm exactly what the surfaces ask for or this whole function
+  // does nothing for the one surface that matters most.
+  const sizes: Array<number | undefined> = [undefined, 128, 192];
   await Promise.all(items.map(async (it) => {
     try {
       const nb = callsignFrom(it.name) ? callsignBase(callsignFrom(it.name)!) : null;
       const base = nb ?? await callsignForFreq(it.frequencyMhz);
       if (!base) return;
-      await Promise.all(sizes.map(async (sz) => {
-        const k = `${base}|${sz}`;
-        if (cache.has(k)) return;
-        cache.set(k, await getStationLogo(base, sz));
-      }));
+      await Promise.all([
+        // Fills the prefs memo, so the hero picks its logo size tier once rather
+        // than defaulting and then correcting when SQLite answers.
+        getStationPrefs(base).catch(() => null),
+        ...sizes.map(async (sz) => {
+          const k = `${base}|${sz ?? 0}`;
+          if (cache.has(k)) return;
+          cache.set(k, await getStationLogo(base, sz));
+        }),
+      ]);
     } catch { /* a warm miss just falls back to the normal path */ }
   }));
   listeners.forEach((l) => l());
@@ -75,26 +85,47 @@ export async function warmStationLogos(
 
 /** Resolve a station's callsign base + logo data-URI. Shared by LogoTile and the
  *  surfaces that must branch their layout on `hasLogo` (hero replaces the call
- *  sign with the logo; tiles/peek hide their text). */
+ *  sign with the logo; tiles/peek hide their text).
+ *
+ *  Everything displayable is DERIVED DURING RENDER, never mirrored into state and
+ *  applied by an effect. That distinction is the whole fix. An effect runs after
+ *  the commit, so a hook that adopted its new identity in one lagged a frame
+ *  behind the frequency — on a preset step the hero painted the OUTGOING station
+ *  once more before catching up. State here holds only what genuinely had to be
+ *  awaited, and every async value is stored WITH the input it answers so a
+ *  superseded resolve can never be shown.
+ */
 export function useStationLogo(name?: string, freqMhz?: number, boxDp?: number): {
   base: string | null; uri: string | null; hasLogo: boolean;
 } {
-  const nameBase = callsignFrom(name) ? callsignBase(callsignFrom(name)!) : null;
   // Cache per (station, requested size) — a chip and the hero want different
   // pre-rendered files for the same station.
   const ck = (b: string) => `${b}|${boxDp ?? 0}`;
-  // base and uri MUST move together. They used to be two useStates, and the gap
-  // between them is what made the hero flash the OUTGOING station's logo on every
-  // swap: `base` updated when callsignForFreq resolved, but `uri` kept the old
-  // station's image until getStationLogo came back — so for those frames the card
-  // showed the new frequency wearing the old logo. Worse, a superseded async
-  // resolve could land late and repaint a station the dial had already left,
-  // which is how a THIRD station's logo (one the vendor service transited) could
-  // appear. One state object, written only when it still matches the live base.
-  const [{ base, uri }, setResolved] = useState<{ base: string | null; uri: string | null }>(
-    () => ({ base: nameBase, uri: nameBase ? cache.get(ck(nameBase)) ?? null : null }),
-  );
   const [tick, setTick] = useState(0);
+
+  // Identity, SYNCHRONOUS where possible: from `name` when it carries a callsign,
+  // else straight out of the already-loaded freq->callsign map. Only a genuinely
+  // cold map falls through to the async lookup.
+  const syncBase = (callsignFrom(name) ? callsignBase(callsignFrom(name)!) : null)
+    ?? callsignForFreqSync(freqMhz);
+
+  // The two awaited values, each tagged with the input it belongs to.
+  const [lateBase, setLateBase] = useState<{ freq: number | null; base: string | null }>(
+    { freq: null, base: null },
+  );
+  const [lateUri, setLateUri] = useState<{ key: string; uri: string | null } | null>(null);
+
+  // A late callsign counts only for the frequency it was asked about; the dial may
+  // have moved on (the vendor service transits frequencies while stepping its own
+  // preset list, which is how a THIRD station's logo used to appear).
+  const base = syncBase ?? (lateBase.freq === (freqMhz ?? null) ? lateBase.base : null);
+  const key = base ? ck(base) : null;
+  // Warm cache first: presets are pre-warmed at every size a surface asks for, so
+  // a step between presets resolves with no async gap at all. `tick` is in the
+  // dependency chain via re-render; a cleared cache simply misses here.
+  const uri = key
+    ? (cache.has(key) ? cache.get(key)! : (lateUri?.key === key ? lateUri.uri : null))
+    : null;
 
   // Re-read when invalidateLogoTile() fires (a new logo was just assigned).
   useEffect(() => {
@@ -103,40 +134,29 @@ export function useStationLogo(name?: string, freqMhz?: number, boxDp?: number):
     return () => { listeners.delete(l); };
   }, []);
 
-  // Adopt a new base and its logo in ONE write. The uri comes from the warm cache
-  // when it is there (presets are pre-warmed, so a swap between presets is
-  // seamless) and otherwise starts null — a logo-less frame, which the hero
-  // already handles by showing the call sign. Never the previous station's image.
-  const adopt = useCallback((b: string | null) => {
-    setResolved((prev) => (prev.base === b ? prev : { base: b, uri: b ? cache.get(ck(b)) ?? null : null }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boxDp]);
-
   // Identity is the callsign: from `name` if it carries one, else resolved from
   // the dial frequency via the FCC DB (a bare "FM 88.7" preset name has none).
   useEffect(() => {
+    if (syncBase) return;                    // already known without awaiting
     let cancelled = false;
-    if (nameBase) { adopt(nameBase); return; }
-    callsignForFreq(freqMhz).then((b) => { if (!cancelled) adopt(b); }).catch(() => {});
+    const f = freqMhz ?? null;
+    callsignForFreq(freqMhz)
+      .then((b) => { if (!cancelled) setLateBase({ freq: f, base: b }); })
+      .catch(() => {});
     return () => { cancelled = true; };
-  }, [nameBase, freqMhz, adopt]);
+  }, [syncBase, freqMhz]);
 
   useEffect(() => {
+    if (!base || !key || cache.has(key)) return;   // nothing to do, or already warm
     let cancelled = false;
-    if (!base) return;                       // adopt() already cleared the uri
-    const k = ck(base);
-    if (cache.has(k)) return;                // adopt() already took the cached one
     getStationLogo(base, boxDp)
       .then((u) => {
-        cache.set(k, u);
-        // Only paint if the dial is STILL on this station. A late resolve for a
-        // frequency the vendor service merely transited must not repaint it.
-        if (!cancelled) setResolved((prev) => (prev.base === base ? { base, uri: u } : prev));
+        cache.set(key, u);
+        if (!cancelled) setLateUri({ key, uri: u });
       })
       .catch(() => {});
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base, tick, boxDp]);
+  }, [base, key, boxDp, tick]);
 
   return { base, uri, hasLogo: !!uri };
 }
@@ -239,7 +259,13 @@ export function invalidateStationDisplay(): void { dispListeners.forEach((l) => 
  *  default. Re-reads when invalidateStationDisplay() fires. */
 export function useStationDisplay(base: string | null, hasLogo: boolean): { showCall: boolean; showFreq: boolean } {
   const dflt = hasLogo ? { showCall: false, showFreq: false } : { showCall: true, showFreq: true };
-  const [prefs, setPrefs] = useState<{ showCall: boolean; showFreq: boolean }>(dflt);
+  // These prefs choose the hero's logo SIZE TIER, so resolving them a tick late
+  // means rendering the logo at one size and then jumping it to another. Read the
+  // memo synchronously and only fall back to state for a base this process has
+  // not looked up yet. `undefined` = unknown; `null` = known to have no explicit
+  // choice, which correctly takes the logo-dependent default.
+  const memo = getStationPrefsSync(base);
+  const [prefs, setPrefs] = useState<{ showCall: boolean; showFreq: boolean } | null>(null);
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const l = () => setTick((n) => n + 1);
@@ -248,14 +274,15 @@ export function useStationDisplay(base: string | null, hasLogo: boolean): { show
   }, []);
   useEffect(() => {
     let cancelled = false;
-    if (!base) { setPrefs(dflt); return; }
+    setPrefs(null);                       // never carry the previous station's prefs
+    if (!base || memo !== undefined) return;   // nothing to fetch, or the memo has it
     // getStationPrefs → null when the user hasn't set an explicit choice; fall
     // back to the logo-dependent default in that case.
     getStationPrefs(base).then((p) => { if (!cancelled) setPrefs(p ?? dflt); }).catch(() => {});
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base, tick, hasLogo]);
-  return prefs;
+  return (memo !== undefined ? memo : prefs) ?? dflt;
 }
 
 /** The 4-core-call-letter box (station-color fill, white letters) that stands in

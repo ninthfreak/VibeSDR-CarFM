@@ -28,7 +28,7 @@ function toast(msg: string) {
 
 /**
  * Reset the stack to the picker with an `autoSpy` param — the picker's effect
- * runs connectSpy() (which pushes the SDR screen itself once the native shim
+ * runs connectSpy() (which pushes the radio screen itself once the native shim
  * answers). We deliberately do NOT synthesise a ResolvedTarget: the resolve
  * pipeline rejects non-URL backends, and the SpyServer nav params only exist
  * after the shim starts. Single-route reset so a failed connect leaves the user
@@ -42,7 +42,7 @@ function goToSpy(host: string, port: number) {
   }));
 }
 
-/** Reset the stack to the SDR screen for a resolved target (fresh mount). */
+/** Reset the stack to the radio screen for a resolved target (fresh mount). */
 async function goToTarget(target: ResolvedTarget) {
   if (!navigationRef.isReady()) return;
   const viewMode = await getViewMode();
@@ -51,7 +51,7 @@ async function goToTarget(target: ResolvedTarget) {
     routes: [
       { name: 'InstancePicker' },
       {
-        name: 'SDR',
+        name: 'Radio',
         params: {
           baseUrl:      target.baseUrl,
           instanceName: target.instanceName,
@@ -81,11 +81,11 @@ export function useDeepLinks(ready: boolean) {
     if (/^sdr:\/\//i.test(url)) {
       const t = parseSdrUrl(url);
       if (!t) { toast('Invalid SpyServer link'); clearDeepLinkActive(); return; }
-      const onSDR = navigationRef.getCurrentRoute?.()?.name === 'SDR';
+      const onRadio = navigationRef.getCurrentRoute?.()?.name === 'Radio';
       Alert.alert(
         'Connect to SpyServer?',
         `${t.host}:${t.port}\n\nSpyServer links come from third-party sources — only connect to servers you trust.`
-          + (onSDR ? '\nThis will disconnect your current session.' : ''),
+          + (onRadio ? '\nThis will disconnect your current session.' : ''),
         [
           { text: 'Cancel', style: 'cancel', onPress: () => clearDeepLinkActive() },
           { text: 'Connect', onPress: () => goToSpy(t.host, t.port) },
@@ -101,9 +101,9 @@ export function useDeepLinks(ready: boolean) {
     if (!res.ok) { toast(res.reason); clearDeepLinkActive(); return; }
 
     // Cold start (nothing to interrupt) → connect directly. If we're already on
-    // an SDR session, confirm before tearing it down.
-    const onSDR = navigationRef.getCurrentRoute?.()?.name === 'SDR';
-    if (onSDR) {
+    // a radio session, confirm before tearing it down.
+    const onRadio = navigationRef.getCurrentRoute?.()?.name === 'Radio';
+    if (onRadio) {
       Alert.alert(
         'Open instance from link?',
         `Connect to ${res.target.instanceName}?\nThis will disconnect your current session.`,

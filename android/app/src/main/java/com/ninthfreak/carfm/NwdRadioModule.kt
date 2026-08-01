@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.media.AudioManager
 import android.os.IBinder
+import android.provider.Settings
 import android.util.Log
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -49,7 +50,6 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     private var radio: RadioFeature? = null
     private var bound = false
     private var registered = false
-    private var initialStereo = false
     private var initialRt = ""
     private var initialPty = -1
     private var connectPromise: Promise? = null
@@ -188,10 +188,10 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
                     freqMult = if (fv > 50000) 1000 else if (fv > 5000) 100 else if (fv > 500) 10 else 1
                 }
             } catch (e: Throwable) { Log.w(TAG, "getCurrentFrequency failed", e) }
-            // Read the CURRENT stereo state: a stable-stereo station never fires
-            // notifyStereo (that only fires on change), so without this the face
-            // is stuck at its mono default on a rock-solid stereo signal.
-            initialStereo = try { r.isStreroOn() } catch (_: Throwable) { false }
+            // NO initial stereo read: isStreroOn() is stuck true on this firmware
+            // (it reads true on dead air), so seeding from it put a false STEREO on
+            // the face that nothing corrected. notifyStereo is the only trustworthy
+            // source; until it fires, the face shows its "unknown" pill.
             initialRt = try { r.getRtMessage() ?: "" } catch (_: Throwable) { "" }
             initialPty = try { r.getPTYType().toInt() } catch (_: Throwable) { -1 }
             // RDS on by default (selector byte 0 — same guess the spike confirmed works).
@@ -304,10 +304,20 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     //     JSON-shaped. There is no String-in/String-out entry point at all
     //     besides setDSP_ak7604_status(String), which is an AK7604 DSP setter.
     //
-    // So RadioJsonNative reaches the MCU through something other than
-    // android.os.Hardware on this firmware, and finding it needs another
-    // decompile pass — not another device run. RSSI and raw RDS stay unavailable
-    // until then; do NOT re-add speculative parseJson calls without new evidence.
+    // That decompile pass is now DONE (2026-07-31) and it found the answer:
+    // ReflectUtil.invokeStatic returns null (it logs "Can't find …") instead of
+    // throwing when a method is absent, so getRadioIc() yields "", the
+    // getRadioIc()=="SI47925" test in RadioService.onCreate fails, and this unit
+    // never selects ArmRadioManager at all — it runs the Allwinner path. The JSON
+    // channel belongs to the Si4792x variant; it was never ours to reach.
+    //
+    // The transport THIS unit uses is the vendor framework class
+    // com.nwd.app.NwdFmManager, via com.nwd.radio.arm.allwinner.AWNative:
+    //   getRadioRDSDataArm() -> String, raw RDS      getRadioRDSFunArm() -> 1 if supported
+    //   getFreAndStrength()  -> hi16 = strength      getStationStereoState() -> real stereo
+    // See docs/BUILTIN-TUNER-FINDINGS.md, "The REAL transport found". Repointing
+    // this probe at NwdFmManager is the next step; until that runs, RSSI and raw
+    // RDS stay unavailable. Do NOT re-add speculative parseJson calls.
     //
     // What the dump DID give us is a set of real, read-only radio getters, which
     // is what this probe now reads. They are the honest replacement for the
@@ -362,6 +372,132 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(sb.toString())
     }
 
+    // ── The transport this unit ACTUALLY uses ────────────────────────────────
+    // NewRdsManager reads RDS through com.nwd.radio.arm.allwinner.AWNative, and
+    // AWNative is a thin reflection shim over the vendor framework class
+    // com.nwd.app.NwdFmManager. Every name below is a GETTER lifted verbatim from
+    // that dump — no setter appears here, so this probe cannot change tuner state.
+    //
+    // The open question is REACHABILITY: the radio service is a system app and we
+    // are not. Encouraging sign — android.os.Hardware resolved fine from our
+    // process (that probe failed on the METHOD, not the class), so ROM framework
+    // classes are on our classloader and not hidden-API blocked.
+    private val nwdFmManagerClass = "com.nwd.app.NwdFmManager"
+
+    private val nwdFmGetters = listOf(
+        "getRadioRDSFunArm" to "1 = hardware supports RDS",
+        "getRadioRDSDataArm" to "16 hex chars = one raw RDS group",
+        "getCurrentFrequency" to "frequency, possibly packed with strength",
+        "getStationStereoState" to "real per-station stereo (vs the stuck isStreroOn)",
+        "getStereo" to "stereo mode flag",
+        "getLoc" to "local/DX",
+        "getRadioModuleArm" to "which module the MCU reports",
+        "getVolue" to "vendor's spelling; a cheap reachability canary",
+    )
+
+    /** One RDS read almost always returns the all-zero "no data this poll"
+     *  sentinel, which reads like a failure. Burst it so a real group has a
+     *  chance to land. */
+    private val rdsBurstReads = 8
+    private val rdsBurstGapMs = 120L
+
+    /** Invoke a no-arg static getter on the vendor framework class. Read-only by
+     *  construction: only names from `nwdFmGetters` reach this. */
+    private fun nwdFmGet(name: String): Any? {
+        val cls = Class.forName(nwdFmManagerClass)
+        val m = try {
+            cls.getMethod(name)
+        } catch (_: NoSuchMethodException) {
+            cls.getDeclaredMethod(name).apply { isAccessible = true }
+        }
+        return m.invoke(null)
+    }
+
+    /** Read an MCU settings key, trying each table in turn. Read-only. */
+    private fun settingsRead(key: String): String {
+        val cr = reactContext.contentResolver
+        try { Settings.System.getString(cr, key)?.let { return "$it (system)" } } catch (_: Throwable) {}
+        try { Settings.Global.getString(cr, key)?.let { return "$it (global)" } } catch (_: Throwable) {}
+        try { Settings.Secure.getString(cr, key)?.let { return "$it (secure)" } } catch (_: Throwable) {}
+        return "(not present in system/global/secure)"
+    }
+
+    /** Probe com.nwd.app.NwdFmManager for signal, raw RDS and a real stereo read,
+     *  plus the two MCU settings that gate RDS. Reports the verbatim value or the
+     *  exact exception type for every call. Read-only throughout. */
+    @ReactMethod
+    fun probeNwdFmManager(promise: Promise) {
+        val sb = StringBuilder("NWDFMMANAGER PROBE ($nwdFmManagerClass)\n")
+        // The decisive line. If the CLASS does not resolve, nothing below can and
+        // this transport is out of reach for an unprivileged app — same shape of
+        // answer the android.os.Hardware probe gave, one level earlier.
+        var cls: Class<*>? = null
+        sb.append("  class resolves? = ")
+        try {
+            cls = Class.forName(nwdFmManagerClass)
+            sb.append("YES (").append(cls.declaredMethods.size).append(" declared methods)")
+        } catch (e: Throwable) {
+            sb.append("NO — ").append(e.javaClass.name).append(": ").append(e.message)
+        }
+        sb.append('\n')
+
+        if (cls == null) {
+            sb.append("  (class absent — skipping the getters; the transport is not reachable here)\n")
+            promise.resolve(sb.toString())
+            return
+        }
+
+        for ((name, note) in nwdFmGetters) {
+            sb.append("  ").append(name).append("() = ")
+            try {
+                sb.append(nwdFmGet(name)?.toString() ?: "(null)")
+            } catch (e: Throwable) {
+                // The exception TYPE is the diagnosis: NoSuchMethodException =
+                // different signature on this firmware; SecurityException /
+                // InvocationTargetException = reachable but refused.
+                sb.append("ERR ").append(e.javaClass.name).append(": ").append(e.message)
+            }
+            sb.append("   // ").append(note).append('\n')
+        }
+
+        // AWNative.getFreAndStrength formats this as %08x and splits it: the low 4
+        // hex digits are the frequency, the high 4 are signal strength. Show both
+        // readings of whatever came back rather than guessing which it is.
+        try {
+            val raw = nwdFmGet("getCurrentFrequency")
+            if (raw is Int) {
+                sb.append("  getCurrentFrequency unpacked: freq=").append(raw and 0xFFFF)
+                    .append(" strength=").append((raw ushr 16) and 0xFFFF)
+                    .append("   // per AWNative.getFreAndStrength\n")
+            }
+        } catch (_: Throwable) {}
+
+        sb.append("  getRadioRDSDataArm() x").append(rdsBurstReads).append(":\n")
+        val seen = LinkedHashMap<String, Int>()
+        repeat(rdsBurstReads) {
+            val v = try {
+                nwdFmGet("getRadioRDSDataArm")?.toString() ?: "(null)"
+            } catch (e: Throwable) {
+                "ERR ${e.javaClass.simpleName}"
+            }
+            seen[v] = (seen[v] ?: 0) + 1
+            try { Thread.sleep(rdsBurstGapMs) } catch (_: InterruptedException) {}
+        }
+        for ((v, n) in seen) sb.append("      ").append(v).append("  x").append(n).append('\n')
+        sb.append("      (all-zero = no group that poll; anything else = LIVE RAW RDS)\n")
+
+        // NewRdsManager.updateRdsState enables RDS only when the area is 0 or 5.
+        // That gate is in the service's Java layer, so reading the data directly
+        // bypasses it — but if the area is wrong the MCU may not emit groups either,
+        // which is exactly what the burst above settles.
+        sb.append("  mcu_radio_area_current = ").append(settingsRead("mcu_radio_area_current"))
+            .append("   // NewRdsManager needs 0 or 5\n")
+        sb.append("  mcu_current_source     = ").append(settingsRead("mcu_current_source"))
+            .append("   // 4 = FM\n")
+
+        promise.resolve(sb.toString())
+    }
+
     @ReactMethod
     fun probe(promise: Promise) {
         val r = radio ?: run { promise.reject("nc", "not connected"); return }
@@ -371,7 +507,12 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             try { sb.append(v()) } catch (e: Throwable) { sb.append("ERR(").append(e.javaClass.simpleName).append(')') }
             sb.append('\n')
         }
-        sb.append("NWD PROBE (freqMult=$freqMult band=$fmBand)\n")
+        // Ask the tuner for its band rather than printing our tracked copy: the
+        // header is how a log reader knows WHICH bank the `presets` line below is
+        // showing, since getPrefabFrequency() always returns the current band's.
+        // On 31 July the header claimed band=0 while the body read band=1.
+        val liveBand = try { r.getCurrentFrequency()?.band?.toString() ?: "?" } catch (_: Throwable) { "?" }
+        sb.append("NWD PROBE (freqMult=$freqMult band=$liveBand tracked=$fmBand)\n")
         line("radioType") { r.getRadioType() }
         line("radioState") { r.getRadioState().toInt() }
         line("scanState") { r.getCurrentScanState() }
@@ -387,7 +528,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         line("bandPlan") {
             val arr = r.getRadioPoint()
             if (arr == null) "null"
-            else arr.joinToString("; ", "[${arr.size}] ") { "max=${it.max} min=${it.min} step=${it.step}" }
+            else arr.joinToString("; ", "[${arr.size}] ") { "lo=${it.lo} hi=${it.hi} step=${it.step}" }
         }
         line("presets") {
             val arr = r.getPrefabFrequency()
@@ -454,6 +595,15 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         override fun notifyState(s: Byte) = emit("NwdRadioState", Arguments.createMap().apply { putInt("state", s.toInt()) })
         override fun notifyCurrentFrequency(band: Byte, freq: Int, ps: String?, arg: Int) =
             emit("NwdRadioFrequency", Arguments.createMap().apply {
+                // TRACK the band. It was captured once at connect and never updated,
+                // yet tune() passes it to setCurrentFrequency on every tune — so the
+                // moment the head unit was switched FM1 -> FM2 we carried on tuning
+                // against the old band. The 31 July log caught exactly that: at
+                // 07:28 the tuner reported band=0 with the user's own six presets,
+                // and by 07:55 band=1 with the factory list, while our connect-time
+                // value stayed 0 for the whole session. Each band has its OWN preset
+                // bank, which is also what `arg` indexes into.
+                fmBand = band
                 putInt("band", band.toInt()); putInt("freq", freq)
                 putDouble("mhz", freq.toDouble() / freqMult); putString("ps", ps ?: "")
                 // `arg` = the tuner's preset-slot index in the CURRENT bank (1-6), or
@@ -479,7 +629,6 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         putInt("band", fmBand.toInt())
         putInt("freqMult", freqMult)
         putBoolean("registered", registered)
-        putBoolean("stereo", initialStereo)
         putString("rt", initialRt)
         putInt("pty", initialPty)
         try { radio?.getCurrentFrequency()?.let {

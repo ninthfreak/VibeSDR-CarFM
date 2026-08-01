@@ -1,8 +1,8 @@
 /**
- * SDRScreen — main receiver screen for CarFM v2.
+ * RadioScreen — main receiver screen for CarFM v2.
  *
  * Hierarchy:
- *   SDRScreen
+ *   RadioScreen
  *   ├── ControlsBar           (drums, sig-frame, freq/mode pill, step, menu — absolute overlay)
  *   ├── MenuSheet             (slide-up panel)
  *   ├── StepPicker            (bottom-sheet step selector)
@@ -43,13 +43,11 @@ import { startBookmarkAutosave, stopBookmarkAutosave,
          getLearnedBookmarksNow } from '../services/vibeServer';
 import { setReceiverIso } from '../services/rdsCountry';
 
-import { type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme,
+import { type SDRBackend, type ProfileInfo, type DabProgramme,
          type DspFilterDesc } from '../services/SDRBackend';
 import { MIN_HZ, MAX_HZ }                              from '../services/sdrTypes';
 import { v4 as uuidv4 }                                from 'uuid';
 import AsyncStorage                                    from '@react-native-async-storage/async-storage';
-import { getDefaultInstance }                          from '../services/defaultInstance';
-import { getFavourites }                               from '../services/favourites';
 import { useTheme }                                     from '../contexts/ThemeContext';
 
 import AudioPlayer, { VibePowerModule } from '../components/AudioPlayer';
@@ -60,9 +58,9 @@ import { isoToFlag, validIso } from '../services/rdsCountry';
 import {
   fetchBookmarks, findNearest, findNextBookmark,
   fmtBandFreq, deriveItuRegion, refreshBandSnr, getBandSnrDb, propCondition,
-  fetchUiConfig, fetchReceiverInfo,
+  fetchUiConfig,
   VTS_ON_HZ, type ServerBookmark, type ServerBand,
-  type ServerUiConfig, type ReceiverInfo,
+  type ServerUiConfig,
 } from '../services/stations';
 import {
   loadUserBookmarks, saveUserBookmarks, bookmarksForInstance,
@@ -81,7 +79,7 @@ import { getUserLocation } from '../services/instancesApi';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type Props = NativeStackScreenProps<RootStackParamList, 'SDR'>;
+type Props = NativeStackScreenProps<RootStackParamList, 'Radio'>;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -128,7 +126,7 @@ function liveStationEqual(a: LiveStation, b: LiveStation): boolean {
     a.pi === b.pi && sameNums(a.afMhz, b.afMhz);
 }
 
-export default function SDRScreen({ route, navigation }: Props) {
+export default function RadioScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName, password } = route.params;
   useKeepAwake();
 
@@ -154,14 +152,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   // SpyServer with canControl=0: another client holds the tuner, so tuning would
   // silently do nothing. Show it rather than letting the user fight a dead dial.
   const [readOnly, setReadOnly] = useState(false);
-  // True when the local session's IQ comes from a SpyServer: most RTL-specific
-  // hardware controls then belong to the server operator, not us.
-  const [isSpy, setIsSpy] = useState(false);
   // Session limit (minutes) from the directory. The server enforces it; we just
-  // warn up front and count down, rather than letting it look like a crash.
+  // warn up front, rather than letting it look like a crash.
   const sessionLimitMins: number = route.params.sessionLimitMins ?? 0;
   const [sessionEndsAt, setSessionEndsAt] = useState<number | null>(null);
-  const [sessionLeftMs, setSessionLeftMs] = useState<number | null>(null);
   const noticeShownRef = useRef(false);
   // Per-device persistence suffix so each local source keeps its OWN remembered
   // setup (frequency/mode/step + hardware config). RTL-TCP is keyed by host:port,
@@ -174,8 +168,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     : 'usb';
   const localHwKey = `lsv_local_hw:${localDeviceKey}`;
   const LocalHw = (NativeModules as any).VibeLocalSDR;
-  const [hwGains,       setHwGains]       = useState<number[]>([]);
-  const [hwServerRates, setHwServerRates] = useState<number[] | null>(null);  // VibeServer-offered rates
   const [hwGain,        setHwGain]        = useState(0);     // tenths of dB
   const [hwAutoGain,    setHwAutoGain]    = useState(true);
   const [hwPpm,         setHwPpm]         = useState(0);
@@ -185,9 +177,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwDirectSamp,  setHwDirectSamp]  = useState(0);
   const [hwDeemph,      setHwDeemph]      = useState(50e-6);  // FM de-emphasis tau (0/50µs/75µs)
   const [hwStereo,      setHwStereo]      = useState(true);   // WFM stereo on / forced mono (local)
-  const [hwSquelch,     setHwSquelch]     = useState(-100);   // audio squelch dBFS (-100 = off)
-  const [hwNrLevel,     setHwNrLevel]     = useState(0);      // audio NR strength 0=off..20 (÷15 → native 0..1.33)
-  const [hwNotch,       setHwNotch]       = useState(false);  // auto notch — LOCAL (shim)
   const [netNotch,      setNetNotch]      = useState(false);  // auto notch — NETWORK (UberSDR/OWRX/Kiwi)
 
   // Load saved RTL-SDR hardware settings and apply them to the running session,
@@ -222,7 +211,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // over from a previous session). Device config (gain/ppm/etc.) still persists.
       const sql = -100, nrLvl = 0, notch = false;
       setHwAutoGain(auto); setHwPpm(ppm); setHwSampleRate(rate);
-      setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwStereo(stereo); setHwSquelch(sql); setHwNrLevel(nrLvl); setHwNotch(notch);
+      setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwStereo(stereo);
       if (typeof prefs.gain === 'number') setHwGain(prefs.gain);
       // Re-apply to the native session (already running from startSpectrum).
       LocalHw?.setPpm?.(ppm);
@@ -240,7 +229,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       try {
         const g = await LocalHw?.getTunerGains?.();
         if (!cancelled && Array.isArray(g) && g.length) {
-          setHwGains(g);
           if (typeof prefs.gain !== 'number') setHwGain(g[Math.floor(g.length / 2)]);
         }
       } catch {}
@@ -370,7 +358,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     setTimeout(() => {
       if (!connectedRef.current) {
         VibePowerModule?.setReconnectFailed?.(true);
-        setReconnectFailedUi(true);
       }
     }, 12000);
   }, []);
@@ -380,28 +367,20 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const [connected, setConnected] = useState(false);
   const [serverLost, setServerLost] = useState(false);   // OWRX server crashed/restarted
-  const [serverBusy, setServerBusy] = useState(false);   // Kiwi receiver full (too_busy)
-  const [connLost,   setConnLost]   = useState(false);   // UberSDR link down — auto-reconnecting
-  const [connTimedOut, setConnTimedOut] = useState(false); // initial connect never completed
-  const connLostTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Initialised from AppState.currentState — a cold launch INTO THE BACKGROUND (the
   // watch waking the phone) fires no `change` event, so assuming foreground here made
   // the app behave as though someone were looking at it.
   const appActiveRef  = useRef(AppState.currentState === 'active');
   // Returning from the background: the spectrum was deliberately paused, so the
   // link reads 0 for a moment while the waterfall re-subscribes. Show a calm
-  // "reinitialising" notice instead of the alarming "connection lost" one, and
-  // only fall back to the real disconnect popup if it doesn't recover in time.
+  // "reinitialising" notice, cleared when frames return (onLink q>0) or by the
+  // watchdog if audio dies too.
   const [reinit, setReinit] = useState(false);
   const reinitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resumingRef = useRef(false);   // true during the post-background reinit window
   // Audio came back fine but the spectrum/waterfall never re-subscribed — give
   // the user a way out (reconnect / instance list) instead of a stuck notice.
-  const [specFailed, setSpecFailed] = useState(false);
   const [profiles, setProfiles]   = useState<ProfileInfo[]>([]);  // OWRX only
-  const [sdrUsage, setSdrUsage] = useState<Record<string, { name: string; inUse: boolean; activeProfileId?: string }>>({});  // OWRX: per-SDR usage
-  const [clientCount, setClientCount] = useState(0);  // OWRX: live user count
-  const [serverModes, setServerModes] = useState<BackendMode[]>([]);  // OWRX gated demod list
   // OWRX: server/profile preset DSP defaults (initial_squelch_level / initial_nr_level)
   // pushed on connect + every profile switch; seeds the menu's squelch/NR sliders so
   // they reflect the owner's preset (e.g. an NFM 2 m profile with a fixed squelch).
@@ -411,7 +390,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // for the VTS resolver (reads in a debounced callback, avoids stale closures).
   const [dabProgrammes, setDabProgrammes] = useState<DabProgramme[]>([]);  // OWRX DAB ensemble
   const [activeDabId, setActiveDabId] = useState<number>(0);
-  const [dabEnsemble, setDabEnsemble] = useState('');
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
   const [liveStation, setLiveStation] = useState<LiveStation>({});
@@ -419,7 +397,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const liveStationRef = useRef<string>('');
   const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
   const lastLiveLogoKey = useRef('');
-  const [fmStereo, setFmStereo] = useState(false);   // WFM stereo pilot (local hardware)
+  // WFM stereo pilot. null = UNKNOWN — nothing has told us yet, so the face shows
+  // a blank pill rather than asserting MONO. The head-unit tuner only reports on a
+  // CHANGE (NwdRadioStereo), and its one-shot getter is stuck true, so "unknown"
+  // is the honest state between connect and the first callback.
+  const [fmStereo, setFmStereo] = useState<boolean | null>(null);
 
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
   // True while the head unit's built-in NWD tuner is driving the face (a
@@ -524,12 +506,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [wfContrast,    setWfContrast]    = useState(0);
   const [wfSharpness,   setWfSharpness]   = useState(5);
   // UberSDR auto-range symmetric contrast (0–20). Web client calibration = 10.
-  const [hwLockedRate, setHwLockedRate] = useState(0);   // >0 = server pinned the rate
   const [autoContrast,  setAutoContrast]  = useState(5);  // production default (10 too dark)
   // M9PSY 5-tap spatial waterfall smooth
   const [spatialSmooth, setSpatialSmooth] = useState(true);
   const [wfCoarse,      setWfCoarse]      = useState<'auto'|'manual'>('auto');
-  const [frameRate,     setFrameRate]     = useState<'native'|'20fps'|'30fps'>('20fps');
   // Idle saver: after 30s without touch, ask the server for ⅓ frame rate
   // (set_rate 3 — skin default-waterfall parity). Meters/waterfall/spectrum
   // all slow with the data; any touch restores full rate instantly.
@@ -540,52 +520,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [vfoIntensity,  setVfoIntensity]  = useState(5);
   // Frost 0-10 (0 = off): smoked-glass band over the passband
   const [vfoFrost,      setVfoFrost]      = useState(5);           // production default
-  // Instance spectrum backdrop (/api/spectrum-bg-image) + opacity 0-10
-  // (3 = web default 0.30); follows the server's configured opacity until
-  // the user moves the slider (or a saved pref exists)
-  const [bgImageUrl,    setBgImageUrl]    = useState<string | null>(null);
+  // Instance spectrum backdrop opacity 0-10 (3 = web default 0.30); follows the
+  // server's configured opacity until the user moves the slider (or a saved
+  // pref exists)
   const [bgOpacity,     setBgOpacity]     = useState(3);
   const bgOpacityUserSet = useRef(false);
-  // Station-ID overlay (web drawStationIdOverlay parity)
-  const [stationId,     setStationId]     = useState<{ line1: string; line2?: string; color: string } | null>(null);
-  // Server software version (menu footer — identifies the backend type)
-  const [serverVersion, setServerVersion] = useState<string | null>(null);
-  const [serverLabel,   setServerLabel]   = useState<string | null>(null);  // OWRX: OpenWebRX/+
   useEffect(() => {
     let cancelled = false;
     if (route.params.tunerless) return;   // no server behind the placeholder URL
     fetchUiConfig(baseUrl).then((cfg: ServerUiConfig | null) => {
       if (cancelled) return;
-      if (cfg?.spectrum_bg_image) {
-        const raw = cfg.spectrum_bg_image;
-        const abs = raw.startsWith('http')
-          ? raw
-          : baseUrl.replace(/\/+$/, '') + (raw.startsWith('/') ? raw : '/' + raw);
-        // Cache-bust like the web client — a freshly uploaded image always loads
-        setBgImageUrl(abs + (abs.includes('?') ? '&' : '?') + 't=' + Date.now());
-      } else {
-        setBgImageUrl(null);
-      }
       if (!bgOpacityUserSet.current && typeof cfg?.spectrum_bg_opacity === 'number') {
         setBgOpacity(Math.round(Math.max(0, Math.min(1, cfg.spectrum_bg_opacity)) * 10));
       }
-      const overlayOff = cfg?.station_id_overlay === false;
-      if (overlayOff) setStationId(null);
-      const idColor = /^#[0-9a-fA-F]{6}$/.test((cfg?.station_id_color ?? '').trim())
-        ? (cfg!.station_id_color as string).trim() : '#ffffff';
-      fetchReceiverInfo(baseUrl).then((r: ReceiverInfo | null) => {
-        if (cancelled || !r) return;
-        if (r.serverVersion) setServerVersion(r.serverVersion);
-        if (overlayOff) return;
-        const callsign = (r.callsign ?? '').trim();
-        const name     = (r.name ?? '').trim();
-        if (!callsign && !name) return;
-        setStationId({
-          line1: callsign && name ? `${callsign} - ${name}` : (callsign || name),
-          line2: (r.location ?? '').trim() || undefined,
-          color: idColor,
-        });
-      }).catch(() => {});
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [baseUrl]);
@@ -597,7 +544,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // on the wire (server paramInfo is all string-typed).
   const [serverDspEnabled, setServerDspEnabled] = useState(false);
   const [serverDspFilter,  setServerDspFilter]  = useState('');
-  const [serverDspParams,  setServerDspParams]  = useState<Record<string,string>>({});
   const [dspFilters,       setDspFilters]       = useState<DspFilterDesc[]>([]);
   const kiwiSqDbmRef  = useRef(-130);
   const kiwiSqOpenRef = useRef(true);
@@ -614,11 +560,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       (NativeModules.VibePowerModule as { setSquelchOpen?: (o: boolean) => void })?.setSquelchOpen?.(open);
     }
   }, []);
-  const [dspError,         setDspError]         = useState<string | null>(null);
 
   // ── UI overlay state ──────────────────────────────────────────────────────
 
-  const [menuOpen,      setMenuOpen]      = useState(false);
 
   // Frequency display unit — chosen in FreqModal, drives the main readout too.
   const [freqUnit, setFreqUnit] = useState<'hz' | 'khz' | 'mhz'>('khz');
@@ -629,9 +573,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     // Smooth tune is always on now (no toggle) — don't restore an old saved "off".
     AsyncStorage.getItem('lsv_idle_slow').then((v: string | null) => {
       if (v !== null) setIdleSlow(v === '1');
-    }).catch(() => {});
-    AsyncStorage.getItem('lsv_frame_rate').then((v: string | null) => {
-      if (v === 'native' || v === '20fps' || v === '30fps') setFrameRate(v);
     }).catch(() => {});
   }, []);
   // ── Signal / SNR ──────────────────────────────────────────────────────────
@@ -865,13 +806,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── Pause = disconnect / Play = reconnect ─────────────────────────────────
   // Pause drops the SDR (the server lets it go on suspend anyway) and Play does
   // a full reconnect. If that reconnect doesn't land within a few seconds (server
-  // full / rate-limited) we flag it so the lock-screen card + an in-app banner
-  // tell the user to open the app.
-  const [reconnectFailedUi, setReconnectFailedUi] = useState(false);
+  // full / rate-limited) we flag it to native so the lock-screen card tells the
+  // user to open the app.
   const connectedRef = useRef(false);
   useEffect(() => {
     connectedRef.current = connected;
-    if (connected) { VibePowerModule?.setReconnectFailed?.(false); setReconnectFailedUi(false); }
+    if (connected) { VibePowerModule?.setReconnectFailed?.(false); }
   }, [connected]);
 
   // (Re)apply the network notch to the audio engine whenever the connection is up
@@ -1046,9 +986,6 @@ export default function SDRScreen({ route, navigation }: Props) {
           }
           applyDspParams(merged);
         }
-      } else if (msg.type === 'dsp_error') {
-        setDspError(String(info.error ?? 'DSP error'));
-        setTimeout(() => setDspError(null), 4000);
       }
     });
     return () => {
@@ -1081,13 +1018,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     destroyed.current = false;
     const c = createBackend(route.params.serverType ?? 'ubersdr', baseUrl, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
-      onConnect:    () => { if (!destroyed.current) { setConnected(true); setServerLost(false); setServerBusy(false); setConnLost(false); if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; } resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); setSpecFailed(false); } },
+      onConnect:    () => { if (!destroyed.current) { setConnected(true); setServerLost(false); resumingRef.current = false; if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; } setReinit(false); } },
       onDisconnect: () => { if (!destroyed.current) setConnected(false); },
       // VibeServer: the serving device's tuner gains → drive the gain slider (a
       // remote client can't query the hardware natively).
-      onHwGains: (gains: number[]) => { if (!destroyed.current && gains.length) setHwGains(gains); },
-      onHwRates: (rates: number[]) => { if (!destroyed.current && rates.length) setHwServerRates(rates); },
-      onHwLockedRate: (r: number) => { if (!destroyed.current) setHwLockedRate(r); },
       onServerLost: () => {
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio
         // engine, and surface the wait-and-reconnect prompt (no auto-reconnect —
@@ -1098,7 +1032,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onServerBusy: () => {
         if (destroyed.current) return;
-        setServerBusy(true);
         (VibePowerModule as any)?.stopExternalAudio?.();
       },
       onReceiverLon: (lon) => { if (!destroyed.current) setRecvLon(lon); },
@@ -1110,38 +1043,19 @@ export default function SDRScreen({ route, navigation }: Props) {
         // is deliberately paused on minimise/resume, which briefly starves the
         // link to 0 with audio still fine — so DEBOUNCE: only pop after a sustained
         // drop, and cancel the instant the link recovers. OWRX/Kiwi use serverLost.
-        if ((route.params.serverType ?? 'ubersdr') === 'ubersdr' && appActiveRef.current) {
-          if (q === 0) {
-            // While reinitialising after a resume the "reinit" notice owns the
-            // screen — don't arm the connection-lost popup underneath it.
-            if (!connLostTimer.current && !resumingRef.current) {
-              connLostTimer.current = setTimeout(() => {
-                connLostTimer.current = null;
-                if (!destroyed.current) setConnLost(true);
-              }, 3000);
-            }
-          } else {
-            // Frames flowing again — recovery. Clear both notices.
-            if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; }
-            setConnLost(false);
-            if (resumingRef.current) {
-              resumingRef.current = false;
-              if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; }
-              setReinit(false);
-            }
-            // Spectrum recovered on its own (e.g. user hit reconnect) → drop the
-            // failure popup too.
-            setSpecFailed(false);
+        if ((route.params.serverType ?? 'ubersdr') === 'ubersdr' && appActiveRef.current && q !== 0) {
+          // Frames flowing again — the post-resume reinit completed, so drop the
+          // "reinitialising" notice.
+          if (resumingRef.current) {
+            resumingRef.current = false;
+            if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; }
+            setReinit(false);
           }
         }
       },
       onStatus:     (s) => { if (!destroyed.current) setStatus(s); },
       onSMeter:     (dbm) => { if (!destroyed.current) { owrxSmeterRef.current = dbm; if (isKiwi) evalKiwiSquelch(dbm); } },
       onProfiles:   (list) => { if (!destroyed.current) setProfiles(list); },
-      onSdrUsage:   (m) => { if (!destroyed.current) setSdrUsage(m); },
-      onClients:    (n) => { if (!destroyed.current) setClientCount(n); },
-      onServerInfo: (info) => { if (!destroyed.current) { setServerLabel(info.name); setServerVersion(info.version || null); } },
-      onModes:      (list) => { if (!destroyed.current) setServerModes(list); },
       onServerDspDefaults: (d) => {
         // Adapter already applied these to the demod; bump seq so the menu re-syncs
         // its sliders even when the new profile presets the same value as before.
@@ -1165,7 +1079,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
         if (meta.programmes) {
           setDabProgrammes(meta.programmes);
-          if (meta.ensemble) setDabEnsemble(meta.ensemble);
           // Mirror the server's default (first programme) so the picker reflects
           // what's actually playing until the user picks another.
           setActiveDabId((cur) => meta.programmes!.some((p) => p.id === cur)
@@ -1194,17 +1107,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onError: (msg) => {
         if (destroyed.current) return;
-        // Rate-limited / blocked → straight to the bypass-password box (the
-        // instance password gets around per-IP limits); other errors offer
-        // both routes.
-        if (/429|rate.?limit|too many|refused|denied|blocked|busy/i.test(msg)) {
-          setPwPrompt(true);
-        } else {
-          Alert.alert('Connection Error', msg, [
-            { text: 'Back to Instances', onPress: () => navigation.goBack() },
-            { text: 'Enter Password', onPress: () => setPwPrompt(true) },
-          ]);
-        }
+        // The bypass-password box this used to open no longer exists, so the
+        // rate-limited branch showed nothing at all. Both cases now surface the
+        // same alert rather than failing silently.
+        Alert.alert('Connection Error', msg, [
+          { text: 'Back to Instances', onPress: () => navigation.goBack() },
+        ]);
       },
     }, password, !!route.params.isLocal);
     client.current = c;
@@ -1289,14 +1197,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     setSessionEndsAt(Date.now() + sessionLimitMins * 60_000);
   }, [connected, sessionLimitMins, sessionEndsAt]);
 
-  useEffect(() => {
-    if (!sessionEndsAt) return;
-    const tick = () => setSessionLeftMs(Math.max(0, sessionEndsAt - Date.now()));
-    tick();
-    const t = setInterval(tick, 1000);
-    return () => clearInterval(t);
-  }, [sessionEndsAt]);
-
   // One combined notice covering BOTH constraints — a read-only, time-limited
   // receiver should not produce two popups in a row.
   useEffect(() => {
@@ -1343,7 +1243,6 @@ export default function SDRScreen({ route, navigation }: Props) {
           return;
         }
         // Another client owns the tuner: the dial would silently do nothing.
-        setIsSpy(!!s.spy);
         if (s.spy) setReadOnly(!s.canControl);
 
         const n = s.stalls ?? 0;
@@ -1356,28 +1255,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearInterval(t);
   }, [isLocal, navigation]);
 
-  // Bypass-password prompt — rate-limited/blocked connections show this
-  // directly (the instance password gets around per-IP limits); submitting
-  // replaces the screen with a fresh session carrying the password on every
-  // WS URL (audio, spectrum, dxcluster).
-  const [pwPrompt, setPwPrompt] = useState(false);
-
   // Audio engine start is GATED on the restore (ms-fast): the engine used to
   // start with the default 14.074/USB in the audio-WS URL and the corrective
   // restore tune could lose the race against the WS handshake — server stayed
   // on 20m FT8/USB while the UI showed the restored station (sounded like
   // "broken AM"), and zoom anchored on the stale server frequency.
   const [tuneLoaded, setTuneLoaded] = useState(false);
-
-  // Initial-connect timeout: if the link never comes up (e.g. a wedged local
-  // shim, dead host, or USB not ready) there's no error event to surface an
-  // escape — the screen just spins forever. After 15s with no connection, show
-  // a "couldn't connect" card with an escape back to the instance list.
-  useEffect(() => {
-    if (connected) { setConnTimedOut(false); return; }
-    const t = setTimeout(() => { if (!destroyed.current && !connected) setConnTimedOut(true); }, 15000);
-    return () => clearTimeout(t);
-  }, [connected]);
 
   useEffect(() => {
     if (!lastTuneLoaded.current || !status.frequency) return;
@@ -1405,12 +1288,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         // a disconnect (audio keeps playing). Suppress the connection-lost popup
         // while backgrounded and reset it so a long lock can't leave it armed.
         appActiveRef.current = false;
-        if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; }
-        setConnLost(false);
         resumingRef.current = false;
         if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; }
         setReinit(false);
-        setSpecFailed(false);
         specPausedByBgRef.current = true;
         client.current?.pauseSpectrum();
       } else if (dataSaverOffRef.current) {
@@ -1446,7 +1326,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         if ((route.params.serverType ?? 'ubersdr') === 'ubersdr' && specPausedByBgRef.current) {
           resumingRef.current = true;
           setReinit(true);
-          setSpecFailed(false);
           const resumeStartedAt = Date.now();
           const armReinitWatchdog = () => {
             if (reinitTimer.current) clearTimeout(reinitTimer.current);
@@ -1462,7 +1341,6 @@ export default function SDRScreen({ route, navigation }: Props) {
                 if (Date.now() - resumeStartedAt > 10000) {
                   resumingRef.current = false;
                   setReinit(false);
-                  setSpecFailed(true);
                   return;
                 }
                 armReinitWatchdog();
@@ -1471,7 +1349,6 @@ export default function SDRScreen({ route, navigation }: Props) {
               // Audio is dead too → genuine disconnect.
               resumingRef.current = false;
               setReinit(false);
-              setConnLost(true);
             }, 3500);
           };
           armReinitWatchdog();
@@ -1564,25 +1441,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     const v = c.getView(); if (!v.binBandwidth || !v.centerHz) return;
     c.zoom(zoomAnchorHz(v), Math.max(1, v.binBandwidth * factor));
   }, [zoomAnchorHz]);
-  // Toggle: SET DEFAULT when this instance isn't the default, CLEAR when it is
-  const [isDefault, setIsDefault] = useState(false);
-  useEffect(() => {
-    getDefaultInstance()
-      .then((d) => setIsDefault(!!d && d.url === baseUrl))
-      .catch(() => {});
-  }, [baseUrl]);
-
-  // Favourite the current instance from the menu — so a good receiver you found
-  // mid-session lands in the picker's favourites without hunting for it again.
-  // Network receivers only (local USB / RTL-TCP / SpyServer wrap localhost and
-  // favourite via the picker, so isLocal instances don't get the button).
-  const [isFavourite, setIsFavourite] = useState(false);
-  useEffect(() => {
-    getFavourites()
-      .then((favs) => setIsFavourite(favs.some((f) => f.url === baseUrl)))
-      .catch(() => {});
-  }, [baseUrl]);
-
 
   // ── Mode / filter / tune ──────────────────────────────────────────────────
 
@@ -1643,7 +1501,6 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const applyDspParams = useCallback((p: Record<string,string>) => {
     dspParamsRef.current = p;
-    setServerDspParams(p);
   }, []);
 
   // Param edits send the FULL params map, debounced 120ms (skin parity)
@@ -1705,7 +1562,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     [recvLon],   // eslint-disable-line react-hooks/exhaustive-deps
   );
   const vtsBookmarks = useRef<ServerBookmark[]>([]);
-  const [searchBookmarks, setSearchBookmarks] = useState<ServerBookmark[]>([]);
   const [searchBands,     setSearchBands]     = useState<ServerBand[]>([]);
   const searchBandsRef = useRef<ServerBand[]>([]);
   useEffect(() => { searchBandsRef.current = searchBands; }, [searchBands]);
@@ -1805,7 +1661,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       ...fallback.filter((b: ServerBookmark) => !seen.has(`${b.name}|${b.frequency}`)),
     ];
     vtsBookmarks.current = merged;
-    setSearchBookmarks(merged);
   }, [serverBookmarks, eibiBookmarks, eibiEnabled, userBookmarks, baseUrl, ituRegion]);
 
   // ── User bookmark management (menu BOOKMARKS pane) ────────────────────────
@@ -2088,7 +1943,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // action, so it applies handheld too. Bookmark taps keep the bookmark's own
   // mode and leave the step untouched.
   const onSearchTune = useCallback((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean) => {
-    setMenuOpen(false);
     const target = Math.round(hz);
     onTuneHz(target);
     const d = bandTuneDefaults(target, ituRegion);
@@ -2195,7 +2049,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       });
       if (tunerSwapDone.current) return;
       tunerSwapDone.current = true;
-      navigation.replace('SDR', {
+      navigation.replace('Radio', {
         baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware',
         viewMode: route.params.viewMode, serverType: 'ubersdr',
         isLocal: true, localPort: res.port, localGen: newLocalSession(),
@@ -2435,15 +2289,24 @@ export default function SDRScreen({ route, navigation }: Props) {
         lastProbedMhz = mhz;
         const dump = await nwdProbe();
         if (cancelled) return;
-        diag(`— probe @ ${mhz.toFixed(1)} —`);
+        // Label the block with the frequency the DUMP itself reports, not the one
+        // that scheduled it. The probe is debounced by 4s and the dial can move in
+        // that time: the 31 July log carries "— probe @ 101.5 —" above a body
+        // reading freq=10590, and looked up the callsign for 101.5 while the tuner
+        // sat on 105.9. A diagnostic that pairs a stale heading with live values is
+        // worse than no heading at all.
+        const mult = Number(/freqMult=(\d+)/.exec(dump)?.[1]) || 100;
+        const raw = Number(/freq=band=\d+\s+freq=(\d+)/.exec(dump)?.[1]);
+        const at = isFinite(raw) && raw > 0 ? raw / mult : mhz;
+        diag(`— probe @ ${at.toFixed(1)}${Math.abs(at - mhz) >= 0.05 ? ` (scheduled at ${mhz.toFixed(1)})` : ''} —`);
         for (const l of dump.split('\n')) if (l.trim()) diag(l);
         // Does the name lookup actually resolve for this station? null here while
         // the audio is fine = the "Tuning…" bug is the FCC lookup (location), not
         // the tuner.
         try {
-          const cs = await callsignForFreq(mhz);
-          if (!cancelled) diag(`  callsign@${mhz.toFixed(1)}=${cs ?? 'null'}`);
-        } catch (e) { if (!cancelled) diag(`  callsign@${mhz.toFixed(1)}=error ${String(e)}`); }
+          const cs = await callsignForFreq(at);
+          if (!cancelled) diag(`  callsign@${at.toFixed(1)}=${cs ?? 'null'}`);
+        } catch (e) { if (!cancelled) diag(`  callsign@${at.toFixed(1)}=error ${String(e)}`); }
       }, 4000);
     };
     // Stereo debounce: the NwdRadioStereo callback is the TRUTH (it flaps with the
@@ -2488,7 +2351,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // service's own preset list. No audio is produced by that session — the
         // MCU keeps routing the analog FM audio.
         (VibePowerModule as any)?.startNwdControl?.();
-        diag(`NWD connected: registered=${info.registered} band=${info.band} freqMult=${info.freqMult} mhz=${info.mhz ?? '?'} ps='${info.ps ?? ''}' stereo=${info.stereo} rt='${info.rt ?? ''}' pty=${info.pty}; RDS on`);
+        diag(`NWD connected: registered=${info.registered} band=${info.band} freqMult=${info.freqMult} mhz=${info.mhz ?? '?'} ps='${info.ps ?? ''}' rt='${info.rt ?? ''}' pty=${info.pty}; RDS on`);
         // Station names come from the FCC-DB callsign lookup, which needs GPS
         // location — if that's null on the head unit, every station shows
         // "Tuning…". Log the location once so the next log confirms whether this
@@ -2496,9 +2359,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         getUserLocation()
           .then((loc) => diag(`location: ${loc ? `${loc.lat},${loc.lon}` : 'null (no GPS fix / permission denied) → names cannot resolve'}`))
           .catch((e) => diag(`location: error ${String(e)}`));
-        // Seed the INITIAL tuner state — stereo/RT/PTY only push notify* on a
-        // CHANGE, so a stable station would otherwise leave the face at defaults.
-        if (typeof info.stereo === 'boolean') setFmStereo(info.stereo);
+        // Seed the INITIAL tuner state — RT/PTY only push notify* on a CHANGE, so
+        // a stable station would otherwise leave the face at defaults. Stereo is
+        // deliberately NOT seeded: its getter is stuck true, so fmStereo stays
+        // null (blank pill) until NwdRadioStereo reports something real.
         setLiveStation((prev) => ({
           ...prev,
           name: info.ps || prev.name,

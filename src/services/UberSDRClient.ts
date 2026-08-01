@@ -96,7 +96,7 @@ const VIEW_SETTLE_MS = 300;
 // ── Spectrum starvation watchdog ────────────────────────────────────────────
 // The audio WS has a native watchdog (VibePowerModule.reviveIfDead) that runs in
 // the background. The spectrum WS had none: its only recovery paths were onclose
-// (which a half-open socket never fires) and SDRScreen's AppState `active`
+// (which a half-open socket never fires) and RadioScreen's AppState `active`
 // handler (which never runs while the phone is locked in a pocket). On cellular
 // — CGNAT rebinds on cell handover, RRC idle transitions, IP changes — the TCP
 // flow is silently invalidated with no FIN/RST, so the socket sat OPEN and
@@ -291,7 +291,7 @@ export class UberSDRClient {
       // follows the view to VFO ± (Fs/2 − M), then locks, and the shim's crop
       // offset carries the view on to the capture edge (a further Fs/2 − cropHalf
       // beyond the dongle). So the reachable view centre = VFO ± (Fs − M − cropHalf).
-      // Clamped directly (centre-bounds) — see SDRScreen.onWfPanDelta movable branch.
+      // Clamped directly (centre-bounds) — see RadioScreen.onWfPanDelta movable branch.
       const fs = this.captureBandwidth();
       const reach = Math.max(0, fs - this.localMargin(fs) - this.viewHalfSpan());
       const vfo = this.status.frequency;
@@ -481,7 +481,7 @@ export class UberSDRClient {
    *  spectrumWs can be a stale/half-open object that never fired onclose, so the
    *  previous `!this.spectrumWs` guard would skip the reopen and leave the
    *  waterfall frozen. Callers sequence this AFTER the native audio revive so the
-   *  spectrum subscribes to a session that exists again (see SDRScreen AppState). */
+   *  spectrum subscribes to a session that exists again (see RadioScreen AppState). */
   resumeSpectrum() {
     this.pausedByApp = false;
     if (this.destroyed) return;
@@ -766,7 +766,7 @@ export class UberSDRClient {
   // See the constants block for why this exists and why detection is pong-first.
   //
   // It runs in EVERY app state, not just background. The brief that specified it
-  // assumed foreground self-heals via SDRScreen's AppState handler — but that
+  // assumed foreground self-heals via RadioScreen's AppState handler — but that
   // handler only fires on a lock/unlock TRANSITION, which is a different thing
   // from "the app is awake". A foregrounded phone whose cellular flow is silently
   // rebound has exactly the same dead socket and no transition coming. Guarding

@@ -581,13 +581,145 @@ loaded into every app process. If reflection reaches it, this gives the two
 things the AIDL cannot: **true signal strength**, and **raw RDS groups** from
 which RadioText can be decoded ourselves.
 
-**UNPROVEN.** It may fail on the class lookup (different ROM), on hidden-API
-access, or return an error (permission/UID). `NwdRadioModule.probeJsonHardware()`
-runs all three queries read-only and reports the verbatim result or the exact
-exception type — Settings → Diagnostics → "Probe signal + raw RDS (JSON
-channel)". The exception type is the diagnosis: ClassNotFoundException = wrong
-ROM, NoSuchMethodException = different signature, SecurityException /
-InvocationTargetException = reachable but refused.
+**DISPROVEN ON DEVICE, 2026-07-30 21:23 — this route is closed.** The probe ran
+read-only against `android.os.Hardware` twice:
 
-If it answers, decoding RT means polling groups and assembling 2A/2B segments
-ourselves — real work, but the data would finally be there.
+- Run 1: `getMethod("parseJson")` → `NoSuchMethodException`. Inconclusive on its
+  own, since `getMethod` sees only public methods while the vendor's own
+  `ReflectUtil` uses `getDeclaredMethod` + `setAccessible`.
+- Run 2: added the `getDeclaredMethod` fallback **and** dumped every method the
+  class declares. `getDeclaredMethod("parseJson", String)` → `NoSuchMethodException`
+  (that call searches the class's own declarations at every visibility), and the
+  180-method dump contained nothing JSON-shaped. The only String-in method is
+  `setDSP_ak7604_status(String)`, an AK7604 DSP setter.
+
+The class itself EXISTS (the lookup succeeded — the failure was the method, not
+`ClassNotFoundException`). `parseJson` simply is not on it on this ROM.
+
+See the 2026-07-31 section below for why: that channel belongs to the Si4792x
+code path, which this unit does not take. Do NOT re-add speculative `parseJson`
+calls without new evidence.
+
+---
+
+# The REAL transport found — `com.nwd.app.NwdFmManager` (2026-07-31)
+
+Static analysis of `com.nwd.radio.service` v2.1.4 with androguard 4.1.4, run after
+the `android.os.Hardware` probe came back negative. This resolves the open "find
+the real MCU transport" question and explains every earlier dead end.
+
+## Why the JSON channel was never going to answer
+
+`RadioJsonNative.parseJson()` does call
+`ReflectUtil.invokeStatic(android.os.Hardware, "parseJson", …)` — the earlier
+reading of that call was correct. What matters is how `ReflectUtil` fails:
+
+```java
+public static Object invokeStatic(Class, String name, Class[], Object[]) {
+    Method m = ReflectUtil.getMethod(cls, name, argTypes);
+    if (m == null) { Log.d(TAG, "Can't find " + name + " interface"); }   // returns null
+    else { m.setAccessible(true); return m.invoke(null, args); }
+    return null;
+}
+```
+
+It does **not** throw when the method is absent — it logs and returns `null`. So
+on this ROM `RadioJsonNative.getRadioIc()` returns `""`, `RadioService.onCreate`'s
+`getRadioIc().equals("SI47925")` test fails, and **`ArmRadioManager` is never
+selected**. The service falls through to the Allwinner path
+(`AWRadioManager` + `NewRdsManager`) — which is exactly what the 2026-07-25 drive
+log observed live.
+
+⇒ The JSON/`android.os.Hardware` channel is the **Si4792x** variant's transport.
+This unit is not that variant. Both facts are consistent; neither is a mystery.
+
+⇒ It also retires the "`ArmRadioManager.getRtMessage()` is hardcoded `return ""`"
+worry: true, but irrelevant here — that manager is not the one running.
+
+## The transport this unit actually uses
+
+`NewRdsManager` reads RDS through `com.nwd.radio.arm.allwinner.AWNative`, and
+`AWNative` is a thin reflection shim over a **vendor framework class**,
+`com.nwd.app.NwdFmManager`:
+
+```java
+AWNative.getRdsData()   -> ReflectUtil.invokeStatic(com.nwd.app.NwdFmManager,
+                                                    "getRadioRDSDataArm", null, null)  // String
+AWNative.isSupportRds() -> ReflectUtil.invokeStatic(com.nwd.app.NwdFmManager,
+                                                    "getRadioRDSFunArm",  null, null)  // Integer, 1 = yes
+```
+
+Every other `AWNative` method is a direct static call on the same class:
+
+| AWNative | NwdFmManager | Note |
+|---|---|---|
+| `getFreq()` | `getCurrentFrequency()` | |
+| `getFreAndStrength(v, sel)` | (packs both) | **hi 16 bits = strength, lo 16 = freq**; `sel` picks |
+| `getStationStereoState()` | `getStationStereoState()` | a real per-station stereo read |
+| `getStereo()` / `setStereo(i)` | `getStereo()` / `setStereo(i)` | |
+| `seek(i)` / `seekDown(i)` | `seek` / `seekDown` | |
+| `setFrequency(i)` | `setFrequency(i)` | |
+| `powerUp()` / `powerDown()` | `setEnable()` / `setDisable()` | |
+| `setFMBand()` / `setAMBand(ctx)` | `setRadioAreaBandArm(0/1)` | |
+| `setLoc(i)` / `getLoc()` | `setLoc` / `getLoc` | local/DX |
+| `isMute()` / `setMute(i)` | `isMute()` / `mute(i)` | |
+| `getVolume()` / `setVolume(i)` | `getVolue()` / `setVolue(i)` | vendor's spelling |
+| `getSupportAM(ctx)` | `getRadioModuleArm()` | |
+
+`com.nwd.app.*` is a ROM framework package, not AOSP — the same shape as the
+`android.os.Hardware` guess, and the same reason to think it is off the
+hidden-API blocklist and present in every app process. **This is the class the
+probe should have been pointed at.** Signal strength, raw RDS, and a real stereo
+state are all on it.
+
+**UNPROVEN from our process** — the service reaches it as a system app. Repoint
+`probeJsonHardware()` at `com.nwd.app.NwdFmManager` and report the verbatim
+result or exact exception type per method. The exception type is the diagnosis:
+`ClassNotFoundException` = not in our classloader, `NoSuchMethodException` =
+different signature, `SecurityException`/`InvocationTargetException` = reachable
+but refused.
+
+## Why RDS is off — the actual gate (`NewRdsManager.updateRdsState`)
+
+```java
+if (mbRdsSupport) {
+    int v1 = 0;
+    int area = SettingTableKey.getIntValue(cr, "mcu_radio_area_current");
+    if ((area == 0 || area == 5) && mbRdsOpen && isFmBand(freq)) v1 = 1;
+    if (mRdsEnable != v1) { mRdsEnable = v1; /* starts read + analyse threads */ }
+} else LOG.print("not support rds");
+```
+
+`mRdsEnable` needs **four** things: `mbRdsSupport` (from
+`getRadioRDSFunArm`), the FM band, `mbRdsOpen`, and — the one nobody was
+looking at — **`mcu_radio_area_current` ∈ {0, 5}**. That is the tuner's
+region/area setting, read from the content-provider settings table.
+
+This is a better explanation of the 07-25 and 07-26 results than any lever tried
+so far. Both runs confirmed `mRdsEnable=false` *while* we were the FM source, and
+concluded the source gate was satisfied but something else was wrong. The area
+setting is that something else, and it is the only input in the expression that
+was never inspected.
+
+**Cheapest next test, read-only:** read `mcu_radio_area_current` via
+`SettingTableKey`/the settings provider and log it. If it is not 0 or 5, RDS is
+regionally disabled on this unit and no amount of source-claiming will turn it
+on. Writing it is a separate question (likely MCU-owned — `AWNative.setArea`
+and `NwdFmManager.setRadioAreaBandArm` are the vendor's own writers).
+
+## Two side findings
+
+- **`getStationStereoState()`** is a per-station stereo read on `NwdFmManager`,
+  distinct from the AIDL's `isStreroOn()` that is stuck true. If the reflection
+  probe answers, this is a candidate real source for the stereo pill, which
+  currently shows blank until `notifyStereo` fires.
+- **`NewRdsManager.transformFlagToFreq`** maps flag 0..205 → `8750 + n*10` and
+  206..210 → `8700 + (n-206)*10`, i.e. a **0.1 MHz** grid over 87.5–108.0. That is
+  indirect evidence for the open "0.1 or 0.2 MHz tune step" question — it is the
+  MCU's preset-flag encoding, not necessarily the tune step, so treat it as a
+  lead rather than an answer.
+
+## Ethics/scope
+
+Interoperability RE of our own device's interface, read-only, local. Do not
+redistribute decompiled code, modified APKs, or firmware.

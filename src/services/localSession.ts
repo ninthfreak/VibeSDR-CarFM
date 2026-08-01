@@ -1,7 +1,7 @@
 // Local-hardware (RTL-SDR / RTL-TCP) session generation guard.
 //
 // The native shim (LocalSdrShim) is a SINGLETON, but the JS that STARTS a session
-// (InstancePickerScreen) and the JS that STOPS it (SDRScreen unmount cleanup) live
+// (InstancePickerScreen) and the JS that STOPS it (RadioScreen unmount cleanup) live
 // in different components. When switching instances the old screen's unmount can
 // run AFTER the new session has already started, and its stopSpectrum() would tear
 // down the NEW session. (V5's much faster native start re-exposed this — the old
