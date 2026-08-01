@@ -912,6 +912,21 @@ export default function RadioScreen({ route, navigation }: Props) {
     // whether CarFM won focus (the media-key routing condition) and who takes it.
     const subFocus = emitter.addListener('VibeFocus', (e: { change: number; granted: boolean }) => {
       diag(e.change === 0 ? `nwd focus request: ${e.granted ? 'GRANTED' : 'DENIED'}` : `nwd focus change: ${e.change}`);
+      // Another app taking focus — Android Auto playing music, a call — means our
+      // audio is gone. Show the powered-off face instead of sitting fully lit
+      // over silence, which is what happened when returning from Android Auto.
+      //
+      //   -1 LOSS, -2 LOSS_TRANSIENT  -> audio stopped, go dark
+      //   -3 LOSS_TRANSIENT_CAN_DUCK  -> a volume dip, NOT a stop; stay lit
+      //    1 GAIN                     -> ours again
+      //
+      // Two deliberate limits. An explicit power-off always wins: focus regain
+      // must not silently switch the radio back on. And this NEVER commands the
+      // tuner — the MCU source has already moved, so this is display state only,
+      // unlike the power button which really does claim and release.
+      if (userPoweredOffRef.current) return;
+      if (e.change === -1 || e.change === -2) setFmAudioActive(false);
+      else if (e.change === 1 || (e.change === 0 && e.granted)) setFmAudioActive(true);
     });
     // Car audio route / Android Auto client connect — gates band-aware auto
     // mode/step (handheld use is never auto-switched).
@@ -2111,14 +2126,20 @@ export default function RadioScreen({ route, navigation }: Props) {
   // now; the real native claim (ACTION_APP_IN_OUT app_id=8) / release (ExitFm)
   // hooks in with task #14 once the probe verifies it on-device.
   const [fmAudioActive, setFmAudioActive] = useState(true);
+  // True once the user has powered the face off deliberately. Audio-focus changes
+  // must not undo that — losing and regaining focus should never turn the radio
+  // back on behind the user's back.
+  const userPoweredOffRef = useRef(false);
   // The power button must actually drive the tuner, not just flip the visual state —
   // on NWD, claiming/releasing the MCU FM source is what starts/STOPS the (analog,
   // MCU-routed) audio. Without this the face went "dead" but sound kept playing.
   const onFmClaimAudio = useCallback(() => {
+    userPoweredOffRef.current = false;
     setFmAudioActive(true);
     if (nwdActiveRef.current) nwdSetAudio(true);
   }, []);
   const onFmReleaseAudio = useCallback(() => {
+    userPoweredOffRef.current = true;
     setFmAudioActive(false);
     if (nwdActiveRef.current) nwdSetAudio(false);
   }, []);
