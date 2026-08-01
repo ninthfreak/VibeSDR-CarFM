@@ -1,24 +1,29 @@
 // nwdRds.test.mjs — RDS group decoding for the NWD head-unit tuner.
 //
-// The groups below are VERBATIM from the drive log of 2026-08-01
-// (carfmtunerlog20260801111008.txt), captured by probeNwdFmManager reading
-// com.nwd.app.NwdFmManager.getRadioRDSDataArm(). They are the first raw RDS this
-// unit has ever produced for us, so the decoder is written against real data
-// rather than a reading of the spec.
+// Every group below is VERBATIM from a drive log (2026-08-01). They are real
+// device output, so the decoder is pinned to what the hardware actually sends
+// rather than to a reading of the spec.
 //
-// Two of them decode to things that independently confirm the bit layout is
-// right: the PS groups spell WERN (a real Wisconsin Public Radio callsign) and
-// the RadioText groups spell "Whole Lotta Love by Led ".
+// Two decode to things that independently confirm the bit layout: the PS groups
+// spell WERN (a real Wisconsin Public Radio callsign) and the RadioText groups
+// spell "Whole Lotta Love by Led ".
+//
+// THE TWO-CYCLE RULE: PS and RadioText publish only when two consecutive
+// COMPLETE assemblies agree. The first build published on the first complete
+// fill and then republished on every later segment, so the user watched
+// half-rewritten buffers churn across the screen — "The load", "Aue cy",
+// "WOda94.9" before "WOLX94.9", and "Z104son's #1 Hit Music Station" where one
+// message bled into the next. The regression cases below replay exactly that.
 
 import { readFileSync } from 'fs';
 
 let bad = 0;
 const check = (name, cond) => { if (!cond) bad++; console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`); };
-const eq = (name, got, want) =>
-  check(`${name} → ${JSON.stringify(got)}`, got === want) ||
-  (got === want ? 0 : console.log(`      wanted ${JSON.stringify(want)}`));
+const eq = (name, got, want) => {
+  check(`${name} → ${JSON.stringify(got)}`, got === want);
+  if (got !== want) console.log(`      wanted ${JSON.stringify(want)}`);
+};
 
-// The decoder is TS; strip the types the same way the other backend tests do.
 const src = readFileSync(new URL('../../src/services/nwdRds.ts', import.meta.url), 'utf8');
 const js = src
   .replace(/^import[^\n]*\n/gm, '')
@@ -33,9 +38,14 @@ const { createNwdRdsDecoder } = await import(
   `data:text/javascript,${encodeURIComponent(js + '\nexport { createNwdRdsDecoder };')}`
 );
 
+const feed = (d, groups, times = 1) => {
+  for (let i = 0; i < times; i++) groups.forEach((g) => d.push(g));
+  return d.state();
+};
+
 // ── Group 0A: Programme Service name ─────────────────────────────────────────
-// Real capture, station PI a6ff. Segments arrive out of order, as they did live.
-const PS_GROUPS = [
+// Real capture, PI a6ff. Four segments assembling "  WERN  ".
+const PS_WERN = [
   'a6ff02c0e0cd2020',   // seg 0 → chars 0,1 = "  "
   'a6ff02c5e0cd5745',   // seg 1 → chars 2,3 = "WE"
   'a6ff02c2e0cd524e',   // seg 2 → chars 4,5 = "RN"
@@ -44,48 +54,64 @@ const PS_GROUPS = [
 
 {
   const d = createNwdRdsDecoder();
-  PS_GROUPS.slice(0, 3).forEach((g) => d.push(g));
-  eq('PS stays empty until every segment has landed', d.state().ps, '');
-  d.push(PS_GROUPS[3]);
-  eq('PS assembles to the real callsign', d.state().ps, 'WERN');
+  eq('PS is empty after one complete cycle', feed(d, PS_WERN, 1).ps, '');
+  eq('PS publishes once a second cycle agrees', feed(d, PS_WERN, 1).ps, 'WERN');
   eq('PI comes from block A', d.state().pi, 0xa6ff);
   eq('PTY comes from block B bits 9-5', d.state().pty, 22);
   eq('TP is false for this station', d.state().tp, false);
 }
 
+{
+  const d = createNwdRdsDecoder();
+  feed(d, PS_WERN.slice(0, 3), 4);
+  eq('an incomplete assembly never publishes, however often it repeats', d.state().ps, '');
+}
+
+// REGRESSION — a scrolling PS. Station 19e2 cycles its name as advertising copy;
+// the first build showed every frame of it, overwriting the hero card.
+{
+  const d = createNwdRdsDecoder();
+  const scroll = [
+    ['19e202c020204942', '19e202c1312e3520', '19e202c220204942', '19e202c3412d3520'],  // "IB1.5" ish
+    ['19e202c020204942', '19e202c1412d464d', '19e202c220203130', '19e202c3412d464d'],  // "IBA-FM" ish
+  ];
+  for (let i = 0; i < 6; i++) feed(d, scroll[i % 2], 1);
+  eq('a PS that never repeats is never published', d.state().ps, '');
+}
+
 // ── Group 2A: RadioText ──────────────────────────────────────────────────────
-// Real capture, station PI a80b. Segments 0-5 carry the message; the log only
-// caught 0-5 plus 14-15, so the tail below is synthesised spaces to complete a
-// 64-char message. The message segments themselves are untouched device data.
-const RT_REAL = [
-  'a80b20d057686f6c',   // seg 0  → "Whol"
-  'a80b20d165204c6f',   // seg 1  → "e Lo"
-  'a80b20d274746120',   // seg 2  → "tta "
-  'a80b20d34c6f7665',   // seg 3  → "Love"
-  'a80b20d420627920',   // seg 4  → " by "
-  'a80b20d54c656420',   // seg 5  → "Led "
+const RT_LED = [
+  'a80b20d057686f6c',   // seg 0 → "Whol"
+  'a80b20d165204c6f',   // seg 1 → "e Lo"
+  'a80b20d274746120',   // seg 2 → "tta "
+  'a80b20d34c6f7665',   // seg 3 → "Love"
+  'a80b20d420627920',   // seg 4 → " by "
+  'a80b20d54c656420',   // seg 5 → "Led "
 ];
+// Segments 6-15, all spaces, completing a 64-char message.
+const RT_PAD = Array.from({ length: 10 }, (_, i) => `a80b20d${(i + 6).toString(16)}20202020`);
+const RT_FULL = [...RT_LED, ...RT_PAD];
 
 {
   const d = createNwdRdsDecoder();
-  RT_REAL.forEach((g) => d.push(g));
-  eq('RadioText stays empty while segments are still missing', d.state().rt, '');
-
-  // Complete the message: segments 6-15, all spaces (0x20202020). Segment index
-  // is the low 4 bits of block B, so 0x20d6 … 0x20df.
-  for (let seg = 6; seg <= 15; seg++) {
-    d.push(`a80b20d${seg.toString(16)}20202020`);
-  }
-  eq('RadioText assembles to the real message', d.state().rt, 'Whole Lotta Love by Led');
+  eq('RadioText is empty after one complete cycle', feed(d, RT_FULL, 1).rt, '');
+  eq('RadioText publishes once a second cycle agrees', feed(d, RT_FULL, 1).rt,
+    'Whole Lotta Love by Led');
   eq('RadioText PTY', d.state().pty, 6);
 }
 
-// A carriage return ends the message early, without needing all 16 segments.
 {
   const d = createNwdRdsDecoder();
-  d.push('a80b20d057686f6c');            // "Whol"
-  d.push('a80b20d165200d20');            // "e " then CR → terminate
-  eq('a CR terminator publishes without the remaining segments', d.state().rt, 'Whole');
+  feed(d, RT_LED, 4);
+  eq('a partly-received RadioText is never shown', d.state().rt, '');
+}
+
+// A carriage return ends the message without needing all 16 segments.
+{
+  const d = createNwdRdsDecoder();
+  const withCr = ['a80b20d057686f6c', 'a80b20d165200d20'];
+  eq('CR: nothing after one cycle', feed(d, withCr, 1).rt, '');
+  eq('CR terminates without the remaining segments', feed(d, withCr, 1).rt, 'Whole');
 }
 
 // ── Housekeeping ─────────────────────────────────────────────────────────────
@@ -99,9 +125,8 @@ const RT_REAL = [
 
 {
   const d = createNwdRdsDecoder();
-  PS_GROUPS.forEach((g) => d.push(g));
+  feed(d, PS_WERN, 2);
   eq('PS is set before the station changes', d.state().ps, 'WERN');
-  // A different PI is a different station — the old name must not linger.
   d.push('19e204c0e0cd6c75');
   eq('a PI change clears the previous station text', d.state().ps, '');
   eq('and adopts the new PI', d.state().pi, 0x19e2);
@@ -109,10 +134,10 @@ const RT_REAL = [
 
 {
   const d = createNwdRdsDecoder();
-  PS_GROUPS.forEach((g) => d.push(g));
-  check('a repeated group reports no change', d.push(PS_GROUPS[3]) === null);
+  feed(d, PS_WERN, 2);
   d.reset();
   eq('reset clears accumulated text', d.state().ps, '');
+  eq('reset clears PI too', d.state().pi, null);
 }
 
 // ── TP flag, from a group that actually sets it ──────────────────────────────

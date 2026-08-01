@@ -2098,6 +2098,17 @@ export default function RadioScreen({ route, navigation }: Props) {
 
   // CarFM settings: theme override + boot autostart, persisted.
   const [fmTheme, setFmTheme] = useState<'system' | 'light' | 'dark'>('system');
+  // Headlights. This ROM does NOT set Android's uiMode night flag — measured
+  // 2026-08-01: extra_ill_state toggles 1/0 while androidUiMode stays DAY — so
+  // useColorScheme() never fires and CarFM stayed light while every other app on
+  // the unit went dark. Drive day/night from the vendor broadcast instead.
+  // null = never heard, so `system` still falls back to useColorScheme().
+  const [fmIllNight, setFmIllNight] = useState<boolean | null>(null);
+  // What the face is actually told. An explicit light/dark preference always
+  // wins; only 'system' defers to the headlights.
+  const fmThemeEffective = fmTheme !== 'system' ? fmTheme
+    : fmIllNight === null ? 'system'
+    : fmIllNight ? 'dark' : 'light';
   const [fmAutostart, setFmAutostart] = useState(true);
   // §4.7 audio-priority (claim/release) on the hero power button. Visual state for
   // now; the real native claim (ACTION_APP_IN_OUT app_id=8) / release (ExitFm)
@@ -2386,7 +2397,19 @@ export default function RadioScreen({ route, navigation }: Props) {
         liveStationRef.current = p.ps ?? '';
         setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(p.mhz * 1e6) }));
         reportDeviceMhz(p.mhz);
-        setLiveStation((prev) => ({ ...prev, name: p.ps || undefined }));
+        // Every RDS-derived field belongs to the station we just LEFT. Clearing
+        // them here is what drops the RDS tell (rdsOk reads pi/name) and empties
+        // the RadioText plate until the new station is acquired — otherwise the
+        // previous station's text sits under the new frequency for seconds.
+        setLiveStation((prev) => ({
+          ...prev,
+          name: p.ps || undefined,
+          text: undefined,
+          pty: undefined,
+          tp: false,
+          ta: false,
+          pi: undefined,
+        }));
         // `arg` is the preset-slot index, NOT signal (confirmed on-device: it equals
         // the frequency's position in the factory preset list, −1 otherwise). The
         // tuner exposes no real signal level, so drive the meter from the DB+GPS
@@ -2440,6 +2463,11 @@ export default function RadioScreen({ route, navigation }: Props) {
       // yet. The pairing is the answer: if uiMode flips with the broadcast, the
       // ROM does set Android night mode and the face should already follow it.
       subs.push(onNwd('NwdIllState', (p) => {
+        // extra_ill_state: 1 = headlights on = night. Confirmed on device; the
+        // same log confirmed androidUiMode never moves, which is why this is the
+        // signal rather than useColorScheme().
+        const m = /extra_ill_state=(\d+)/.exec(p.extras);
+        if (m) setFmIllNight(m[1] === '1');
         diag(`ILL ${p.action} [${p.extras}] androidUiMode=${p.uiMode}`);
       }));
       subs.push(onNwd('NwdRadioRt', (p) => { setLiveStation((prev) => ({ ...prev, text: p.rt || undefined })); diag(`RT '${p.rt}'`); }));
@@ -2651,7 +2679,7 @@ export default function RadioScreen({ route, navigation }: Props) {
         af={liveStation.af}
         ptyText={ptyLabel(liveStation.pty, ituRegion === 2)}
         tunerError={fmTunerError}
-        theme={fmTheme}
+        theme={fmThemeEffective}
         autostart={fmAutostart}
         onSetTheme={onFmSetTheme}
         onSetAutostart={onFmSetAutostart}

@@ -62,21 +62,23 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
   // never shown — a half-filled PS reads as a different station.
   let psBuf = new Array<string>(8).fill(' ');
   let psSeen = 0;                       // bitmask of the 4 PS segments seen
+  let psCandidate = '';                 // previous COMPLETE assembly; must repeat to publish
   let rtBuf = new Array<string>(64).fill(' ');
   let rtSeen = 0;                       // bitmask of the 16 RT segments seen
   let rtEnd: number | null = null;      // index of the 0x0D terminator, once seen
   let rtAb: number | null = null;       // A/B flag; a flip means a new message
-  let rtDone = false;                   // terminator seen, or all segments filled
+  let rtCandidate = '';                 // previous COMPLETE message; must repeat to publish
 
   const reset = () => {
     st = { ...BLANK };
     psBuf = new Array<string>(8).fill(' ');
     psSeen = 0;
+    psCandidate = '';
     rtBuf = new Array<string>(64).fill(' ');
     rtSeen = 0;
     rtEnd = null;
     rtAb = null;
-    rtDone = false;
+    rtCandidate = '';
   };
 
   const push = (hex: string): RdsState | null => {
@@ -110,8 +112,26 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
       psBuf[seg * 2] = chr((d >>> 8) & 0xff);
       psBuf[seg * 2 + 1] = chr(d & 0xff);
       psSeen |= 1 << seg;
-      // Only publish once all four segments have landed.
-      if (psSeen === 0b1111) st.ps = psBuf.join('').trim();
+      if (psSeen === 0b1111) {
+        // Publish only when two CONSECUTIVE complete assemblies agree.
+        //
+        // Without this the display churns: segments keep arriving after the first
+        // complete fill, so each one republishes a buffer that is half the old
+        // name and half the new. Observed on device 2026-08-01 — "The load",
+        // "The cyad", "Aue cy", "Auda94.9", "WOda94.9" before settling on
+        // "WOLX94.9", every one of them shown to the user.
+        //
+        // A station that SCROLLS its PS (101.5 cycling "101.5"/"IBA-FM"/"10A-FM")
+        // never repeats an assembly, so it never publishes. That is correct: a
+        // scrolling PS is advertising copy, not a station name, and RadioText
+        // carries the same content properly.
+        const cand = psBuf.join('');
+        if (cand === psCandidate) st.ps = cand.trim();
+        psCandidate = cand;
+        // Start a clean cycle so the next assembly cannot inherit stale chars.
+        psSeen = 0;
+        psBuf = new Array<string>(8).fill(' ');
+      }
     } else if (groupType === 2) {
       // 2A / 2B — RadioText. 2A carries 4 chars (blocks C and D) at segment×4;
       // 2B carries 2 chars (block D only) at segment×2, with block C repeating PI.
@@ -122,7 +142,7 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
         rtBuf = new Array<string>(64).fill(' ');
         rtSeen = 0;
         rtEnd = null;
-        rtDone = false;
+        rtCandidate = '';
       }
       rtAb = ab;
 
@@ -142,12 +162,18 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
       });
       rtSeen |= 1 << seg;
 
-      // Publish when the broadcaster says the message ended, or once every
-      // segment of a full-length message has been seen. Without this a
-      // half-received RadioText would flicker on screen a few chars at a time.
-      if (rtEnd !== null || rtSeen === 0xffff) rtDone = true;
-      if (rtDone) {
-        st.rt = (rtEnd !== null ? rtBuf.slice(0, rtEnd) : rtBuf).join('').trimEnd();
+      // Same two-cycle rule as PS, and for the same reason. Latching on the first
+      // complete fill meant every later segment republished a partly-rewritten
+      // buffer: on device this showed "        blic Radio", "Wisc    blic Radio",
+      // and "Z104son's #1 Hit Music Station" — one message bleeding into the next
+      // because many stations change RadioText without toggling the A/B flag.
+      if (rtEnd !== null || rtSeen === 0xffff) {
+        const msg = (rtEnd !== null ? rtBuf.slice(0, rtEnd) : rtBuf).join('').trimEnd();
+        if (msg === rtCandidate) st.rt = msg;
+        rtCandidate = msg;
+        rtSeen = 0;
+        rtEnd = null;
+        rtBuf = new Array<string>(64).fill(' ');
       }
     }
 
