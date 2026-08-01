@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.IntentFilter
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.res.Configuration
 import android.media.AudioManager
 import android.os.IBinder
 import android.provider.Settings
@@ -92,6 +93,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             } else {
                 bound = true
                 startPanelKeyWatch()
+                startIllWatch()
             }
         } catch (e: Throwable) {
             connectPromise = null
@@ -156,6 +158,65 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         panelReceiver = null
     }
 
+    // ── Illumination (headlights) → day/night ────────────────────────────────
+    // Every other app on this unit switches to dark when the headlights go on,
+    // CarFM does not. The face already follows useColorScheme(), so the question
+    // is whether this ROM sets Android's uiMode night flag at all, or signals
+    // day/night only through a vendor broadcast the way it does the wheel.
+    //
+    // Found in the vendor APKs: `com.nwd.ACTION_ILL_STATE_CHANGE` carrying
+    // `extra_ill_state`. Same shape as the panel-key broadcast, so likely
+    // unprotected and receivable.
+    //
+    // The extra's TYPE is unknown (byte / int / boolean), so this dumps the whole
+    // bundle verbatim rather than guessing a getter and reading a silent default.
+    // It also reports Android's uiMode night bits at the same instant, which is
+    // the decisive comparison:
+    //   ill fires AND uiMode flips  -> the ROM does set night mode; the bug is ours
+    //   ill fires, uiMode unchanged -> vendor-only signal; CarFM must listen for it
+    private var illReceiver: BroadcastReceiver? = null
+
+    /** Android's night flag right now, as a readable string. */
+    private fun uiModeNight(): String =
+        when (reactContext.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) {
+            Configuration.UI_MODE_NIGHT_YES -> "NIGHT"
+            Configuration.UI_MODE_NIGHT_NO -> "DAY"
+            else -> "UNDEFINED"
+        }
+
+    private fun startIllWatch() {
+        if (illReceiver != null) return
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, i: Intent?) {
+                val extras = i?.extras
+                val dump = extras?.keySet()?.joinToString(", ") { k ->
+                    "$k=${extras.get(k)} (${extras.get(k)?.javaClass?.simpleName ?: "null"})"
+                } ?: "(no extras)"
+                Log.i(TAG, "ILL ${i?.action} $dump uiMode=${uiModeNight()}")
+                emit("NwdIllState", Arguments.createMap().apply {
+                    putString("action", i?.action ?: "")
+                    putString("extras", dump)
+                    putString("uiMode", uiModeNight())
+                })
+            }
+        }
+        val f = IntentFilter().apply { addAction("com.nwd.ACTION_ILL_STATE_CHANGE") }
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                reactContext.registerReceiver(r, f, Context.RECEIVER_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag") reactContext.registerReceiver(r, f)
+            }
+            illReceiver = r
+            Log.i(TAG, "ill watch registered; uiMode=${uiModeNight()}")
+        } catch (e: Throwable) { Log.w(TAG, "ill watch failed", e) }
+    }
+
+    private fun stopIllWatch() {
+        illReceiver?.let { try { reactContext.unregisterReceiver(it) } catch (_: Throwable) {} }
+        illReceiver = null
+    }
+
     /** Send a panel key AS IF the wheel/panel had been pressed (same unprotected
      *  broadcast the MCU uses). Lets the probe exercise the service's own dispatch
      *  table — e.g. 46 = AMS auto-store — without physical buttons. */
@@ -168,6 +229,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun disconnect() {
         stopPanelKeyWatch()
+        stopIllWatch()
         try { radio?.unRegistCallback(callback) } catch (_: Throwable) {}
         if (bound) { try { reactContext.unbindService(conn) } catch (_: Throwable) {} }
         bound = false
