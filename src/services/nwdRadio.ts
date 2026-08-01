@@ -93,6 +93,10 @@ export type NwdEvents = {
   NwdRadioPty: { pty: number };
   NwdRadioTa: { ta: boolean };
   NwdRadioScanState: { state: number };
+  /** One raw RDS group, 16 hex chars (4 blocks x 2 bytes), from
+   *  com.nwd.app.NwdFmManager.getRadioRDSDataArm(). Feed to createNwdRdsDecoder
+   *  in nwdRds.ts — this is the channel the bound AIDL cannot provide. */
+  NwdRdsGroup: { hex: string };
   NwdRadioState: { state: number };
   NwdRadioDisconnected: Record<string, never>;
   /** Steering-wheel / front-panel key, straight off the MCU's unprotected

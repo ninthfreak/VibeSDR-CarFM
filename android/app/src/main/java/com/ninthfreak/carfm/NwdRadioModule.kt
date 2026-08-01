@@ -94,6 +94,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
                 bound = true
                 startPanelKeyWatch()
                 startIllWatch()
+                startRdsPump()
             }
         } catch (e: Throwable) {
             connectPromise = null
@@ -217,6 +218,60 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         illReceiver = null
     }
 
+    // ── Raw RDS pump ─────────────────────────────────────────────────────────
+    // getRadioRDSDataArm() returns ONE already-synchronised RDS group as 16 hex
+    // chars (4 blocks x 2 bytes), or all zeros for "nothing this poll". This is
+    // the data the bound AIDL never exposes — the reason RadioText is reachable
+    // on this unit at all. Confirmed live 2026-08-01: real groups spelling a
+    // station's PS and RadioText.
+    //
+    // RDS runs at ~11.4 groups/sec, so ~87ms per group. Polling at 90ms keeps up
+    // without spinning. Consecutive identical reads are dropped: the same group
+    // is returned repeatedly between refreshes, and the JS decoder is idempotent
+    // for repeats anyway, so this is pure bridge-traffic saving.
+    private val rdsPollMs = 90L
+    private val zeroGroup = "0000000000000000"
+    @Volatile private var rdsPumpRunning = false
+    private var rdsThread: Thread? = null
+
+    private fun startRdsPump() {
+        if (rdsThread != null) return
+        // Don't spin a thread that will throw 11 times a second on a unit where
+        // this transport isn't present. Prove it works once, first.
+        val supported = try {
+            (nwdFmGet("getRadioRDSFunArm") as? Int) == 1 &&
+                (nwdFmGet("getRadioRDSDataArm") as? String)?.length == 16
+        } catch (e: Throwable) {
+            Log.i(TAG, "RDS pump not started: ${e.javaClass.simpleName}")
+            false
+        }
+        if (!supported) { Log.i(TAG, "RDS pump not started: transport unavailable"); return }
+
+        rdsPumpRunning = true
+        val t = Thread {
+            var last = ""
+            while (rdsPumpRunning) {
+                val hex = try { nwdFmGet("getRadioRDSDataArm")?.toString() ?: "" } catch (_: Throwable) { "" }
+                if (hex.length == 16 && hex != zeroGroup && hex != last) {
+                    last = hex
+                    emit("NwdRdsGroup", Arguments.createMap().apply { putString("hex", hex) })
+                }
+                try { Thread.sleep(rdsPollMs) } catch (_: InterruptedException) { break }
+            }
+        }
+        t.isDaemon = true
+        t.name = "nwd-rds-pump"
+        t.start()
+        rdsThread = t
+        Log.i(TAG, "RDS pump started (${rdsPollMs}ms)")
+    }
+
+    private fun stopRdsPump() {
+        rdsPumpRunning = false
+        rdsThread?.interrupt()
+        rdsThread = null
+    }
+
     /** Send a panel key AS IF the wheel/panel had been pressed (same unprotected
      *  broadcast the MCU uses). Lets the probe exercise the service's own dispatch
      *  table — e.g. 46 = AMS auto-store — without physical buttons. */
@@ -230,6 +285,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     fun disconnect() {
         stopPanelKeyWatch()
         stopIllWatch()
+        stopRdsPump()
         try { radio?.unRegistCallback(callback) } catch (_: Throwable) {}
         if (bound) { try { reactContext.unbindService(conn) } catch (_: Throwable) {} }
         bound = false

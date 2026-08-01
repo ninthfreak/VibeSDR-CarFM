@@ -128,10 +128,18 @@ export interface TunerCapabilities {
 export const NWD_CAPABILITIES: TunerCapabilities = {
   id: 'nwd',
   label: 'Built-in FM radio',
-  signal: 'estimated',            // no RSSI over the AIDL; readRssi() is native-only
-  radioText: 'unsupported',       // getRtMessage() hardcoded ""; RDS also region-gated
+  // No RSSI. Confirmed 2026-08-01: getCurrentFrequency() returns 0, so the
+  // strength-packed-in-the-high-16-bits route implied by AWNative is a dead end.
+  signal: 'estimated',
+  // LIVE as of 2026-08-01 — not via the AIDL (getRtMessage() is still hardcoded
+  // "" and RDS is still region-gated at mcu_radio_area_current=1), but by reading
+  // raw groups off NwdFmManager.getRadioRDSDataArm() and decoding them ourselves.
+  radioText: 'live',
   stereo: 'on-change',            // notifyStereo fires on change; isStreroOn() stuck true
-  stationIdentity: 'frequency-db',// no getPI() on the interface
+  // PI is now decoded from block A of the raw groups, so this COULD be 'rds-pi'.
+  // Left as-is because the callsign and logo lookup still resolves from frequency
+  // + GPS; flip it when that is rewired, not before.
+  stationIdentity: 'frequency-db',
   metadataSettleMs: 2000,
   dropsStationNameDuringTune: true,
   lockState: 'none',              // radioState is global, not per-channel
