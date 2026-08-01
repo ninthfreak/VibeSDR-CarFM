@@ -104,6 +104,36 @@ export function deriveItuRegion(lon: number | null | undefined): number {
   return 3;
 }
 
+/**
+ * ITU region of the DEVICE itself, from its timezone. 0 when unknown.
+ *
+ * Only meaningful when the receiver IS the device — the built-in head-unit tuner
+ * or an attached dongle. For a REMOTE receiver the server's own longitude must
+ * win (a European listening to a US receiver wants that receiver's region), which
+ * is why this is a fallback and never an override.
+ *
+ * Why it exists: on the head-unit tuner there is no server longitude at all, so
+ * the region resolved to 0 and PTY fell back to the European table. Every genre
+ * on the face was then wrong in a way that looked plausible — "Classic Rock"
+ * read as "Drama", "Rock" as "Education" (observed on device 2026-08-01, five
+ * stations). GPS could not rescue it either: this unit reports no fix.
+ *
+ * Timezone is used rather than locale because it tracks where the unit IS, not
+ * what language it was set to.
+ */
+export function deviceItuRegion(): number {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? '';
+    const area = tz.split('/')[0];
+    if (area === 'America') return 2;
+    if (area === 'Europe' || area === 'Africa' || area === 'Atlantic') return 1;
+    if (area === 'Asia' || area === 'Australia' || area === 'Pacific' || area === 'Indian') return 3;
+    return 0;
+  } catch {
+    return 0;   // no Intl — behave exactly as before
+  }
+}
+
 // ── Nearest / next-bookmark lookups (skin findNearest / findNextBookmark) ──
 
 export interface NearestStation {

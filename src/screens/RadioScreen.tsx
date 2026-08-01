@@ -58,7 +58,7 @@ import { isWholeProfileMode } from '../services/dataModes';
 import { isoToFlag, validIso } from '../services/rdsCountry';
 import {
   fetchBookmarks, findNearest, findNextBookmark,
-  fmtBandFreq, deriveItuRegion, refreshBandSnr, getBandSnrDb, propCondition,
+  fmtBandFreq, deriveItuRegion, deviceItuRegion, refreshBandSnr, getBandSnrDb, propCondition,
   fetchUiConfig,
   VTS_ON_HZ, type ServerBookmark, type ServerBand,
   type ServerUiConfig,
@@ -1563,7 +1563,11 @@ export default function RadioScreen({ route, navigation }: Props) {
   // KiwiSDR /status). NOT the device location.
   const [recvLon, setRecvLon] = useState<number | null>(null);
   const ituRegion = useMemo(
-    () => deriveItuRegion(route.params.serverLongitude ?? recvLon),
+    // A remote receiver's own longitude always wins. But the head-unit tuner has
+    // no server at all, so this used to resolve to 0 and PTY silently fell back
+    // to the European table — "Classic Rock" displayed as "Drama". When there is
+    // no receiver longitude the receiver IS this device, so ask the device.
+    () => deriveItuRegion(route.params.serverLongitude ?? recvLon) || deviceItuRegion(),
     [recvLon],   // eslint-disable-line react-hooks/exhaustive-deps
   );
   const vtsBookmarks = useRef<ServerBookmark[]>([]);
