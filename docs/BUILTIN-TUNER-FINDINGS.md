@@ -822,3 +822,31 @@ RT+ and AF are deliberately NOT decoded: no evidence this tuner emits them.
 - **PI is decoded but not driving identity.** Callsign and logo still resolve
   from frequency + GPS, so a null GPS fix still means "Tuning…". Rewiring that
   onto PI is the obvious next win.
+
+
+---
+
+# "get" is not read-only — a probe cut the audio (2026-08-01)
+
+`getRadioRDSStrengthArm(int):int` appeared in the method dump and was added to
+the probe as a read-only sweep over arguments 0..3. That reasoning was wrong.
+
+On device the audio **cut off instantly** when the probe ran. It returned `63`
+for all four arguments — `0x3F`, all-ones, which reads as an error sentinel — and
+every `getRadioRDSDataArm()` call for the rest of that probe returned `null`,
+though the same call had worked seconds earlier in the same run.
+
+The likely explanation matches `AWNative.seek`: on this chip a level is measured
+**at a frequency**, so the argument is probably a raw frequency and 0..3 tuned
+the front end to nonsense. That would make it a command, not a getter.
+
+Removed from the probe. The rule going forward, recorded in
+`docs/NWD-RADIO-INTEGRATION.md` §9a: **the naming is not a contract.** The
+getters listed as safe are safe because they have been called repeatedly on a
+live unit with no observed side effect — nothing else earns that status by having
+"get" in its name.
+
+Signal strength stays open, with two candidates left, both now understood to be
+commands: `getRadioRDSStrengthArm(rawFrequency)` and
+`NwdFmManager.seek(currentFrequency)`. Both need a deliberate stationary test
+with someone listening, on a manual button, never on a timer. See task #58.

@@ -614,25 +614,24 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             }
         } catch (_: Throwable) {}
 
-        // THE SIGNAL CANDIDATE. The method dump (2026-08-01) turned up
-        // getRadioRDSStrengthArm(int):int — a getter, so unlike seek() it does not
-        // command the tuner. Its argument is undocumented, so sweep a few values
-        // and let the numbers say which (if any) is a level.
+        // getRadioRDSStrengthArm(int) IS NOT CALLED HERE, DELIBERATELY.
         //
-        // READING THE RESULT: a value that does not move between a strong local
-        // station and dead air is NOT a signal level. That is exactly the trap
-        // isStreroOn() (stuck true) and the notifyCurrentFrequency `arg` field
-        // (a preset slot) both set. Compare two stations before believing it.
-        sb.append("  getRadioRDSStrengthArm(0..3):\n")
-        for (arg in 0..3) {
-            sb.append("      arg=").append(arg).append(" -> ")
-            try {
-                sb.append(nwdFmGetInt("getRadioRDSStrengthArm", arg)?.toString() ?: "(null)")
-            } catch (e: Throwable) {
-                sb.append("ERR ").append(e.javaClass.simpleName).append(": ").append(e.message)
-            }
-            sb.append('\n')
-        }
+        // It was, once, swept over args 0..3 on the assumption that a method named
+        // "get" reads rather than commands. On device (2026-08-01 16:13) that
+        // sweep KILLED THE AUDIO instantly, and every getRadioRDSDataArm() call
+        // after it returned null for the rest of the probe — the same call had
+        // worked moments earlier in the same run. It returned 63 for all four
+        // args, which now reads as an error sentinel rather than a level.
+        //
+        // The likely explanation matches AWNative.seek: on this chip a level is
+        // MEASURED AT A FREQUENCY, so the argument is probably a raw frequency and
+        // calling it with 0..3 tuned the front end to nonsense. If so it belongs
+        // with seek() as a command, not a getter.
+        //
+        // LESSON, and it applies to every unexplored vendor method: "get" in this
+        // API does not mean read-only. Nothing new gets called from this probe
+        // without a reason to believe it is safe. See task #58 for the controlled
+        // experiment — one call, current frequency, stationary, listening.
 
         sb.append("  getRadioRDSDataArm() x").append(rdsBurstReads).append(":\n")
         val seen = LinkedHashMap<String, Int>()

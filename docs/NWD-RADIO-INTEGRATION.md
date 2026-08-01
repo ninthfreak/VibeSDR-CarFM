@@ -308,6 +308,23 @@ Do not spend time on these; each was chased and closed.
 
 ---
 
+## 9a. ⚠️ "get" does not mean read-only
+
+`getRadioRDSStrengthArm(int)` was called with arguments 0..3, on the reasoning
+that a method named *get* reads state. It **cut the audio instantly**, and every
+`getRadioRDSDataArm()` call for the rest of that probe returned `null` — the same
+call had worked seconds earlier in the same run. It returned `63` for all four
+arguments, which reads as an error sentinel rather than a level.
+
+The likely explanation matches `AWNative.seek`: on this chip a level is measured
+*at a frequency*, so the argument is probably a raw frequency, and 0..3 tuned the
+front end to nonsense.
+
+**Treat every unexplored method on this class as a command until proven
+otherwise.** The naming is not a contract. The methods listed in §8 are safe
+because they have been called repeatedly on a live unit with no side effect —
+that is the only evidence that counts here.
+
 ## 10. Signal strength — it comes from a seek, not a getter
 
 **This section corrects an earlier conclusion.** `NwdFmManager.getCurrentFrequency()`
