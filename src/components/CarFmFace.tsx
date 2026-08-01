@@ -1011,7 +1011,13 @@ export default function CarFmFace(props: CarFmFaceProps) {
     ]);
     anim.start(({ finished }) => { if (finished) setFlip(null); });
     return () => anim.stop();
-  }, [flip, flipProg]);
+    // flipArmed MUST be here. It is read above, and arming happens a frame AFTER
+    // the descriptor is set — so without it this effect runs once, while armed is
+    // still false, returns early, and never runs again. The morph then never
+    // starts: progress stays at 0 (pre-swap geometry) and the descriptor is never
+    // cleared, because setFlip(null) only happens in the completion callback. The
+    // cards sit in the wrong places with no movement until the next step.
+  }, [flip, flipArmed, flipProg]);
 
   const measureSlot = useCallback((slot: 'left' | 'center' | 'right') => (e: LayoutChangeEvent) => {
     const { x, y, width, height } = e.nativeEvent.layout;

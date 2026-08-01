@@ -49,6 +49,13 @@ check('arming also yields one frame for the native mount',
   /requestAnimationFrame\(\(\) => setFlipArmed\(true\)\)/.test(src));
 check('the animation refuses to run unarmed',
   /if \(!flip \|\| !flipArmed\) return;/.test(src));
+// The guard above passed on a build where the morph never ran at all: the effect
+// READ flipArmed but did not DEPEND on it, so it fired once (unarmed, early
+// return) and never again. Descriptor set, progress stuck at 0, cards frozen in
+// pre-swap positions. Testing that the guard exists is not testing that the
+// effect observes it.
+check('the animation effect re-runs when arming flips',
+  /\}, \[flip, flipArmed, flipProg\]\);/.test(src));
 check('a target that never arrives drops the flip instead of freezing it',
   /FLIP dropped/.test(src) && /setFlip\(null\);\s*\n\s*\}, 400\);/.test(src));
 check('the target is computed before the descriptor is built',
