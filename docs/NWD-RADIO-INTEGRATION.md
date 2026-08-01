@@ -289,7 +289,7 @@ Do not spend time on these; each was chased and closed.
 
 | Want | Status |
 |---|---|
-| **Signal strength / RSSI** | **Not reachable so far.** No AIDL method, no callback, and the outgoing broadcasts carry only frequency/band/preset/state. `RadioNative.readRssi()` exists but is native-only (vendor `.so` + device access). `NwdFmManager.getCurrentFrequency()` returns **0** on the reference unit, so the strength-packed-in-the-high-16-bits scheme implied by `AWNative.getFreAndStrength` is a dead end. **Still open — see §10.** |
+| **Signal strength / RSSI** | **Not reachable passively.** No AIDL method, no callback, and the outgoing broadcasts carry only frequency/band/preset/state. `getRssi`/`getRssiSignal` exist but on `ArmRadioManager`/`SprdFmNative` — the **Spreadtrum** path, which Allwinner units never take. On Allwinner the value comes back from a **seek**, not a getter — see §10. |
 | Per-channel lock / tuned indicator | Does not exist. `getRadioState()` is a global idle/active flag. |
 | PI over the AIDL | No `getPI()`. Get it from block A of the raw groups instead (§8). |
 | Clearing the hardware preset banks | `CleanFMPreFreData()` exists only on a manager variant this unit does not run, and is not on the AIDL. |
@@ -308,17 +308,51 @@ Do not spend time on these; each was chased and closed.
 
 ---
 
-## 10. Open: is a real signal level reachable?
+## 10. Signal strength — it comes from a seek, not a getter
 
-Not yet, and not abandoned. `NwdFmManager` declares **~53 methods** and only nine
-have been called. The unexplored remainder is the last plausible place a level
-could live.
+**This section corrects an earlier conclusion.** `NwdFmManager.getCurrentFrequency()`
+returns 0 on the reference unit, which was read as "the packed frequency+strength
+scheme is a dead end." That was wrong: it only rules out *that method* as the
+source of the packed value.
 
-`NwdRadioModule.probeNwdFmManager()` now dumps every declared method name with
-its signature. If a candidate appears — anything RSSI, level, quality or
-strength shaped — call it read-only and compare a strong station against dead
-air. That is the next concrete step.
+An xref over the service APK shows `AWNative.getFreAndStrength` has exactly two
+callers, `AWNative.seek` and `AWNative.seekDown`, and the packed int comes from
+the **return value of `NwdFmManager.seek(frequency)`**:
 
-If nothing turns up there, the honest conclusion is that signal strength is not
-available to an unprivileged app on this firmware, and an estimate (station
-database + GPS) rendered visibly as an estimate is the correct design.
+```java
+public static int seek(int p6) {
+    int packed   = NwdFmManager.seek(p6);           // the source
+    int strength = getFreAndStrength(packed, 1);    // high 16 bits
+    int freq     = getFreAndStrength(packed, 0);    // low 16 bits
+    if (freq != p6) strength = 0;                   // didn't land -> no reading
+    return strength;
+}
+```
+
+So the hardware **does** report a level. It is produced by the scan primitive:
+seek to a frequency, get back where you landed and how strong it is. There is no
+passive getter for it on the Allwinner path.
+
+### The experiment worth running
+
+Call `NwdFmManager.seek(currentFrequency)`. It should land trivially, satisfy
+`freq == p6`, and return the strength at the station you are already on.
+
+**Caveat, and it matters: `seek()` commands the tuner.** Every other recipe in
+this document is a read. This one is a write that most likely retunes to where
+you already are — but "most likely" is a static-analysis guess, and it could
+produce an audible blip or a brief mute. Fire it manually first, at a standstill,
+and listen. Do not put it on a timer until you know.
+
+If it works, that is a real signal meter. If it disturbs the audio, the honest
+fallback is an estimate (station database + GPS) rendered visibly *as* an
+estimate, which is what CarFM does today.
+
+### Also unexplored
+
+- **`NwdDeviceConfig`** — a second reachable `com.nwd.app.*` framework class.
+  Nothing on it has been called. A plausible home for the current illumination
+  state, which would fix the day/night gap where the broadcast only reports
+  *changes* and says nothing at startup (§7).
+- **`MCUSystemSetting.getRadioArea()` / `getRadioAreaFeature()`** — would read the
+  region directly rather than via the settings table (§8).
