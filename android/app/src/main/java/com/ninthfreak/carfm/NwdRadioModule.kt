@@ -531,6 +531,19 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         return m.invoke(null)
     }
 
+    /** Same, for a single-int getter. Used only for getRadioRDSStrengthArm(int),
+     *  whose argument is undocumented — the probe sweeps a few values rather than
+     *  guessing one. Still a getter: nothing here commands the tuner. */
+    private fun nwdFmGetInt(name: String, arg: Int): Any? {
+        val cls = Class.forName(nwdFmManagerClass)
+        val m = try {
+            cls.getMethod(name, Int::class.javaPrimitiveType)
+        } catch (_: NoSuchMethodException) {
+            cls.getDeclaredMethod(name, Int::class.javaPrimitiveType).apply { isAccessible = true }
+        }
+        return m.invoke(null, arg)
+    }
+
     /** Read an MCU settings key, trying each table in turn. Read-only. */
     private fun settingsRead(key: String): String {
         val cr = reactContext.contentResolver
@@ -600,6 +613,26 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
                     .append("   // per AWNative.getFreAndStrength\n")
             }
         } catch (_: Throwable) {}
+
+        // THE SIGNAL CANDIDATE. The method dump (2026-08-01) turned up
+        // getRadioRDSStrengthArm(int):int — a getter, so unlike seek() it does not
+        // command the tuner. Its argument is undocumented, so sweep a few values
+        // and let the numbers say which (if any) is a level.
+        //
+        // READING THE RESULT: a value that does not move between a strong local
+        // station and dead air is NOT a signal level. That is exactly the trap
+        // isStreroOn() (stuck true) and the notifyCurrentFrequency `arg` field
+        // (a preset slot) both set. Compare two stations before believing it.
+        sb.append("  getRadioRDSStrengthArm(0..3):\n")
+        for (arg in 0..3) {
+            sb.append("      arg=").append(arg).append(" -> ")
+            try {
+                sb.append(nwdFmGetInt("getRadioRDSStrengthArm", arg)?.toString() ?: "(null)")
+            } catch (e: Throwable) {
+                sb.append("ERR ").append(e.javaClass.simpleName).append(": ").append(e.message)
+            }
+            sb.append('\n')
+        }
 
         sb.append("  getRadioRDSDataArm() x").append(rdsBurstReads).append(":\n")
         val seen = LinkedHashMap<String, Int>()

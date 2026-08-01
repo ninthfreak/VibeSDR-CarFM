@@ -58,7 +58,7 @@ import { isWholeProfileMode } from '../services/dataModes';
 import { isoToFlag, validIso } from '../services/rdsCountry';
 import {
   fetchBookmarks, findNearest, findNextBookmark,
-  fmtBandFreq, deriveItuRegion, refreshBandSnr, getBandSnrDb, propCondition,
+  fmtBandFreq, refreshBandSnr, getBandSnrDb, propCondition,
   fetchUiConfig,
   VTS_ON_HZ, type ServerBookmark, type ServerBand,
   type ServerUiConfig,
@@ -1039,7 +1039,6 @@ export default function RadioScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         (VibePowerModule as any)?.stopExternalAudio?.();
       },
-      onReceiverLon: (lon) => { if (!destroyed.current) setRecvLon(lon); },
       onReconnecting: () => {},
       onLink: (q) => {
         if (destroyed.current) return;
@@ -1553,19 +1552,17 @@ export default function RadioScreen({ route, navigation }: Props) {
   // bookmarks; an arrow jump defers any band notif 3s so the station name
   // shows first (skin VTS_ARROW_BOOKMARK_MS).
   // ITU region drives the MW channel step (9 kHz region 1, 10 kHz region 2/3).
-  // Prefer the RECEIVER longitude (passed by the directory, which knows it); fall
-  // back to the user's device longitude when we don't have it (default/favourite
-  // reconnects, OWRX, custom URLs) so it isn't left at region 0 → wrong 10 kHz.
-  // ITU region (MW 9/10 kHz) is a property of WHERE THE RECEIVER IS — not the
-  // listener (a European on a US receiver wants 10 kHz). So use the receiver's
-  // own longitude only: from the directory (serverLongitude) or the server's
-  // status page (recvLon via onReceiverLon — OWRX/UberSDR /status.json,
-  // KiwiSDR /status). NOT the device location.
-  const [recvLon, setRecvLon] = useState<number | null>(null);
-  const ituRegion = useMemo(
-    () => deriveItuRegion(route.params.serverLongitude ?? recvLon),
-    [recvLon],   // eslint-disable-line react-hooks/exhaustive-deps
-  );
+  // ITU region 2 — the Americas. FIXED, not detected.
+  //
+  // CarFM is a North American car radio: the station database is the FCC's, and
+  // PTY labels use RBDS. Deriving the region was a VibeSDR concern, where a
+  // listener might connect to a receiver anywhere on earth. Here it only ever
+  // produced ways to be wrong — the head-unit tuner reports no longitude and the
+  // unit reports no GPS fix, so detection resolved to "unknown" and silently fell
+  // back to the European PTY table, printing "Drama" over a classic-rock station.
+  //
+  // If CarFM is ever wanted outside region 2, this is the one line to revisit.
+  const ituRegion = 2;
   const vtsBookmarks = useRef<ServerBookmark[]>([]);
   const [searchBands,     setSearchBands]     = useState<ServerBand[]>([]);
   const searchBandsRef = useRef<ServerBand[]>([]);
@@ -2098,6 +2095,17 @@ export default function RadioScreen({ route, navigation }: Props) {
 
   // CarFM settings: theme override + boot autostart, persisted.
   const [fmTheme, setFmTheme] = useState<'system' | 'light' | 'dark'>('system');
+  // Headlights. This ROM does NOT set Android's uiMode night flag — measured
+  // 2026-08-01: extra_ill_state toggles 1/0 while androidUiMode stays DAY — so
+  // useColorScheme() never fires and CarFM stayed light while every other app on
+  // the unit went dark. Drive day/night from the vendor broadcast instead.
+  // null = never heard, so `system` still falls back to useColorScheme().
+  const [fmIllNight, setFmIllNight] = useState<boolean | null>(null);
+  // What the face is actually told. An explicit light/dark preference always
+  // wins; only 'system' defers to the headlights.
+  const fmThemeEffective = fmTheme !== 'system' ? fmTheme
+    : fmIllNight === null ? 'system'
+    : fmIllNight ? 'dark' : 'light';
   const [fmAutostart, setFmAutostart] = useState(true);
   // §4.7 audio-priority (claim/release) on the hero power button. Visual state for
   // now; the real native claim (ACTION_APP_IN_OUT app_id=8) / release (ExitFm)
@@ -2386,7 +2394,19 @@ export default function RadioScreen({ route, navigation }: Props) {
         liveStationRef.current = p.ps ?? '';
         setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(p.mhz * 1e6) }));
         reportDeviceMhz(p.mhz);
-        setLiveStation((prev) => ({ ...prev, name: p.ps || undefined }));
+        // Every RDS-derived field belongs to the station we just LEFT. Clearing
+        // them here is what drops the RDS tell (rdsOk reads pi/name) and empties
+        // the RadioText plate until the new station is acquired — otherwise the
+        // previous station's text sits under the new frequency for seconds.
+        setLiveStation((prev) => ({
+          ...prev,
+          name: p.ps || undefined,
+          text: undefined,
+          pty: undefined,
+          tp: false,
+          ta: false,
+          pi: undefined,
+        }));
         // `arg` is the preset-slot index, NOT signal (confirmed on-device: it equals
         // the frequency's position in the factory preset list, −1 otherwise). The
         // tuner exposes no real signal level, so drive the meter from the DB+GPS
@@ -2440,6 +2460,11 @@ export default function RadioScreen({ route, navigation }: Props) {
       // yet. The pairing is the answer: if uiMode flips with the broadcast, the
       // ROM does set Android night mode and the face should already follow it.
       subs.push(onNwd('NwdIllState', (p) => {
+        // extra_ill_state: 1 = headlights on = night. Confirmed on device; the
+        // same log confirmed androidUiMode never moves, which is why this is the
+        // signal rather than useColorScheme().
+        const m = /extra_ill_state=(\d+)/.exec(p.extras);
+        if (m) setFmIllNight(m[1] === '1');
         diag(`ILL ${p.action} [${p.extras}] androidUiMode=${p.uiMode}`);
       }));
       subs.push(onNwd('NwdRadioRt', (p) => { setLiveStation((prev) => ({ ...prev, text: p.rt || undefined })); diag(`RT '${p.rt}'`); }));
@@ -2651,7 +2676,7 @@ export default function RadioScreen({ route, navigation }: Props) {
         af={liveStation.af}
         ptyText={ptyLabel(liveStation.pty, ituRegion === 2)}
         tunerError={fmTunerError}
-        theme={fmTheme}
+        theme={fmThemeEffective}
         autostart={fmAutostart}
         onSetTheme={onFmSetTheme}
         onSetAutostart={onFmSetAutostart}

@@ -95,7 +95,11 @@ export async function fetchBands(baseUrl: string): Promise<ServerBand[]> {
     : [];
 }
 
-// ── ITU region from receiver longitude (skin _deriveItuRegion) ──────────────
+// ── ITU region from receiver longitude ─────────────────────────────────────
+// NOT used by the CarFM app any more — it fixes region 2 (the Americas) rather
+// than detecting anything; see RadioScreen. Kept because the VibeServer web
+// client (web/client/src/main.ts) still imports it, and that client genuinely
+// can be pointed at a receiver anywhere.
 
 export function deriveItuRegion(lon: number | null | undefined): number {
   if (lon === null || lon === undefined) return 0;
