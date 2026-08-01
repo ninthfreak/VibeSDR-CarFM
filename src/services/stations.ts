@@ -124,6 +124,15 @@ export function deriveItuRegion(lon: number | null | undefined): number {
 export function deviceItuRegion(): number {
   try {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? '';
+    // Zones whose prefix disagrees with their region. Hawaii is the one that
+    // matters most here: it is Pacific/* but a US state, so it uses RBDS.
+    const EXCEPT: Record<string, number> = {
+      'Pacific/Honolulu': 2, 'Pacific/Midway': 2, 'Pacific/Johnston': 2,
+      'Atlantic/Bermuda': 2, 'America/Scoresbysund': 1, 'America/Danmarkshavn': 1,
+      'Asia/Istanbul': 1, 'Europe/Istanbul': 1, 'Asia/Nicosia': 1, 'Asia/Beirut': 1,
+      'Asia/Damascus': 1, 'Asia/Amman': 1, 'Asia/Jerusalem': 1, 'Asia/Baghdad': 1,
+    };
+    if (tz in EXCEPT) return EXCEPT[tz];
     const area = tz.split('/')[0];
     if (area === 'America') return 2;
     if (area === 'Europe' || area === 'Africa' || area === 'Atlantic') return 1;
