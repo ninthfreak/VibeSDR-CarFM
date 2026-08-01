@@ -723,3 +723,90 @@ and `NwdFmManager.setRadioAreaBandArm` are the vendor's own writers).
 
 Interoperability RE of our own device's interface, read-only, local. Do not
 redistribute decompiled code, modified APKs, or firmware.
+
+---
+
+# RDS IS REACHABLE — confirmed on device 2026-08-01
+
+Drive log `carfmtunerlog20260801111008`. `probeNwdFmManager` answered, and the
+answer was the good one.
+
+```
+class resolves? = YES (53 declared methods)
+getRadioRDSFunArm()   = 1
+getRadioRDSDataArm()  = a80b20d057686f6c      <- a live RDS group
+getStationStereoState() = 1
+getCurrentFrequency() = 0
+mcu_radio_area_current = 1 (system)
+mcu_current_source     = 4 (system)
+```
+
+## What this settles
+
+- **`com.nwd.app.NwdFmManager` is reachable from an ordinary app.** The vendor
+  framework class resolves and its static getters invoke by reflection. The
+  earlier `android.os.Hardware` failure was that class, not the technique.
+- **Raw RDS flows.** `getRadioRDSDataArm()` returns one already-synchronised
+  group as 16 hex chars, exactly as the decompile predicted.
+- **The region gate does not stop us.** `mcu_radio_area_current = 1` is outside
+  the {0, 5} that `NewRdsManager.updateRdsState` requires, which is why the
+  vendor service never decodes RDS on this unit — but that check lives in the
+  service's Java layer. Reading the getter directly bypasses it entirely. The
+  MCU emits groups regardless.
+- **A real stereo read exists.** `getStationStereoState() = 1`.
+- **RSSI is still out of reach.** `getCurrentFrequency()` returns 0, so the
+  strength-in-the-high-16-bits idea taken from `AWNative.getFreAndStrength` is
+  disproven. The DB+GPS estimate stays.
+
+## The groups decode
+
+Hand-decoded from the log before any code was written, which is what confirmed
+the block order and bit layout:
+
+```
+a80b 20d0 5768 6f6c   PI=a80b  group 2A seg 0   "Whol"
+a80b 20d1 6520 4c6f            2A seg 1         "e Lo"
+a80b 20d2 7474 6120            2A seg 2         "tta "
+a80b 20d3 4c6f 7665            2A seg 3         "Love"
+a80b 20d4 2062 7920            2A seg 4         " by "
+a80b 20d5 4c65 6420            2A seg 5         "Led "
+```
+→ **"Whole Lotta Love by Led "** — RadioText, on a unit where it was believed
+impossible.
+
+```
+a6ff 02c0 e0cd 2020   PI=a6ff  group 0A seg 0   PS chars 0,1 = "  "
+a6ff 02c5 e0cd 5745            0A seg 1         PS chars 2,3 = "WE"
+a6ff 02c2 e0cd 524e            0A seg 2         PS chars 4,5 = "RN"
+a6ff 02c7 e0cd 2020            0A seg 3         PS chars 6,7 = "  "
+```
+→ **"WERN"**, a real Wisconsin Public Radio callsign.
+
+Layout, as used by the decoder: block A = PI; block B = group type (15-12),
+version (11), TP (10), PTY (9-5); 0A/0B = TA (4) + PS segment (1-0) with chars
+in block D; 2A = RT segment (3-0) with chars in blocks C and D, 2B = block D
+only and block C repeats PI.
+
+## Implementation
+
+- **`NwdRadioModule.startRdsPump()`** — a daemon thread polling
+  `getRadioRDSDataArm()` every 90 ms (RDS runs ~11.4 groups/s ≈ 87 ms/group),
+  dropping consecutive duplicates, emitting `NwdRdsGroup`. It refuses to start
+  unless `getRadioRDSFunArm()` returns 1 and one read comes back 16 chars, so a
+  unit without this transport never spins the thread.
+- **`src/services/nwdRds.ts`** — group decoder: PI, PTY, TP/TA, PS, RadioText.
+  Decoded in TS rather than through the C++ `RdsDecoder::pushGroup`, which is
+  reachable only via `local_sdr_shim.h` — a seam whose contract is an SDR
+  session. Routing head-unit groups through it would couple the chip path to the
+  SDR engine for no gain; the two take data at different levels anyway.
+- **`tools/tests/nwdRds.test.mjs`** — replays the exact groups above and asserts
+  "WERN" and "Whole Lotta Love by Led".
+
+RT+ and AF are deliberately NOT decoded: no evidence this tuner emits them.
+
+## Still open
+
+- **RSSI.** No path found. `readRssi()` remains native-only.
+- **PI is decoded but not driving identity.** Callsign and logo still resolve
+  from frequency + GPS, so a null GPS fix still means "Tuning…". Rewiring that
+  onto PI is the obvious next win.

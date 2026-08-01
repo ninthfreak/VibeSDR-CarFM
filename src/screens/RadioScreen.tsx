@@ -34,6 +34,7 @@ import type { RootStackParamList }     from '../../App';
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { createBackend } from '../services/UberSDRAdapter';
 import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, onNwd, PANEL_KEY } from '../services/nwdRadio';
+import { createNwdRdsDecoder } from '../services/nwdRds';
 import { diag, isDiagEnabled } from '../services/diag';
 import { startMotion, stopMotion } from '../services/motion';
 import { startGpsFix, stopGpsFix } from '../services/gps';
@@ -402,6 +403,10 @@ export default function RadioScreen({ route, navigation }: Props) {
   // CHANGE (NwdRadioStereo), and its one-shot getter is stuck true, so "unknown"
   // is the honest state between connect and the first callback.
   const [fmStereo, setFmStereo] = useState<boolean | null>(null);
+
+  // Decodes the raw RDS groups the native pump reads off NwdFmManager. Held in a
+  // ref so it survives re-renders — it accumulates PS/RT segments across groups.
+  const rdsDecoder = useRef(createNwdRdsDecoder());
 
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
   // True while the head unit's built-in NWD tuner is driving the face (a
@@ -2387,8 +2392,34 @@ export default function RadioScreen({ route, navigation }: Props) {
         // tuner exposes no real signal level, so drive the meter from the DB+GPS
         // estimate instead (grey/estimated on the face).
         scheduleSignalEst(p.mhz);
+        // PS/RadioText belong to the station we just left. A PI change clears
+        // them too, but the dial moves first and PI only arrives with the next
+        // group — without this the old name lingers across a preset step.
+        rdsDecoder.current.reset();
         diag(`freq ${p.mhz.toFixed(1)} arg=${p.arg} PS='${p.ps}'`);
         scheduleProbe(p.mhz);
+      }));
+      // RAW RDS — the channel the AIDL cannot provide. Groups arrive from
+      // NwdFmManager.getRadioRDSDataArm() via the native pump; decoding them
+      // ourselves is what finally yields RadioText on this unit, along with a
+      // real PI instead of the FCC-DB frequency guess.
+      subs.push(onNwd('NwdRdsGroup', (p) => {
+        const s = rdsDecoder.current.push(p.hex);
+        if (!s) return;
+        setLiveStation((prev) => ({
+          ...prev,
+          name: s.ps || prev.name,
+          text: s.rt || prev.text,
+          pty: s.pty ?? prev.pty,
+          tp: s.tp,
+          ta: s.ta,
+          // PI is a 4-digit uppercase hex STRING everywhere else in the app
+          // (SDRBackend: "hex PI code, '' when none"), so match that rather than
+          // leaking the decoder's numeric form into shared state.
+          pi: s.pi === null ? prev.pi : s.pi.toString(16).toUpperCase().padStart(4, '0'),
+        }));
+        if (s.ps) liveStationRef.current = s.ps;
+        diag(`RDS pi=${s.pi?.toString(16)} ps='${s.ps}' pty=${s.pty} rt='${s.rt}'`);
       }));
       // STEERING WHEEL — the real transport. The MCU broadcasts
       // com.nwd.action.ACTION_KEY_VALUE and the vendor service picks it up
