@@ -95,52 +95,17 @@ export async function fetchBands(baseUrl: string): Promise<ServerBand[]> {
     : [];
 }
 
-// ── ITU region from receiver longitude (skin _deriveItuRegion) ──────────────
+// ── ITU region from receiver longitude ─────────────────────────────────────
+// NOT used by the CarFM app any more — it fixes region 2 (the Americas) rather
+// than detecting anything; see RadioScreen. Kept because the VibeServer web
+// client (web/client/src/main.ts) still imports it, and that client genuinely
+// can be pointed at a receiver anywhere.
 
 export function deriveItuRegion(lon: number | null | undefined): number {
   if (lon === null || lon === undefined) return 0;
   if (lon < -30) return 2;
   if (lon < 60) return 1;
   return 3;
-}
-
-/**
- * ITU region of the DEVICE itself, from its timezone. 0 when unknown.
- *
- * Only meaningful when the receiver IS the device — the built-in head-unit tuner
- * or an attached dongle. For a REMOTE receiver the server's own longitude must
- * win (a European listening to a US receiver wants that receiver's region), which
- * is why this is a fallback and never an override.
- *
- * Why it exists: on the head-unit tuner there is no server longitude at all, so
- * the region resolved to 0 and PTY fell back to the European table. Every genre
- * on the face was then wrong in a way that looked plausible — "Classic Rock"
- * read as "Drama", "Rock" as "Education" (observed on device 2026-08-01, five
- * stations). GPS could not rescue it either: this unit reports no fix.
- *
- * Timezone is used rather than locale because it tracks where the unit IS, not
- * what language it was set to.
- */
-export function deviceItuRegion(): number {
-  try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? '';
-    // Zones whose prefix disagrees with their region. Hawaii is the one that
-    // matters most here: it is Pacific/* but a US state, so it uses RBDS.
-    const EXCEPT: Record<string, number> = {
-      'Pacific/Honolulu': 2, 'Pacific/Midway': 2, 'Pacific/Johnston': 2,
-      'Atlantic/Bermuda': 2, 'America/Scoresbysund': 1, 'America/Danmarkshavn': 1,
-      'Asia/Istanbul': 1, 'Europe/Istanbul': 1, 'Asia/Nicosia': 1, 'Asia/Beirut': 1,
-      'Asia/Damascus': 1, 'Asia/Amman': 1, 'Asia/Jerusalem': 1, 'Asia/Baghdad': 1,
-    };
-    if (tz in EXCEPT) return EXCEPT[tz];
-    const area = tz.split('/')[0];
-    if (area === 'America') return 2;
-    if (area === 'Europe' || area === 'Africa' || area === 'Atlantic') return 1;
-    if (area === 'Asia' || area === 'Australia' || area === 'Pacific' || area === 'Indian') return 3;
-    return 0;
-  } catch {
-    return 0;   // no Intl — behave exactly as before
-  }
 }
 
 // ── Nearest / next-bookmark lookups (skin findNearest / findNextBookmark) ──

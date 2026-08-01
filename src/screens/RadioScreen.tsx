@@ -58,7 +58,7 @@ import { isWholeProfileMode } from '../services/dataModes';
 import { isoToFlag, validIso } from '../services/rdsCountry';
 import {
   fetchBookmarks, findNearest, findNextBookmark,
-  fmtBandFreq, deriveItuRegion, deviceItuRegion, refreshBandSnr, getBandSnrDb, propCondition,
+  fmtBandFreq, refreshBandSnr, getBandSnrDb, propCondition,
   fetchUiConfig,
   VTS_ON_HZ, type ServerBookmark, type ServerBand,
   type ServerUiConfig,
@@ -1039,7 +1039,6 @@ export default function RadioScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         (VibePowerModule as any)?.stopExternalAudio?.();
       },
-      onReceiverLon: (lon) => { if (!destroyed.current) setRecvLon(lon); },
       onReconnecting: () => {},
       onLink: (q) => {
         if (destroyed.current) return;
@@ -1553,23 +1552,17 @@ export default function RadioScreen({ route, navigation }: Props) {
   // bookmarks; an arrow jump defers any band notif 3s so the station name
   // shows first (skin VTS_ARROW_BOOKMARK_MS).
   // ITU region drives the MW channel step (9 kHz region 1, 10 kHz region 2/3).
-  // Prefer the RECEIVER longitude (passed by the directory, which knows it); fall
-  // back to the user's device longitude when we don't have it (default/favourite
-  // reconnects, OWRX, custom URLs) so it isn't left at region 0 → wrong 10 kHz.
-  // ITU region (MW 9/10 kHz) is a property of WHERE THE RECEIVER IS — not the
-  // listener (a European on a US receiver wants 10 kHz). So use the receiver's
-  // own longitude only: from the directory (serverLongitude) or the server's
-  // status page (recvLon via onReceiverLon — OWRX/UberSDR /status.json,
-  // KiwiSDR /status). NOT the device location.
-  const [recvLon, setRecvLon] = useState<number | null>(null);
-  const ituRegion = useMemo(
-    // A remote receiver's own longitude always wins. But the head-unit tuner has
-    // no server at all, so this used to resolve to 0 and PTY silently fell back
-    // to the European table — "Classic Rock" displayed as "Drama". When there is
-    // no receiver longitude the receiver IS this device, so ask the device.
-    () => deriveItuRegion(route.params.serverLongitude ?? recvLon) || deviceItuRegion(),
-    [recvLon],   // eslint-disable-line react-hooks/exhaustive-deps
-  );
+  // ITU region 2 — the Americas. FIXED, not detected.
+  //
+  // CarFM is a North American car radio: the station database is the FCC's, and
+  // PTY labels use RBDS. Deriving the region was a VibeSDR concern, where a
+  // listener might connect to a receiver anywhere on earth. Here it only ever
+  // produced ways to be wrong — the head-unit tuner reports no longitude and the
+  // unit reports no GPS fix, so detection resolved to "unknown" and silently fell
+  // back to the European PTY table, printing "Drama" over a classic-rock station.
+  //
+  // If CarFM is ever wanted outside region 2, this is the one line to revisit.
+  const ituRegion = 2;
   const vtsBookmarks = useRef<ServerBookmark[]>([]);
   const [searchBands,     setSearchBands]     = useState<ServerBand[]>([]);
   const searchBandsRef = useRef<ServerBand[]>([]);
