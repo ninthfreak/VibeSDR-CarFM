@@ -565,6 +565,17 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             return
         }
 
+        // Every method name on the class. We call nine; the class declares ~53, and
+        // the ones we never tried are the only place a real signal level could
+        // still be hiding — readRssi() is native-only and getCurrentFrequency()
+        // returned 0, killing the strength-packed-in-the-high-16-bits route. Names
+        // only: this lists the surface, it does not invoke anything.
+        sb.append("  declared methods:\n")
+        cls.declaredMethods
+            .map { m -> "${m.name}(${m.parameterTypes.joinToString(",") { it.simpleName }}):${m.returnType.simpleName}" }
+            .sorted()
+            .forEach { sb.append("      ").append(it).append('\n') }
+
         for ((name, note) in nwdFmGetters) {
             sb.append("  ").append(name).append("() = ")
             try {

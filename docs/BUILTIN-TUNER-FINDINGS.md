@@ -3,8 +3,15 @@
 Reverse-engineering scout for **Backend E** (the head unit's built-in FM tuner),
 per `docs/design/handoff/TUNER-BACKENDS-ADDENDUM.md §6` and the built-in-tuner
 scouting addendum. Interoperability RE of the interface for driving the tuner
-from our own UI. Static analysis only — no decompiled code, APKs, or firmware are
-redistributed; the map below is a description of the interface, not vendor source.
+from our own UI.
+
+Static analysis only — no decompiled code, APKs, or firmware are redistributed;
+the map below is a description of the interface, not vendor source.
+
+> **Looking for how to DO this rather than how it was found?** See
+> `docs/NWD-RADIO-INTEGRATION.md` — a standalone guide to driving the same radio
+> from any app, without CarFM. This file is the investigation log, in order,
+> including the wrong turns.
 
 **Important correction to the scouting brief:** that brief targeted FYT/DUDUOS
 `com.syu.ms` (a numeric register/command scheme). This unit is a **different
