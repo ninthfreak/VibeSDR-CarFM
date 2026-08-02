@@ -33,7 +33,7 @@ import type { RootStackParamList }     from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { createBackend } from '../services/UberSDRAdapter';
-import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, onNwd, PANEL_KEY } from '../services/nwdRadio';
+import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, onNwd, PANEL_KEY } from '../services/nwdRadio';
 import { createNwdRdsDecoder } from '../services/nwdRds';
 import { diag, isDiagEnabled } from '../services/diag';
 import { startMotion, stopMotion } from '../services/motion';
@@ -407,6 +407,11 @@ export default function RadioScreen({ route, navigation }: Props) {
   // Decodes the raw RDS groups the native pump reads off NwdFmManager. Held in a
   // ref so it survives re-renders — it accumulates PS/RT segments across groups.
   const rdsDecoder = useRef(createNwdRdsDecoder());
+  /** When the last raw group arrived, ms. 0 = none since the last expiry. */
+  const lastRdsAtRef = useRef(0);
+  /** How long RDS survives without a group before the face drops it. Groups run
+   *  ~11/s while the carrier is present, so twelve seconds is far past noise. */
+  const RDS_STALE_MS = 12_000;
 
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
   // True while the head unit's built-in NWD tuner is driving the face (a
@@ -912,20 +917,20 @@ export default function RadioScreen({ route, navigation }: Props) {
     // whether CarFM won focus (the media-key routing condition) and who takes it.
     const subFocus = emitter.addListener('VibeFocus', (e: { change: number; granted: boolean }) => {
       diag(e.change === 0 ? `nwd focus request: ${e.granted ? 'GRANTED' : 'DENIED'}` : `nwd focus change: ${e.change}`);
-      // Another app taking focus — Android Auto playing music, a call — means our
-      // audio is gone. Show the powered-off face instead of sitting fully lit
-      // over silence, which is what happened when returning from Android Auto.
+      // Focus is a HINT here, never the state. An earlier version drove the
+      // powered-off face straight off these events and had two faults: Android
+      // sends no GAIN after a permanent LOSS, so the face went grey for the rest
+      // of the drive even once the MCU handed FM back; and LOSS_TRANSIENT — what
+      // a navigation prompt raises — greyed the whole radio for the length of a
+      // spoken direction. The 1.5s poll reads the MCU source instead and recovers
+      // on its own; all this does is get there a beat sooner.
       //
-      //   -1 LOSS, -2 LOSS_TRANSIENT  -> audio stopped, go dark
-      //   -3 LOSS_TRANSIENT_CAN_DUCK  -> a volume dip, NOT a stop; stay lit
-      //    1 GAIN                     -> ours again
-      //
-      // Two deliberate limits. An explicit power-off always wins: focus regain
-      // must not silently switch the radio back on. And this NEVER commands the
-      // tuner — the MCU source has already moved, so this is display state only,
-      // unlike the power button which really does claim and release.
+      //   -1 LOSS  -> something took the speakers for good; reflect it now, and
+      //               let the poll light it back up if the MCU returns FM.
+      //   -2/-3    -> transient. A nav prompt or a ping. Leave the face alone.
+      //    1 GAIN  -> ours again.
       if (userPoweredOffRef.current) return;
-      if (e.change === -1 || e.change === -2) setFmAudioActive(false);
+      if (e.change === -1) setFmAudioActive(false);
       else if (e.change === 1 || (e.change === 0 && e.granted)) setFmAudioActive(true);
     });
     // Car audio route / Android Auto client connect — gates band-aware auto
@@ -2116,11 +2121,27 @@ export default function RadioScreen({ route, navigation }: Props) {
   // the unit went dark. Drive day/night from the vendor broadcast instead.
   // null = never heard, so `system` still falls back to useColorScheme().
   const [fmIllNight, setFmIllNight] = useState<boolean | null>(null);
+
+  // Listen for the headlights on EVERY backend, not just NWD. This used to be
+  // registered only inside the NWD connect path, which is gated on a tunerless
+  // launch — so an RTL-SDR session never heard the broadcast and stayed light all
+  // night. Idempotent, and a no-op on a non-NWD unit.
+  useEffect(() => { nwdStartIlluminationWatch(); }, []);
+
   // What the face is actually told. An explicit light/dark preference always
   // wins; only 'system' defers to the headlights.
+  //
+  // PROVISIONAL NIGHT: the broadcast reports CHANGES only, and no getter for the
+  // current illumination state has been found yet (NwdDeviceConfig is unexplored).
+  // Starting the car after dark with the headlights already on therefore produced
+  // no event, and 'system' fell through useColorScheme() — which this ROM pins to
+  // DAY permanently — to a full-white face in the driver's eyeline for the whole
+  // drive. Until the first real broadcast arrives, guess from the clock. A wrong
+  // guess costs a dim screen in daylight; the alternative cost is glare at night.
   const fmThemeEffective = fmTheme !== 'system' ? fmTheme
-    : fmIllNight === null ? 'system'
-    : fmIllNight ? 'dark' : 'light';
+    : fmIllNight !== null ? (fmIllNight ? 'dark' : 'light')
+    : (new Date().getHours() >= 19 || new Date().getHours() < 7) ? 'dark'
+    : 'system';
   const [fmAutostart, setFmAutostart] = useState(true);
   // §4.7 audio-priority (claim/release) on the hero power button. Visual state for
   // now; the real native claim (ACTION_APP_IN_OUT app_id=8) / release (ExitFm)
@@ -2373,8 +2394,23 @@ export default function RadioScreen({ route, navigation }: Props) {
       diag(`NWD available? ${avail}`);
       if (!avail || cancelled) return;
       try {
-        const info = await nwdConnect();
-        if (cancelled) { nwdDisconnect(); return; }
+        // Retry the bind. The native side now rejects after 8s rather than
+        // awaiting an onServiceConnected that may never arrive, which turned an
+        // inert face into a reachable failure — but a failure with no way back is
+        // still a dead radio, and the realistic cause is timing: CarFM autostarts
+        // at ignition alongside the vendor service and can win the race. Three
+        // attempts spans about half a minute of vendor-service boot.
+        let info: Awaited<ReturnType<typeof nwdConnect>> | null = null;
+        for (let attempt = 1; attempt <= 3 && !cancelled; attempt++) {
+          try { info = await nwdConnect(); break; }
+          catch (e) {
+            diag(`NWD connect attempt ${attempt}/3 failed: ${String(e)}`);
+            if (attempt === 3) throw e;
+            nwdDisconnect();   // drop the half-bound connection before rebinding
+            await new Promise((r) => setTimeout(r, 3000));
+          }
+        }
+        if (cancelled || !info) { nwdDisconnect(); return; }
         nwdActiveRef.current = true;
         setNwdActive(true);
         setFmTunerError(false);
@@ -2408,7 +2444,14 @@ export default function RadioScreen({ route, navigation }: Props) {
           if (info.ps) liveStationRef.current = info.ps;
           scheduleSignalEst(info.mhz);   // seed the estimated meter for the boot station
         }
-      } catch (e) { diag(`NWD connect FAILED: ${String(e)}`); return; }
+      } catch (e) {
+        diag(`NWD connect FAILED: ${String(e)}`);
+        // Say so on the face. Without this the pill's state depends on whatever it
+        // happened to hold, and a launch that never reached the tuner could still
+        // read as a working radio.
+        setFmTunerError(true);
+        return;
+      }
       if (cancelled) return;
       // Decoded RDS + tuning state pushed from the service (Binder → JS events).
       subs.push(onNwd('NwdRadioFrequency', (p) => {
@@ -2437,6 +2480,9 @@ export default function RadioScreen({ route, navigation }: Props) {
         // them too, but the dial moves first and PI only arrives with the next
         // group — without this the old name lingers across a preset step.
         rdsDecoder.current.reset();
+        // Restart the staleness clock at the retune, so the new station gets a
+        // full window to acquire instead of inheriting the old one's countdown.
+        lastRdsAtRef.current = Date.now();
         diag(`freq ${p.mhz.toFixed(1)} arg=${p.arg} PS='${p.ps}'`);
         scheduleProbe(p.mhz);
       }));
@@ -2445,6 +2491,10 @@ export default function RadioScreen({ route, navigation }: Props) {
       // ourselves is what finally yields RadioText on this unit, along with a
       // real PI instead of the FCC-DB frequency guess.
       subs.push(onNwd('NwdRdsGroup', (p) => {
+        // Stamp on ARRIVAL, not on publish: a group getting through means the RDS
+        // carrier is still there, even when consensus rejects it and push()
+        // returns null. This is what the staleness sweep in the poll measures.
+        lastRdsAtRef.current = Date.now();
         const s = rdsDecoder.current.push(p.hex);
         if (!s) return;
         setLiveStation((prev) => ({
@@ -2506,16 +2556,45 @@ export default function RadioScreen({ route, navigation }: Props) {
           reportDeviceMhz(p.mhz!);
           scheduleProbe(p.mhz);
         }
-        if (p.ps) liveStationRef.current = p.ps;
-        setLiveStation((prev) => {
-          const next = {
-            ...prev,
-            name: p.ps || prev.name,
-            text: p.rt || prev.text,
-            pty: (typeof p.pty === 'number' && p.pty >= 0) ? p.pty : prev.pty,
-          };
-          return liveStationEqual(prev, next) ? prev : next;
-        });
+        // Is FM actually playing? The MCU's own source register is the truth on a
+        // head unit: the audio is analog and MCU-routed, and after a permanent
+        // AUDIOFOCUS_LOSS Android never sends a GAIN — so a focus-driven state
+        // goes dark when Android Auto takes over and NEVER comes back when the MCU
+        // hands FM back. This poll self-heals. An explicit power-off still wins.
+        if (typeof p.source === 'number' && p.source >= 0 && !userPoweredOffRef.current) {
+          setFmAudioActive(p.source === 4);
+        }
+        // RDS EXPIRES. Losing a station is silence, not an event: drive out of
+        // range without touching the dial and the groups simply stop. Every
+        // liveStation merge is `x || prev.x` and only a retune ever cleared
+        // anything, so the plate went on scrolling the last song, the genre kept
+        // the old PTY, TP/TA stayed latched and the RDS tell stayed lit — all of
+        // it over hiss, for as long as the drive lasted.
+        //
+        // Self-healing: the decoder is reset too, so the next group that gets
+        // through republishes from scratch. The hero keeps its name and logo via
+        // the FCC-database fallback, which is by design.
+        if (lastRdsAtRef.current && Date.now() - lastRdsAtRef.current > RDS_STALE_MS) {
+          lastRdsAtRef.current = 0;
+          rdsDecoder.current.reset();
+          setLiveStation((prev) =>
+            (prev.name || prev.text || prev.pty !== undefined || prev.tp || prev.ta || prev.pi)
+              ? { ...prev, name: undefined, text: undefined, pty: undefined, tp: false, ta: false, pi: undefined }
+              : prev);
+          diag('RDS expired — no group for 12s');
+        }
+        // The poll does NOT drive PS / RadioText / PTY.
+        //
+        // On this unit those getters are worthless: getRtMessage() is a hardcoded
+        // "" on one manager and region-gated on the other, psName stays empty for a
+        // passive bound client, and getPTYType() returns 0. The old merge accepted
+        // `p.pty >= 0`, so that 0 overwrote a correctly decoded PTY and ptyLabels
+        // renders '' for 0 — the genre line vanished and could not recover, because
+        // the decoder's internal state was already correct so no later group
+        // re-published it.
+        //
+        // Raw RDS from NwdRdsGroup is strictly better data and is the only writer
+        // now. Same reasoning that already keeps the poll away from stereo.
         // Log a poll line whenever the getters' reading CHANGES (not just the first
         // few), so a full drive shows how isStreroOn()/getCurrentFrequency() behave
         // over time — especially whether stereo sticks true on empty channels —

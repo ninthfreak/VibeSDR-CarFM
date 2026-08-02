@@ -72,6 +72,7 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
   let rtBuf = new Array<string>(64).fill(' ');
   let rtSeen = 0;                       // bitmask of the 16 RT segments seen
   let rtEnd: number | null = null;      // index of the 0x0D terminator, once seen
+  let rtEndSeg: number | null = null;   // and which segment carried it
   let rtAb: number | null = null;       // A/B flag; a flip means a new message
   let rtCandidate = '';                 // previous COMPLETE message; must repeat to publish
   let piConfirmed: number | null = null;// the PI we trust; groups not carrying it are dropped
@@ -88,12 +89,15 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     rtBuf = new Array<string>(64).fill(' ');
     rtSeen = 0;
     rtEnd = null;
+    rtEndSeg = null;
     rtAb = null;
     rtCandidate = '';
     ptyPending = null;
     ptyCount = 0;
-    // piConfirmed is deliberately NOT cleared here: reset() runs as part of
-    // adopting a new station, and the caller sets it immediately after.
+    // piConfirmed is deliberately NOT cleared. Clearing it would drop the decoder
+    // into the no-incumbent path where any 3-group run of corruption is adopted
+    // outright, with no trusted PI to outvote it. st.pi is re-asserted from
+    // piConfirmed by the next matching group — see the equality branch in push().
   };
 
   const push = (hex: string): RdsState | null => {
@@ -143,6 +147,21 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
       st.pi = a;
     } else {
       piPendingCount = 0;   // a good group resets the dissent counter
+      // Re-assert after an external reset(). reset() rebuilds st from BLANK, which
+      // nulls st.pi, but deliberately keeps piConfirmed — and the exported surface
+      // is { push, reset, state } with no setter, so the comment claiming "the
+      // caller sets it immediately after" was wrong: no caller can.
+      //
+      // Without this, every later group carrying the same PI lands in this branch
+      // and never rewrites st.pi, so PI stays null for the rest of the session.
+      // RadioScreen calls reset() on EVERY frequency event, so re-pressing the
+      // preset you are already on is enough to trigger it.
+      //
+      // Re-asserting here rather than clearing piConfirmed in reset() is
+      // deliberate: clearing would drop the decoder into the no-incumbent path
+      // where any 3-group run of corruption is adopted outright, with no trusted
+      // PI to outvote it.
+      if (st.pi === null) st.pi = piConfirmed;
     }
 
     // Block B needs the SAME treatment, independently. A correct PI does not mean
@@ -199,6 +218,7 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
         rtBuf = new Array<string>(64).fill(' ');
         rtSeen = 0;
         rtEnd = null;
+        rtEndSeg = null;
         rtCandidate = '';
       }
       rtAb = ab;
@@ -214,7 +234,7 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
         // 0x0D ends the message. This MUST be tested on the raw byte: chr()
         // folds every non-printable to a space, so sanitising first would erase
         // the terminator and the message would never publish.
-        if (byte === 0x0d) { if (rtEnd === null || at < rtEnd) rtEnd = at; return; }
+        if (byte === 0x0d) { if (rtEnd === null || at < rtEnd) { rtEnd = at; rtEndSeg = seg; } return; }
         rtBuf[at] = chr(byte);
       });
       rtSeen |= 1 << seg;
@@ -224,7 +244,15 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
       // buffer: on device this showed "        blic Radio", "Wisc    blic Radio",
       // and "Z104son's #1 Hit Music Station" — one message bleeding into the next
       // because many stations change RadioText without toggling the A/B flag.
-      if (rtEnd !== null || rtSeen === 0xffff) {
+      // A terminator only means "the message ends here" — it says nothing about
+      // whether the segments BEFORE it ever arrived. Acquisition genuinely lands
+      // mid-cycle (PI consensus burns groups before any RT group is admitted), so
+      // publishing on the terminator alone put a fragment on the plate after every
+      // retune: segments 2,3 then a CR in segment 4 rendered as "tta Love".
+      // Require every segment up to the terminator's own.
+      const endMask = rtEndSeg === null ? 0 : (1 << (rtEndSeg + 1)) - 1;
+      const terminatedAndComplete = rtEndSeg !== null && (rtSeen & endMask) === endMask;
+      if (terminatedAndComplete || rtSeen === 0xffff) {
         // ONE complete cycle publishes. Requiring two was costing several seconds
         // on air and was the "RadioText took forever" complaint; it was only ever
         // guarding against corruption that PI/PTY consensus now rejects earlier,
@@ -235,6 +263,7 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
         rtCandidate = msg;
         rtSeen = 0;
         rtEnd = null;
+        rtEndSeg = null;
         rtBuf = new Array<string>(64).fill(' ');
       }
     }

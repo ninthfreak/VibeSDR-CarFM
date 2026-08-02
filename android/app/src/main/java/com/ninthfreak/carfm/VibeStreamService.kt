@@ -261,6 +261,12 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             emitEvent("VibeFocus") { it.putInt("change", change); it.putBoolean("granted", false) }
             return@OnAudioFocusChangeListener
         }
+        // Tell JS on the non-NWD path too. The emit used to live only inside the
+        // nwdControl branch above, so on a dongle or remote session AUDIOFOCUS_LOSS
+        // tore the engine down and said nothing: the face stayed fully lit with a
+        // frozen signal bar over silence, and play/mute were no-ops because the
+        // service instance was already gone.
+        emitEvent("VibeFocus") { it.putInt("change", change); it.putBoolean("granted", false) }
         when (change) {
             // Permanent loss = another media app took over for good. Relinquish
             // fully like iOS does — stop the engine and tear down the foreground
