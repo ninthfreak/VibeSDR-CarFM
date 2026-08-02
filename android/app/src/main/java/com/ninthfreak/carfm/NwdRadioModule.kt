@@ -8,7 +8,9 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.content.res.Configuration
 import android.media.AudioManager
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import com.facebook.react.bridge.Arguments
@@ -53,7 +55,18 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     private var registered = false
     private var initialRt = ""
     private var initialPty = -1
-    private var connectPromise: Promise? = null
+    @Volatile private var connectPromise: Promise? = null
+    private val promiseLock = Any()
+    /** Settle `connectPromise` exactly once, whoever gets there first — the bind
+     *  callback arrives on the main thread while connect() runs on the bridge
+     *  thread, and the watchdog below races both. */
+    private fun settleConnect(block: (Promise) -> Unit) {
+        val p = synchronized(promiseLock) { connectPromise.also { connectPromise = null } } ?: return
+        block(p)
+    }
+    /** How long to wait for onServiceConnected before calling the bind dead. */
+    private val connectTimeoutMs = 8000L
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     // Self-calibrated on connect from getCurrentFrequency() (see the spike). MHz →
     // raw multiplier and the FM band byte both vary by unit.
@@ -82,23 +95,39 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun connect(promise: Promise) {
         if (bound && radio != null) { promise.resolve(currentStateMap()); return }
-        connectPromise = promise
+        synchronized(promiseLock) { connectPromise = promise }
         try {
             val intent = Intent(bindAction).setPackage(servicePkg)
             val ok = reactContext.bindService(intent, conn, Context.BIND_AUTO_CREATE)
             if (!ok) {
-                connectPromise = null
                 try { reactContext.unbindService(conn) } catch (_: Throwable) {}
-                promise.reject("bind", "bindService returned false — NWD radio service not found/bindable")
+                settleConnect { it.reject("bind", "bindService returned false — NWD radio service not found/bindable") }
             } else {
                 bound = true
                 startPanelKeyWatch()
                 startIllWatch()
-                startRdsPump()
+                // NOT startRdsPump() here: bindService is asynchronous, so at this
+                // point `radio` is still null and setRDSState has not run. The pump
+                // starts from onServiceConnected, once RDS has actually been enabled.
+                //
+                // WATCHDOG. A successful bindService only means the system accepted
+                // the request; onServiceConnected is the event that matters, and if
+                // the vendor service dies in onCreate or hands back a null binder it
+                // never arrives. Nothing else settles this promise — disconnect()
+                // does not touch it — so JS sat forever inside `await nwdConnect()`,
+                // above every line that clears the tuner-error pill, leaving a dead
+                // face with no way back short of killing the app. Reject instead, so
+                // the caller's existing catch runs.
+                mainHandler.postDelayed({
+                    settleConnect {
+                        Log.w(TAG, "connect timed out after ${connectTimeoutMs}ms — no onServiceConnected")
+                        disconnect()
+                        it.reject("bind", "NWD radio service bound but never connected (${connectTimeoutMs}ms)")
+                    }
+                }, connectTimeoutMs)
             }
         } catch (e: Throwable) {
-            connectPromise = null
-            promise.reject("bind", "bindService threw: ${e.message}", e)
+            settleConnect { it.reject("bind", "bindService threw: ${e.message}", e) }
         }
     }
 
@@ -185,6 +214,15 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             else -> "UNDEFINED"
         }
 
+    /** Register the illumination watch WITHOUT connecting the tuner.
+     *
+     *  Day/night is a property of the vehicle, not of which tuner is selected, but
+     *  the only caller used to be connect() — which is gated on a tunerless launch
+     *  — so an RTL-SDR session never registered the receiver at all and stayed
+     *  light all night. JS calls this on mount for every backend. Idempotent. */
+    @ReactMethod
+    fun startIlluminationWatch() = startIllWatch()
+
     private fun startIllWatch() {
         if (illReceiver != null) return
         val r = object : BroadcastReceiver() {
@@ -231,26 +269,50 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     // for repeats anyway, so this is pure bridge-traffic saving.
     private val rdsPollMs = 90L
     private val zeroGroup = "0000000000000000"
+    // Arming budget: 240 x 250ms = 60s. Long enough to cover a launch that happens
+    // while the unit is still on another source and only reaches FM a minute later;
+    // bounded so a unit without the transport doesn't keep a thread alive forever.
+    private val rdsArmAttempts = 240
+    private val rdsArmRetryMs = 250L
     @Volatile private var rdsPumpRunning = false
     private var rdsThread: Thread? = null
 
     private fun startRdsPump() {
         if (rdsThread != null) return
-        // Don't spin a thread that will throw 11 times a second on a unit where
-        // this transport isn't present. Prove it works once, first.
-        val supported = try {
-            (nwdFmGet("getRadioRDSFunArm") as? Int) == 1 &&
-                (nwdFmGet("getRadioRDSDataArm") as? String)?.length == 16
-        } catch (e: Throwable) {
-            Log.i(TAG, "RDS pump not started: ${e.javaClass.simpleName}")
-            false
-        }
-        if (!supported) { Log.i(TAG, "RDS pump not started: transport unavailable"); return }
-
         rdsPumpRunning = true
         val t = Thread {
+            // The support check runs INSIDE the thread, with retries.
+            //
+            // It used to be a one-shot gate evaluated by the caller. connect()
+            // called this straight after bindService(), which is asynchronous — so
+            // the gate ran before `radio` existed, before setRDSState, and before
+            // JS claimed the FM source. Launch CarFM while the head unit is on
+            // Bluetooth and the gate read a cold front end, latched
+            // supported=false, and nothing ever re-armed it: no RadioText for the
+            // whole session, on the only path that can produce it.
+            //
+            // Retrying costs nothing and removes the latch. Give up only after the
+            // transport has stayed silent for several seconds.
+            var armed = false
+            var attempts = 0
             var last = ""
             while (rdsPumpRunning) {
+                if (!armed) {
+                    val ok = try {
+                        (nwdFmGet("getRadioRDSFunArm") as? Int) == 1 &&
+                            (nwdFmGet("getRadioRDSDataArm") as? String)?.length == 16
+                    } catch (_: Throwable) { false }
+                    if (ok) {
+                        armed = true
+                        Log.i(TAG, "RDS pump armed after $attempts attempt(s)")
+                    } else if (++attempts >= rdsArmAttempts) {
+                        Log.i(TAG, "RDS pump giving up: transport unavailable after $attempts attempts")
+                        break
+                    } else {
+                        try { Thread.sleep(rdsArmRetryMs) } catch (_: InterruptedException) { break }
+                        continue
+                    }
+                }
                 val hex = try { nwdFmGet("getRadioRDSDataArm")?.toString() ?: "" } catch (_: Throwable) { "" }
                 if (hex.length == 16 && hex != zeroGroup && hex != last) {
                     last = hex
@@ -263,7 +325,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         t.name = "nwd-rds-pump"
         t.start()
         rdsThread = t
-        Log.i(TAG, "RDS pump started (${rdsPollMs}ms)")
+        Log.i(TAG, "RDS pump thread started (${rdsPollMs}ms)")
     }
 
     private fun stopRdsPump() {
@@ -283,6 +345,10 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun disconnect() {
+        mainHandler.removeCallbacksAndMessages(null)   // cancel the connect watchdog
+        // A disconnect while a connect is still in flight must not leave the caller
+        // awaiting a promise that now has nothing left to settle it.
+        settleConnect { it.reject("bind", "disconnected before the NWD radio service connected") }
         stopPanelKeyWatch()
         stopIllWatch()
         stopRdsPump()
@@ -314,12 +380,17 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             initialPty = try { r.getPTYType().toInt() } catch (_: Throwable) { -1 }
             // RDS on by default (selector byte 0 — same guess the spike confirmed works).
             try { r.setRDSState(0.toByte(), true) } catch (_: Throwable) {}
-            connectPromise?.resolve(currentStateMap())
-            connectPromise = null
+            // Only now is the raw-group transport worth polling: the service is
+            // live and RDS has been switched on.
+            startRdsPump()
+            settleConnect { it.resolve(currentStateMap()) }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
             radio = null
+            // The pump reads through NwdFmManager, not the binder, so it would keep
+            // polling a dead front end. Stop it; a re-bind re-arms from scratch.
+            stopRdsPump()
             emit("NwdRadioDisconnected", Arguments.createMap())
         }
     }
@@ -365,6 +436,15 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             map.putBoolean("stereo", try { r.isStreroOn() } catch (_: Throwable) { false })
             map.putString("rt", try { r.getRtMessage() ?: "" } catch (_: Throwable) { "" })
             map.putInt("pty", try { r.getPTYType().toInt() } catch (_: Throwable) { -1 })
+            // Whether FM audio is ACTUALLY playing. Android audio focus cannot
+            // answer this on a head unit: the audio is analog and MCU-routed, and
+            // after a permanent AUDIOFOCUS_LOSS the OS never sends a GAIN — so a
+            // focus-driven state can go dark and never come back when the MCU
+            // hands FM over to Android Auto and later takes it back. The MCU's own
+            // source register is the truth and it self-heals. 4 = FM; -1 = unknown.
+            map.putInt("source", try {
+                Settings.System.getString(reactContext.contentResolver, "mcu_current_source")?.toIntOrNull() ?: -1
+            } catch (_: Throwable) { -1 })
             promise.resolve(map)
         } catch (e: Throwable) { promise.resolve(null) }
     }
@@ -765,6 +845,21 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
                 // value stayed 0 for the whole session. Each band has its OWN preset
                 // bank, which is also what `arg` indexes into.
                 fmBand = band
+                // RE-DERIVE THE SCALE TOO. It was calibrated once at connect from
+                // whatever the head unit happened to be tuned to, and never again —
+                // while sitting two lines above the putDouble that consumes it. Last
+                // on AM: freq=1000 -> the >500 arm gives freqMult=10, so FM then
+                // reads "1059.0" MHz and tune(102.5) sends 1025, outside the
+                // 8750..10790 plan. The dial spins and the radio does not move, for
+                // the rest of the session. The band fix above already learned this
+                // lesson; the scale was left behind.
+                //
+                // Only widen, never narrow: an AM reading must not undo an FM one.
+                // 8750..10790 (FM, x100) and 87500..107900 (x1000) both exceed any
+                // AM raw value, so taking the maximum settles on the FM scale and
+                // stays there.
+                val m = if (freq > 50000) 1000 else if (freq > 5000) 100 else if (freq > 500) 10 else 1
+                if (m > freqMult) freqMult = m
                 putInt("band", band.toInt()); putInt("freq", freq)
                 putDouble("mhz", freq.toDouble() / freqMult); putString("ps", ps ?: "")
                 // `arg` = the tuner's preset-slot index in the CURRENT bank (1-6), or

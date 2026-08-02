@@ -88,11 +88,17 @@ export function brandColor(key: string): string {
   return BRAND_BGS[Math.abs(h) % BRAND_BGS.length];
 }
 
-/** Callsign shown as its core letters only: strip `-FM`/`-AM` and stray
- *  hyphens/spaces (e.g. `WWHG-FM` → `WWHG`). Applied everywhere a call sign
- *  is displayed (hero, tiles, peek, nearby) — matches the design prototype. */
+/** Drop a trailing band suffix from a callsign: `WWHG-FM` → `WWHG`,
+ *  `WJJO FM` → `WJJO`. Applied everywhere a call sign is displayed (hero,
+ *  tiles, peek, nearby).
+ *
+ *  The suffix must be SEPARATED and TRAILING. The previous version matched
+ *  `(fm|am)\b` anywhere, which amputated real callsigns — `WHAM` → `WH`,
+ *  `KJFM` → `KJ`, `KAFM` → `KA` — and then stripped every space, so the
+ *  hero's `callsignHint`, built as `${callsign} · ${city}`, rendered as
+ *  `WKSC·Chicago` at 94dp with no room to breathe. */
 export const cleanCall = (s?: string): string =>
-  String(s || '').replace(/[\s-]*(fm|am)\b/ig, '').replace(/[-\s]+/g, '').trim();
+  String(s || '').replace(/[\s-]+(fm|am)\s*$/i, '').trim();
 
 /** "WJJO-FM" -> "JJO" style short monogram for the tile face. */
 export function monogram(callsign: string): string {

@@ -25,6 +25,7 @@ type NwdNative = {
   sendPanelKey?(key: number): void;
   probeJsonHardware?(): Promise<string>;
   probeNwdFmManager?(): Promise<string>;
+  startIlluminationWatch?(): void;
   requestAudioSource(): void;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
@@ -65,7 +66,13 @@ export function nwdTune(mhz: number): Promise<number> {
 export function nwdSeek(up: boolean): void { native?.seek(up); }
 /** Current tuner state via the synchronous getters (the push callbacks don't
  *  reach us on-device). Null when not connected. Never rejects. */
-export type NwdPoll = { mhz?: number; ps?: string; stereo?: boolean; rt?: string; pty?: number };
+export type NwdPoll = {
+  mhz?: number; ps?: string; stereo?: boolean; rt?: string; pty?: number;
+  /** MCU audio source: 4 = FM, anything else = something else owns the speakers,
+   *  -1 = could not read. This, not Android audio focus, is whether FM is
+   *  actually playing on a head unit — and unlike focus it recovers by itself. */
+  source?: number;
+};
 export function nwdPoll(): Promise<NwdPoll | null> {
   if (!native) return Promise.resolve(null);
   return native.poll().catch(() => null);
@@ -126,6 +133,12 @@ export const PANEL_KEY = {
 /** Fire a panel key as if the wheel/panel had been pressed (same unprotected
  *  broadcast the MCU sends) — lets us drive the service's own dispatch table. */
 export function nwdSendPanelKey(key: number): void { native?.sendPanelKey?.(key); }
+
+/** Start listening for the head unit's illumination (headlights) broadcast.
+ *  Day/night belongs to the vehicle, not to the selected tuner, so this is
+ *  deliberately callable without connecting the NWD tuner — an RTL-SDR session
+ *  needs it just as much. Idempotent; a no-op off an NWD unit. */
+export function nwdStartIlluminationWatch(): void { native?.startIlluminationWatch?.(); }
 
 /**
  * Probe the vendor JSON channel (android.os.Hardware.parseJson) that the radio

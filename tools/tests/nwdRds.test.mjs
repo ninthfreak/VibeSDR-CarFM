@@ -115,11 +115,28 @@ const RT_FULL = [...RT_LED, ...RT_PAD];
   eq('a partly-received RadioText is never shown', d.state().rt, '');
 }
 
-// A carriage return ends the message without needing all 16 segments.
+// A carriage return ends the message without needing all 16 segments — but only
+// when everything BEFORE it arrived.
 {
   const d = prime(createNwdRdsDecoder(), 'a80b20d057686f6c');
   eq('CR terminates without the remaining segments',
     feed(d, ['a80b20d057686f6c', 'a80b20d165200d20'], 1).rt, 'Whole');
+}
+
+// REGRESSION — joining mid-message must not publish the fragment. Acquisition
+// really does land mid-cycle, since PI consensus burns groups before any RT group
+// is admitted. This used to render "        tta Love" on the plate, which the
+// screen treats as truthy (leading spaces) and the face trims to "tta Love".
+{
+  const d = prime(createNwdRdsDecoder(), 'a80b20d274746120');   // primes on SEGMENT 2
+  d.push('a80b20d34c6f7665');                                   // seg 3
+  d.push('a80b20d4200d2020');                                   // seg 4 carries the CR
+  eq('a terminator with segments 0-1 missing publishes nothing', d.state().rt, '');
+  // Supply the missing head; now the message is whole and may publish.
+  d.push('a80b20d057686f6c');                                   // seg 0
+  d.push('a80b20d165204c6f');                                   // seg 1
+  d.push('a80b20d4200d2020');                                   // CR again
+  eq('once the head arrives it publishes in full', d.state().rt, 'Whole Lotta Love');
 }
 
 // ── Housekeeping ─────────────────────────────────────────────────────────────
@@ -149,6 +166,23 @@ const RT_FULL = [...RT_LED, ...RT_PAD];
   d.reset();
   eq('reset clears accumulated text', d.state().ps, '');
   eq('reset clears PI too', d.state().pi, null);
+}
+
+// REGRESSION — PI must come BACK after an external reset() onto the same station.
+// reset() keeps piConfirmed while nulling st.pi, and there is no setter on the
+// exported interface, so a same-PI group used to fall through the equality branch
+// and never restore it: PI was null for the rest of the session. RadioScreen calls
+// reset() on every frequency event, so re-pressing the active preset triggers it.
+{
+  const d = prime(createNwdRdsDecoder(), PS_WERN[0]);
+  feed(d, PS_WERN, 2);
+  eq('PI acquired', d.state().pi, 0xa6ff);
+  d.reset();
+  eq('reset nulls it', d.state().pi, null);
+  d.push(PS_WERN[0]);
+  eq('the very next same-PI group restores it', d.state().pi, 0xa6ff);
+  feed(d, PS_WERN, 2);
+  eq('and the name re-acquires normally', d.state().ps, 'WERN');
 }
 
 // ── TP flag, from a group that actually sets it ──────────────────────────────
