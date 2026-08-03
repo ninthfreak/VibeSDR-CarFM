@@ -25,6 +25,7 @@ import {
   Platform,
   StatusBar,
   StyleSheet,
+  useColorScheme,
   View,
 } from 'react-native';
 import { useKeepAwake }       from 'expo-keep-awake';
@@ -33,9 +34,9 @@ import type { RootStackParamList }     from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { createBackend } from '../services/UberSDRAdapter';
-import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, onNwd, PANEL_KEY } from '../services/nwdRadio';
+import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, onNwd, PANEL_KEY, panelKeyName } from '../services/nwdRadio';
 import { createNwdRdsDecoder } from '../services/nwdRds';
-import { diag, isDiagEnabled } from '../services/diag';
+import { diag, isDiagEnabled, isDiagOverlayEnabled, subscribeDiagPrefs } from '../services/diag';
 import { startMotion, stopMotion } from '../services/motion';
 import { startGpsFix, stopGpsFix } from '../services/gps';
 import { KiwiAdapter } from '../services/KiwiAdapter';
@@ -72,6 +73,8 @@ import { fmNowPlaying } from '../services/nowPlaying';
 import { ptyLabel } from '../services/ptyLabels';
 import { getCarAutostart, setCarAutostart } from '../services/carMode';
 import CarFmFace, { type CarFmPreset } from '../components/CarFmFace';
+import DiagOverlay from '../components/carfm/DiagOverlay';
+import { DARK, LIGHT } from '../components/carfm/tokens';
 import { identifyByPi, initLogoService, consumeSharedLogo, getNearbyStations, callsignForFreq, estimatedSignalDbForFreq } from '../services/stationFinder';
 import { warmStationLogos } from '../components/carfm/LogoTile';
 import type { StationIdentity } from '../services/stationTypes';
@@ -2013,14 +2016,21 @@ export default function RadioScreen({ route, navigation }: Props) {
 
   // Resolve station identity from the RDS PI (offline, via the bundled DB) so the
   // FM face can name the station before PS arrives. Hex string -> int -> lookup.
+  //
+  // The dial goes in with it. A PI that decodes cleanly to a station on some
+  // other frequency is not this station, and without the dial to say so, WIBA-FM
+  // 101.5 renamed itself "KDTI · Rochester Hills" — see identifyByPi.
   useEffect(() => {
     if (status.mode !== 'wfm' || !liveStation.pi) { setPiIdentity(null); return; }
     const pi = parseInt(liveStation.pi, 16);
     if (!Number.isFinite(pi)) { setPiIdentity(null); return; }
     let cancelled = false;
-    identifyByPi(pi, liveStation.name).then((id) => { if (!cancelled) setPiIdentity(id); }).catch(() => {});
+    const dialMhz = status.frequency > 0 ? status.frequency / 1e6 : undefined;
+    identifyByPi(pi, liveStation.name, dialMhz)
+      .then((id) => { if (!cancelled) setPiIdentity(id); })
+      .catch(() => {});
     return () => { cancelled = true; };
-  }, [status.mode, liveStation.pi, liveStation.name]);
+  }, [status.mode, status.frequency, liveStation.pi, liveStation.name]);
 
   // Callsign/city hint shown only when PS text is absent (PS always wins, §6).
   const fmCallsignHint = useMemo<string | undefined>(() => {
@@ -2121,6 +2131,13 @@ export default function RadioScreen({ route, navigation }: Props) {
   // the unit went dark. Drive day/night from the vendor broadcast instead.
   // null = never heard, so `system` still falls back to useColorScheme().
   const [fmIllNight, setFmIllNight] = useState<boolean | null>(null);
+
+  // Mirror the tail of the tuner log onto the face. Off by default; the settings
+  // toggle drives it, and the persisted value arrives after mount, so this
+  // subscribes rather than reading once.
+  const [diagOverlay, setDiagOverlay] = useState(isDiagOverlayEnabled());
+  useEffect(() => subscribeDiagPrefs(() => setDiagOverlay(isDiagOverlayEnabled())), []);
+  const osScheme = useColorScheme();
 
   // Listen for the headlights on EVERY backend, not just NWD. This used to be
   // registered only inside the NWD connect path, which is gated on a tunerless
@@ -2523,7 +2540,11 @@ export default function RadioScreen({ route, navigation }: Props) {
       // right after makes the APP's order win — including refusing to walk into
       // the phantom slots past the end of the user's list.
       subs.push(onNwd('NwdPanelKey', (p) => {
-        diag(`panel key ${p.key}${p.key === PANEL_KEY.PRESET_NEXT ? ' (preset next)' : p.key === PANEL_KEY.PRESET_PREV ? ' (preset prev)' : ''}`);
+        // Name EVERY key the dispatch table knows, not just the two we act on:
+        // an unnamed line then means "the MCU sent a code we have never
+        // identified", which is what the diagnostics overlay highlights.
+        const keyName = panelKeyName(p.key);
+        diag(`panel key ${p.key}${keyName ? ` (${keyName})` : ''}`);
         if (p.key === PANEL_KEY.PRESET_NEXT) fmHwStepRef.current?.(1);
         else if (p.key === PANEL_KEY.PRESET_PREV) fmHwStepRef.current?.(-1);
       }));
@@ -2795,6 +2816,16 @@ export default function RadioScreen({ route, navigation }: Props) {
         hardwareStep={fmHwStep}
         device={fmDevice}
       />
+
+      {/* Tuner log tail, on the face. Off unless both diagnostics toggles are on;
+          never interactive. Follows the same day/night resolution as the face so
+          it doesn't glare at night. */}
+      {diagOverlay ? (
+        <DiagOverlay pal={
+          (fmThemeEffective === 'dark' || (fmThemeEffective === 'system' && osScheme === 'dark'))
+            ? DARK : LIGHT
+        } />
+      ) : null}
     </View>
   );
 }

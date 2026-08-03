@@ -20,8 +20,10 @@ import { snapshotDate, clearAllStationPrefs } from '../../services/stationDb';
 import { clearAllLogoFiles } from '../../services/logoStore';
 import { clearLogoCache } from '../../services/stationLogoCache';
 import { invalidateLogoTile, invalidateStationDisplay } from './LogoTile';
-import { isNwdAvailable, nwdRequestAudioSource, nwdProbe, nwdProbeJsonHardware, nwdProbeFmManager } from '../../services/nwdRadio';
-import { diag, isDiagEnabled, setDiagEnabled, diagLines, diagText, clearDiag, subscribeDiag } from '../../services/diag';
+import { isNwdAvailable, nwdRequestAudioSource, nwdProbe, nwdProbeJsonHardware, nwdProbeFmManager,
+         nwdSeekStrengthTest } from '../../services/nwdRadio';
+import { diag, isDiagEnabled, setDiagEnabled, isDiagOverlayEnabled, setDiagOverlayEnabled,
+         diagLines, diagText, clearDiag, subscribeDiag } from '../../services/diag';
 
 export type CarFmTheme = 'system' | 'light' | 'dark';
 
@@ -76,6 +78,7 @@ export default function SettingsPanel({
   const [logosOn, setLogosOn] = useState(false);
   const [dataDate, setDataDate] = useState<string | null>(null);
   const [diagOn, setDiagOn] = useState(isDiagEnabled());
+  const [diagOverlayOn, setDiagOverlayOn] = useState(isDiagOverlayEnabled());
   const [, forceTick] = useState(0);
   // Six taps on the about line reveal the hidden band-theme force group (§12).
   const [eggTaps, setEggTaps] = useState(0);
@@ -89,6 +92,10 @@ export default function SettingsPanel({
 
   const toggleDiag = useCallback(() => {
     setDiagOn((v) => { const nv = !v; setDiagEnabled(nv); return nv; });
+  }, []);
+
+  const toggleDiagOverlay = useCallback(() => {
+    setDiagOverlayOn((v) => { const nv = !v; setDiagOverlayEnabled(nv); return nv; });
   }, []);
 
   // Write the log via native (no file-picker Activity — the SAF picker crashed on
@@ -115,6 +122,32 @@ export default function SettingsPanel({
     diag('— manual probe —');
     const dump = await nwdProbe();
     for (const l of dump.split('\n')) if (l.trim()) diag(l);
+  }, []);
+
+  // THE SIGNAL-LEVEL EXPERIMENT (task #58). Unlike every other row here this one
+  // COMMANDS the tuner, so it confirms first and runs exactly once per press —
+  // never on a timer, never folded into the auto-probe. See nwdSeekStrengthTest.
+  const runSeekStrengthTest = useCallback(() => {
+    Alert.alert(
+      'Test signal level?',
+      'This retunes the tuner to the frequency it is already on, which is how the '
+      + 'vendor reads a level. It should be silent, but it is a command — an earlier '
+      + 'attempt at a different method cut the audio.\n\n'
+      + 'Park first, keep the radio playing, and listen while it runs.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Run once',
+          style: 'destructive',
+          onPress: async () => {
+            if (!isDiagEnabled()) setDiagEnabled(true);
+            diag('— seek strength test —');
+            const dump = await nwdSeekStrengthTest();
+            for (const l of dump.split('\n')) if (l.trim()) diag(l);
+          },
+        },
+      ],
+    );
   }, []);
 
   const Local = (NativeModules as any).VibeLocalSDR as
@@ -408,6 +441,19 @@ export default function SettingsPanel({
               </Pressable>
               {diagOn ? (
                 <>
+                  {/* The log is worth capturing on every drive; the on-face tail
+                      only when watching for something specific — an unnamed panel
+                      key, the headlights, a dropout. Nested under the capture
+                      toggle because it shows nothing without it. */}
+                  <Pressable style={({ pressed }) => [styles.switchRow, pressed && { backgroundColor: pal.raised }]} onPress={toggleDiagOverlay} accessibilityRole="switch" accessibilityState={{ checked: diagOverlayOn }}>
+                    <View style={styles.textWrap}>
+                      <Text style={[styles.rowTitle, { color: pal.text }]}>Show the log on the radio</Text>
+                      <Text style={[styles.rowSub, { color: pal.dim }]}>
+                        Mirror the last few events onto the face itself, so you can see them as they happen. Unexplained events are highlighted.
+                      </Text>
+                    </View>
+                    <Toggle on={diagOverlayOn} pal={pal} onToggle={toggleDiagOverlay} label="Show the log on the radio" />
+                  </Pressable>
                   <ScrollView
                     style={[styles.diagLog, { borderColor: pal.border, backgroundColor: pal.raised }]}
                     contentContainerStyle={{ padding: 10 }}
@@ -446,6 +492,20 @@ export default function SettingsPanel({
                         accessibilityRole="button" accessibilityLabel="Probe the NwdFmManager transport for signal, raw RDS and stereo"
                       >
                         <Text style={[styles.clearText, { color: pal.blue }]}>Probe NwdFmManager (signal · raw RDS · stereo)</Text>
+                        <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
+                      </Pressable>
+                      {/* AMBER, not blue, and it asks first. Everything above is a
+                          passive read that the auto-probe also fires by itself;
+                          this one commands the tuner and only ever runs on a
+                          deliberate press. The colour difference is the point. */}
+                      <View style={[styles.divider, { backgroundColor: pal.border }]} />
+                      <Pressable
+                        style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.amberFill }]}
+                        onPress={runSeekStrengthTest}
+                        accessibilityRole="button"
+                        accessibilityLabel="Test signal level — commands the tuner, park first"
+                      >
+                        <Text style={[styles.clearText, { color: pal.amber }]}>Test signal level (commands the tuner — park first)</Text>
                         <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                       </Pressable>
                     </>

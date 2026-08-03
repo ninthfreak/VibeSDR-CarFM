@@ -853,3 +853,258 @@ Signal strength stays open, with two candidates left, both now understood to be
 commands: `getRadioRDSStrengthArm(rawFrequency)` and
 `NwdFmManager.seek(currentFrequency)`. Both need a deliberate stationary test
 with someone listening, on a manual button, never on a timer. See task #58.
+
+---
+
+## A PI can be right about the station and wrong about the nibble (2026-08-03)
+
+WIBA-FM 101.5 named itself **"KDTI · Rochester Hills"** on the hero, consistently
+once PI consensus started landing. This was previously blamed on block-A
+corruption. That was wrong.
+
+The station really does transmit `0x19E2`. In the 07:54:59 probe all eight raw
+group reads on 101.5 begin `19e2`, and the rest of each group decodes cleanly —
+`19e224d27320436c` places `"s Cl"` at RadioText offset 8, exactly where
+`Madison's Classic Rock` needs it. `piToCallsign(0x19E2)` returns `KDTI`, which
+the bundled FCC table has as 90.3 FM, Rochester Hills MI. Correct arithmetic on a
+wrong input.
+
+Measured across the five stations in that drive log:
+
+| Dial | PI sent | Formula says | Callsign arithmetic | Low 12 bits |
+|---|---|---|---|---|
+| 101.5 WIBA-FM | `19e2` | KDTI | `69e2` | agree |
+| 104.1 WZEE | `1718` | KCRW | `9718` | agree |
+| 105.9 WWHG | `8f7c` | WWHG | `8f7c` | — |
+| 94.9 WOLX-FM | `7ad5` | WOLX | `7ad5` | — |
+| 88.7 WERN | `a6ff` | (A-block, refused) | `60ff` | — |
+
+Both broken codes carry the correct low twelve bits with the top nibble forced to
+`1`. That is the signature of an RDS encoder running in European mode, where the
+top nibble is a country code rather than part of the callsign arithmetic. The
+cause is inference; the pattern is measured. The two correct stations belong to a
+different operator. WERN is unaffected because `a6ff` is an A-block network PI
+with no callsign in it, and `piToCallsign` already refuses the whole A-block.
+
+### Why CarFM believed it
+
+`identifyByPi` looked the computed callsign up in the DB and called it confident
+when the row was full-power FM. KDTI's row is full-power FM. Nothing compared the
+row's 90.3 MHz against the tuned 101.5. Two paths that would normally contradict
+it were both dead: WIBA's PS scrolls (`101.5` / `IBA-FM`), so the decoder's
+two-cycle rule correctly refuses to publish it, and GPS is null on this unit, so
+the location-based lookup returns nothing. PI was the only identity left. It was
+also queuing KDTI's logo through `noteEncountered`.
+
+### The rule now
+
+1. The dial outranks the PI. A decoded callsign whose DB row sits on a different
+   frequency is rejected outright.
+2. On rejection, look for a station **on the tuned frequency** whose derived PI
+   matches in the low twelve bits. Measured over the 10,646 full-power rows in
+   the bundled table, `(frequency, low 12 bits)` yields 10,487 distinct keys, of
+   which 130 have two holders and none has three — so exactly one hit is
+   accepted and anything else is refused.
+3. The salvage is only reachable after a CLEAN decode. `a6ff` has none, so WERN
+   never enters it — which matters, because its low twelve bits would otherwise
+   have matched KISL in Avalon CA, also on 88.7.
+
+Needs no GPS, which is the point: a head unit with no fix is exactly the case
+where nothing else can contradict a bad PI. Covered by
+`tools/tests/piLowBits.test.mjs`.
+
+---
+
+## Two more things the 2026-08-03 probe settled
+
+### RadioText corruption was reaching the plate, and it was the majority case
+
+Blocks C and D carry the text and nothing protects them. PI consensus guards
+block A, PTY consensus guards block B, and the characters themselves have no
+error check at all. Counting every RadioText publish in the drive log:
+
+| Station | publishes | clean | corrupt |
+|---|---|---|---|
+| WERN 88.7 | 83 | 39 | **44 (53%)** |
+| WWHG 105.9 | 8 | 5 | 3 |
+| WIBA 101.5 | 6 | 5 | 1 |
+| WZEE 104.1 | 1 | 1 | 0 |
+
+`Wisconsin PuAoic Radio`, `Wisc h yn Public Radio`, `Wisconsin Public Rad 5` —
+every one of them shown to the driver. The same fault produced the trailing junk
+on `Everything That Rocks          "` and `Madison's Classic Rock  ...  0  *F`,
+where the terminator was lost and the sixteen-segment fallback published corrupt
+padding along with the message.
+
+Fixed by making the FIRST fill of a message instant and every REPLACEMENT wait
+for a repeat. Random corruption essentially never repeats, so it never reaches
+the face; a real message change costs one extra cycle. An A/B flag flip is the
+broadcaster declaring a new message, so that path stays instant. Requiring two
+cycles for everything was the earlier rule and was the "RadioText took forever"
+complaint — this keeps acquisition fast and only slows replacement.
+
+### The RDS pump's arming gate was asking a question about the station
+
+The gate required a 16-character `getRadioRDSDataArm()` read before the pump
+would start. That is a property of the STATION, not the tuner. The 07:56:39
+probe was taken on 102.1, a channel that produced no group at all in either
+visit, and read `(null)` eight times out of eight — while `getRadioRDSFunArm()`
+still read `1`, exactly as it did in the four probes taken on stations that were
+sending. Sitting on a quiet channel past the retry budget would therefore have
+killed RadioText for the whole session.
+
+The flag alone now arms the pump. A null or all-zero data read is just a poll
+with nothing in it — both sentinels are observed on device and both are skipped.
+
+### Negative results from the same probe
+
+- **`getCurrentFrequency()` is not implemented here.** `0` in all five probes,
+  unpacking to `freq=0 strength=0`, while tuned to four different stations with
+  strong signal. That closes the packed frequency-plus-strength candidate for
+  task #58.
+- **`getStationStereoState()` is stuck true, like `isStreroOn()`.** `1` in all
+  five probes, including on 102.1 with no RDS at all and the AIDL stereo
+  callback flapping. The probe's own label calling it "real per-station stereo"
+  is wrong and should not be trusted.
+- **`getVolue()` read `0` in all five probes** while FM was audibly playing, so
+  it is not the head unit's volume and is not the reachability canary the
+  comment claims.
+- **`getRadioModuleArm()` read a stable `12`** — a real, honest value, and a
+  candidate to replace the fabricated tuner diagnostics (audit finding 25).
+- **`mcu_radio_area_current` is still `1`** in every probe, which is why the
+  vendor AIDL never delivers PS or RadioText. We only have them by bypassing it.
+- **`mute(int)` and `isMute()` are declared and unused.** Every preset step
+  audibly plays the wrong station for about a second, because the vendor
+  broadcast cannot be cancelled and we can only correct after it. Muting across
+  the hold would cover that burst — untested, and a command, so it needs the same
+  stationary care as the strength read that cut the audio.
+- **Panel key `14` is unmapped.** Eight occurrences, in bursts of two and three,
+  absent from the decompiled dispatch table. Unidentified.
+
+---
+
+## Signal strength: the map is now complete (decompile, 2026-08-03)
+
+Re-ran androguard over the pulled `service.apk`. This closes the question of
+*where to look* and leaves exactly one candidate, much better understood.
+
+### `getRadioRDSStrengthArm` should be abandoned, not retried
+
+An xref over the whole service found **no callers**. Nothing in the vendor's own
+code invokes it — not `AWNative`, not `ArmRadioManager`, not `NewRdsManager`.
+There is no usage model to copy, which is exactly why the probe that passed it
+0..3 was flying blind and cut the audio. Retrying it means guessing an argument
+convention that the vendor itself never exercises.
+
+### The seek route is the vendor's own idiom, and the packing is confirmed
+
+`AWNative.seek(int)` decompiles to:
+
+```java
+int packed   = NwdFmManager.seek(frequency);          // the framework call
+int strength = getFreAndStrength(packed, 1);
+int freq     = getFreAndStrength(packed, 0);
+return (freq == frequency) ? strength : 0;            // 0 == "it moved, distrust"
+```
+
+and `getFreAndStrength(v, sel)` formats `v` as `%08x`, taking the **last four hex
+digits as the frequency and the first four as the strength** — so
+`strength = (packed >>> 16) & 0xffff`, `freq = packed & 0xffff`.
+
+The decisive detail is in `NewRdsManager.getOtherGoodStation()`, the AF-following
+routine. It calls `AWNative.seek(afFreq)` on each candidate alternative
+frequency, compares the returned strength against `RADIO_FM_STOP`, and then ends
+with:
+
+```java
+AWNative.seek(mCurrentFrequency.getFrequency());   // restore
+```
+
+**The vendor calls seek with the frequency it is already on, as a no-op return to
+where it was.** The `freq == frequency` guard in the wrapper exists precisely to
+answer "did the tuner stay put". That is the pattern CarFM should copy:
+`NwdFmManager.seek(rawCurrentFrequency)`, unpack, and trust the strength only
+when the low half comes back equal to what was asked.
+
+Still a command, and it still needs a stationary test on a manual button with
+someone listening — the naming rule from §9a has not changed. But it is no longer
+a guess: it is the call the vendor makes, with the argument the vendor uses, for
+the purpose we want.
+
+`RADIO_FM_STOP`, `RADIO_DX_FM_STOP` and `RADIO_LOC_FM_STOP` are all set at
+runtime rather than compiled in, so the seek-stop threshold has to be observed
+rather than read out of the APK.
+
+### Everything else is closed
+
+- **AIDL `RadioFeature`** — 30 methods, none of them a level.
+- **AIDL `RadioCallback`** — 14 callbacks, no signal notify. The one candidate,
+  `notifyCurrentFrequency`'s `arg`, was tested on device and is the preset index.
+- **`Frequency` parcelable** — `band`, `psName`, `freq`. No strength field.
+- **`NwdFmManager.getCurrentFrequency()`** — `0` in all five probes of
+  2026-08-03, so it is not a second source of the packed value.
+- **`RadioJsonNative.queryRssi()`** — exists in the APK but belongs to the JSON /
+  Si4792x variant, which is absent on this unit (see task #43).
+- **The other 50 declared methods** are setters, commands, or non-level getters.
+
+### A measured bar we can build today, with no hardware access
+
+Raw RDS groups already cross the bridge, and their health is a real signal-quality
+measure — unlike the current meter, which is a GPS-and-database estimate that
+freezes at tune time and resolves to nothing at all on a unit with no GPS fix.
+
+Two quantities, both free:
+
+- **Group arrival rate.** RDS runs at a fixed ~11.4 groups/s, so a shortfall means
+  the demodulator is losing sync. The probe bursts of 2026-08-03 show the spread
+  plainly: 8 of 8 null on 102.1 (a channel that produced nothing all session),
+  5 of 8 null on 88.7 during the stretch with the stereo flapping and the RDS
+  expiries, 0 of 8 null on 105.9, 101.5 and 88.7 when they were solid.
+- **Block-A error rate.** The fraction of groups whose PI does not match the
+  confirmed PI. The decoder already computes this to drop them; it just discards
+  the count.
+
+Add the stereo pilot flag and that is a three-input quality bar. It saturates —
+a strong and a very strong station both give zero errors — so it is a bottom-half
+meter, honest about weak and blind about excellent. It should be labelled as RDS
+quality, not as dBµV, which would also retire the fabricated tuner diagnostics of
+audit finding 25 and the frozen meter of finding 17.
+
+### The controlled experiment, and how to run it
+
+Built 2026-08-03. Settings → DIAGNOSTICS → **"Test signal level (commands the
+tuner — park first)"**, in amber rather than blue, below the three blue probe
+rows. It asks for confirmation before doing anything.
+
+It is deliberately NOT part of `probe()`. `scheduleProbe()` fires that one
+automatically a few seconds after every retune while diagnostics are on, and
+everything in it is a passive read. This is a command; putting it there would run
+it unattended on every tune, which is exactly how the audio was cut on
+2026-08-01.
+
+One press does one thing:
+
+```
+asked   = RadioFeature.getCurrentFrequency().freq      // live, never cached
+packed  = NwdFmManager.seek(asked)                     // the one command
+strength = (packed ushr 16) and 0xFFFF
+landed   = packed and 0xFFFF
+landedOk = (landed == asked)                           // AWNative's own check
+after    = RadioFeature.getCurrentFrequency().freq     // independent confirmation
+```
+
+`landedOk` is the safety verdict and it is the same comparison `AWNative.seek`
+makes before it trusts a level. `after` is the binder's independent account of
+where the tuner ended up, because `landed` is only the seek's report of itself.
+
+**Procedure.** Parked, engine on, radio audible, on a strong station. Press once,
+listen. Then press again on a weak station: a number that does not move between
+a strong and a weak station is a constant, not a measurement — which is the
+failure mode that `63` for all four arguments looked like on the earlier attempt.
+
+**If the audio drops**, the seek route goes the way of `getRadioRDSStrengthArm`
+and the RDS-quality bar above becomes the answer instead.
+
+`RADIO_FM_STOP`, the threshold the service compares a seek strength against, is
+set at runtime rather than compiled into the APK, so the expected range has to
+come from this test rather than from the decompile.

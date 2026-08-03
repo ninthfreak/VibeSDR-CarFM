@@ -258,9 +258,10 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
 
     // ── Raw RDS pump ─────────────────────────────────────────────────────────
     // getRadioRDSDataArm() returns ONE already-synchronised RDS group as 16 hex
-    // chars (4 blocks x 2 bytes), or all zeros for "nothing this poll". This is
-    // the data the bound AIDL never exposes — the reason RadioText is reachable
-    // on this unit at all. Confirmed live 2026-08-01: real groups spelling a
+    // chars (4 blocks x 2 bytes). "Nothing this poll" comes back as all zeros OR
+    // as a Java null — both observed on device, so both are skipped. This is the
+    // data the bound AIDL never exposes — the reason RadioText is reachable on
+    // this unit at all. Confirmed live 2026-08-01: real groups spelling a
     // station's PS and RadioText.
     //
     // RDS runs at ~11.4 groups/sec, so ~87ms per group. Polling at 90ms keeps up
@@ -269,9 +270,10 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     // for repeats anyway, so this is pure bridge-traffic saving.
     private val rdsPollMs = 90L
     private val zeroGroup = "0000000000000000"
-    // Arming budget: 240 x 250ms = 60s. Long enough to cover a launch that happens
-    // while the unit is still on another source and only reaches FM a minute later;
-    // bounded so a unit without the transport doesn't keep a thread alive forever.
+    // Arming budget: 240 x 250ms = 60s. The gate below reads a hardware capability
+    // flag, so this only has to outlast the vendor stack coming up — it is not
+    // waiting on a station. Bounded so a unit without the transport at all doesn't
+    // keep a thread alive forever.
     private val rdsArmAttempts = 240
     private val rdsArmRetryMs = 250L
     @Volatile private var rdsPumpRunning = false
@@ -281,7 +283,9 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         if (rdsThread != null) return
         rdsPumpRunning = true
         val t = Thread {
-            // The support check runs INSIDE the thread, with retries.
+            // The support check runs INSIDE the thread, with retries, and asks
+            // only whether the HARDWARE has RDS — never whether a station is
+            // sending it.
             //
             // It used to be a one-shot gate evaluated by the caller. connect()
             // called this straight after bindService(), which is asynchronous — so
@@ -291,16 +295,22 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             // supported=false, and nothing ever re-armed it: no RadioText for the
             // whole session, on the only path that can produce it.
             //
-            // Retrying costs nothing and removes the latch. Give up only after the
-            // transport has stayed silent for several seconds.
+            // The gate also demanded a 16-char getRadioRDSDataArm() read, which is
+            // a property of the STATION, not the tuner. Proved on 2026-08-03: the
+            // probe taken on 102.1 — a channel that produced no group at all in
+            // either visit — read (null) eight times out of eight while
+            // getRadioRDSFunArm() still read 1, exactly as it did in the four
+            // probes on stations that were sending. Sitting on a quiet channel
+            // past the retry budget would therefore have killed RadioText for the
+            // session. So the flag alone arms the pump; a null data read is just a
+            // poll with nothing in it.
             var armed = false
             var attempts = 0
             var last = ""
             while (rdsPumpRunning) {
                 if (!armed) {
                     val ok = try {
-                        (nwdFmGet("getRadioRDSFunArm") as? Int) == 1 &&
-                            (nwdFmGet("getRadioRDSDataArm") as? String)?.length == 16
+                        (nwdFmGet("getRadioRDSFunArm") as? Int) == 1
                     } catch (_: Throwable) { false }
                     if (ok) {
                         armed = true
@@ -585,12 +595,23 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     private val nwdFmGetters = listOf(
         "getRadioRDSFunArm" to "1 = hardware supports RDS",
         "getRadioRDSDataArm" to "16 hex chars = one raw RDS group",
-        "getCurrentFrequency" to "frequency, possibly packed with strength",
-        "getStationStereoState" to "real per-station stereo (vs the stuck isStreroOn)",
+        // Reads 0 on this unit in all five probes of 2026-08-03, on four
+        // different stations with strong signal. Not implemented here, and NOT
+        // the source of the packed freq+strength int — that is the RETURN of
+        // NwdFmManager.seek(frequency); see the findings doc.
+        "getCurrentFrequency" to "0 on this unit — not implemented",
+        // Was labelled "real per-station stereo (vs the stuck isStreroOn)". It is
+        // not: it read 1 in all five probes, including on 102.1, a channel with
+        // no RDS at all and the AIDL stereo callback flapping. Stuck true exactly
+        // like isStreroOn(), and must not be used to drive the pill.
+        "getStationStereoState" to "reads 1 always — stuck, like isStreroOn()",
         "getStereo" to "stereo mode flag",
         "getLoc" to "local/DX",
-        "getRadioModuleArm" to "which module the MCU reports",
-        "getVolue" to "vendor's spelling; a cheap reachability canary",
+        "getRadioModuleArm" to "which module the MCU reports (12 here)",
+        // Was called a reachability canary. It reads 0 while FM is audibly
+        // playing, so it is neither the head unit's volume nor evidence of
+        // anything working.
+        "getVolue" to "vendor's spelling; reads 0 even while playing",
     )
 
     /** One RDS read almost always returns the all-zero "no data this poll"
@@ -611,17 +632,116 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         return m.invoke(null)
     }
 
-    /** Same, for a single-int getter. Used only for getRadioRDSStrengthArm(int),
-     *  whose argument is undocumented — the probe sweeps a few values rather than
-     *  guessing one. Still a getter: nothing here commands the tuner. */
-    private fun nwdFmGetInt(name: String, arg: Int): Any? {
-        val cls = Class.forName(nwdFmManagerClass)
-        val m = try {
-            cls.getMethod(name, Int::class.javaPrimitiveType)
-        } catch (_: NoSuchMethodException) {
-            cls.getDeclaredMethod(name, Int::class.javaPrimitiveType).apply { isAccessible = true }
+    // DELETED: nwdFmGetInt(name, arg).
+    //
+    // It existed for getRadioRDSStrengthArm(int) and carried the comment "Still a
+    // getter: nothing here commands the tuner". That was wrong and it cost the
+    // audio — sweeping arguments 0..3 cut the sound instantly and returned 63
+    // (0x3F, all ones) for every one of them. The 2026-08-03 decompile then found
+    // that method has NO callers anywhere in the vendor service, so there is no
+    // usage model to copy and nothing to retry against.
+    //
+    // Left absent deliberately: an int-arg reflection helper on this class is an
+    // invitation to call the next plausible-looking method the same way. The
+    // strength path that IS evidenced is NwdFmManager.seek(rawFrequency), which
+    // is a command and belongs behind a manual, stationary test — not behind a
+    // helper named "get".
+
+    // ── The signal-level experiment (task #58) ───────────────────────────────
+    //
+    // DELIBERATELY NOT PART OF probe(). probe() is fired automatically by
+    // scheduleProbe() a few seconds after every retune while diagnostics are on,
+    // and everything in it is a passive read. This is a COMMAND. Putting it there
+    // would run it unattended on every tune, which is precisely how the audio was
+    // cut on 2026-08-01.
+    //
+    // WHAT IT DOES, and why this argument and no other. From the service
+    // decompile of 2026-08-03:
+    //
+    //   AWNative.seek(int frequency) {
+    //       int packed   = NwdFmManager.seek(frequency);
+    //       int strength = getFreAndStrength(packed, 1);   // high 4 hex digits
+    //       int freq     = getFreAndStrength(packed, 0);   // low  4 hex digits
+    //       return (freq == frequency) ? strength : 0;     // 0 = it moved, distrust
+    //   }
+    //
+    // and NewRdsManager.getOtherGoodStation() — the alternative-frequency
+    // follower — ends by calling AWNative.seek(mCurrentFrequency.getFrequency())
+    // to return to where it started. So the vendor itself calls seek with the
+    // frequency it is ALREADY ON, as a no-op restore, and the equality check
+    // exists to confirm the tuner stayed put. That is the call this makes: one
+    // invocation, at the current raw frequency, per press.
+    //
+    // It is still a command. It may mute briefly even when it works, and it could
+    // behave like getRadioRDSStrengthArm did. Hence: manual, single-shot,
+    // stationary, with someone listening.
+    private val nwdFmSeek = "seek"
+
+    /** One `NwdFmManager.seek(currentRawFrequency)`, reported verbatim.
+     *
+     *  Resolves a human-readable block for the tuner log — never rejects, because
+     *  the failure modes are the result. `landedOk` is the safety verdict: the
+     *  low half of the return must equal the frequency we asked for. */
+    @ReactMethod
+    fun seekStrengthTest(promise: Promise) {
+        val sb = StringBuilder()
+        sb.append("SEEK STRENGTH TEST (NwdFmManager.seek — this is a COMMAND)\n")
+        val r = radio
+        if (r == null) { promise.resolve(sb.append("  not connected\n").toString()); return }
+
+        // Ask the tuner where it is, in RAW units, right now. Never a cached value:
+        // the whole test is "measure at the frequency we are on", and a stale
+        // number would command a real retune.
+        val asked = try {
+            val f: Frequency? = r.getCurrentFrequency()
+            if (f == null) { promise.resolve(sb.append("  getCurrentFrequency() returned null — aborted\n").toString()); return }
+            f.freq
+        } catch (e: Throwable) {
+            promise.resolve(sb.append("  getCurrentFrequency() threw ${e.javaClass.simpleName} — aborted\n").toString()); return
         }
-        return m.invoke(null, arg)
+        if (asked <= 0) {
+            promise.resolve(sb.append("  current frequency reads $asked — refusing to seek to that\n").toString()); return
+        }
+        sb.append("  asking for raw freq = ").append(asked)
+            .append("  (~").append(asked.toDouble() / freqMult).append(" MHz)\n")
+
+        val packed = try {
+            val cls = Class.forName(nwdFmManagerClass)
+            val m = try {
+                cls.getMethod(nwdFmSeek, Int::class.javaPrimitiveType)
+            } catch (_: NoSuchMethodException) {
+                cls.getDeclaredMethod(nwdFmSeek, Int::class.javaPrimitiveType).apply { isAccessible = true }
+            }
+            m.invoke(null, asked)
+        } catch (e: Throwable) {
+            val cause = (e as? java.lang.reflect.InvocationTargetException)?.cause ?: e
+            promise.resolve(sb.append("  seek() threw ${cause.javaClass.name}: ${cause.message}\n").toString()); return
+        }
+
+        if (packed !is Int) {
+            promise.resolve(sb.append("  seek() returned ").append(packed?.javaClass?.name ?: "null")
+                .append(", not an Int — layout unknown\n").toString()); return
+        }
+
+        val strength = (packed ushr 16) and 0xFFFF
+        val landed = packed and 0xFFFF
+        sb.append("  raw return  = ").append(packed)
+            // Integer.toHexString + padStart rather than String.format: the
+            // decompiled getFreAndStrength splits on the %08x form, so the padded
+            // eight digits are what makes the high/low halves readable by eye.
+            .append("  (0x").append(Integer.toHexString(packed).padStart(8, '0')).append(")\n")
+        sb.append("  strength    = ").append(strength).append("   // high 16 bits\n")
+        sb.append("  landed freq = ").append(landed).append("   // low 16 bits\n")
+        sb.append("  landedOk    = ").append(landed == asked)
+            .append(if (landed == asked) "   // stayed put — strength is trustworthy\n"
+                    else "   // MOVED. AWNative would return 0 here; distrust the level\n")
+        // Did the tuner really stay? getCurrentFrequency() is the independent
+        // check — `landed` is the seek's own account of itself.
+        val after = try { r.getCurrentFrequency()?.freq ?: -1 } catch (_: Throwable) { -1 }
+        sb.append("  freq after  = ").append(after)
+            .append(if (after == asked) "   // confirmed by the binder\n" else "   // CHANGED\n")
+        sb.append("  >>> Is the audio still playing? That is the other half of this test.\n")
+        promise.resolve(sb.toString())
     }
 
     /** Read an MCU settings key, trying each table in turn. Read-only. */

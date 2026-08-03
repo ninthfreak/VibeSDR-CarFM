@@ -11,16 +11,27 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const KEY = '@carfm/diag_enabled';
+const OVERLAY_KEY = '@carfm/diag_overlay';
 // Big enough to hold a full drive's worth of change-gated tuner events (a short
 // driveway test used ~50 lines; a commute with seeks + stereo flapping can run
 // into the hundreds). Ring-buffered, kept in memory only while capturing.
 const MAX = 2000;
 const lines: string[] = [];
 const listeners = new Set<() => void>();
+const prefListeners = new Set<() => void>();
 let enabled = false;
+let overlay = false;
 
-// Restore the persisted toggle at import so capture starts before settings is opened.
-AsyncStorage.getItem(KEY).then((v) => { enabled = v === '1'; }).catch(() => {});
+// Restore the persisted toggles at import so capture starts before settings is
+// opened — and notify, because the read is async and lands after mount.
+AsyncStorage.getItem(KEY).then((v) => {
+  enabled = v === '1';
+  prefListeners.forEach((l) => l());
+}).catch(() => {});
+AsyncStorage.getItem(OVERLAY_KEY).then((v) => {
+  overlay = v === '1';
+  prefListeners.forEach((l) => l());
+}).catch(() => {});
 
 function stamp(): string {
   const d = new Date();
@@ -41,6 +52,23 @@ export function setDiagEnabled(on: boolean): void {
   enabled = on;
   AsyncStorage.setItem(KEY, on ? '1' : '0').catch(() => {});
   diag(on ? '— diagnostics on —' : '');   // marks the toggle point when turning on
+  prefListeners.forEach((l) => l());      // the on-screen tail rides on this flag
+}
+
+/** Mirror the tail of the log onto the radio face itself. Separate from capture:
+ *  the log is worth having on every drive, the overlay only when watching for
+ *  something. Implies capture — the overlay shows nothing without it. */
+export function isDiagOverlayEnabled(): boolean { return overlay && enabled; }
+export function setDiagOverlayEnabled(on: boolean): void {
+  overlay = on;
+  AsyncStorage.setItem(OVERLAY_KEY, on ? '1' : '0').catch(() => {});
+  prefListeners.forEach((l) => l());
+}
+/** Fires when either diagnostics toggle changes, including the async restore at
+ *  import — which lands after the first render, so subscribing is not optional. */
+export function subscribeDiagPrefs(l: () => void): () => void {
+  prefListeners.add(l);
+  return () => { prefListeners.delete(l); };
 }
 export function diagLines(): readonly string[] { return lines; }
 export function diagText(): string { return lines.join('\n'); }

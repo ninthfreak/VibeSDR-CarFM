@@ -222,6 +222,28 @@ export async function stationsForCallsignBase(base: string): Promise<StationRow[
   }
 }
 
+/**
+ * Every FULL-POWER station on one dial frequency, nationwide. Small (the FM
+ * raster puts ~100 rows on a channel) and needs no location, which is the point:
+ * it is the only station lookup that still works on a head unit with no GPS fix.
+ *
+ * Translators and LPFM are excluded on purpose. The RBDS callsign formula does
+ * not apply to them (NRSC-G300), so their derived PI is noise, and the only
+ * caller matches on derived PI.
+ */
+export async function stationsAtFrequency(mhz: number): Promise<StationRow[]> {
+  const d = await db();
+  if (!d || !Number.isFinite(mhz) || mhz <= 0) return [];
+  try {
+    const raw = await d.getAllAsync<RawRow>(
+      `SELECT * FROM stations WHERE service = 'FM' AND ABS(frequency_mhz - ?) < 0.05`, [mhz]);
+    return raw.map(mapRow);
+  } catch (e) {
+    console.warn('[stationDb] frequency lookup failed', e);
+    return [];
+  }
+}
+
 export async function snapshotDate(): Promise<string | null> {
   const d = await db();
   if (!d) return null;

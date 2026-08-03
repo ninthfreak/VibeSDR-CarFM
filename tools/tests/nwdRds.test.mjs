@@ -139,6 +139,52 @@ const RT_FULL = [...RT_LED, ...RT_PAD];
   eq('once the head arrives it publishes in full', d.state().rt, 'Whole Lotta Love');
 }
 
+// REGRESSION — corrupt characters must not reach the plate. Blocks C and D carry
+// the text and nothing protects them: PI consensus guards block A and PTY
+// consensus guards block B, but the characters themselves have no error check.
+// On the drive of 2026-08-03, 44 of WERN's 83 RadioText publishes were corrupt
+// ("Wisconsin PuAoic Radio", "Wisc h yn Public Radio"), every one of them shown.
+//
+// So: the first fill of a message publishes at once, and anything that would
+// REPLACE it has to arrive twice. Random corruption never repeats.
+{
+  // Segment 2 with one byte flipped: "tta " becomes "tAa ".
+  const RT_BAD = RT_FULL.map((g) => (g === 'a80b20d274746120' ? 'a80b20d274416120' : g));
+  const CLEAN = 'Whole Lotta Love by Led';
+
+  const d = prime(createNwdRdsDecoder(), RT_LED[0]);
+  eq('the first complete message still shows immediately', feed(d, RT_FULL, 1).rt, CLEAN);
+  eq('a corrupt cycle does not replace it', feed(d, RT_BAD, 1).rt, CLEAN);
+  eq('nor does a second, differently corrupt cycle', feed(d,
+    RT_FULL.map((g) => (g === 'a80b20d34c6f7665' ? 'a80b20d34c6f7645' : g)), 1).rt, CLEAN);
+  eq('and the clean text survives the whole run', feed(d, RT_FULL, 1).rt, CLEAN);
+}
+
+// The flip side: a message that really did change must still get through, and
+// the same corruption twice would be indistinguishable from a change — which is
+// why this rule is about repetition, not about detecting corruption.
+{
+  const d = prime(createNwdRdsDecoder(), RT_LED[0]);
+  feed(d, RT_FULL, 1);
+  const NEXT = RT_FULL.map((g) => (g === 'a80b20d54c656420' ? 'a80b20d55a657020' : g));
+  eq('one cycle of a new message is not believed', feed(d, NEXT, 1).rt,
+    'Whole Lotta Love by Led');
+  eq('the repeat publishes it', feed(d, NEXT, 1).rt, 'Whole Lotta Love by Zep');
+}
+
+// An A/B flip is the broadcaster saying "new message", so it does not wait.
+{
+  const d = prime(createNwdRdsDecoder(), RT_LED[0]);
+  feed(d, RT_FULL, 1);
+  // Same groups with the A/B bit TOGGLED in block B (bit 4; it is already 1 in
+  // this capture, so 0x20dX becomes 0x20cX).
+  const FLIPPED = RT_FULL
+    .map((g) => (g === 'a80b20d54c656420' ? 'a80b20d55a657020' : g))
+    .map((g) => g.slice(0, 4) + (parseInt(g.slice(4, 8), 16) ^ 0x0010).toString(16).padStart(4, '0') + g.slice(8));
+  eq('an A/B flip publishes on its first complete cycle', feed(d, FLIPPED, 1).rt,
+    'Whole Lotta Love by Zep');
+}
+
 // ── Housekeeping ─────────────────────────────────────────────────────────────
 {
   const d = createNwdRdsDecoder();
