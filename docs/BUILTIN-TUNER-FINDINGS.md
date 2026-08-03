@@ -853,3 +853,62 @@ Signal strength stays open, with two candidates left, both now understood to be
 commands: `getRadioRDSStrengthArm(rawFrequency)` and
 `NwdFmManager.seek(currentFrequency)`. Both need a deliberate stationary test
 with someone listening, on a manual button, never on a timer. See task #58.
+
+---
+
+## A PI can be right about the station and wrong about the nibble (2026-08-03)
+
+WIBA-FM 101.5 named itself **"KDTI · Rochester Hills"** on the hero, consistently
+once PI consensus started landing. This was previously blamed on block-A
+corruption. That was wrong.
+
+The station really does transmit `0x19E2`. In the 07:54:59 probe all eight raw
+group reads on 101.5 begin `19e2`, and the rest of each group decodes cleanly —
+`19e224d27320436c` places `"s Cl"` at RadioText offset 8, exactly where
+`Madison's Classic Rock` needs it. `piToCallsign(0x19E2)` returns `KDTI`, which
+the bundled FCC table has as 90.3 FM, Rochester Hills MI. Correct arithmetic on a
+wrong input.
+
+Measured across the five stations in that drive log:
+
+| Dial | PI sent | Formula says | Callsign arithmetic | Low 12 bits |
+|---|---|---|---|---|
+| 101.5 WIBA-FM | `19e2` | KDTI | `69e2` | agree |
+| 104.1 WZEE | `1718` | KCRW | `9718` | agree |
+| 105.9 WWHG | `8f7c` | WWHG | `8f7c` | — |
+| 94.9 WOLX-FM | `7ad5` | WOLX | `7ad5` | — |
+| 88.7 WERN | `a6ff` | (A-block, refused) | `60ff` | — |
+
+Both broken codes carry the correct low twelve bits with the top nibble forced to
+`1`. That is the signature of an RDS encoder running in European mode, where the
+top nibble is a country code rather than part of the callsign arithmetic. The
+cause is inference; the pattern is measured. The two correct stations belong to a
+different operator. WERN is unaffected because `a6ff` is an A-block network PI
+with no callsign in it, and `piToCallsign` already refuses the whole A-block.
+
+### Why CarFM believed it
+
+`identifyByPi` looked the computed callsign up in the DB and called it confident
+when the row was full-power FM. KDTI's row is full-power FM. Nothing compared the
+row's 90.3 MHz against the tuned 101.5. Two paths that would normally contradict
+it were both dead: WIBA's PS scrolls (`101.5` / `IBA-FM`), so the decoder's
+two-cycle rule correctly refuses to publish it, and GPS is null on this unit, so
+the location-based lookup returns nothing. PI was the only identity left. It was
+also queuing KDTI's logo through `noteEncountered`.
+
+### The rule now
+
+1. The dial outranks the PI. A decoded callsign whose DB row sits on a different
+   frequency is rejected outright.
+2. On rejection, look for a station **on the tuned frequency** whose derived PI
+   matches in the low twelve bits. Measured over the 10,646 full-power rows in
+   the bundled table, `(frequency, low 12 bits)` yields 10,487 distinct keys, of
+   which 130 have two holders and none has three — so exactly one hit is
+   accepted and anything else is refused.
+3. The salvage is only reachable after a CLEAN decode. `a6ff` has none, so WERN
+   never enters it — which matters, because its low twelve bits would otherwise
+   have matched KISL in Avalon CA, also on 88.7.
+
+Needs no GPS, which is the point: a head unit with no fix is exactly the case
+where nothing else can contradict a bad PI. Covered by
+`tools/tests/piLowBits.test.mjs`.

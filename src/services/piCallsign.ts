@@ -139,3 +139,45 @@ export function piToCallsign(pi: number): PiDecode {
 export function callsignBase(callsign: string): string {
   return callsign.toUpperCase().replace(/-.*$/, '').trim();
 }
+
+/**
+ * The PI bits that survive a wrong top nibble.
+ *
+ * Some encoders get the top nibble wrong and the remaining twelve bits right —
+ * the signature of an encoder running in European RDS mode, where that nibble is
+ * a country code rather than part of the callsign arithmetic. Observed on this
+ * unit 2026-08-03, on two stations at once:
+ *
+ *   WIBA-FM 101.5 sends 0x19E2, callsign arithmetic gives 0x69E2 -> "KDTI"
+ *   WZEE    104.1 sends 0x1718, callsign arithmetic gives 0x9718 -> "KCRW"
+ *
+ * Both decodes are real, distant stations (KDTI is 90.3 in Rochester Hills MI,
+ * KCRW is 89.9 in Santa Monica CA), so nothing about the value itself looks
+ * wrong — only the dial disagrees.
+ */
+export const PI_LOW_MASK = 0x0fff;
+
+/**
+ * Which of `rows` could have sent `pi` if the top nibble is untrustworthy.
+ *
+ * Pass only stations already known to be on the tuned frequency: the pair
+ * (frequency, low 12 bits) is very nearly a key. Measured over the whole bundled
+ * FCC table — 10,646 full-power stations — 10,487 distinct pairs, of which 130
+ * have two holders and none has three. So a single hit is strong evidence and
+ * two hits mean give up, which is what the caller does.
+ *
+ * Returns uppercase callsign bases, deduplicated.
+ */
+export function piLowBitsCandidates(
+  pi: number,
+  rows: ReadonlyArray<{ callsignBase: string }>,
+): string[] {
+  if (!Number.isFinite(pi) || pi <= 0) return [];
+  const want = pi & PI_LOW_MASK;
+  const hits = new Set<string>();
+  for (const r of rows) {
+    const p = callsignToPi(r.callsignBase);
+    if (p !== null && (p & PI_LOW_MASK) === want) hits.add(callsignBase(r.callsignBase));
+  }
+  return [...hits];
+}

@@ -14,7 +14,7 @@ import { Linking, NativeModules } from 'react-native';
 import { getUserLocation } from './instancesApi';
 import { haversineKm } from './stationGeo';
 import {
-  nearbyStations as dbNearby, stationsForCallsignBase, snapshotDate,
+  nearbyStations as dbNearby, stationsForCallsignBase, stationsAtFrequency, snapshotDate,
   markWanted, wantedBases,
   type NearbyDbResult,
 } from './stationDb';
@@ -25,7 +25,7 @@ import {
 } from './logoStore';
 import { resolveLogo, fetchImage, fetchImageResult, base64ToBytes, type LogoStation } from './logoResolver';
 import { stationLogoQuery } from './logoDuckDuckGo';
-import { piToCallsign, callsignBase } from './piCallsign';
+import { piToCallsign, callsignBase, piLowBitsCandidates } from './piCallsign';
 import type { NearbyStation, StationIdentity, StationRow } from './stationTypes';
 
 export interface NearbyResult {
@@ -91,28 +91,80 @@ function bestStation(rows: StationRow[]): StationRow | null {
   return [...rows].sort((a, b) => (order[a.service] ?? 9) - (order[b.service] ?? 9))[0];
 }
 
-export async function identifyByPi(pi: number, psText?: string): Promise<StationIdentity> {
+/** Dial-vs-DB tolerance. The FM raster is 0.2 MHz in North America, so half a
+ *  0.1 MHz step is loose enough for rounding and far tighter than any channel. */
+const FREQ_EPS = 0.05;
+
+/**
+ * Look for the station the dial says we are on, when the PI says otherwise.
+ *
+ * Only called after a PI decoded cleanly to a callsign that the DB places on a
+ * DIFFERENT frequency — the state that says the top nibble is wrong rather than
+ * the whole code. Refuses on 0 or 2+ candidates; see piLowBitsCandidates for why
+ * a single hit is trustworthy.
+ */
+async function salvageByLowBits(pi: number, freqMhz: number): Promise<StationRow | null> {
+  const onDial = await stationsAtFrequency(freqMhz);
+  const bases = piLowBitsCandidates(pi, onDial);
+  if (bases.length !== 1) return null;
+  return bestStation(onDial.filter((r) => r.callsignBase === bases[0]));
+}
+
+/**
+ * Identify the live station from its RDS PI. Pass the tuned frequency whenever
+ * it is known — it is what stops a mis-encoded PI from renaming the station.
+ */
+export async function identifyByPi(
+  pi: number, psText?: string, freqMhz?: number,
+): Promise<StationIdentity> {
   const dec = piToCallsign(pi);
   if (!dec.callsign) return { pi, callsign: null, confident: false, station: null, note: dec.note };
 
-  const base = callsignBase(dec.callsign);
+  let callsign = dec.callsign;
+  let base = callsignBase(callsign);
   const rows = await stationsForCallsignBase(base);
-  const station = bestStation(rows);
+  let station = bestStation(rows);
 
   let confident = dec.confident && station != null && station.service === 'FM';
   let note = dec.note;
   if (station == null) note = 'no DB match for computed callsign';
   else if (station.service !== 'FM') note = `matched a ${station.service} (formula unreliable for translators)`;
 
+  // ── THE DIAL OUTRANKS THE PI ────────────────────────────────────────────────
+  // A PI that decodes to a real station on a different frequency is not this
+  // station, however clean the decode looks. Without this check WIBA-FM 101.5
+  // renamed itself "KDTI · Rochester Hills" every time PI consensus landed, and
+  // queued that station's logo — the decode was correct, the transmitted code
+  // was not. See PI_LOW_MASK for the encoder fault and the two stations it hit.
+  //
+  // This is deliberately the one identity path that survives a head unit with no
+  // GPS fix, which is exactly when nothing else can contradict a bad PI.
+  if (typeof freqMhz === 'number' && freqMhz > 0 && station != null
+      && Math.abs(station.frequencyMhz - freqMhz) > FREQ_EPS) {
+    const clash = `${callsign} is ${station.frequencyMhz} MHz, dial is ${freqMhz}`;
+    const salvaged = await salvageByLowBits(pi, freqMhz);
+    if (!salvaged) {
+      return { pi, callsign: null, confident: false, station: null, note: `${clash} — PI rejected` };
+    }
+    // The BASE, not the row's `callsign`: the formula path returns a bare
+    // four-letter form ('WOLX' for a row reading 'WOLX-FM'), and the hero renders
+    // whatever this is verbatim, so the two paths must agree on the shape.
+    callsign = salvaged.callsignBase;
+    base = salvaged.callsignBase;
+    station = salvaged;
+    confident = salvaged.service === 'FM';
+    note = `${clash}; low 12 bits match ${salvaged.callsign} on the dial`;
+  }
+
   if (psText) {
     const other = psText.toUpperCase().match(/\b([KW][A-Z]{3})\b/);
-    if (other && other[1] !== base) { confident = false; note = `PS text names ${other[1]}, not ${dec.callsign}`; }
+    if (other && other[1] !== base) { confident = false; note = `PS text names ${other[1]}, not ${callsign}`; }
   }
 
   // Tuning to it counts as an encounter — resolve its logo (background: no-op
   // until AUTO is enabled; freq carried so a later forced resolve has it).
-  void noteEncountered({ base, callsign: dec.callsign, homepage: null, name: station?.callsign, freqMhz: station?.frequencyMhz });
-  return { pi, callsign: dec.callsign, confident, station, note };
+  void noteEncountered({ base, callsign, homepage: null, name: station?.callsign, freqMhz: station?.frequencyMhz });
+  return { pi, callsign, confident, station, note };
 }
 
 /** A station was tuned/shown — resolve its logo now, or queue it if offline. */

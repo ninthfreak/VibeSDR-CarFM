@@ -2013,14 +2013,21 @@ export default function RadioScreen({ route, navigation }: Props) {
 
   // Resolve station identity from the RDS PI (offline, via the bundled DB) so the
   // FM face can name the station before PS arrives. Hex string -> int -> lookup.
+  //
+  // The dial goes in with it. A PI that decodes cleanly to a station on some
+  // other frequency is not this station, and without the dial to say so, WIBA-FM
+  // 101.5 renamed itself "KDTI · Rochester Hills" — see identifyByPi.
   useEffect(() => {
     if (status.mode !== 'wfm' || !liveStation.pi) { setPiIdentity(null); return; }
     const pi = parseInt(liveStation.pi, 16);
     if (!Number.isFinite(pi)) { setPiIdentity(null); return; }
     let cancelled = false;
-    identifyByPi(pi, liveStation.name).then((id) => { if (!cancelled) setPiIdentity(id); }).catch(() => {});
+    const dialMhz = status.frequency > 0 ? status.frequency / 1e6 : undefined;
+    identifyByPi(pi, liveStation.name, dialMhz)
+      .then((id) => { if (!cancelled) setPiIdentity(id); })
+      .catch(() => {});
     return () => { cancelled = true; };
-  }, [status.mode, liveStation.pi, liveStation.name]);
+  }, [status.mode, status.frequency, liveStation.pi, liveStation.name]);
 
   // Callsign/city hint shown only when PS text is absent (PS always wins, §6).
   const fmCallsignHint = useMemo<string | undefined>(() => {
