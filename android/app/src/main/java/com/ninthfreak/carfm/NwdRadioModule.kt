@@ -258,9 +258,10 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
 
     // ── Raw RDS pump ─────────────────────────────────────────────────────────
     // getRadioRDSDataArm() returns ONE already-synchronised RDS group as 16 hex
-    // chars (4 blocks x 2 bytes), or all zeros for "nothing this poll". This is
-    // the data the bound AIDL never exposes — the reason RadioText is reachable
-    // on this unit at all. Confirmed live 2026-08-01: real groups spelling a
+    // chars (4 blocks x 2 bytes). "Nothing this poll" comes back as all zeros OR
+    // as a Java null — both observed on device, so both are skipped. This is the
+    // data the bound AIDL never exposes — the reason RadioText is reachable on
+    // this unit at all. Confirmed live 2026-08-01: real groups spelling a
     // station's PS and RadioText.
     //
     // RDS runs at ~11.4 groups/sec, so ~87ms per group. Polling at 90ms keeps up
@@ -269,9 +270,10 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     // for repeats anyway, so this is pure bridge-traffic saving.
     private val rdsPollMs = 90L
     private val zeroGroup = "0000000000000000"
-    // Arming budget: 240 x 250ms = 60s. Long enough to cover a launch that happens
-    // while the unit is still on another source and only reaches FM a minute later;
-    // bounded so a unit without the transport doesn't keep a thread alive forever.
+    // Arming budget: 240 x 250ms = 60s. The gate below reads a hardware capability
+    // flag, so this only has to outlast the vendor stack coming up — it is not
+    // waiting on a station. Bounded so a unit without the transport at all doesn't
+    // keep a thread alive forever.
     private val rdsArmAttempts = 240
     private val rdsArmRetryMs = 250L
     @Volatile private var rdsPumpRunning = false
@@ -281,7 +283,9 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         if (rdsThread != null) return
         rdsPumpRunning = true
         val t = Thread {
-            // The support check runs INSIDE the thread, with retries.
+            // The support check runs INSIDE the thread, with retries, and asks
+            // only whether the HARDWARE has RDS — never whether a station is
+            // sending it.
             //
             // It used to be a one-shot gate evaluated by the caller. connect()
             // called this straight after bindService(), which is asynchronous — so
@@ -291,16 +295,22 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             // supported=false, and nothing ever re-armed it: no RadioText for the
             // whole session, on the only path that can produce it.
             //
-            // Retrying costs nothing and removes the latch. Give up only after the
-            // transport has stayed silent for several seconds.
+            // The gate also demanded a 16-char getRadioRDSDataArm() read, which is
+            // a property of the STATION, not the tuner. Proved on 2026-08-03: the
+            // probe taken on 102.1 — a channel that produced no group at all in
+            // either visit — read (null) eight times out of eight while
+            // getRadioRDSFunArm() still read 1, exactly as it did in the four
+            // probes on stations that were sending. Sitting on a quiet channel
+            // past the retry budget would therefore have killed RadioText for the
+            // session. So the flag alone arms the pump; a null data read is just a
+            // poll with nothing in it.
             var armed = false
             var attempts = 0
             var last = ""
             while (rdsPumpRunning) {
                 if (!armed) {
                     val ok = try {
-                        (nwdFmGet("getRadioRDSFunArm") as? Int) == 1 &&
-                            (nwdFmGet("getRadioRDSDataArm") as? String)?.length == 16
+                        (nwdFmGet("getRadioRDSFunArm") as? Int) == 1
                     } catch (_: Throwable) { false }
                     if (ok) {
                         armed = true

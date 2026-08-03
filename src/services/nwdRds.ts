@@ -74,7 +74,8 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
   let rtEnd: number | null = null;      // index of the 0x0D terminator, once seen
   let rtEndSeg: number | null = null;   // and which segment carried it
   let rtAb: number | null = null;       // A/B flag; a flip means a new message
-  let rtCandidate = '';                 // previous COMPLETE message; must repeat to publish
+  let rtCandidate = '';                 // previous COMPLETE assembly, corrupt or not
+  let rtPublished = false;              // has THIS message ever reached the face?
   let piConfirmed: number | null = null;// the PI we trust; groups not carrying it are dropped
   let piPending: number | null = null;  // candidate PI awaiting repeats
   let piPendingCount = 0;
@@ -92,6 +93,7 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     rtEndSeg = null;
     rtAb = null;
     rtCandidate = '';
+    rtPublished = false;
     ptyPending = null;
     ptyCount = 0;
     // piConfirmed is deliberately NOT cleared. Clearing it would drop the decoder
@@ -220,6 +222,7 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
         rtEnd = null;
         rtEndSeg = null;
         rtCandidate = '';
+        rtPublished = false;   // a genuinely new message shows at once, as below
       }
       rtAb = ab;
 
@@ -253,13 +256,32 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
       const endMask = rtEndSeg === null ? 0 : (1 << (rtEndSeg + 1)) - 1;
       const terminatedAndComplete = rtEndSeg !== null && (rtSeen & endMask) === endMask;
       if (terminatedAndComplete || rtSeen === 0xffff) {
-        // ONE complete cycle publishes. Requiring two was costing several seconds
-        // on air and was the "RadioText took forever" complaint; it was only ever
-        // guarding against corruption that PI/PTY consensus now rejects earlier,
-        // and against cross-message mixing that clearing the buffer each cycle
-        // already prevents structurally.
         const msg = (rtEnd !== null ? rtBuf.slice(0, rtEnd) : rtBuf).join('').trimEnd();
-        st.rt = msg;
+        // FIRST FILL IS INSTANT, REPLACEMENTS MUST REPEAT.
+        //
+        // Blocks C and D carry the text itself and nothing protects them: PI
+        // consensus guards block A, PTY consensus guards block B, and the
+        // characters have no error check at all. On the drive of 2026-08-03,
+        // 44 of WERN's 83 RadioText publishes were corrupt — "Wisconsin PuAoic
+        // Radio", "Wisc h yn Public Radio", "Wisconsin Public Rad 5" — every one
+        // of them shown to the driver. Same fault produced the trailing junk on
+        // "Everything That Rocks          \"", where the terminator was lost and
+        // the 16-segment fallback published corrupt padding along with the text.
+        //
+        // Requiring two agreeing cycles for EVERYTHING was the previous rule and
+        // it was the "RadioText took forever" complaint, so it only applies to
+        // replacements. Corruption is random, so a corrupt assembly essentially
+        // never repeats and never reaches the face; a real message change costs
+        // one extra cycle, a few seconds on a song title. An A/B flip is the
+        // broadcaster saying the message changed, so that path stays instant.
+        if (!rtPublished) {
+          st.rt = msg;
+          rtPublished = true;
+        } else if (msg !== st.rt && msg === rtCandidate) {
+          st.rt = msg;
+        }
+        // Always the LAST assembly seen, agreeing or not — otherwise a stale
+        // candidate could later be confirmed by an unrelated repeat.
         rtCandidate = msg;
         rtSeen = 0;
         rtEnd = null;

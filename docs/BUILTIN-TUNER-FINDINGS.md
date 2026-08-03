@@ -912,3 +912,71 @@ also queuing KDTI's logo through `noteEncountered`.
 Needs no GPS, which is the point: a head unit with no fix is exactly the case
 where nothing else can contradict a bad PI. Covered by
 `tools/tests/piLowBits.test.mjs`.
+
+---
+
+## Two more things the 2026-08-03 probe settled
+
+### RadioText corruption was reaching the plate, and it was the majority case
+
+Blocks C and D carry the text and nothing protects them. PI consensus guards
+block A, PTY consensus guards block B, and the characters themselves have no
+error check at all. Counting every RadioText publish in the drive log:
+
+| Station | publishes | clean | corrupt |
+|---|---|---|---|
+| WERN 88.7 | 83 | 39 | **44 (53%)** |
+| WWHG 105.9 | 8 | 5 | 3 |
+| WIBA 101.5 | 6 | 5 | 1 |
+| WZEE 104.1 | 1 | 1 | 0 |
+
+`Wisconsin PuAoic Radio`, `Wisc h yn Public Radio`, `Wisconsin Public Rad 5` —
+every one of them shown to the driver. The same fault produced the trailing junk
+on `Everything That Rocks          "` and `Madison's Classic Rock  ...  0  *F`,
+where the terminator was lost and the sixteen-segment fallback published corrupt
+padding along with the message.
+
+Fixed by making the FIRST fill of a message instant and every REPLACEMENT wait
+for a repeat. Random corruption essentially never repeats, so it never reaches
+the face; a real message change costs one extra cycle. An A/B flag flip is the
+broadcaster declaring a new message, so that path stays instant. Requiring two
+cycles for everything was the earlier rule and was the "RadioText took forever"
+complaint — this keeps acquisition fast and only slows replacement.
+
+### The RDS pump's arming gate was asking a question about the station
+
+The gate required a 16-character `getRadioRDSDataArm()` read before the pump
+would start. That is a property of the STATION, not the tuner. The 07:56:39
+probe was taken on 102.1, a channel that produced no group at all in either
+visit, and read `(null)` eight times out of eight — while `getRadioRDSFunArm()`
+still read `1`, exactly as it did in the four probes taken on stations that were
+sending. Sitting on a quiet channel past the retry budget would therefore have
+killed RadioText for the whole session.
+
+The flag alone now arms the pump. A null or all-zero data read is just a poll
+with nothing in it — both sentinels are observed on device and both are skipped.
+
+### Negative results from the same probe
+
+- **`getCurrentFrequency()` is not implemented here.** `0` in all five probes,
+  unpacking to `freq=0 strength=0`, while tuned to four different stations with
+  strong signal. That closes the packed frequency-plus-strength candidate for
+  task #58.
+- **`getStationStereoState()` is stuck true, like `isStreroOn()`.** `1` in all
+  five probes, including on 102.1 with no RDS at all and the AIDL stereo
+  callback flapping. The probe's own label calling it "real per-station stereo"
+  is wrong and should not be trusted.
+- **`getVolue()` read `0` in all five probes** while FM was audibly playing, so
+  it is not the head unit's volume and is not the reachability canary the
+  comment claims.
+- **`getRadioModuleArm()` read a stable `12`** — a real, honest value, and a
+  candidate to replace the fabricated tuner diagnostics (audit finding 25).
+- **`mcu_radio_area_current` is still `1`** in every probe, which is why the
+  vendor AIDL never delivers PS or RadioText. We only have them by bypassing it.
+- **`mute(int)` and `isMute()` are declared and unused.** Every preset step
+  audibly plays the wrong station for about a second, because the vendor
+  broadcast cannot be cancelled and we can only correct after it. Muting across
+  the hold would cover that burst — untested, and a command, so it needs the same
+  stationary care as the strength read that cut the audio.
+- **Panel key `14` is unmapped.** Eight occurrences, in bursts of two and three,
+  absent from the decompiled dispatch table. Unidentified.

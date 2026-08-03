@@ -130,6 +130,17 @@ export const PANEL_KEY = {
   CHANGE_FM_BAND: 72, CHANGE_AM_BAND: 73,
 } as const;
 
+/** Human name for a panel key, or null when the MCU sent a code the decompiled
+ *  dispatch table has no entry for.
+ *
+ *  Null is the interesting answer: key 14 arrived eight times in the drive log of
+ *  2026-08-03 and is not in the table, so nobody knows what button it is. The
+ *  diagnostics overlay highlights exactly the lines this returns null for. */
+export function panelKeyName(key: number): string | null {
+  const hit = Object.entries(PANEL_KEY).find(([, v]) => v === key);
+  return hit ? hit[0].toLowerCase().replace(/_/g, ' ') : null;
+}
+
 /** Fire a panel key as if the wheel/panel had been pressed (same unprotected
  *  broadcast the MCU sends) — lets us drive the service's own dispatch table. */
 export function nwdSendPanelKey(key: number): void { native?.sendPanelKey?.(key); }

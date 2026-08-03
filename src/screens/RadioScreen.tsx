@@ -25,6 +25,7 @@ import {
   Platform,
   StatusBar,
   StyleSheet,
+  useColorScheme,
   View,
 } from 'react-native';
 import { useKeepAwake }       from 'expo-keep-awake';
@@ -33,9 +34,9 @@ import type { RootStackParamList }     from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { createBackend } from '../services/UberSDRAdapter';
-import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, onNwd, PANEL_KEY } from '../services/nwdRadio';
+import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, onNwd, PANEL_KEY, panelKeyName } from '../services/nwdRadio';
 import { createNwdRdsDecoder } from '../services/nwdRds';
-import { diag, isDiagEnabled } from '../services/diag';
+import { diag, isDiagEnabled, isDiagOverlayEnabled, subscribeDiagPrefs } from '../services/diag';
 import { startMotion, stopMotion } from '../services/motion';
 import { startGpsFix, stopGpsFix } from '../services/gps';
 import { KiwiAdapter } from '../services/KiwiAdapter';
@@ -72,6 +73,8 @@ import { fmNowPlaying } from '../services/nowPlaying';
 import { ptyLabel } from '../services/ptyLabels';
 import { getCarAutostart, setCarAutostart } from '../services/carMode';
 import CarFmFace, { type CarFmPreset } from '../components/CarFmFace';
+import DiagOverlay from '../components/carfm/DiagOverlay';
+import { DARK, LIGHT } from '../components/carfm/tokens';
 import { identifyByPi, initLogoService, consumeSharedLogo, getNearbyStations, callsignForFreq, estimatedSignalDbForFreq } from '../services/stationFinder';
 import { warmStationLogos } from '../components/carfm/LogoTile';
 import type { StationIdentity } from '../services/stationTypes';
@@ -2129,6 +2132,13 @@ export default function RadioScreen({ route, navigation }: Props) {
   // null = never heard, so `system` still falls back to useColorScheme().
   const [fmIllNight, setFmIllNight] = useState<boolean | null>(null);
 
+  // Mirror the tail of the tuner log onto the face. Off by default; the settings
+  // toggle drives it, and the persisted value arrives after mount, so this
+  // subscribes rather than reading once.
+  const [diagOverlay, setDiagOverlay] = useState(isDiagOverlayEnabled());
+  useEffect(() => subscribeDiagPrefs(() => setDiagOverlay(isDiagOverlayEnabled())), []);
+  const osScheme = useColorScheme();
+
   // Listen for the headlights on EVERY backend, not just NWD. This used to be
   // registered only inside the NWD connect path, which is gated on a tunerless
   // launch — so an RTL-SDR session never heard the broadcast and stayed light all
@@ -2530,7 +2540,11 @@ export default function RadioScreen({ route, navigation }: Props) {
       // right after makes the APP's order win — including refusing to walk into
       // the phantom slots past the end of the user's list.
       subs.push(onNwd('NwdPanelKey', (p) => {
-        diag(`panel key ${p.key}${p.key === PANEL_KEY.PRESET_NEXT ? ' (preset next)' : p.key === PANEL_KEY.PRESET_PREV ? ' (preset prev)' : ''}`);
+        // Name EVERY key the dispatch table knows, not just the two we act on:
+        // an unnamed line then means "the MCU sent a code we have never
+        // identified", which is what the diagnostics overlay highlights.
+        const keyName = panelKeyName(p.key);
+        diag(`panel key ${p.key}${keyName ? ` (${keyName})` : ''}`);
         if (p.key === PANEL_KEY.PRESET_NEXT) fmHwStepRef.current?.(1);
         else if (p.key === PANEL_KEY.PRESET_PREV) fmHwStepRef.current?.(-1);
       }));
@@ -2802,6 +2816,16 @@ export default function RadioScreen({ route, navigation }: Props) {
         hardwareStep={fmHwStep}
         device={fmDevice}
       />
+
+      {/* Tuner log tail, on the face. Off unless both diagnostics toggles are on;
+          never interactive. Follows the same day/night resolution as the face so
+          it doesn't glare at night. */}
+      {diagOverlay ? (
+        <DiagOverlay pal={
+          (fmThemeEffective === 'dark' || (fmThemeEffective === 'system' && osScheme === 'dark'))
+            ? DARK : LIGHT
+        } />
+      ) : null}
     </View>
   );
 }
