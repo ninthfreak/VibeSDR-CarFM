@@ -980,3 +980,92 @@ with nothing in it — both sentinels are observed on device and both are skippe
   stationary care as the strength read that cut the audio.
 - **Panel key `14` is unmapped.** Eight occurrences, in bursts of two and three,
   absent from the decompiled dispatch table. Unidentified.
+
+---
+
+## Signal strength: the map is now complete (decompile, 2026-08-03)
+
+Re-ran androguard over the pulled `service.apk`. This closes the question of
+*where to look* and leaves exactly one candidate, much better understood.
+
+### `getRadioRDSStrengthArm` should be abandoned, not retried
+
+An xref over the whole service found **no callers**. Nothing in the vendor's own
+code invokes it — not `AWNative`, not `ArmRadioManager`, not `NewRdsManager`.
+There is no usage model to copy, which is exactly why the probe that passed it
+0..3 was flying blind and cut the audio. Retrying it means guessing an argument
+convention that the vendor itself never exercises.
+
+### The seek route is the vendor's own idiom, and the packing is confirmed
+
+`AWNative.seek(int)` decompiles to:
+
+```java
+int packed   = NwdFmManager.seek(frequency);          // the framework call
+int strength = getFreAndStrength(packed, 1);
+int freq     = getFreAndStrength(packed, 0);
+return (freq == frequency) ? strength : 0;            // 0 == "it moved, distrust"
+```
+
+and `getFreAndStrength(v, sel)` formats `v` as `%08x`, taking the **last four hex
+digits as the frequency and the first four as the strength** — so
+`strength = (packed >>> 16) & 0xffff`, `freq = packed & 0xffff`.
+
+The decisive detail is in `NewRdsManager.getOtherGoodStation()`, the AF-following
+routine. It calls `AWNative.seek(afFreq)` on each candidate alternative
+frequency, compares the returned strength against `RADIO_FM_STOP`, and then ends
+with:
+
+```java
+AWNative.seek(mCurrentFrequency.getFrequency());   // restore
+```
+
+**The vendor calls seek with the frequency it is already on, as a no-op return to
+where it was.** The `freq == frequency` guard in the wrapper exists precisely to
+answer "did the tuner stay put". That is the pattern CarFM should copy:
+`NwdFmManager.seek(rawCurrentFrequency)`, unpack, and trust the strength only
+when the low half comes back equal to what was asked.
+
+Still a command, and it still needs a stationary test on a manual button with
+someone listening — the naming rule from §9a has not changed. But it is no longer
+a guess: it is the call the vendor makes, with the argument the vendor uses, for
+the purpose we want.
+
+`RADIO_FM_STOP`, `RADIO_DX_FM_STOP` and `RADIO_LOC_FM_STOP` are all set at
+runtime rather than compiled in, so the seek-stop threshold has to be observed
+rather than read out of the APK.
+
+### Everything else is closed
+
+- **AIDL `RadioFeature`** — 30 methods, none of them a level.
+- **AIDL `RadioCallback`** — 14 callbacks, no signal notify. The one candidate,
+  `notifyCurrentFrequency`'s `arg`, was tested on device and is the preset index.
+- **`Frequency` parcelable** — `band`, `psName`, `freq`. No strength field.
+- **`NwdFmManager.getCurrentFrequency()`** — `0` in all five probes of
+  2026-08-03, so it is not a second source of the packed value.
+- **`RadioJsonNative.queryRssi()`** — exists in the APK but belongs to the JSON /
+  Si4792x variant, which is absent on this unit (see task #43).
+- **The other 50 declared methods** are setters, commands, or non-level getters.
+
+### A measured bar we can build today, with no hardware access
+
+Raw RDS groups already cross the bridge, and their health is a real signal-quality
+measure — unlike the current meter, which is a GPS-and-database estimate that
+freezes at tune time and resolves to nothing at all on a unit with no GPS fix.
+
+Two quantities, both free:
+
+- **Group arrival rate.** RDS runs at a fixed ~11.4 groups/s, so a shortfall means
+  the demodulator is losing sync. The probe bursts of 2026-08-03 show the spread
+  plainly: 8 of 8 null on 102.1 (a channel that produced nothing all session),
+  5 of 8 null on 88.7 during the stretch with the stereo flapping and the RDS
+  expiries, 0 of 8 null on 105.9, 101.5 and 88.7 when they were solid.
+- **Block-A error rate.** The fraction of groups whose PI does not match the
+  confirmed PI. The decoder already computes this to drop them; it just discards
+  the count.
+
+Add the stereo pilot flag and that is a three-input quality bar. It saturates —
+a strong and a very strong station both give zero errors — so it is a bottom-half
+meter, honest about weak and blind about excellent. It should be labelled as RDS
+quality, not as dBµV, which would also retire the fabricated tuner diagnostics of
+audit finding 25 and the frozen meter of finding 17.
