@@ -595,12 +595,23 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     private val nwdFmGetters = listOf(
         "getRadioRDSFunArm" to "1 = hardware supports RDS",
         "getRadioRDSDataArm" to "16 hex chars = one raw RDS group",
-        "getCurrentFrequency" to "frequency, possibly packed with strength",
-        "getStationStereoState" to "real per-station stereo (vs the stuck isStreroOn)",
+        // Reads 0 on this unit in all five probes of 2026-08-03, on four
+        // different stations with strong signal. Not implemented here, and NOT
+        // the source of the packed freq+strength int — that is the RETURN of
+        // NwdFmManager.seek(frequency); see the findings doc.
+        "getCurrentFrequency" to "0 on this unit — not implemented",
+        // Was labelled "real per-station stereo (vs the stuck isStreroOn)". It is
+        // not: it read 1 in all five probes, including on 102.1, a channel with
+        // no RDS at all and the AIDL stereo callback flapping. Stuck true exactly
+        // like isStreroOn(), and must not be used to drive the pill.
+        "getStationStereoState" to "reads 1 always — stuck, like isStreroOn()",
         "getStereo" to "stereo mode flag",
         "getLoc" to "local/DX",
-        "getRadioModuleArm" to "which module the MCU reports",
-        "getVolue" to "vendor's spelling; a cheap reachability canary",
+        "getRadioModuleArm" to "which module the MCU reports (12 here)",
+        // Was called a reachability canary. It reads 0 while FM is audibly
+        // playing, so it is neither the head unit's volume nor evidence of
+        // anything working.
+        "getVolue" to "vendor's spelling; reads 0 even while playing",
     )
 
     /** One RDS read almost always returns the all-zero "no data this poll"
@@ -621,18 +632,20 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         return m.invoke(null)
     }
 
-    /** Same, for a single-int getter. Used only for getRadioRDSStrengthArm(int),
-     *  whose argument is undocumented — the probe sweeps a few values rather than
-     *  guessing one. Still a getter: nothing here commands the tuner. */
-    private fun nwdFmGetInt(name: String, arg: Int): Any? {
-        val cls = Class.forName(nwdFmManagerClass)
-        val m = try {
-            cls.getMethod(name, Int::class.javaPrimitiveType)
-        } catch (_: NoSuchMethodException) {
-            cls.getDeclaredMethod(name, Int::class.javaPrimitiveType).apply { isAccessible = true }
-        }
-        return m.invoke(null, arg)
-    }
+    // DELETED: nwdFmGetInt(name, arg).
+    //
+    // It existed for getRadioRDSStrengthArm(int) and carried the comment "Still a
+    // getter: nothing here commands the tuner". That was wrong and it cost the
+    // audio — sweeping arguments 0..3 cut the sound instantly and returned 63
+    // (0x3F, all ones) for every one of them. The 2026-08-03 decompile then found
+    // that method has NO callers anywhere in the vendor service, so there is no
+    // usage model to copy and nothing to retry against.
+    //
+    // Left absent deliberately: an int-arg reflection helper on this class is an
+    // invitation to call the next plausible-looking method the same way. The
+    // strength path that IS evidenced is NwdFmManager.seek(rawFrequency), which
+    // is a command and belongs behind a manual, stationary test — not behind a
+    // helper named "get".
 
     /** Read an MCU settings key, trying each table in turn. Read-only. */
     private fun settingsRead(key: String): String {
