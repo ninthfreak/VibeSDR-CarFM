@@ -1069,3 +1069,42 @@ a strong and a very strong station both give zero errors — so it is a bottom-h
 meter, honest about weak and blind about excellent. It should be labelled as RDS
 quality, not as dBµV, which would also retire the fabricated tuner diagnostics of
 audit finding 25 and the frozen meter of finding 17.
+
+### The controlled experiment, and how to run it
+
+Built 2026-08-03. Settings → DIAGNOSTICS → **"Test signal level (commands the
+tuner — park first)"**, in amber rather than blue, below the three blue probe
+rows. It asks for confirmation before doing anything.
+
+It is deliberately NOT part of `probe()`. `scheduleProbe()` fires that one
+automatically a few seconds after every retune while diagnostics are on, and
+everything in it is a passive read. This is a command; putting it there would run
+it unattended on every tune, which is exactly how the audio was cut on
+2026-08-01.
+
+One press does one thing:
+
+```
+asked   = RadioFeature.getCurrentFrequency().freq      // live, never cached
+packed  = NwdFmManager.seek(asked)                     // the one command
+strength = (packed ushr 16) and 0xFFFF
+landed   = packed and 0xFFFF
+landedOk = (landed == asked)                           // AWNative's own check
+after    = RadioFeature.getCurrentFrequency().freq     // independent confirmation
+```
+
+`landedOk` is the safety verdict and it is the same comparison `AWNative.seek`
+makes before it trusts a level. `after` is the binder's independent account of
+where the tuner ended up, because `landed` is only the seek's report of itself.
+
+**Procedure.** Parked, engine on, radio audible, on a strong station. Press once,
+listen. Then press again on a weak station: a number that does not move between
+a strong and a weak station is a constant, not a measurement — which is the
+failure mode that `63` for all four arguments looked like on the earlier attempt.
+
+**If the audio drops**, the seek route goes the way of `getRadioRDSStrengthArm`
+and the RDS-quality bar above becomes the answer instead.
+
+`RADIO_FM_STOP`, the threshold the service compares a seek strength against, is
+set at runtime rather than compiled into the APK, so the expected range has to
+come from this test rather than from the decompile.

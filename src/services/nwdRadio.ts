@@ -25,6 +25,7 @@ type NwdNative = {
   sendPanelKey?(key: number): void;
   probeJsonHardware?(): Promise<string>;
   probeNwdFmManager?(): Promise<string>;
+  seekStrengthTest?(): Promise<string>;
   startIlluminationWatch?(): void;
   requestAudioSource(): void;
   addListener(eventName: string): void;
@@ -177,6 +178,24 @@ export async function nwdProbeJsonHardware(): Promise<string> {
 export async function nwdProbeFmManager(): Promise<string> {
   try { return (await native?.probeNwdFmManager?.()) ?? 'module unavailable'; }
   catch (e) { return `probe threw: ${String((e as Error)?.message ?? e)}`; }
+}
+
+/**
+ * THE ONE COMMAND IN THIS FILE. Calls `NwdFmManager.seek(currentRawFrequency)`
+ * exactly once and reports the packed return: strength in the high 16 bits,
+ * the frequency it landed on in the low 16.
+ *
+ * Deliberately NOT part of nwdProbe(), which auto-fires a few seconds after every
+ * retune while diagnostics are on. This retunes the front end — to the frequency
+ * it is already on, which is how the vendor's own AF follower restores itself
+ * after scanning, but a retune nonetheless. Manual, single-shot, stationary, with
+ * someone listening. See docs/BUILTIN-TUNER-FINDINGS.md and task #58.
+ *
+ * Never rejects: an exception from the vendor class IS the result.
+ */
+export async function nwdSeekStrengthTest(): Promise<string> {
+  try { return (await native?.seekStrengthTest?.()) ?? 'module unavailable'; }
+  catch (e) { return `seek test threw: ${String((e as Error)?.message ?? e)}`; }
 }
 
 /** Subscribe to a native NWD event. Returns an unsubscribe fn (no-op if the

@@ -20,7 +20,8 @@ import { snapshotDate, clearAllStationPrefs } from '../../services/stationDb';
 import { clearAllLogoFiles } from '../../services/logoStore';
 import { clearLogoCache } from '../../services/stationLogoCache';
 import { invalidateLogoTile, invalidateStationDisplay } from './LogoTile';
-import { isNwdAvailable, nwdRequestAudioSource, nwdProbe, nwdProbeJsonHardware, nwdProbeFmManager } from '../../services/nwdRadio';
+import { isNwdAvailable, nwdRequestAudioSource, nwdProbe, nwdProbeJsonHardware, nwdProbeFmManager,
+         nwdSeekStrengthTest } from '../../services/nwdRadio';
 import { diag, isDiagEnabled, setDiagEnabled, isDiagOverlayEnabled, setDiagOverlayEnabled,
          diagLines, diagText, clearDiag, subscribeDiag } from '../../services/diag';
 
@@ -121,6 +122,32 @@ export default function SettingsPanel({
     diag('— manual probe —');
     const dump = await nwdProbe();
     for (const l of dump.split('\n')) if (l.trim()) diag(l);
+  }, []);
+
+  // THE SIGNAL-LEVEL EXPERIMENT (task #58). Unlike every other row here this one
+  // COMMANDS the tuner, so it confirms first and runs exactly once per press —
+  // never on a timer, never folded into the auto-probe. See nwdSeekStrengthTest.
+  const runSeekStrengthTest = useCallback(() => {
+    Alert.alert(
+      'Test signal level?',
+      'This retunes the tuner to the frequency it is already on, which is how the '
+      + 'vendor reads a level. It should be silent, but it is a command — an earlier '
+      + 'attempt at a different method cut the audio.\n\n'
+      + 'Park first, keep the radio playing, and listen while it runs.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Run once',
+          style: 'destructive',
+          onPress: async () => {
+            if (!isDiagEnabled()) setDiagEnabled(true);
+            diag('— seek strength test —');
+            const dump = await nwdSeekStrengthTest();
+            for (const l of dump.split('\n')) if (l.trim()) diag(l);
+          },
+        },
+      ],
+    );
   }, []);
 
   const Local = (NativeModules as any).VibeLocalSDR as
@@ -465,6 +492,20 @@ export default function SettingsPanel({
                         accessibilityRole="button" accessibilityLabel="Probe the NwdFmManager transport for signal, raw RDS and stereo"
                       >
                         <Text style={[styles.clearText, { color: pal.blue }]}>Probe NwdFmManager (signal · raw RDS · stereo)</Text>
+                        <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
+                      </Pressable>
+                      {/* AMBER, not blue, and it asks first. Everything above is a
+                          passive read that the auto-probe also fires by itself;
+                          this one commands the tuner and only ever runs on a
+                          deliberate press. The colour difference is the point. */}
+                      <View style={[styles.divider, { backgroundColor: pal.border }]} />
+                      <Pressable
+                        style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.amberFill }]}
+                        onPress={runSeekStrengthTest}
+                        accessibilityRole="button"
+                        accessibilityLabel="Test signal level — commands the tuner, park first"
+                      >
+                        <Text style={[styles.clearText, { color: pal.amber }]}>Test signal level (commands the tuner — park first)</Text>
                         <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                       </Pressable>
                     </>

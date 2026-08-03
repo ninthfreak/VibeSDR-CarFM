@@ -647,6 +647,103 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     // is a command and belongs behind a manual, stationary test — not behind a
     // helper named "get".
 
+    // ── The signal-level experiment (task #58) ───────────────────────────────
+    //
+    // DELIBERATELY NOT PART OF probe(). probe() is fired automatically by
+    // scheduleProbe() a few seconds after every retune while diagnostics are on,
+    // and everything in it is a passive read. This is a COMMAND. Putting it there
+    // would run it unattended on every tune, which is precisely how the audio was
+    // cut on 2026-08-01.
+    //
+    // WHAT IT DOES, and why this argument and no other. From the service
+    // decompile of 2026-08-03:
+    //
+    //   AWNative.seek(int frequency) {
+    //       int packed   = NwdFmManager.seek(frequency);
+    //       int strength = getFreAndStrength(packed, 1);   // high 4 hex digits
+    //       int freq     = getFreAndStrength(packed, 0);   // low  4 hex digits
+    //       return (freq == frequency) ? strength : 0;     // 0 = it moved, distrust
+    //   }
+    //
+    // and NewRdsManager.getOtherGoodStation() — the alternative-frequency
+    // follower — ends by calling AWNative.seek(mCurrentFrequency.getFrequency())
+    // to return to where it started. So the vendor itself calls seek with the
+    // frequency it is ALREADY ON, as a no-op restore, and the equality check
+    // exists to confirm the tuner stayed put. That is the call this makes: one
+    // invocation, at the current raw frequency, per press.
+    //
+    // It is still a command. It may mute briefly even when it works, and it could
+    // behave like getRadioRDSStrengthArm did. Hence: manual, single-shot,
+    // stationary, with someone listening.
+    private val nwdFmSeek = "seek"
+
+    /** One `NwdFmManager.seek(currentRawFrequency)`, reported verbatim.
+     *
+     *  Resolves a human-readable block for the tuner log — never rejects, because
+     *  the failure modes are the result. `landedOk` is the safety verdict: the
+     *  low half of the return must equal the frequency we asked for. */
+    @ReactMethod
+    fun seekStrengthTest(promise: Promise) {
+        val sb = StringBuilder()
+        sb.append("SEEK STRENGTH TEST (NwdFmManager.seek — this is a COMMAND)\n")
+        val r = radio
+        if (r == null) { promise.resolve(sb.append("  not connected\n").toString()); return }
+
+        // Ask the tuner where it is, in RAW units, right now. Never a cached value:
+        // the whole test is "measure at the frequency we are on", and a stale
+        // number would command a real retune.
+        val asked = try {
+            val f: Frequency? = r.getCurrentFrequency()
+            if (f == null) { promise.resolve(sb.append("  getCurrentFrequency() returned null — aborted\n").toString()); return }
+            f.freq
+        } catch (e: Throwable) {
+            promise.resolve(sb.append("  getCurrentFrequency() threw ${e.javaClass.simpleName} — aborted\n").toString()); return
+        }
+        if (asked <= 0) {
+            promise.resolve(sb.append("  current frequency reads $asked — refusing to seek to that\n").toString()); return
+        }
+        sb.append("  asking for raw freq = ").append(asked)
+            .append("  (~").append(asked.toDouble() / freqMult).append(" MHz)\n")
+
+        val packed = try {
+            val cls = Class.forName(nwdFmManagerClass)
+            val m = try {
+                cls.getMethod(nwdFmSeek, Int::class.javaPrimitiveType)
+            } catch (_: NoSuchMethodException) {
+                cls.getDeclaredMethod(nwdFmSeek, Int::class.javaPrimitiveType).apply { isAccessible = true }
+            }
+            m.invoke(null, asked)
+        } catch (e: Throwable) {
+            val cause = (e as? java.lang.reflect.InvocationTargetException)?.cause ?: e
+            promise.resolve(sb.append("  seek() threw ${cause.javaClass.name}: ${cause.message}\n").toString()); return
+        }
+
+        if (packed !is Int) {
+            promise.resolve(sb.append("  seek() returned ").append(packed?.javaClass?.name ?: "null")
+                .append(", not an Int — layout unknown\n").toString()); return
+        }
+
+        val strength = (packed ushr 16) and 0xFFFF
+        val landed = packed and 0xFFFF
+        sb.append("  raw return  = ").append(packed)
+            // Integer.toHexString + padStart rather than String.format: the
+            // decompiled getFreAndStrength splits on the %08x form, so the padded
+            // eight digits are what makes the high/low halves readable by eye.
+            .append("  (0x").append(Integer.toHexString(packed).padStart(8, '0')).append(")\n")
+        sb.append("  strength    = ").append(strength).append("   // high 16 bits\n")
+        sb.append("  landed freq = ").append(landed).append("   // low 16 bits\n")
+        sb.append("  landedOk    = ").append(landed == asked)
+            .append(if (landed == asked) "   // stayed put — strength is trustworthy\n"
+                    else "   // MOVED. AWNative would return 0 here; distrust the level\n")
+        // Did the tuner really stay? getCurrentFrequency() is the independent
+        // check — `landed` is the seek's own account of itself.
+        val after = try { r.getCurrentFrequency()?.freq ?: -1 } catch (_: Throwable) { -1 }
+        sb.append("  freq after  = ").append(after)
+            .append(if (after == asked) "   // confirmed by the binder\n" else "   // CHANGED\n")
+        sb.append("  >>> Is the audio still playing? That is the other half of this test.\n")
+        promise.resolve(sb.toString())
+    }
+
     /** Read an MCU settings key, trying each table in turn. Read-only. */
     private fun settingsRead(key: String): String {
         val cr = reactContext.contentResolver
