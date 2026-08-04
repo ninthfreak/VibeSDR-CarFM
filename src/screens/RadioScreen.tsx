@@ -412,9 +412,20 @@ export default function RadioScreen({ route, navigation }: Props) {
   const rdsDecoder = useRef(createNwdRdsDecoder());
   /** When the last raw group arrived, ms. 0 = none since the last expiry. */
   const lastRdsAtRef = useRef(0);
-  /** How long RDS survives without a group before the face drops it. Groups run
-   *  ~11/s while the carrier is present, so twelve seconds is far past noise. */
-  const RDS_STALE_MS = 12_000;
+  /** The face was blanked by an expiry but the DECODER still holds the station.
+   *  The next group republishes it verbatim instead of re-acquiring from air. */
+  const rdsStaleRef = useRef(false);
+  /**
+   * How long RDS survives without a group before the face drops it.
+   *
+   * Was twelve seconds, which the drive of 2026-08-04 showed is far too eager:
+   * of fifteen expiries, eight had groups back within ten seconds and one within
+   * ONE second. Every one of those blanked the plate for a moment over a station
+   * that had not actually gone anywhere. Twenty-five seconds still catches the
+   * genuine losses in that same log — the 36s, 60s and 68s gaps — while
+   * suppressing all eight of the spurious ones.
+   */
+  const RDS_STALE_MS = 25_000;
 
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
   // True while the head unit's built-in NWD tuner is driving the face (a
@@ -2033,8 +2044,14 @@ export default function RadioScreen({ route, navigation }: Props) {
   }, [status.mode, status.frequency, liveStation.pi, liveStation.name]);
 
   // Callsign/city hint shown only when PS text is absent (PS always wins, §6).
+  //
+  // `confident` is what that flag is FOR and this was the only consumer, which
+  // read the callsign and ignored the verdict — so a PI the identifier had
+  // explicitly refused to vouch for was still painted over the hero. Belt and
+  // braces with identifyByPi's own early return: either alone would have kept
+  // WBGX off the face on 2026-08-04.
   const fmCallsignHint = useMemo<string | undefined>(() => {
-    if (liveStation.name || !piIdentity?.callsign) return undefined;
+    if (liveStation.name || !piIdentity?.callsign || !piIdentity.confident) return undefined;
     const city = piIdentity.station?.city;
     return city ? `${piIdentity.callsign} · ${city}` : piIdentity.callsign;
   }, [liveStation.name, piIdentity]);
@@ -2500,6 +2517,9 @@ export default function RadioScreen({ route, navigation }: Props) {
         // Restart the staleness clock at the retune, so the new station gets a
         // full window to acquire instead of inheriting the old one's countdown.
         lastRdsAtRef.current = Date.now();
+        // A retune outranks a pending expiry: there is nothing worth restoring,
+        // the decoder was just emptied.
+        rdsStaleRef.current = false;
         diag(`freq ${p.mhz.toFixed(1)} arg=${p.arg} PS='${p.ps}'`);
         scheduleProbe(p.mhz);
       }));
@@ -2512,7 +2532,16 @@ export default function RadioScreen({ route, navigation }: Props) {
         // carrier is still there, even when consensus rejects it and push()
         // returns null. This is what the staleness sweep in the poll measures.
         lastRdsAtRef.current = Date.now();
-        const s = rdsDecoder.current.push(p.hex);
+        const pushed = rdsDecoder.current.push(p.hex);
+        // The carrier is back after an expiry. The decoder never lost the station,
+        // so restore what it already holds rather than waiting to re-acquire —
+        // push() returns null when nothing changed, which after an expiry is the
+        // normal case and would otherwise leave the plate blank indefinitely.
+        let s = pushed;
+        if (rdsStaleRef.current) {
+          rdsStaleRef.current = false;
+          s = rdsDecoder.current.state();
+        }
         if (!s) return;
         setLiveStation((prev) => ({
           ...prev,
@@ -2597,12 +2626,24 @@ export default function RadioScreen({ route, navigation }: Props) {
         // the FCC-database fallback, which is by design.
         if (lastRdsAtRef.current && Date.now() - lastRdsAtRef.current > RDS_STALE_MS) {
           lastRdsAtRef.current = 0;
-          rdsDecoder.current.reset();
+          // DO NOT reset the decoder. Expiry means "the carrier went quiet", not
+          // "we are on a different station" — a retune is what means that, and
+          // the frequency handler already resets there.
+          //
+          // Resetting here was making the corruption worse, not better. A reset
+          // clears rtPublished, which re-opens the instant-publish path for the
+          // first complete assembly after the signal returns — and that assembly
+          // is being received in exactly the marginal conditions that caused the
+          // gap. On 2026-08-04, eight of the eleven corrupt RadioText changes on
+          // WERN were first fills after an expiry. Keeping the decoder means the
+          // confirmed text comes straight back instead of being re-acquired from
+          // the worst air of the drive.
+          rdsStaleRef.current = true;
           setLiveStation((prev) =>
             (prev.name || prev.text || prev.pty !== undefined || prev.tp || prev.ta || prev.pi)
               ? { ...prev, name: undefined, text: undefined, pty: undefined, tp: false, ta: false, pi: undefined }
               : prev);
-          diag('RDS expired — no group for 12s');
+          diag(`RDS expired — no group for ${RDS_STALE_MS / 1000}s`);
         }
         // The poll does NOT drive PS / RadioText / PTY.
         //

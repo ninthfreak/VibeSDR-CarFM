@@ -46,6 +46,27 @@ const BLANK: RdsState = { pi: null, pty: null, tp: false, ta: false, ps: '', rt:
  *  block corruption never clears it. */
 const PI_CONFIRM = 3;
 
+/**
+ * Identical PIs required to DISPLACE a PI already trusted — much higher than the
+ * three it takes to acquire one from nothing, and deliberately so.
+ *
+ * Acquisition should be fast: there is no incumbent to protect and the sooner PI
+ * lands the sooner the station has a name. Displacement should be slow, because
+ * the decoder is almost never the thing that notices a station change — the
+ * screen calls reset() on every frequency event, so a retune has already emptied
+ * this decoder before a single group of the new station arrives. What is left for
+ * this path to catch is a station changing UNDER a stationary dial, which happens
+ * on a long drive and happens over many seconds.
+ *
+ * Three was not enough. On 2026-08-04, WERN's 0xA6FF was misread as 0x57FF three
+ * times in a row during a fade, three separate times in one commute — enough to
+ * clear the old threshold, wipe the accumulated PS and RadioText, and put the
+ * formula's rendering of that number, "WBGX", on the hero in place of the logo.
+ * Twelve groups is a little over a second of solid contradicting data, which a
+ * fade-induced burst does not sustain and a genuine new station does trivially.
+ */
+const PI_DISPLACE = 12;
+
 /** RDS uses a restricted character set; anything unprintable becomes a space so
  *  a corrupt block degrades the text rather than injecting control codes. */
 function chr(byte: number): string {
@@ -140,12 +161,12 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     } else if (a !== piConfirmed) {
       if (a === piPending) piPendingCount++;
       else { piPending = a; piPendingCount = 1; }
-      if (piPendingCount < PI_CONFIRM) return null;   // corrupt block — drop it
+      if (piPendingCount < PI_DISPLACE) return null;  // corrupt block — drop it
       // Persistent disagreement: a real station change.
       reset();
       piConfirmed = a;
       piPending = a;
-      piPendingCount = PI_CONFIRM;
+      piPendingCount = PI_DISPLACE;
       st.pi = a;
     } else {
       piPendingCount = 0;   // a good group resets the dissent counter

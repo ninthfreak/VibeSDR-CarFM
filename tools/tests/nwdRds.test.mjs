@@ -200,10 +200,35 @@ const RT_FULL = [...RT_LED, ...RT_PAD];
   eq('PS is set before the station changes', d.state().ps, 'WERN');
   d.push('19e204c0e0cd6c75');
   eq('ONE group with a new PI is not believed', d.state().ps, 'WERN');
+
+  // REGRESSION — three is enough to ACQUIRE a PI and must not be enough to
+  // DISPLACE one. On 2026-08-04 a fade turned WERN's a6ff into 57ff three times
+  // running, three separate times in one commute; under the old threshold that
+  // wiped the station and put the formula's rendering of it, "WBGX", on the hero.
   d.push('19e204c0e0cd6c75');
   d.push('19e204c0e0cd6c75');
+  eq('three groups no longer displace a trusted PI', d.state().pi, 0xa6ff);
+  eq('  ...and the station text survives the burst', d.state().ps, 'WERN');
+
+  // Twelve does displace it: a real new station carries its PI in EVERY group.
+  for (let i = 0; i < 9; i++) d.push('19e204c0e0cd6c75');
   eq('a PERSISTENT new PI is a station change', d.state().pi, 0x19e2);
   eq('and it clears the previous station text', d.state().ps, '');
+}
+
+// REGRESSION — the burst must not need to be contiguous to be REJECTED, and a
+// good group in the middle resets the dissent counter, so an intermittent
+// corruption never accumulates its way to a displacement.
+{
+  const d = prime(createNwdRdsDecoder(), PS_WERN[0]);
+  feed(d, PS_WERN, 2);
+  for (let i = 0; i < 6; i++) {
+    d.push('19e204c0e0cd6c75');   // bad
+    d.push('19e204c0e0cd6c75');   // bad
+    d.push(PS_WERN[0]);           // the real station, which zeroes the counter
+  }
+  eq('scattered bursts never add up to a station change', d.state().pi, 0xa6ff);
+  eq('  ...and the name is untouched', d.state().ps, 'WERN');
 }
 
 {
