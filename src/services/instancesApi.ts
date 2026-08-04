@@ -50,6 +50,57 @@ let _cacheLat:  number | null = null;
 let _cacheLon:  number | null = null;
 const CACHE_TTL_MS = 60_000;
 
+export interface DetailedLocation {
+  lat: number; lon: number;
+  accM?: number; speedMs?: number; headingDeg?: number; altM?: number;
+  provider?: string;
+  /** Seconds since the fix was taken. A stale fix makes distance and bearing to
+   *  a transmitter fiction, so debug mode records it rather than hiding it. */
+  fixAgeS?: number;
+  /** True when this came from a live update rather than the last-known cache. */
+  live?: boolean;
+}
+
+/**
+ * A position good enough to correlate against radio reception — live where
+ * possible, with accuracy, speed, heading and the age of the fix.
+ *
+ * NOT because getUserLocation() below is broken — it is not. An earlier version
+ * of this comment claimed it was, on the strength of the `location: null` line in
+ * the drive logs. That line is logged ONCE, about a second after launch, when the
+ * last-known cache is naturally still empty on a cold start; the nearby-station
+ * search works later in the same drive, which is the evidence that settles it.
+ *
+ * What getUserLocation() genuinely cannot do is support this dataset. It asks for
+ * COARSE only, reads last-known and never requests a live update, and returns
+ * lat/lon and nothing else. Correlating reception at highway speed needs the
+ * accuracy, the speed and heading, and above all the AGE of the fix — a
+ * last-known position minutes old turns distance and bearing to a transmitter
+ * into fiction while the car keeps moving.
+ *
+ * Never throws; resolves null when there is genuinely nothing.
+ */
+export async function getDetailedLocation(timeoutMs = 8000): Promise<DetailedLocation | null> {
+  try {
+    if (Platform.OS === 'android') {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        {
+          title: 'Location for reception logging',
+          message: 'CarFM records where each signal reading was taken so the measured '
+            + 'level can be compared against what the station database predicts. It stays on-device.',
+          buttonPositive: 'OK',
+        },
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) return null;
+    }
+    const mod = NativeModules.VibePowerModule as
+      | { getLocationDetailed?: (ms: number) => Promise<DetailedLocation | null> }
+      | undefined;
+    return (await mod?.getLocationDetailed?.(timeoutMs)) ?? null;
+  } catch { return null; }
+}
+
 export async function getUserLocation(): Promise<{ lat: number; lon: number } | null> {
   // navigator.geolocation does NOT exist in React Native — the old code
   // always resolved null, never prompted, and the directory fell back to

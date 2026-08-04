@@ -1108,3 +1108,77 @@ and the RDS-quality bar above becomes the answer instead.
 `RADIO_FM_STOP`, the threshold the service compares a seek strength against, is
 set at runtime rather than compiled into the APK, so the expected range has to
 come from this test rather than from the decompile.
+
+---
+
+## SIGNAL STRENGTH: SOLVED (2026-08-04)
+
+`NwdFmManager.seek(rawCurrentFrequency)` works. Twenty presses across a driveway
+session and a commute, `landedOk = true` on every one, the binder confirming the
+frequency afterwards every time, no audio interruption, and RDS groups continuing
+to arrive through each test.
+
+The value is real, not a constant. It moves with the station and with position:
+
+| Dial | driveway (Madison) | near Janesville | at work |
+|---|---|---|---|
+| 88.7 WERN | — | 55, 55 | 53 |
+| 94.9 WOLX | — | 50 | 47 |
+| 101.5 WIBA | 62 | 49, 50 | 54 |
+| 102.1 WQLF | 40 | 40, 41, 40 | 37 |
+| 104.1 WZEE | 51 | 58 | — |
+| 105.9 WWHG | 54 | 73, 72 | 58 |
+
+105.9 climbing from 54 to 73 on the approach to Janesville, and 101.5 falling
+from 62 to ~50 leaving Madison, are the geography — WWHG is licensed to
+Evansville, WIBA to Sauk City. Observed range so far is **37 to 73**, and the
+high half of the packed int has never exceeded one byte.
+
+Task #58 is answered. `getRadioRDSStrengthArm` stays abandoned.
+
+## Three defects the same drive exposed
+
+### A corrupt PI put a nonexistent station on the hero
+
+At 07:32:30, 07:49:52 and 07:54:55 the decoder published `pi=57ff` on WERN, whose
+real PI is `a6ff`. The formula renders `0x57FF` as **WBGX** — a callsign that
+appears nowhere in the FCC table. The hero dropped WERN's logo for it.
+
+Three independent failures had to line up, and all three are fixed:
+
+1. **Three groups displaced a trusted PI.** `PI_CONFIRM = 3` governed both
+   acquiring a PI and overthrowing one. A fade produced three consecutive
+   corrupt reads, three separate times in one commute. Acquisition still takes
+   three; displacement now takes twelve. This is safe to raise because the
+   decoder is almost never what notices a station change — `RadioScreen` calls
+   `reset()` on every frequency event, so a retune has already emptied it.
+2. **`identifyByPi` returned a callsign with no DB row.** It marked the result
+   not-confident and returned it anyway. The frequency gate could not save it
+   either, because that gate was guarded on `station != null`. No row now means
+   `callsign: null` — the formula turns any 16 bits in the K/W range into four
+   plausible letters, so "it decoded" is not evidence a station exists.
+3. **`fmCallsignHint` ignored `confident`.** It was the only consumer of that
+   flag and it read the callsign without checking the verdict.
+
+### The RDS expiry was firing on stations that had not gone anywhere
+
+Fifteen expiries in one commute. Eight had groups back within ten seconds; one
+within a single second. Twelve seconds is raised to **twenty-five**, which still
+catches the genuine losses in the same log (36s, 60s, 68s).
+
+### The expiry was also causing most of the remaining RadioText corruption
+
+Expiry called `reset()`, which clears `rtPublished` and so re-opens the
+instant-publish path for the first complete assembly after the signal returns —
+an assembly received in exactly the marginal conditions that caused the gap.
+Eight of the eleven corrupt RadioText changes on WERN that day were first fills
+after an expiry.
+
+Expiry no longer resets the decoder. It blanks the face and sets a flag; the
+first group back republishes the decoder's retained state verbatim. A retune
+still resets, because a retune genuinely is a different station.
+
+Counted honestly — as changes of the text, not log lines — WERN's corruption rate
+was 59% on 2026-08-03 and 61% on 2026-08-04, i.e. unchanged. What the repeat rule
+bought was a drop in the NUMBER of changes, 67 to 18, which is why the plate
+reads as stable. The remaining corruption is the two paths above.

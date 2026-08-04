@@ -46,6 +46,27 @@ const BLANK: RdsState = { pi: null, pty: null, tp: false, ta: false, ps: '', rt:
  *  block corruption never clears it. */
 const PI_CONFIRM = 3;
 
+/**
+ * Identical PIs required to DISPLACE a PI already trusted — much higher than the
+ * three it takes to acquire one from nothing, and deliberately so.
+ *
+ * Acquisition should be fast: there is no incumbent to protect and the sooner PI
+ * lands the sooner the station has a name. Displacement should be slow, because
+ * the decoder is almost never the thing that notices a station change — the
+ * screen calls reset() on every frequency event, so a retune has already emptied
+ * this decoder before a single group of the new station arrives. What is left for
+ * this path to catch is a station changing UNDER a stationary dial, which happens
+ * on a long drive and happens over many seconds.
+ *
+ * Three was not enough. On 2026-08-04, WERN's 0xA6FF was misread as 0x57FF three
+ * times in a row during a fade, three separate times in one commute — enough to
+ * clear the old threshold, wipe the accumulated PS and RadioText, and put the
+ * formula's rendering of that number, "WBGX", on the hero in place of the logo.
+ * Twelve groups is a little over a second of solid contradicting data, which a
+ * fade-induced burst does not sustain and a genuine new station does trivially.
+ */
+const PI_DISPLACE = 12;
+
 /** RDS uses a restricted character set; anything unprintable becomes a space so
  *  a corrupt block degrades the text rather than injecting control codes. */
 function chr(byte: number): string {
@@ -60,6 +81,11 @@ export interface NwdRdsDecoder {
   /** Drop all accumulated text. Call on retune: PS/RT belong to the old station. */
   reset(): void;
   state(): RdsState;
+  /** Reception quality since the last resetStats(). `groups` counts well-formed
+   *  non-empty groups; `piMismatch` counts those whose block A did not carry the
+   *  trusted PI, i.e. the block error rate. Untouched by reset(). */
+  stats(): { groups: number; piMismatch: number };
+  resetStats(): void;
 }
 
 export function createNwdRdsDecoder(): NwdRdsDecoder {
@@ -79,6 +105,14 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
   let piConfirmed: number | null = null;// the PI we trust; groups not carrying it are dropped
   let piPending: number | null = null;  // candidate PI awaiting repeats
   let piPendingCount = 0;
+  // Reception-quality counters. The decoder already has to decide whether each
+  // group's block A carries the trusted PI in order to drop the bad ones; it just
+  // threw the tally away. Kept here because block error rate is the most direct
+  // measure of what multipath does to a signal, and nothing else in the app can
+  // see it. Reset independently of the decode state — these belong to a
+  // measurement window, not to a station.
+  let statGroups = 0;
+  let statPiMismatch = 0;
   let ptyPending: number | null = null; // block B is corrupted independently of block A
   let ptyCount = 0;
 
@@ -106,6 +140,7 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     if (typeof hex !== 'string' || hex.length !== 16) return null;
     if (/^0+$/.test(hex)) return null;                 // "no group this poll"
     if (!/^[0-9a-fA-F]{16}$/.test(hex)) return null;
+    statGroups++;   // well-formed and carrying something — counted before any trust gate
 
     const a = parseInt(hex.slice(0, 4), 16);
     const b = parseInt(hex.slice(4, 8), 16);
@@ -138,14 +173,15 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
       piConfirmed = a;
       st.pi = a;
     } else if (a !== piConfirmed) {
+      statPiMismatch++;
       if (a === piPending) piPendingCount++;
       else { piPending = a; piPendingCount = 1; }
-      if (piPendingCount < PI_CONFIRM) return null;   // corrupt block — drop it
+      if (piPendingCount < PI_DISPLACE) return null;  // corrupt block — drop it
       // Persistent disagreement: a real station change.
       reset();
       piConfirmed = a;
       piPending = a;
-      piPendingCount = PI_CONFIRM;
+      piPendingCount = PI_DISPLACE;
       st.pi = a;
     } else {
       piPendingCount = 0;   // a good group resets the dissent counter
@@ -294,5 +330,11 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     return after === before ? null : { ...st };
   };
 
-  return { push, reset, state: () => ({ ...st }) };
+  return {
+    push,
+    reset,
+    state: () => ({ ...st }),
+    stats: () => ({ groups: statGroups, piMismatch: statPiMismatch }),
+    resetStats: () => { statGroups = 0; statPiMismatch = 0; },
+  };
 }

@@ -125,10 +125,22 @@ export async function identifyByPi(
   const rows = await stationsForCallsignBase(base);
   let station = bestStation(rows);
 
+  // NO DB ROW MEANS NO STATION. The formula turns any 16 bits in the K/W range
+  // into four plausible letters, so "it decoded" is not evidence that anything is
+  // out there. On 2026-08-04 a corrupt block A on WERN read 0xA6FF as 0x57FF,
+  // which the formula renders as WBGX — a callsign absent from the entire FCC
+  // table. The old code marked it not-confident and returned it anyway, and the
+  // hero dropped WERN's logo to show it.
+  //
+  // Returning early also repairs the frequency gate below, which was guarded on
+  // `station != null` and so could never fire on exactly this case.
+  if (station == null) {
+    return { pi, callsign: null, confident: false, station: null, note: 'no DB match for computed callsign' };
+  }
+
   let confident = dec.confident && station != null && station.service === 'FM';
   let note = dec.note;
-  if (station == null) note = 'no DB match for computed callsign';
-  else if (station.service !== 'FM') note = `matched a ${station.service} (formula unreliable for translators)`;
+  if (station.service !== 'FM') note = `matched a ${station.service} (formula unreliable for translators)`;
 
   // ── THE DIAL OUTRANKS THE PI ────────────────────────────────────────────────
   // A PI that decodes to a real station on a different frequency is not this

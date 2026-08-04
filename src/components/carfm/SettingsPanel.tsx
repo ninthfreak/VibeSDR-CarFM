@@ -22,6 +22,7 @@ import { clearLogoCache } from '../../services/stationLogoCache';
 import { invalidateLogoTile, invalidateStationDisplay } from './LogoTile';
 import { isNwdAvailable, nwdRequestAudioSource, nwdProbe, nwdProbeJsonHardware, nwdProbeFmManager,
          nwdSeekStrengthTest } from '../../services/nwdRadio';
+import { isDebugMode, setDebugMode } from '../../services/debugMode';
 import { diag, isDiagEnabled, setDiagEnabled, isDiagOverlayEnabled, setDiagOverlayEnabled,
          diagLines, diagText, clearDiag, subscribeDiag } from '../../services/diag';
 
@@ -79,6 +80,7 @@ export default function SettingsPanel({
   const [dataDate, setDataDate] = useState<string | null>(null);
   const [diagOn, setDiagOn] = useState(isDiagEnabled());
   const [diagOverlayOn, setDiagOverlayOn] = useState(isDiagOverlayEnabled());
+  const [debugOn, setDebugOn] = useState(isDebugMode());
   const [, forceTick] = useState(0);
   // Six taps on the about line reveal the hidden band-theme force group (§12).
   const [eggTaps, setEggTaps] = useState(0);
@@ -92,6 +94,17 @@ export default function SettingsPanel({
 
   const toggleDiag = useCallback(() => {
     setDiagOn((v) => { const nv = !v; setDiagEnabled(nv); return nv; });
+  }, []);
+
+  // Debug/testing mode. Implies capture, and turns the log QUIET: per-change RDS
+  // lines are suppressed in favour of one structured sample every 15s.
+  const toggleDebug = useCallback(() => {
+    setDebugOn((v) => {
+      const nv = !v;
+      setDebugMode(nv);
+      if (nv && !isDiagEnabled()) { setDiagEnabled(true); setDiagOn(true); }
+      return nv;
+    });
   }, []);
 
   const toggleDiagOverlay = useCallback(() => {
@@ -453,6 +466,15 @@ export default function SettingsPanel({
                       </Text>
                     </View>
                     <Toggle on={diagOverlayOn} pal={pal} onToggle={toggleDiagOverlay} label="Show the log on the radio" />
+                  </Pressable>
+                  <Pressable style={({ pressed }) => [styles.switchRow, pressed && { backgroundColor: pal.raised }]} onPress={toggleDebug} accessibilityRole="switch" accessibilityState={{ checked: debugOn }}>
+                    <View style={styles.textWrap}>
+                      <Text style={[styles.rowTitle, { color: pal.text }]}>Reception testing mode</Text>
+                      <Text style={[styles.rowSub, { color: pal.dim }]}>
+                        Records signal level, position and RDS health every 15 seconds, and puts four audio-quality buttons on the radio. Quiets the routine RDS chatter. Each reading commands the tuner.
+                      </Text>
+                    </View>
+                    <Toggle on={debugOn} pal={pal} onToggle={toggleDebug} label="Reception testing mode" />
                   </Pressable>
                   <ScrollView
                     style={[styles.diagLog, { borderColor: pal.border, backgroundColor: pal.raised }]}

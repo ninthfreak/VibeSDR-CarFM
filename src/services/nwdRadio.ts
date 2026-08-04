@@ -26,6 +26,9 @@ type NwdNative = {
   probeJsonHardware?(): Promise<string>;
   probeNwdFmManager?(): Promise<string>;
   seekStrengthTest?(): Promise<string>;
+  startLevelWatch?(intervalMs: number): void;
+  stopLevelWatch?(): void;
+  readLevelNow?(): void;
   startIlluminationWatch?(): void;
   requestAudioSource(): void;
   addListener(eventName: string): void;
@@ -105,6 +108,10 @@ export type NwdEvents = {
    *  com.nwd.app.NwdFmManager.getRadioRDSDataArm(). Feed to createNwdRdsDecoder
    *  in nwdRds.ts — this is the channel the bound AIDL cannot provide. */
   NwdRdsGroup: { hex: string };
+  /** Signal level from NwdFmManager.seek(currentFrequency) — see nwdSignalLevel.
+   *  `ok` is false when the tuner did not stay on the frequency we asked about,
+   *  or when the call failed; `level` is meaningless then. UNDER DEVELOPMENT. */
+  NwdRadioLevel: { level: number; asked: number; landed: number; ok: boolean; err?: string };
   NwdRadioState: { state: number };
   NwdRadioDisconnected: Record<string, never>;
   /** Steering-wheel / front-panel key, straight off the MCU's unprotected
@@ -197,6 +204,15 @@ export async function nwdSeekStrengthTest(): Promise<string> {
   try { return (await native?.seekStrengthTest?.()) ?? 'module unavailable'; }
   catch (e) { return `seek test threw: ${String((e as Error)?.message ?? e)}`; }
 }
+
+/** Start the periodic level read. Each tick COMMANDS the tuner (see
+ *  nwdSeekStrengthTest), so the native side floors the interval at 5s and skips
+ *  any tick where the MCU says FM is not the current source. Idempotent. */
+export function nwdStartLevelWatch(intervalMs: number): void { native?.startLevelWatch?.(intervalMs); }
+export function nwdStopLevelWatch(): void { native?.stopLevelWatch?.(); }
+/** One reading now, off the bridge thread — call on retune so the meter does not
+ *  sit on the previous station's level until the next tick. */
+export function nwdReadLevelNow(): void { native?.readLevelNow?.(); }
 
 /** Subscribe to a native NWD event. Returns an unsubscribe fn (no-op if the
  *  module is absent, e.g. on a non-NWD unit or iOS). */

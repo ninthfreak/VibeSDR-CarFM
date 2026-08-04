@@ -34,8 +34,18 @@ import type { RootStackParamList }     from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { createBackend } from '../services/UberSDRAdapter';
-import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, onNwd, PANEL_KEY, panelKeyName } from '../services/nwdRadio';
+import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, nwdStartLevelWatch, nwdStopLevelWatch, nwdReadLevelNow,
+         onNwd, PANEL_KEY, panelKeyName } from '../services/nwdRadio';
 import { createNwdRdsDecoder } from '../services/nwdRds';
+import { levelToBars, LEVEL_POLL_MS } from '../services/nwdSignalLevel';
+import {
+  isDebugMode, subscribeDebugMode, formatSample, bearingDeg, DEBUG_SAMPLE_MS,
+  RATING_LABELS, type AudioRating, type DebugSample,
+} from '../services/debugMode';
+import { getDetailedLocation } from '../services/instancesApi';
+import { stationsAtFrequency } from '../services/stationDb';
+import { haversineKm, receivabilityScore } from '../services/stationGeo';
+import RatingBar from '../components/carfm/RatingBar';
 import { diag, isDiagEnabled, isDiagOverlayEnabled, subscribeDiagPrefs } from '../services/diag';
 import { startMotion, stopMotion } from '../services/motion';
 import { startGpsFix, stopGpsFix } from '../services/gps';
@@ -412,11 +422,52 @@ export default function RadioScreen({ route, navigation }: Props) {
   const rdsDecoder = useRef(createNwdRdsDecoder());
   /** When the last raw group arrived, ms. 0 = none since the last expiry. */
   const lastRdsAtRef = useRef(0);
-  /** How long RDS survives without a group before the face drops it. Groups run
-   *  ~11/s while the carrier is present, so twelve seconds is far past noise. */
-  const RDS_STALE_MS = 12_000;
+  /** The face was blanked by an expiry but the DECODER still holds the station.
+   *  The next group republishes it verbatim instead of re-acquiring from air. */
+  const rdsStaleRef = useRef(false);
+  /**
+   * How long RDS survives without a group before the face drops it.
+   *
+   * Was twelve seconds, which the drive of 2026-08-04 showed is far too eager:
+   * of fifteen expiries, eight had groups back within ten seconds and one within
+   * ONE second. Every one of those blanked the plate for a moment over a station
+   * that had not actually gone anywhere. Twenty-five seconds still catches the
+   * genuine losses in that same log — the 36s, 60s and 68s gaps — while
+   * suppressing all eight of the spurious ones.
+   */
+  const RDS_STALE_MS = 25_000;
 
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
+  /** Measured level from NwdFmManager.seek — the built-in tuner's real signal
+   *  reading, and the only measured one CarFM has ever had. Null until the first
+   *  tick. UNDER DEVELOPMENT; see nwdSignalLevel.ts. */
+  const [fmLevel, setFmLevel] = useState<number | null>(null);
+
+  // ── Debug/testing mode ───────────────────────────────────────────────────
+  // Records one structured sample every 15s so the measured level and the
+  // database's PREDICTION can be checked against what a person actually hears.
+  // Nothing here runs unless the mode is on.
+  const [debugOn, setDebugOn] = useState(isDebugMode());
+  // The NWD event handlers are built once, so they would close over a stale
+  // `debugOn` forever. A ref is what they read.
+  const debugModeRef = useRef(isDebugMode());
+  useEffect(() => subscribeDebugMode(() => {
+    debugModeRef.current = isDebugMode();
+    setDebugOn(debugModeRef.current);
+  }), []);
+  const [fmRating, setFmRating] = useState<AudioRating | null>(null);
+  const ratingAtRef = useRef(0);
+  /** Stereo transitions since the last sample. The best cheap proxy for what a
+   *  level reading cannot see: multipath collapses the pilot, so a station can
+   *  read 55 and still flap. WERN did exactly that all through one commute. */
+  const stereoFlipsRef = useRef(0);
+  /** RDS expiries since the last sample. */
+  const rdsExpiriesRef = useRef(0);
+  /** When the dial last moved — a sample taken seconds after a retune has not
+   *  settled and must be droppable in analysis. */
+  const lastTuneAtRef = useRef(Date.now());
+  /** When the last sample closed, so rates are per-window rather than per-drive. */
+  const lastSampleAtRef = useRef(Date.now());
   // True while the head unit's built-in NWD tuner is driving the face (a
   // tunerless carFm launch on an NWD/NOWADA unit). Routes tune commands to it.
   const nwdActiveRef = useRef(false);
@@ -795,11 +846,101 @@ export default function RadioScreen({ route, navigation }: Props) {
   // the seq would carry no information.
   const [fmDevice, setFmDevice] = useState<{ mhz: number; seq: number } | null>(null);
   const fmDeviceSeq = useRef(0);
+  /** The dial, for code that runs inside long-lived event closures where the
+   *  `status` state would be stale. */
+  const curMhzRef = useRef(0);
+
   const reportDeviceMhz = useCallback((mhz: number) => {
+    curMhzRef.current = mhz;
     setFmDevice((prev) => (prev && Math.abs(prev.mhz - mhz) < 0.005
       ? prev
       : { mhz, seq: ++fmDeviceSeq.current }));
   }, []);
+
+  /**
+   * Close one debug sample: the level just measured, the position at that same
+   * instant, what the station database predicts from there, and the reception
+   * signals a level reading cannot see. One line, fixed columns.
+   *
+   * Everything is best-effort — a missing GPS fix or a station absent from the
+   * database yields `?` in that column rather than dropping the sample, because
+   * "the level was 54 and we do not know where" is still worth having.
+   */
+  const writeDebugSample = useCallback(async (level: number) => {
+    const now = Date.now();
+    const mhz = curMhzRef.current > 0 ? curMhzRef.current : null;
+
+    const loc = await getDetailedLocation(8000);
+
+    // What the database expects here. stationsAtFrequency is nationwide, so with
+    // a fix we pick the best-receivability row on this channel; without one there
+    // is nothing honest to say.
+    let predScore: number | null = null, distKm: number | null = null;
+    let brg: number | null = null, erpKw: number | null = null;
+    let stationClass: string | null = null, dbCall: string | null = null;
+    if (loc && mhz != null) {
+      try {
+        const rows = await stationsAtFrequency(mhz);
+        let best: { row: (typeof rows)[number]; score: number; d: number } | null = null;
+        for (const row of rows) {
+          const d = haversineKm(loc.lat, loc.lon, row.lat, row.lon);
+          const score = receivabilityScore({ erpKw: row.erpKw, stationClass: row.stationClass, distanceKm: d });
+          if (!best || score > best.score) best = { row, score, d };
+        }
+        if (best) {
+          predScore = best.score;
+          distKm = best.d;
+          brg = bearingDeg(loc.lat, loc.lon, best.row.lat, best.row.lon);
+          erpKw = best.row.erpKw;
+          stationClass = best.row.stationClass;
+          dbCall = best.row.callsign;
+        }
+      } catch { /* leave the prediction columns unknown */ }
+    }
+
+    // RDS health over the window that just closed, then start a fresh one.
+    const st = rdsDecoder.current.stats();
+    const windowS = Math.max(1, (now - lastSampleAtRef.current) / 1000);
+    rdsDecoder.current.resetStats();
+    lastSampleAtRef.current = now;
+
+    const sample: DebugSample = {
+      mhz,
+      level,
+      bars: levelToBars(level),
+      lat: loc?.lat ?? null,
+      lon: loc?.lon ?? null,
+      accM: loc?.accM ?? null,
+      speedMs: loc?.speedMs ?? null,
+      headingDeg: loc?.headingDeg ?? null,
+      fixAgeS: loc?.fixAgeS ?? null,
+      predScore, distKm, bearingDeg: brg, erpKw, stationClass, dbCall,
+      rdsGroupsPerSec: st.groups / windowS,
+      rdsErrPct: st.groups ? (100 * st.piMismatch) / st.groups : null,
+      stereoFlips: stereoFlipsRef.current,
+      rdsExpiries: rdsExpiriesRef.current,
+      sinceTuneS: (now - lastTuneAtRef.current) / 1000,
+      rating: ratingRef.current,
+      ratingAgeS: ratingRef.current ? (now - ratingAtRef.current) / 1000 : null,
+    };
+    stereoFlipsRef.current = 0;
+    rdsExpiriesRef.current = 0;
+    diag(formatSample(sample));
+  }, []);
+
+  /** The rating, for the sampler's long-lived closure. */
+  const ratingRef = useRef<AudioRating | null>(null);
+  const onRateAudio = useCallback((r: AudioRating) => {
+    ratingRef.current = r;
+    ratingAtRef.current = Date.now();
+    setFmRating(r);
+    // Its own event line: the periodic sample carries the rating too, but the
+    // moment of the press is when the driver heard the thing.
+    diag(`RATE ${r} (${RATING_LABELS[r]}) f=${curMhzRef.current.toFixed(1)} lvl=${fmLevelRef.current ?? '?'}`);
+  }, []);
+  const fmLevelRef = useRef<number | null>(null);
+  useEffect(() => { fmLevelRef.current = fmLevel; }, [fmLevel]);
+
   const fmHwSeq = useRef(0);
   const fmDoHwStep = useCallback((dir: 1 | -1) => {
     fmHwSeq.current += 1;
@@ -2033,8 +2174,14 @@ export default function RadioScreen({ route, navigation }: Props) {
   }, [status.mode, status.frequency, liveStation.pi, liveStation.name]);
 
   // Callsign/city hint shown only when PS text is absent (PS always wins, §6).
+  //
+  // `confident` is what that flag is FOR and this was the only consumer, which
+  // read the callsign and ignored the verdict — so a PI the identifier had
+  // explicitly refused to vouch for was still painted over the hero. Belt and
+  // braces with identifyByPi's own early return: either alone would have kept
+  // WBGX off the face on 2026-08-04.
   const fmCallsignHint = useMemo<string | undefined>(() => {
-    if (liveStation.name || !piIdentity?.callsign) return undefined;
+    if (liveStation.name || !piIdentity?.callsign || !piIdentity.confident) return undefined;
     const city = piIdentity.station?.city;
     return city ? `${piIdentity.callsign} · ${city}` : piIdentity.callsign;
   }, [liveStation.name, piIdentity]);
@@ -2131,6 +2278,23 @@ export default function RadioScreen({ route, navigation }: Props) {
   // the unit went dark. Drive day/night from the vendor broadcast instead.
   // null = never heard, so `system` still falls back to useColorScheme().
   const [fmIllNight, setFmIllNight] = useState<boolean | null>(null);
+
+  // The level watch, owned separately from the connect effect because its cadence
+  // depends on debug mode: 15s while sampling, 30s otherwise. Started here so a
+  // mid-drive toggle takes effect immediately — folded into the connect effect it
+  // would have kept the slow rate until the next reconnect, and the log would
+  // have quietly held half the samples the mode promises.
+  useEffect(() => {
+    if (!nwdActive) return;
+    // A fresh window: the counters and the RDS tally belong to the interval that
+    // is starting, not to whatever was accumulating before the toggle.
+    stereoFlipsRef.current = 0;
+    rdsExpiriesRef.current = 0;
+    lastSampleAtRef.current = Date.now();
+    rdsDecoder.current.resetStats();
+    nwdStartLevelWatch(debugOn ? DEBUG_SAMPLE_MS : LEVEL_POLL_MS);
+    return () => nwdStopLevelWatch();
+  }, [nwdActive, debugOn]);
 
   // Mirror the tail of the tuner log onto the face. Off by default; the settings
   // toggle drives it, and the persisted value arrives after mount, so this
@@ -2439,12 +2603,15 @@ export default function RadioScreen({ route, navigation }: Props) {
         // MCU keeps routing the analog FM audio.
         (VibePowerModule as any)?.startNwdControl?.();
         diag(`NWD connected: registered=${info.registered} band=${info.band} freqMult=${info.freqMult} mhz=${info.mhz ?? '?'} ps='${info.ps ?? ''}' rt='${info.rt ?? ''}' pty=${info.pty}; RDS on`);
-        // Station names come from the FCC-DB callsign lookup, which needs GPS
-        // location — if that's null on the head unit, every station shows
-        // "Tuning…". Log the location once so the next log confirms whether this
-        // is why (null → no GPS/permission), not a data-wiring guess.
+        // Station names come from the FCC-DB callsign lookup, which needs GPS.
+        // ONE-SHOT, and about a second after launch — so a null here means the
+        // last-known cache was cold at that instant, NOT that location is
+        // unavailable for the drive. Reading it as the latter is a mistake this
+        // comment exists to prevent: the nearby search works later in the same
+        // session. For anything that needs a position it can trust, use
+        // getDetailedLocation(), which requests a live fix and reports its age.
         getUserLocation()
-          .then((loc) => diag(`location: ${loc ? `${loc.lat},${loc.lon}` : 'null (no GPS fix / permission denied) → names cannot resolve'}`))
+          .then((loc) => diag(`location at launch: ${loc ? `${loc.lat},${loc.lon}` : 'no cached fix yet (cold start — not a failure)'}`))
           .catch((e) => diag(`location: error ${String(e)}`));
         // Seed the INITIAL tuner state — RT/PTY only push notify* on a CHANGE, so
         // a stable station would otherwise leave the face at defaults. Stereo is
@@ -2500,6 +2667,14 @@ export default function RadioScreen({ route, navigation }: Props) {
         // Restart the staleness clock at the retune, so the new station gets a
         // full window to acquire instead of inheriting the old one's countdown.
         lastRdsAtRef.current = Date.now();
+        // A retune outranks a pending expiry: there is nothing worth restoring,
+        // the decoder was just emptied.
+        rdsStaleRef.current = false;
+        // The level belongs to the station we just left. Drop it and ask for a
+        // fresh one rather than letting the meter lie until the next 30s tick.
+        setFmLevel(null);
+        lastTuneAtRef.current = Date.now();
+        nwdReadLevelNow();
         diag(`freq ${p.mhz.toFixed(1)} arg=${p.arg} PS='${p.ps}'`);
         scheduleProbe(p.mhz);
       }));
@@ -2507,12 +2682,43 @@ export default function RadioScreen({ route, navigation }: Props) {
       // NwdFmManager.getRadioRDSDataArm() via the native pump; decoding them
       // ourselves is what finally yields RadioText on this unit, along with a
       // real PI instead of the FCC-DB frequency guess.
+      // MEASURED signal level — the first one this app has ever had on this unit.
+      // The estimate it replaces needed a GPS fix, which this head unit never
+      // provides, so the meter has been showing an empty icon and the word "EST"
+      // for its whole life. Each reading COMMANDS the tuner, so the native side
+      // paces it and skips any tick where FM is not the MCU's current source.
+      subs.push(onNwd('NwdRadioLevel', (p) => {
+        // `ok` false means the tuner did not stay on the frequency we asked
+        // about, which is the same check AWNative makes before it believes a
+        // level. Keep the previous reading rather than showing a wrong one.
+        if (!p.ok) { diag(`level: REJECTED asked=${p.asked} landed=${p.landed}${p.err ? ` ${p.err}` : ''}`); return; }
+        setFmLevel(p.level);
+        if (!debugModeRef.current) {
+          diag(`level ${p.level} @ ${p.asked} → ${levelToBars(p.level)} bars`);
+          return;
+        }
+        // DEBUG MODE: this reading is the heartbeat of the dataset. Take the
+        // position at the same instant and close a sample window.
+        void writeDebugSample(p.level);
+      }));
+      // The watch is NOT started here — its interval depends on debug mode, and
+      // this effect runs once per connection. See the dedicated effect below.
+
       subs.push(onNwd('NwdRdsGroup', (p) => {
         // Stamp on ARRIVAL, not on publish: a group getting through means the RDS
         // carrier is still there, even when consensus rejects it and push()
         // returns null. This is what the staleness sweep in the poll measures.
         lastRdsAtRef.current = Date.now();
-        const s = rdsDecoder.current.push(p.hex);
+        const pushed = rdsDecoder.current.push(p.hex);
+        // The carrier is back after an expiry. The decoder never lost the station,
+        // so restore what it already holds rather than waiting to re-acquire —
+        // push() returns null when nothing changed, which after an expiry is the
+        // normal case and would otherwise leave the plate blank indefinitely.
+        let s = pushed;
+        if (rdsStaleRef.current) {
+          rdsStaleRef.current = false;
+          s = rdsDecoder.current.state();
+        }
         if (!s) return;
         setLiveStation((prev) => ({
           ...prev,
@@ -2527,7 +2733,12 @@ export default function RadioScreen({ route, navigation }: Props) {
           pi: s.pi === null ? prev.pi : s.pi.toString(16).toUpperCase().padStart(4, '0'),
         }));
         if (s.ps) liveStationRef.current = s.ps;
-        diag(`RDS pi=${s.pi?.toString(16)} ps='${s.ps}' pty=${s.pty} rt='${s.rt}'`);
+        // Debug mode is deliberately quiet: this one line fired 184 times in a
+        // 40-minute commute and is what buries the events worth reading. The
+        // structured sample carries the same information, aggregated.
+        if (!debugModeRef.current) {
+          diag(`RDS pi=${s.pi?.toString(16)} ps='${s.ps}' pty=${s.pty} rt='${s.rt}'`);
+        }
       }));
       // STEERING WHEEL — the real transport. The MCU broadcasts
       // com.nwd.action.ACTION_KEY_VALUE and the vendor service picks it up
@@ -2560,7 +2771,14 @@ export default function RadioScreen({ route, navigation }: Props) {
         diag(`ILL ${p.action} [${p.extras}] androidUiMode=${p.uiMode}`);
       }));
       subs.push(onNwd('NwdRadioRt', (p) => { setLiveStation((prev) => ({ ...prev, text: p.rt || undefined })); diag(`RT '${p.rt}'`); }));
-      subs.push(onNwd('NwdRadioStereo', (p) => { setStereoDebounced(p.on); diag(`stereo ${p.on}`); }));
+      subs.push(onNwd('NwdRadioStereo', (p) => {
+        // Counted on the RAW event, before the 2s debounce: the debounce exists to
+        // stop the pill flickering, and the flapping it hides is exactly the
+        // measurement we want.
+        stereoFlipsRef.current++;
+        setStereoDebounced(p.on);
+        if (!debugModeRef.current) diag(`stereo ${p.on}`);
+      }));
       subs.push(onNwd('NwdRadioPty', (p) => { setLiveStation((prev) => ({ ...prev, pty: p.pty })); diag(`PTY ${p.pty}`); }));
       subs.push(onNwd('NwdRadioTa', (p) => { setLiveStation((prev) => ({ ...prev, ta: p.ta })); diag(`TA ${p.ta}`); }));
       // Poll the getters as a freq fallback. RESOLVED: isStreroOn() is stuck true
@@ -2597,12 +2815,25 @@ export default function RadioScreen({ route, navigation }: Props) {
         // the FCC-database fallback, which is by design.
         if (lastRdsAtRef.current && Date.now() - lastRdsAtRef.current > RDS_STALE_MS) {
           lastRdsAtRef.current = 0;
-          rdsDecoder.current.reset();
+          // DO NOT reset the decoder. Expiry means "the carrier went quiet", not
+          // "we are on a different station" — a retune is what means that, and
+          // the frequency handler already resets there.
+          //
+          // Resetting here was making the corruption worse, not better. A reset
+          // clears rtPublished, which re-opens the instant-publish path for the
+          // first complete assembly after the signal returns — and that assembly
+          // is being received in exactly the marginal conditions that caused the
+          // gap. On 2026-08-04, eight of the eleven corrupt RadioText changes on
+          // WERN were first fills after an expiry. Keeping the decoder means the
+          // confirmed text comes straight back instead of being re-acquired from
+          // the worst air of the drive.
+          rdsStaleRef.current = true;
           setLiveStation((prev) =>
             (prev.name || prev.text || prev.pty !== undefined || prev.tp || prev.ta || prev.pi)
               ? { ...prev, name: undefined, text: undefined, pty: undefined, tp: false, ta: false, pi: undefined }
               : prev);
-          diag('RDS expired — no group for 12s');
+          rdsExpiriesRef.current++;
+          diag(`RDS expired — no group for ${RDS_STALE_MS / 1000}s`);
         }
         // The poll does NOT drive PS / RadioText / PTY.
         //
@@ -2791,6 +3022,11 @@ export default function RadioScreen({ route, navigation }: Props) {
           : liveStation.text}
         stereo={fmStereo}
         signalDb={fmSignalDb}
+        // MEASURED bars, built-in tuner only. Outranks the GPS+database estimate
+        // because it is a reading rather than a prediction — the estimate is
+        // coarse and only recomputed on retune. UNDER DEVELOPMENT.
+        signalBars={levelToBars(fmLevel)}
+        signalLevelRaw={fmLevel}
         rdsOk={!!liveStation.pi || !!liveStation.name}
         tp={liveStation.tp}
         ta={liveStation.ta}
@@ -2820,6 +3056,15 @@ export default function RadioScreen({ route, navigation }: Props) {
       {/* Tuner log tail, on the face. Off unless both diagnostics toggles are on;
           never interactive. Follows the same day/night resolution as the face so
           it doesn't glare at night. */}
+      {/* Audio-quality rating — debug mode only, and gone entirely otherwise. */}
+      {debugOn ? (
+        <RatingBar
+          pal={(fmThemeEffective === 'dark' || (fmThemeEffective === 'system' && osScheme === 'dark')) ? DARK : LIGHT}
+          current={fmRating}
+          onRate={onRateAudio}
+        />
+      ) : null}
+
       {diagOverlay ? (
         <DiagOverlay pal={
           (fmThemeEffective === 'dark' || (fmThemeEffective === 'system' && osScheme === 'dark'))
