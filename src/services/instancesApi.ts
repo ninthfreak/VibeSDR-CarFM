@@ -65,10 +65,20 @@ export interface DetailedLocation {
  * A position good enough to correlate against radio reception — live where
  * possible, with accuracy, speed, heading and the age of the fix.
  *
- * Asks for FINE location, unlike getUserLocation() below which asks only for
- * COARSE. That, plus its last-known-only read, is why every drive log since July
- * says "location: null": nothing was ever actively requested and the cache was
- * empty. Never throws; resolves null when there is genuinely nothing.
+ * NOT because getUserLocation() below is broken — it is not. An earlier version
+ * of this comment claimed it was, on the strength of the `location: null` line in
+ * the drive logs. That line is logged ONCE, about a second after launch, when the
+ * last-known cache is naturally still empty on a cold start; the nearby-station
+ * search works later in the same drive, which is the evidence that settles it.
+ *
+ * What getUserLocation() genuinely cannot do is support this dataset. It asks for
+ * COARSE only, reads last-known and never requests a live update, and returns
+ * lat/lon and nothing else. Correlating reception at highway speed needs the
+ * accuracy, the speed and heading, and above all the AGE of the fix — a
+ * last-known position minutes old turns distance and bearing to a transmitter
+ * into fiction while the car keeps moving.
+ *
+ * Never throws; resolves null when there is genuinely nothing.
  */
 export async function getDetailedLocation(timeoutMs = 8000): Promise<DetailedLocation | null> {
   try {

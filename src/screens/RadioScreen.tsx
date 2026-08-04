@@ -2586,12 +2586,15 @@ export default function RadioScreen({ route, navigation }: Props) {
         // MCU keeps routing the analog FM audio.
         (VibePowerModule as any)?.startNwdControl?.();
         diag(`NWD connected: registered=${info.registered} band=${info.band} freqMult=${info.freqMult} mhz=${info.mhz ?? '?'} ps='${info.ps ?? ''}' rt='${info.rt ?? ''}' pty=${info.pty}; RDS on`);
-        // Station names come from the FCC-DB callsign lookup, which needs GPS
-        // location — if that's null on the head unit, every station shows
-        // "Tuning…". Log the location once so the next log confirms whether this
-        // is why (null → no GPS/permission), not a data-wiring guess.
+        // Station names come from the FCC-DB callsign lookup, which needs GPS.
+        // ONE-SHOT, and about a second after launch — so a null here means the
+        // last-known cache was cold at that instant, NOT that location is
+        // unavailable for the drive. Reading it as the latter is a mistake this
+        // comment exists to prevent: the nearby search works later in the same
+        // session. For anything that needs a position it can trust, use
+        // getDetailedLocation(), which requests a live fix and reports its age.
         getUserLocation()
-          .then((loc) => diag(`location: ${loc ? `${loc.lat},${loc.lon}` : 'null (no GPS fix / permission denied) → names cannot resolve'}`))
+          .then((loc) => diag(`location at launch: ${loc ? `${loc.lat},${loc.lon}` : 'no cached fix yet (cold start — not a failure)'}`))
           .catch((e) => diag(`location: error ${String(e)}`));
         // Seed the INITIAL tuner state — RT/PTY only push notify* on a CHANGE, so
         // a stable station would otherwise leave the face at defaults. Stereo is
@@ -3002,8 +3005,9 @@ export default function RadioScreen({ route, navigation }: Props) {
           : liveStation.text}
         stereo={fmStereo}
         signalDb={fmSignalDb}
-        // MEASURED bars, built-in tuner only. Overrides the GPS estimate, which
-        // resolves to null on this unit anyway. UNDER DEVELOPMENT.
+        // MEASURED bars, built-in tuner only. Outranks the GPS+database estimate
+        // because it is a reading rather than a prediction — the estimate is
+        // coarse and only recomputed on retune. UNDER DEVELOPMENT.
         signalBars={levelToBars(fmLevel)}
         signalLevelRaw={fmLevel}
         rdsOk={!!liveStation.pi || !!liveStation.name}

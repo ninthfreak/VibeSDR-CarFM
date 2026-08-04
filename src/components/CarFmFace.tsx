@@ -55,7 +55,8 @@ export interface CarFmFaceProps {
   signalDb: number | null;
   /** MEASURED bars 0..4 from the built-in tuner's own level read, or null when
    *  there is no reading. Overrides `signalDb` when present — that path is a
-   *  GPS+database ESTIMATE and resolves to null on a head unit with no fix.
+   *  GPS+database ESTIMATE — coarse, recomputed only on retune, and null until a
+   *  fix exists.
    *  See services/nwdSignalLevel.ts. UNDER DEVELOPMENT. */
   signalBars?: number | null;
   /** The raw level behind `signalBars`. Shown bare, with NO unit: the scale is
@@ -1084,9 +1085,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
             shown BARE — the scale is anchored to the vendor's seek-stop
             thresholds but its units are unresolved, so "dB" would be a lie.
           SDR: live amber bars + a genuine dB figure.
-          ESTIMATE: grey bars and the word EST. On this head unit the estimate
-            needs a GPS fix it never gets, so it renders as an empty icon —
-            which is exactly what it has always been. */}
+          ESTIMATE: grey bars and the word EST. It is a database guess from
+            position, not a reading, so it stays grey and never shows a number.
+            Empty until a fix lands, which on a cold start takes a while. */}
       <SignalWaves
         size={L.signalIcon}
         strength={off ? 0 : signalBars != null ? signalBars : waveStrength(signalDb)}

@@ -12,6 +12,13 @@
  * the reception-quality signals that a level reading cannot see. The driver
  * tags what they hear with one button press, and the rating rides along.
  *
+ * The position comes from getDetailedLocation() rather than the app's existing
+ * getUserLocation(). That is not because the latter fails — it works, and the
+ * nearby-station search proves it on the road — but because it returns lat/lon
+ * alone from the last-known cache. At highway speed this dataset needs the fix's
+ * AGE above all: a position minutes old makes distance and bearing to a
+ * transmitter fiction while the car keeps moving.
+ *
  * DELIBERATELY QUIET. Normal diagnostics log every RDS field change, which on a
  * commute is hundreds of near-identical lines that bury the interesting ones.
  * Debug mode suppresses that chatter and keeps structured samples plus discrete
