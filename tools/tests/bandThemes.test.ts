@@ -22,6 +22,21 @@ ok('The Beatles', matchEggId('The Beatles - Hey Jude') === 'The Beatles');
 
 // non-matches + edges
 ok('no match → null', matchEggId('Taylor Swift - Anti-Hero') === null);
+
+// REGRESSION — RadioText now carries ADVERTS, not just a station slogan. WIBA
+// began rotating them on 2026-08-04 ("NicoletLaw.com  Injured? Get Nicolet!"),
+// so this matcher runs against arbitrary ad copy. normalizeRt turns punctuation
+// into spaces, which is exactly what makes "AC/DC" match — and also what made
+// an HVAC advert match, repainting the whole app.
+ok('an HVAC advert is NOT AC/DC', matchEggId('Hometown HVAC DC power specialists') === null);
+ok('a real ad does not match', matchEggId('NicoletLaw.com  Injured? Get Nicolet! - 101.5 IBA-FM') === null);
+ok('a band name inside a longer word does not match', matchEggId('Welcome to Nirvanaland') === null);
+ok('...nor a trailing fragment', matchEggId('subacdcx') === null);
+// ...while every genuine form still matches, punctuation and all.
+ok('AC/DC still matches with a slash', matchEggId('101.5 IBA-FM - Back In Black - AC/DC') === 'AC/DC');
+ok('possessives still match', matchEggId("Nirvana's Lithium") === 'Nirvana');
+ok('a name at the very end matches', matchEggId('Now playing: The Beatles') === 'The Beatles');
+ok('a name at the very start matches', matchEggId('Nirvana - Lithium') === 'Nirvana');
 ok('empty RadioText → null', matchEggId('') === null);
 ok('whitespace RadioText → null', matchEggId('   ') === null);
 // substring false-positive guard: "beatles" must be a real substring, not fuzzy
