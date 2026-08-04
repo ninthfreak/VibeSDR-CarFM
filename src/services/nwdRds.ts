@@ -36,9 +36,32 @@ export interface RdsState {
   ps: string;
   /** RadioText, up to 64 chars, trimmed. Empty until a terminator or full fill. */
   rt: string;
+  /** This station uses PS as a scrolling text field rather than as its name, so
+   *  `ps` is not an identity and must not reach the hero. See PS_SCROLL_DISTINCT. */
+  psScrolling: boolean;
 }
 
-const BLANK: RdsState = { pi: null, pty: null, tp: false, ta: false, ps: '', rt: '' };
+const BLANK: RdsState = { pi: null, pty: null, tp: false, ta: false, ps: '', rt: '', psScrolling: false };
+
+/**
+ * Distinct published PS values, on ONE station, that mean the PS is a scrolling
+ * text field rather than a name.
+ *
+ * The two-cycle rule was supposed to make this impossible: a scrolling PS never
+ * repeats a complete assembly, so it never publishes. That reasoning holds for a
+ * FAST scroller and fails for a slow one. WIBA-FM holds each 8-character chunk
+ * for about four seconds — several complete assemblies — so consecutive
+ * assemblies agree and every chunk publishes.
+ *
+ * Measured on the drive of 2026-08-04 the separation is not subtle: WIBA
+ * published 16 distinct values in half an hour ("Walk", "This Way", "Aerosmit",
+ * "erosmith", "NicoletL", "Law.com" …), while WERN published exactly one and
+ * WWHG exactly one. Three is comfortably clear of both.
+ *
+ * Once set the verdict sticks until the station changes, because a station that
+ * scrolls its PS keeps doing it, and the PI-derived identity is better anyway.
+ */
+const PS_SCROLL_DISTINCT = 3;
 
 /** Identical PIs required before a value is trusted, or before a disagreement is
  *  accepted as a real station change. RDS runs ~11.4 groups/s, so 3 is about a
@@ -95,6 +118,8 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
   let psBuf = new Array<string>(8).fill(' ');
   let psSeen = 0;                       // bitmask of the 4 PS segments seen
   let psCandidate = '';                 // previous COMPLETE assembly; must repeat to publish
+  let psSeenValues = new Set<string>();  // distinct published names — see PS_SCROLL_DISTINCT
+  let psScrolling = false;               // ...and the verdict once there are too many
   let rtBuf = new Array<string>(64).fill(' ');
   let rtSeen = 0;                       // bitmask of the 16 RT segments seen
   let rtEnd: number | null = null;      // index of the 0x0D terminator, once seen
@@ -121,6 +146,8 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     psBuf = new Array<string>(8).fill(' ');
     psSeen = 0;
     psCandidate = '';
+    psSeenValues = new Set<string>();
+    psScrolling = false;
     rtBuf = new Array<string>(64).fill(' ');
     rtSeen = 0;
     rtEnd = null;
@@ -240,7 +267,24 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
         // scrolling PS is advertising copy, not a station name, and RadioText
         // carries the same content properly.
         const cand = psBuf.join('');
-        if (cand === psCandidate) st.ps = cand.trim();
+        if (cand === psCandidate) {
+          // A repeated complete assembly. That used to be proof of a name; on a
+          // slow scroller it only proves the chunk was held for a few seconds.
+          // Count the distinct ones and stop trusting PS entirely once there are
+          // too many — including retracting what was already shown, because those
+          // earlier chunks were never a name either.
+          const val = cand.trim();
+          if (!psScrolling) {
+            psSeenValues.add(val);
+            if (psSeenValues.size >= PS_SCROLL_DISTINCT) {
+              psScrolling = true;
+              st.psScrolling = true;
+              st.ps = '';
+            } else {
+              st.ps = val;
+            }
+          }
+        }
         psCandidate = cand;
         // Start a clean cycle so the next assembly cannot inherit stale chars.
         psSeen = 0;
