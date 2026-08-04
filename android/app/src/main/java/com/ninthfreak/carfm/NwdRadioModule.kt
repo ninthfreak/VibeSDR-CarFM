@@ -723,6 +723,13 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     // (ArmRadioManager.clearVaildFlag); this runs far below that.
     @Volatile private var levelRunning = false
     private var levelThread: Thread? = null
+    /** Restart guard. Debug mode changes the cadence mid-drive, so start/stop is
+     *  now routine — and a bare boolean flag races there: stopLevelWatch() sets it
+     *  false, startLevelWatch() sets it true again, and if the outgoing thread has
+     *  not re-checked in between it simply carries on, leaving two threads reading
+     *  the tuner. Each thread captures a generation and exits when it is no longer
+     *  the current one. */
+    @Volatile private var levelGen = 0
 
     private fun emitLevel(s: SeekResult) {
         emit("NwdRadioLevel", Arguments.createMap().apply {
@@ -736,11 +743,12 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun startLevelWatch(intervalMs: Double) {
-        if (levelThread != null) return
+        stopLevelWatch()          // idempotent, and the only way to change cadence
+        val myGen = ++levelGen
         levelRunning = true
         val gap = intervalMs.toLong().coerceAtLeast(5_000L)   // floor: never hammer the chip
         val t = Thread {
-            while (levelRunning) {
+            while (levelRunning && levelGen == myGen) {
                 // Only when the MCU says FM owns the speakers. Commanding the
                 // tuner while Bluetooth or Android Auto is playing would move a
                 // front end nobody asked us to touch.
@@ -761,6 +769,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun stopLevelWatch() {
         levelRunning = false
+        levelGen++                // retires whatever thread is currently running
         levelThread?.interrupt()
         levelThread = null
     }

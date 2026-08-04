@@ -2279,6 +2279,23 @@ export default function RadioScreen({ route, navigation }: Props) {
   // null = never heard, so `system` still falls back to useColorScheme().
   const [fmIllNight, setFmIllNight] = useState<boolean | null>(null);
 
+  // The level watch, owned separately from the connect effect because its cadence
+  // depends on debug mode: 15s while sampling, 30s otherwise. Started here so a
+  // mid-drive toggle takes effect immediately — folded into the connect effect it
+  // would have kept the slow rate until the next reconnect, and the log would
+  // have quietly held half the samples the mode promises.
+  useEffect(() => {
+    if (!nwdActive) return;
+    // A fresh window: the counters and the RDS tally belong to the interval that
+    // is starting, not to whatever was accumulating before the toggle.
+    stereoFlipsRef.current = 0;
+    rdsExpiriesRef.current = 0;
+    lastSampleAtRef.current = Date.now();
+    rdsDecoder.current.resetStats();
+    nwdStartLevelWatch(debugOn ? DEBUG_SAMPLE_MS : LEVEL_POLL_MS);
+    return () => nwdStopLevelWatch();
+  }, [nwdActive, debugOn]);
+
   // Mirror the tail of the tuner log onto the face. Off by default; the settings
   // toggle drives it, and the persisted value arrives after mount, so this
   // subscribes rather than reading once.
@@ -2684,8 +2701,8 @@ export default function RadioScreen({ route, navigation }: Props) {
         // position at the same instant and close a sample window.
         void writeDebugSample(p.level);
       }));
-      nwdStartLevelWatch(debugModeRef.current ? DEBUG_SAMPLE_MS : LEVEL_POLL_MS);
-      subs.push(() => nwdStopLevelWatch());
+      // The watch is NOT started here — its interval depends on debug mode, and
+      // this effect runs once per connection. See the dedicated effect below.
 
       subs.push(onNwd('NwdRdsGroup', (p) => {
         // Stamp on ARRIVAL, not on publish: a group getting through means the RDS
