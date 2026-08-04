@@ -50,6 +50,47 @@ let _cacheLat:  number | null = null;
 let _cacheLon:  number | null = null;
 const CACHE_TTL_MS = 60_000;
 
+export interface DetailedLocation {
+  lat: number; lon: number;
+  accM?: number; speedMs?: number; headingDeg?: number; altM?: number;
+  provider?: string;
+  /** Seconds since the fix was taken. A stale fix makes distance and bearing to
+   *  a transmitter fiction, so debug mode records it rather than hiding it. */
+  fixAgeS?: number;
+  /** True when this came from a live update rather than the last-known cache. */
+  live?: boolean;
+}
+
+/**
+ * A position good enough to correlate against radio reception — live where
+ * possible, with accuracy, speed, heading and the age of the fix.
+ *
+ * Asks for FINE location, unlike getUserLocation() below which asks only for
+ * COARSE. That, plus its last-known-only read, is why every drive log since July
+ * says "location: null": nothing was ever actively requested and the cache was
+ * empty. Never throws; resolves null when there is genuinely nothing.
+ */
+export async function getDetailedLocation(timeoutMs = 8000): Promise<DetailedLocation | null> {
+  try {
+    if (Platform.OS === 'android') {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        {
+          title: 'Location for reception logging',
+          message: 'CarFM records where each signal reading was taken so the measured '
+            + 'level can be compared against what the station database predicts. It stays on-device.',
+          buttonPositive: 'OK',
+        },
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) return null;
+    }
+    const mod = NativeModules.VibePowerModule as
+      | { getLocationDetailed?: (ms: number) => Promise<DetailedLocation | null> }
+      | undefined;
+    return (await mod?.getLocationDetailed?.(timeoutMs)) ?? null;
+  } catch { return null; }
+}
+
 export async function getUserLocation(): Promise<{ lat: number; lon: number } | null> {
   // navigator.geolocation does NOT exist in React Native — the old code
   // always resolved null, never prompted, and the directory fell back to

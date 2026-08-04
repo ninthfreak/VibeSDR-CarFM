@@ -242,6 +242,89 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     /** One-shot coarse location for nearest-first instance sorting. JS must
      *  request ACCESS_COARSE_LOCATION via PermissionsAndroid first. */
     @ReactMethod
+    /**
+     * A position good enough to correlate against radio reception.
+     *
+     * `getLocation()` below is not: it reads only getLastKnownLocation(), which on
+     * this head unit returns null every time — every drive log since July says
+     * "location: null" — and it discards accuracy, speed, bearing and the age of
+     * the fix. Debug mode needs all four: a stale fix makes distance and bearing
+     * to a transmitter into fiction, and speed separates "bad spot" from "bad
+     * while moving", which is the whole multipath question.
+     *
+     * So: ask the providers for a LIVE update, wait up to `timeoutMs`, and fall
+     * back to the freshest last-known if nothing arrives. Resolves null only when
+     * there is genuinely nothing. Never rejects.
+     */
+    @ReactMethod
+    fun getLocationDetailed(timeoutMs: Double, promise: Promise) {
+        val lm = try {
+            reactContext.getSystemService(android.content.Context.LOCATION_SERVICE)
+                as android.location.LocationManager
+        } catch (e: Throwable) { promise.resolve(null); return }
+
+        fun toMap(l: android.location.Location, live: Boolean): com.facebook.react.bridge.WritableMap =
+            com.facebook.react.bridge.Arguments.createMap().apply {
+                putDouble("lat", l.latitude)
+                putDouble("lon", l.longitude)
+                if (l.hasAccuracy()) putDouble("accM", l.accuracy.toDouble())
+                if (l.hasSpeed()) putDouble("speedMs", l.speed.toDouble())
+                // Bearing is only meaningful while moving; a parked fix reports 0.
+                if (l.hasBearing() && l.hasSpeed() && l.speed > 0.5f) putDouble("headingDeg", l.bearing.toDouble())
+                if (l.hasAltitude()) putDouble("altM", l.altitude)
+                putString("provider", l.provider ?: "?")
+                putDouble("fixAgeS", ((System.currentTimeMillis() - l.time).coerceAtLeast(0L)) / 1000.0)
+                putBoolean("live", live)
+            }
+
+        fun freshestLastKnown(): android.location.Location? {
+            var best: android.location.Location? = null
+            for (p in lm.getProviders(true)) {
+                try {
+                    val l = lm.getLastKnownLocation(p) ?: continue
+                    if (best == null || l.time > best!!.time) best = l
+                } catch (_: SecurityException) { }
+            }
+            return best
+        }
+
+        val settled = java.util.concurrent.atomic.AtomicBoolean(false)
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        var listener: android.location.LocationListener? = null
+
+        val finish = { loc: android.location.Location?, live: Boolean ->
+            if (settled.compareAndSet(false, true)) {
+                listener?.let { try { lm.removeUpdates(it) } catch (_: Throwable) {} }
+                promise.resolve(if (loc == null) null else toMap(loc, live))
+            }
+        }
+
+        listener = object : android.location.LocationListener {
+            override fun onLocationChanged(l: android.location.Location) { finish(l, true) }
+            @Deprecated("required by the interface on older API levels")
+            override fun onStatusChanged(p: String?, s: Int, e: android.os.Bundle?) {}
+            override fun onProviderEnabled(p: String) {}
+            override fun onProviderDisabled(p: String) {}
+        }
+
+        var requested = false
+        for (p in lm.getProviders(true)) {
+            try {
+                lm.requestLocationUpdates(p, 0L, 0f, listener, android.os.Looper.getMainLooper())
+                requested = true
+            } catch (_: SecurityException) {
+                // Permission not granted — last-known is all we will ever get.
+            } catch (_: Throwable) { }
+        }
+
+        // Whatever happens, answer. A live fix wins; otherwise the freshest cached
+        // one, tagged live=false and carrying its age so the caller can judge it.
+        handler.postDelayed({ finish(freshestLastKnown(), false) },
+            timeoutMs.toLong().coerceIn(1_000L, 30_000L))
+        if (!requested) finish(freshestLastKnown(), false)
+    }
+
+    @ReactMethod
     fun getLocation(promise: Promise) {
         try {
             val lm = reactContext.getSystemService(android.content.Context.LOCATION_SERVICE)
