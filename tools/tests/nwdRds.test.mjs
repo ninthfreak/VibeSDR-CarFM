@@ -38,6 +38,7 @@ const js = src
   .replace(/: NwdRdsDecoder/g, '').replace(/: string \| null/g, '')
   .replace(/: number \| null/g, '').replace(/: string/g, '').replace(/: number/g, '')
   .replace(/new Array<string>\(/g, 'new Array(')
+  .replace(/new Set<string>\(\)/g, 'new Set()')
   .replace(/export interface [\s\S]*?\n}\n/g, '')
   .replace(/export /g, '');
 const { createNwdRdsDecoder } = await import(
@@ -87,6 +88,52 @@ const PS_WERN = [
   ];
   for (let i = 0; i < 6; i++) feed(d, scroll[i % 2], 1);
   eq('a PS that never repeats is never published', d.state().ps, '');
+}
+
+// REGRESSION — a SLOW scrolling PS. The two-cycle rule assumed a scroller never
+// repeats a complete assembly, which is true only if it scrolls fast. WIBA-FM
+// holds each 8-character chunk for about four seconds — many complete
+// assemblies — so every chunk cleared the rule and published. On 2026-08-04 it
+// put "Walk", "This Way", "Aerosmit", "NicoletL", "Law.com" and eleven more onto
+// the hero in place of the station logo, because the face resolves its identity
+// from PS before the PI-derived callsign.
+//
+// Measured that day: WIBA 16 distinct PS values, WERN 1, WWHG 1.
+{
+  // Build the four 0A groups that spell an 8-char PS for PI 19e2, PTY 6.
+  const psGroups = (text) => {
+    const t = text.padEnd(8, ' ').slice(0, 8);
+    return [0, 1, 2, 3].map((seg) => {
+      const b = (0x04c0 | seg).toString(16).padStart(4, '0');
+      const d = ((t.charCodeAt(seg * 2) << 8) | t.charCodeAt(seg * 2 + 1)).toString(16).padStart(4, '0');
+      return `19e2${b}e0cd${d}`;
+    });
+  };
+  // Each chunk is held long enough to satisfy the two-cycle rule, as on air.
+  const hold = (d, text) => feed(d, psGroups(text), 3);
+
+  const d = prime(createNwdRdsDecoder(), psGroups('101.5')[0]);
+  eq('the first held chunk still publishes', hold(d, '101.5').ps, '101.5');
+  eq('  ...and so does a second', hold(d, 'IBA-FM -').ps, 'IBA-FM -');
+  // Three distinct values is the verdict: this is a text field, not a name.
+  const third = hold(d, 'Walk');
+  eq('the third distinct value trips the scroll detector', third.psScrolling, true);
+  eq('  ...and PS is retracted, not merely frozen', third.ps, '');
+  eq('  ...so later chunks never reach the face',
+     [hold(d, 'This Way').ps, hold(d, 'Aerosmit').ps, hold(d, 'Law.com').ps].join('|'), '||');
+
+  // A retune clears the verdict — the next station gets judged on its own.
+  d.reset();
+  eq('reset clears the scrolling verdict', d.state().psScrolling, false);
+}
+
+// ...and a station with ONE fixed name must be untouched by that detector, no
+// matter how long it is held. WERN published exactly one value all day.
+{
+  const d = prime(createNwdRdsDecoder(), PS_WERN[0]);
+  for (let i = 0; i < 30; i++) feed(d, PS_WERN, 1);
+  eq('a fixed PS survives any amount of repetition', d.state().ps, 'WERN');
+  eq('  ...and is never called a scroller', d.state().psScrolling, false);
 }
 
 // ── Group 2A: RadioText ──────────────────────────────────────────────────────

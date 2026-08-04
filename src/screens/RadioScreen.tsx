@@ -2722,7 +2722,12 @@ export default function RadioScreen({ route, navigation }: Props) {
         if (!s) return;
         setLiveStation((prev) => ({
           ...prev,
-          name: s.ps || prev.name,
+          // A scrolling PS is not a name. `s.ps` goes empty the moment the
+          // decoder decides that, but `|| prev.name` would cheerfully keep the
+          // last chunk on the hero forever — which is how "Walk This Way" ended
+          // up where WIBA's logo belongs. Clear it outright and let the
+          // PI-derived identity take over, which is what the hero falls back to.
+          name: s.psScrolling ? undefined : (s.ps || prev.name),
           text: s.rt || prev.text,
           pty: s.pty ?? prev.pty,
           tp: s.tp,
