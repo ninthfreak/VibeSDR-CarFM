@@ -53,6 +53,15 @@ export interface CarFmFaceProps {
   /** true = STEREO, false = MONO, null = UNKNOWN (blank pill — nothing has reported yet). */
   stereo: boolean | null;
   signalDb: number | null;
+  /** MEASURED bars 0..4 from the built-in tuner's own level read, or null when
+   *  there is no reading. Overrides `signalDb` when present — that path is a
+   *  GPS+database ESTIMATE and resolves to null on a head unit with no fix.
+   *  See services/nwdSignalLevel.ts. UNDER DEVELOPMENT. */
+  signalBars?: number | null;
+  /** The raw level behind `signalBars`. Shown bare, with NO unit: the scale is
+   *  anchored to the vendor's own seek-stop thresholds but its units are
+   *  unresolved, and printing "dB" would be inventing one. */
+  signalLevelRaw?: number | null;
   /** RDS decoder has a lock (PI/PS seen) — drives the RDS tell. */
   rdsOk?: boolean;
   /** RDS Traffic Programme flag. */
@@ -512,7 +521,7 @@ function Tell({ label, on, pulse, pal, fontSize = 11, dark = false, off = false 
 
 export default function CarFmFace(props: CarFmFaceProps) {
   const {
-    freqHz, stationName, callsignHint, radioText, stereo, signalDb,
+    freqHz, stationName, callsignHint, radioText, stereo, signalDb, signalBars, signalLevelRaw,
     rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
     onSetAutostart, onSetTheme, onRetryTuner, presets, nwdActive, onHardwareSeek,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
@@ -1069,13 +1078,26 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // stereo column is truly centered regardless of the side widths.
   const signalCluster = (
     <View style={[styles.signalPill, tall && styles.signalPillTall, !tall && { minHeight: L.stereoH, justifyContent: 'center' }]}>
-      {/* NWD has no real signal metric — the bars are a DB+GPS *estimate*, so they
-          render grey (not amber) to signal "not live", and the dB number is
-          suppressed (we have no measured level). Zero + grey when there's no fix
-          or no dataset entry. RTL-SDR keeps the live amber meter + dB readout. */}
-      <SignalWaves size={L.signalIcon} strength={off ? 0 : waveStrength(signalDb)} on={nwdActive ? pal.dim : pal.amber} off={pal.meterEmpty} />
+      {/* Three cases, and only the first is a real measurement.
+          MEASURED (signalBars non-null): the built-in tuner's own level read.
+            Amber like the SDR meter, because it IS live, and the raw number is
+            shown BARE — the scale is anchored to the vendor's seek-stop
+            thresholds but its units are unresolved, so "dB" would be a lie.
+          SDR: live amber bars + a genuine dB figure.
+          ESTIMATE: grey bars and the word EST. On this head unit the estimate
+            needs a GPS fix it never gets, so it renders as an empty icon —
+            which is exactly what it has always been. */}
+      <SignalWaves
+        size={L.signalIcon}
+        strength={off ? 0 : signalBars != null ? signalBars : waveStrength(signalDb)}
+        on={nwdActive && signalBars == null ? pal.dim : pal.amber}
+        off={pal.meterEmpty}
+      />
       <Text style={[styles.signalText, { fontSize: L.signalDb, color: pal.dim }]}>
-        {off ? '--' : nwdActive ? 'EST' : signalDb == null ? '—' : `${Math.round(signalDb)} dB`}
+        {off ? '--'
+          : signalLevelRaw != null ? `${signalLevelRaw}`
+          : nwdActive ? 'EST'
+          : signalDb == null ? '—' : `${Math.round(signalDb)} dB`}
       </Text>
     </View>
   );

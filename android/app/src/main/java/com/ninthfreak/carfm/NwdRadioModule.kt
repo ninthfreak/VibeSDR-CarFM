@@ -677,34 +677,25 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     // stationary, with someone listening.
     private val nwdFmSeek = "seek"
 
-    /** One `NwdFmManager.seek(currentRawFrequency)`, reported verbatim.
+    /** One seek, serialized. The periodic watch and the manual test both come
+     *  through here, so two of them can never command the tuner at once. */
+    private val seekLock = Any()
+
+    private data class SeekResult(val asked: Int, val strength: Int, val landed: Int, val err: String?)
+
+    /** Ask the tuner for its level at the frequency it is ALREADY ON.
      *
-     *  Resolves a human-readable block for the tuner log — never rejects, because
-     *  the failure modes are the result. `landedOk` is the safety verdict: the
-     *  low half of the return must equal the frequency we asked for. */
-    @ReactMethod
-    fun seekStrengthTest(promise: Promise) {
-        val sb = StringBuilder()
-        sb.append("SEEK STRENGTH TEST (NwdFmManager.seek — this is a COMMAND)\n")
-        val r = radio
-        if (r == null) { promise.resolve(sb.append("  not connected\n").toString()); return }
-
-        // Ask the tuner where it is, in RAW units, right now. Never a cached value:
-        // the whole test is "measure at the frequency we are on", and a stale
-        // number would command a real retune.
+     *  Reads the frequency live from the binder every time — never from cached
+     *  state, because a stale number would turn this into a real retune, which is
+     *  the one thing it must not be. */
+    private fun seekHere(): SeekResult = synchronized(seekLock) {
+        val r = radio ?: return SeekResult(0, 0, 0, "not connected")
         val asked = try {
-            val f: Frequency? = r.getCurrentFrequency()
-            if (f == null) { promise.resolve(sb.append("  getCurrentFrequency() returned null — aborted\n").toString()); return }
-            f.freq
+            r.getCurrentFrequency()?.freq ?: return SeekResult(0, 0, 0, "getCurrentFrequency returned null")
         } catch (e: Throwable) {
-            promise.resolve(sb.append("  getCurrentFrequency() threw ${e.javaClass.simpleName} — aborted\n").toString()); return
+            return SeekResult(0, 0, 0, "getCurrentFrequency threw ${e.javaClass.simpleName}")
         }
-        if (asked <= 0) {
-            promise.resolve(sb.append("  current frequency reads $asked — refusing to seek to that\n").toString()); return
-        }
-        sb.append("  asking for raw freq = ").append(asked)
-            .append("  (~").append(asked.toDouble() / freqMult).append(" MHz)\n")
-
+        if (asked <= 0) return SeekResult(asked, 0, 0, "current frequency reads $asked")
         val packed = try {
             val cls = Class.forName(nwdFmManagerClass)
             val m = try {
@@ -715,31 +706,103 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
             m.invoke(null, asked)
         } catch (e: Throwable) {
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.cause ?: e
-            promise.resolve(sb.append("  seek() threw ${cause.javaClass.name}: ${cause.message}\n").toString()); return
+            return SeekResult(asked, 0, 0, "seek threw ${cause.javaClass.name}: ${cause.message}")
         }
+        if (packed !is Int) return SeekResult(asked, 0, 0, "seek returned ${packed?.javaClass?.name ?: "null"}, not Int")
+        SeekResult(asked, (packed ushr 16) and 0xFFFF, packed and 0xFFFF, null)
+    }
 
-        if (packed !is Int) {
-            promise.resolve(sb.append("  seek() returned ").append(packed?.javaClass?.name ?: "null")
-                .append(", not an Int — layout unknown\n").toString()); return
+    // ── Periodic level watch ─────────────────────────────────────────────────
+    // UNDER DEVELOPMENT (2026-08-04). Every tick COMMANDS the tuner, so:
+    //   - its own thread, never the bridge, which the 1.5s poll already uses;
+    //   - it stops the moment FM is not the MCU's current source, so it can
+    //     never retune a front end that something else is using;
+    //   - the interval comes from JS (LEVEL_POLL_MS) so there is one place to
+    //     slow it down or turn it off.
+    // The vendor rate-limits its own comparable read to 900ms
+    // (ArmRadioManager.clearVaildFlag); this runs far below that.
+    @Volatile private var levelRunning = false
+    private var levelThread: Thread? = null
+
+    private fun emitLevel(s: SeekResult) {
+        emit("NwdRadioLevel", Arguments.createMap().apply {
+            putInt("level", s.strength)
+            putInt("asked", s.asked)
+            putInt("landed", s.landed)
+            putBoolean("ok", s.err == null && s.asked > 0 && s.asked == s.landed)
+            if (s.err != null) putString("err", s.err)
+        })
+    }
+
+    @ReactMethod
+    fun startLevelWatch(intervalMs: Double) {
+        if (levelThread != null) return
+        levelRunning = true
+        val gap = intervalMs.toLong().coerceAtLeast(5_000L)   // floor: never hammer the chip
+        val t = Thread {
+            while (levelRunning) {
+                // Only when the MCU says FM owns the speakers. Commanding the
+                // tuner while Bluetooth or Android Auto is playing would move a
+                // front end nobody asked us to touch.
+                val src = try {
+                    Settings.System.getString(reactContext.contentResolver, "mcu_current_source")?.toIntOrNull() ?: -1
+                } catch (_: Throwable) { -1 }
+                if (src == 4) emitLevel(seekHere())
+                try { Thread.sleep(gap) } catch (_: InterruptedException) { break }
+            }
         }
+        t.isDaemon = true
+        t.name = "nwd-level-watch"
+        t.start()
+        levelThread = t
+        Log.i(TAG, "level watch started (${gap}ms)")
+    }
 
-        val strength = (packed ushr 16) and 0xFFFF
-        val landed = packed and 0xFFFF
+    @ReactMethod
+    fun stopLevelWatch() {
+        levelRunning = false
+        levelThread?.interrupt()
+        levelThread = null
+    }
+
+    /** One reading now, off the bridge thread — used on retune so the meter does
+     *  not sit on the previous station's level until the next tick. */
+    @ReactMethod
+    fun readLevelNow() {
+        Thread { emitLevel(seekHere()) }.apply { isDaemon = true }.start()
+    }
+
+    /** One `NwdFmManager.seek(currentRawFrequency)`, reported verbatim.
+     *
+     *  Resolves a human-readable block for the tuner log — never rejects, because
+     *  the failure modes are the result. `landedOk` is the safety verdict: the
+     *  low half of the return must equal the frequency we asked for. */
+    @ReactMethod
+    fun seekStrengthTest(promise: Promise) {
+        val sb = StringBuilder()
+        sb.append("SEEK STRENGTH TEST (NwdFmManager.seek — this is a COMMAND)\n")
+        // The SAME seekHere() the periodic watch uses, so the manual test can
+        // never diverge from what ships. Only the reporting differs.
+        val s = seekHere()
+        if (s.err != null) { promise.resolve(sb.append("  ").append(s.err).append(" — aborted\n").toString()); return }
+        sb.append("  asking for raw freq = ").append(s.asked)
+            .append("  (~").append(s.asked.toDouble() / freqMult).append(" MHz)\n")
+        val packed = (s.strength shl 16) or s.landed
         sb.append("  raw return  = ").append(packed)
             // Integer.toHexString + padStart rather than String.format: the
             // decompiled getFreAndStrength splits on the %08x form, so the padded
             // eight digits are what makes the high/low halves readable by eye.
             .append("  (0x").append(Integer.toHexString(packed).padStart(8, '0')).append(")\n")
-        sb.append("  strength    = ").append(strength).append("   // high 16 bits\n")
-        sb.append("  landed freq = ").append(landed).append("   // low 16 bits\n")
-        sb.append("  landedOk    = ").append(landed == asked)
-            .append(if (landed == asked) "   // stayed put — strength is trustworthy\n"
+        sb.append("  strength    = ").append(s.strength).append("   // high 16 bits\n")
+        sb.append("  landed freq = ").append(s.landed).append("   // low 16 bits\n")
+        sb.append("  landedOk    = ").append(s.landed == s.asked)
+            .append(if (s.landed == s.asked) "   // stayed put — strength is trustworthy\n"
                     else "   // MOVED. AWNative would return 0 here; distrust the level\n")
         // Did the tuner really stay? getCurrentFrequency() is the independent
         // check — `landed` is the seek's own account of itself.
-        val after = try { r.getCurrentFrequency()?.freq ?: -1 } catch (_: Throwable) { -1 }
+        val after = try { radio?.getCurrentFrequency()?.freq ?: -1 } catch (_: Throwable) { -1 }
         sb.append("  freq after  = ").append(after)
-            .append(if (after == asked) "   // confirmed by the binder\n" else "   // CHANGED\n")
+            .append(if (after == s.asked) "   // confirmed by the binder\n" else "   // CHANGED\n")
         sb.append("  >>> Is the audio still playing? That is the other half of this test.\n")
         promise.resolve(sb.toString())
     }

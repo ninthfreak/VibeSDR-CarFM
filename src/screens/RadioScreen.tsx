@@ -34,8 +34,10 @@ import type { RootStackParamList }     from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { createBackend } from '../services/UberSDRAdapter';
-import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, onNwd, PANEL_KEY, panelKeyName } from '../services/nwdRadio';
+import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, nwdStartLevelWatch, nwdStopLevelWatch, nwdReadLevelNow,
+         onNwd, PANEL_KEY, panelKeyName } from '../services/nwdRadio';
 import { createNwdRdsDecoder } from '../services/nwdRds';
+import { levelToBars, LEVEL_POLL_MS } from '../services/nwdSignalLevel';
 import { diag, isDiagEnabled, isDiagOverlayEnabled, subscribeDiagPrefs } from '../services/diag';
 import { startMotion, stopMotion } from '../services/motion';
 import { startGpsFix, stopGpsFix } from '../services/gps';
@@ -428,6 +430,10 @@ export default function RadioScreen({ route, navigation }: Props) {
   const RDS_STALE_MS = 25_000;
 
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
+  /** Measured level from NwdFmManager.seek — the built-in tuner's real signal
+   *  reading, and the only measured one CarFM has ever had. Null until the first
+   *  tick. UNDER DEVELOPMENT; see nwdSignalLevel.ts. */
+  const [fmLevel, setFmLevel] = useState<number | null>(null);
   // True while the head unit's built-in NWD tuner is driving the face (a
   // tunerless carFm launch on an NWD/NOWADA unit). Routes tune commands to it.
   const nwdActiveRef = useRef(false);
@@ -2520,6 +2526,10 @@ export default function RadioScreen({ route, navigation }: Props) {
         // A retune outranks a pending expiry: there is nothing worth restoring,
         // the decoder was just emptied.
         rdsStaleRef.current = false;
+        // The level belongs to the station we just left. Drop it and ask for a
+        // fresh one rather than letting the meter lie until the next 30s tick.
+        setFmLevel(null);
+        nwdReadLevelNow();
         diag(`freq ${p.mhz.toFixed(1)} arg=${p.arg} PS='${p.ps}'`);
         scheduleProbe(p.mhz);
       }));
@@ -2527,6 +2537,22 @@ export default function RadioScreen({ route, navigation }: Props) {
       // NwdFmManager.getRadioRDSDataArm() via the native pump; decoding them
       // ourselves is what finally yields RadioText on this unit, along with a
       // real PI instead of the FCC-DB frequency guess.
+      // MEASURED signal level — the first one this app has ever had on this unit.
+      // The estimate it replaces needed a GPS fix, which this head unit never
+      // provides, so the meter has been showing an empty icon and the word "EST"
+      // for its whole life. Each reading COMMANDS the tuner, so the native side
+      // paces it and skips any tick where FM is not the MCU's current source.
+      subs.push(onNwd('NwdRadioLevel', (p) => {
+        // `ok` false means the tuner did not stay on the frequency we asked
+        // about, which is the same check AWNative makes before it believes a
+        // level. Keep the previous reading rather than showing a wrong one.
+        if (!p.ok) { diag(`level: REJECTED asked=${p.asked} landed=${p.landed}${p.err ? ` ${p.err}` : ''}`); return; }
+        setFmLevel(p.level);
+        diag(`level ${p.level} @ ${p.asked} → ${levelToBars(p.level)} bars`);
+      }));
+      nwdStartLevelWatch(LEVEL_POLL_MS);
+      subs.push(() => nwdStopLevelWatch());
+
       subs.push(onNwd('NwdRdsGroup', (p) => {
         // Stamp on ARRIVAL, not on publish: a group getting through means the RDS
         // carrier is still there, even when consensus rejects it and push()
@@ -2832,6 +2858,10 @@ export default function RadioScreen({ route, navigation }: Props) {
           : liveStation.text}
         stereo={fmStereo}
         signalDb={fmSignalDb}
+        // MEASURED bars, built-in tuner only. Overrides the GPS estimate, which
+        // resolves to null on this unit anyway. UNDER DEVELOPMENT.
+        signalBars={levelToBars(fmLevel)}
+        signalLevelRaw={fmLevel}
         rdsOk={!!liveStation.pi || !!liveStation.name}
         tp={liveStation.tp}
         ta={liveStation.ta}
