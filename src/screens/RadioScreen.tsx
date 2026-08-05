@@ -37,7 +37,8 @@ import { createBackend } from '../services/UberSDRAdapter';
 import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, nwdStartLevelWatch, nwdStopLevelWatch, nwdReadLevelNow,
          onNwd, PANEL_KEY, panelKeyName } from '../services/nwdRadio';
 import { createNwdRdsDecoder } from '../services/nwdRds';
-import { levelToBars, LEVEL_POLL_MS, LEVEL_SETTLE_MS } from '../services/nwdSignalLevel';
+import { levelToLit, settleDottedPairs, LEVEL_POLL_MS, LEVEL_SETTLE_MS } from '../services/nwdSignalLevel';
+import { getTunerBackend, loadTunerBackend, subscribeTunerBackend, readoutFor } from '../services/tunerBackend';
 import { stripStationFromRt } from '../services/rtStation';
 import {
   isDebugMode, subscribeDebugMode, formatSample, bearingDeg, DEBUG_SAMPLE_MS,
@@ -443,11 +444,22 @@ export default function RadioScreen({ route, navigation }: Props) {
    *  reading, and the only measured one CarFM has ever had. Null until the first
    *  tick. UNDER DEVELOPMENT; see nwdSignalLevel.ts. */
   const [fmLevel, setFmLevel] = useState<number | null>(null);
-  /** Rolling reception quality from the RDS decoder — the share of recent groups
-   *  whose PI block survived. Null until enough groups have arrived, and null
-   *  again while RDS is expired. Sampled by the 1.5s poll below; the decoder owns
-   *  the window. UNDER DEVELOPMENT alongside the level. */
-  const [fmQuality, setFmQuality] = useState<number | null>(null);
+  /** How many of the glyph's outermost lit wave pairs are drawn dotted — the
+   *  reception-loss overlay. Derived from the decoder's rolling PI-match figure,
+   *  through a hysteresis band so a value near a boundary cannot flicker a whole
+   *  pair on and off. 0 whenever there is no figure at all. */
+  // Which readout the face draws — the SETTINGS SELECTION, not the live probe
+  // (ANDROID §6.3 v1.13.0). Presentation only; picking RTL-SDR does not re-bind
+  // the hardware. See services/tunerBackend.
+  const [tunerSel, setTunerSel] = useState(getTunerBackend());
+  useEffect(() => {
+    void loadTunerBackend().then(setTunerSel);
+    return subscribeTunerBackend(() => setTunerSel(getTunerBackend()));
+  }, []);
+
+  const [fmDotted, setFmDotted] = useState(0);
+  const fmDottedRef = useRef(0);
+  useEffect(() => { fmDottedRef.current = fmDotted; }, [fmDotted]);
 
   // ── Debug/testing mode ───────────────────────────────────────────────────
   // Records one structured sample every 15s so the measured level and the
@@ -932,7 +944,7 @@ export default function RadioScreen({ route, navigation }: Props) {
     const sample: DebugSample = {
       mhz,
       level,
-      bars: levelToBars(level),
+      bars: levelToLit(level),
       lat: loc?.lat ?? null,
       lon: loc?.lon ?? null,
       accM: loc?.accM ?? null,
@@ -2756,7 +2768,7 @@ export default function RadioScreen({ route, navigation }: Props) {
         if (!p.ok) { diag(`level: REJECTED asked=${p.asked} landed=${p.landed}${p.err ? ` ${p.err}` : ''}`); return; }
         setFmLevel(p.level);
         if (!debugModeRef.current) {
-          diag(`level ${p.level} @ ${p.asked} → ${levelToBars(p.level)} bars`);
+          diag(`level ${p.level} @ ${p.asked} → ${levelToLit(p.level)} lit`);
           return;
         }
         // DEBUG MODE: this reading is the heartbeat of the dataset. Take the
@@ -2902,17 +2914,19 @@ export default function RadioScreen({ route, navigation }: Props) {
           rdsExpiriesRef.current++;
           diag(`RDS expired — no group for ${RDS_STALE_MS / 1000}s`);
         }
-        // Reception quality, sampled onto the face. The decoder's ring is NOT
+        // Reception loss → the dotted-wave overlay. The decoder's ring is NOT
         // reset by an expiry (see above), so gate on the stale flag here instead —
-        // a quality figure held over from before the carrier went quiet would be
+        // a figure held over from before the carrier went quiet would be
         // describing air we are no longer receiving.
+        //
+        // The band is settled HERE rather than at render: the ring's percentage
+        // drifts by fractions of a point every poll, and both the rounding and the
+        // hysteresis have to happen once, against the band actually on screen.
         {
-          const raw = rdsStaleRef.current ? null : rdsDecoder.current.quality().piMatchPct;
-          // Rounded HERE, not at render: the ring's percentage moves by fractions
-          // of a point every poll and an unrounded value would re-render the whole
-          // face 40 times a minute for a number that never visibly changed.
-          const q = raw == null ? null : Math.round(raw);
-          setFmQuality((prev) => (prev === q ? prev : q));
+          const match = rdsStaleRef.current ? null : rdsDecoder.current.quality().piMatchPct;
+          const loss = match == null ? null : 100 - match;
+          const next = settleDottedPairs(fmDottedRef.current, loss);
+          if (next !== fmDottedRef.current) setFmDotted(next);
         }
         // The poll does NOT drive PS / RadioText / PTY.
         //
@@ -3105,9 +3119,10 @@ export default function RadioScreen({ route, navigation }: Props) {
         // MEASURED bars, built-in tuner only. Outranks the GPS+database estimate
         // because it is a reading rather than a prediction — the estimate is
         // coarse and only recomputed on retune. UNDER DEVELOPMENT.
-        signalBars={levelToBars(fmLevel)}
+        signalLit={levelToLit(fmLevel)}
         signalLevelRaw={fmLevel}
-        signalQualityPct={fmQuality}
+        signalDottedPairs={fmDotted}
+        signalReadout={readoutFor(tunerSel)}
         rdsOk={!!liveStation.pi || !!liveStation.name}
         tp={liveStation.tp}
         ta={liveStation.ta}

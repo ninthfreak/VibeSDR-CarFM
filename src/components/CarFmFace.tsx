@@ -38,7 +38,7 @@ import SidePresetCard, { PEEK_OPACITY, PEEK_SCALE } from './carfm/SidePresetCard
 import SettingsPanel, { type CarFmTheme } from './carfm/SettingsPanel';
 import { cleanCall, DARK, FM_MAX_MHZ, FM_MIN_MHZ, FONT, FONT_BOLD, LIGHT, type CarFmPalette } from './carfm/tokens';
 import { resolveEgg, eggTokens, areBandFontsReady, subscribeBandFonts } from './carfm/bandThemes';
-import { BandGear, AcdcHorn, AcdcBolt, CardFrame } from './carfm/bandArt';
+import { BandGear, BAND_GEAR_MOTIFS, AcdcHorn, AcdcBolt, CardFrame, ZeppelinRune, ZeppelinAirship } from './carfm/bandArt';
 
 export interface CarFmPreset {
   name: string;
@@ -58,19 +58,20 @@ export interface CarFmFaceProps {
    *  GPS+database ESTIMATE — coarse, recomputed only on retune, and null until a
    *  fix exists.
    *  See services/nwdSignalLevel.ts. UNDER DEVELOPMENT. */
-  signalBars?: number | null;
-  /** The raw level behind `signalBars`. Shown bare, with NO unit: the scale is
-   *  anchored to the vendor's own seek-stop thresholds but its units are
-   *  unresolved, and printing "dB" would be inventing one. */
+  signalLit?: number | null;
+  /** The raw level behind `signalLit`, drawn inside the glyph. Shown bare, with
+   *  NO unit: the scale is anchored to the vendor's own seek-stop thresholds but
+   *  its units are unresolved, and printing "dB" would be inventing one. */
   signalLevelRaw?: number | null;
-  /** Reception quality 0..100 beneath the level, or null when unknown — which is
-   *  common and must not read as 0%. It is the share of recent RDS groups whose
-   *  PI block matched, NOT "% intact": this tuner reports no per-block validity,
-   *  so the blocks carrying the TEXT cannot be judged at all. ~84% is the healthy
-   *  case, so nothing under 100 may be styled as a fault.
-   *  PLACEMENT AND SIZE ARE PROVISIONAL — this is on the face to be looked at and
-   *  adjusted, and the label wording is still open. */
-  signalQualityPct?: number | null;
+  /** How many of the OUTERMOST LIT arc pairs are drawn dotted — reception loss,
+   *  subtracted from what strength drew. 0 when there is no loss figure at all,
+   *  which is common: a station with weak RDS must render solid, because absence
+   *  of data is not evidence of loss. Clamped inside SignalWaves. */
+  signalDottedPairs?: number;
+  /** Which readout to draw, from the SETTINGS SELECTION rather than the live
+   *  probe (ANDROID §6.3 v1.13.0): `'sdr'` prints the dB figure with its unit,
+   *  `'nwd'` the unitless level. Defaults to the built-in tuner. */
+  signalReadout?: 'nwd' | 'sdr';
   /** RDS decoder has a lock (PI/PS seen) — drives the RDS tell. */
   rdsOk?: boolean;
   /** RDS Traffic Programme flag. */
@@ -146,14 +147,18 @@ interface FlipDescriptor {
 const mhzOf = (hz: number) => Math.round(hz / CHANNEL_HZ) / 10;
 const fmt = (mhz: number) => mhz.toFixed(1);
 
-/** dB → 0–4 waves (count/position encode strength, never colour alone).
+/** dB → 0–5 lit elements (count/position encode strength, never colour alone).
  *  Design mapping (CarFmLive): rating 0–5 ↔ db = −95 + rating·8, 12 meter
- *  segments = rating/5·12, waves = segments/3. Inverted here so real dBFS
- *  (−110…−55) lights the same waves as the design demo. */
+ *  segments = rating/5·12. Inverted here so real dBFS (−110…−55) lights the same
+ *  share of the glyph as the design demo.
+ *
+ *  Rescaled with the glyph in v1.13.0: it gained a fourth arc pair, so the range
+ *  is 0–5. Left at 0–4 the outermost pair could never light on this path, and a
+ *  full-scale SDR signal would have read one short of the built-in tuner's. */
 function waveStrength(db: number | null): number {
   if (db == null) return 0;
   const segs = Math.max(0, Math.min(12, Math.round((db + 95) * 0.3)));
-  return Math.max(0, Math.min(4, Math.round(segs / 3)));
+  return Math.max(0, Math.min(5, Math.round((segs / 12) * 5)));
 }
 
 /**
@@ -178,7 +183,9 @@ function waveStrength(db: number | null): number {
  * still lands without adding permanent chrome §4.6 doesn't specify. Callers
  * place the non-persistent one absolutely, so appearing shifts no layout.
  */
-function MotionCarGlyph({ pal, persistent }: { pal: CarFmPalette; persistent?: boolean }) {
+function MotionCarGlyph({ pal, persistent, airship, wide }: {
+  pal: CarFmPalette; persistent?: boolean; airship?: boolean; wide?: boolean;
+}) {
   const moving = useIsMoving();
   const [flashing, setFlashing] = useState(false);
   const pulse = useRef(new Animated.Value(0)).current;
@@ -220,16 +227,24 @@ function MotionCarGlyph({ pal, persistent }: { pal: CarFmPalette; persistent?: b
     <Animated.View
       style={{ opacity, transform: [{ scale }], zIndex: 5 }}
       accessibilityLabel={flashing ? 'Not available while driving' : 'Vehicle in motion'}>
-      <MotionCar size={34} color={pal.amber} />
+      {/* Led Zeppelin flies an airship in this slot instead of the car (§2.3).
+          The colour and the ~2.6s pulse are NOT the theme's to change — this is
+          the fixed amber safety family, same as TA. On the wide track it lifts
+          6px to fly level with the satellite beside it; no lift on tall. */}
+      {airship
+        ? <View style={wide ? { transform: [{ translateY: -6 }] } : undefined}>
+            <ZeppelinAirship color={pal.amber} />
+          </View>
+        : <MotionCar size={34} color={pal.amber} />}
     </Animated.View>
   );
 }
 
-function DrivingStatusIcons({ pal }: { pal: CarFmPalette }) {
+function DrivingStatusIcons({ pal, airship }: { pal: CarFmPalette; airship?: boolean }) {
   const { hasFix } = useGpsFix();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-      <MotionCarGlyph pal={pal} persistent />
+      <MotionCarGlyph pal={pal} persistent airship={airship} wide />
       {/* §4.6: no fix → full text color at 32% + the same faint 1px light emboss. */}
       <View
         style={[
@@ -530,7 +545,7 @@ function Tell({ label, on, pulse, pal, fontSize = 11, dark = false, off = false 
 
 export default function CarFmFace(props: CarFmFaceProps) {
   const {
-    freqHz, stationName, callsignHint, radioText, stereo, signalDb, signalBars, signalLevelRaw, signalQualityPct,
+    freqHz, stationName, callsignHint, radioText, stereo, signalDb, signalLit, signalLevelRaw, signalDottedPairs = 0, signalReadout = 'nwd',
     rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
     onSetAutostart, onSetTheme, onRetryTuner, presets, nwdActive, onHardwareSeek,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
@@ -576,6 +591,11 @@ export default function CarFmFace(props: CarFmFaceProps) {
   const eggFreqFont = eggFontOn ? egg?.freqFont : undefined;
   const eggRtFont = eggFontOn ? (egg?.rtFont ?? egg?.font) : undefined;
   const eggGenreFont = eggFontOn ? (egg?.genreFont ?? egg?.font) : undefined;
+  // `fontScope: 'hero'` confines the theme face to the hero card and RadioText,
+  // leaving preset tiles and peek cards on the default (Led Zeppelin's Kashmir —
+  // a display cut is unreadable at tile size, and the theme reads from the hero
+  // anyway). Absent → the face applies everywhere, as every earlier theme does.
+  const eggBodyFont = eggFontOn && egg?.fontScope !== 'hero' ? egg?.font : undefined;
   // Hero-identity lettering (§12). RN Text carries one shadow, so nameGhost (a
   // hard drop-shadow) and nameOutline (approximated as a soft ring — RN has no
   // real text stroke) are mutually exclusive, which matches the registry (no egg
@@ -680,19 +700,16 @@ export default function CarFmFace(props: CarFmFaceProps) {
       rtFont: s(landscape ? 26 : 30),
       // Header element scaling (design renderVals `tall ?` branches). Small
       // status type floors at legibility, not proportion (§10).
-      signalIcon: s(tall ? 46 : 33),
+      // SIGNAL-METER.md's rendered sizes. The glyph grew from 33/46 because it
+      // gained a fourth arc pair AND swallowed the level number, which used to
+      // sit beside it — net, the wide cluster is narrower than it was.
+      signalIcon: s(tall ? 74.75 : 54.6),
       signalDb: signalNum,
-      signalNumW: Math.round(signalNum * 2.7),
-      // The level and quality lines get EXPLICIT line heights. Left to the
-      // platform, an empty quality string collapses its box and the level shifts
-      // down by half a line the moment the figure goes unknown — which happens
-      // several times on a normal drive. Fixed boxes, always.
-      signalLine: Math.max(14, s(tall ? 22 : 18)),
-      // Quality sits subordinate to the level: smaller, dimmer, directly beneath.
-      // PROVISIONAL — 11 wide / 13 tall is a starting point for a look at the
-      // real screen, not a settled size.
-      signalQuality: Math.max(11, s(tall ? 13 : 11)),
-      signalQualityLine: Math.max(13, s(tall ? 16 : 14)),
+      // The number is an absolutely-positioned overlay inside the glyph, in the
+      // clear column below the dot: every arc bows outward toward the flanks and
+      // none crosses the vertical centreline. `top` is measured from the glyph's
+      // own top edge, so the baseline clears the outermost wave.
+      signalNumTop: s(tall ? 32.1 : 23),
       stereoFont: Math.max(12, s(tall ? 18 : 15)),
       stereoWave: tall ? { w: s(28), h: s(40) } : { w: s(20), h: s(28) },
       // STEREO/MONO pill chrome (design stereoStyle = pill + minWidth). Heights
@@ -1097,49 +1114,77 @@ export default function CarFmFace(props: CarFmFaceProps) {
     onSaveStationPreset(st.callsign, st.frequencyMhz);
   }, [onSaveStationPreset]);
 
+  // Marks drawn IN PLACE OF the genre line (Led Zeppelin's four symbols). Laid
+  // out by height with §2.3's 0.62em gaps; each mark takes its width from its own
+  // aspect. Unlike the type these do NOT wait on the band fonts — they are art,
+  // not a typeface, and there is nothing to fall back to.
+  const eggRunes = egg?.genreArt?.length ? (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: L.ptyFont * 0.62 }}>
+      {egg.genreArt.map((m) => (
+        <ZeppelinRune key={m} mark={m} size={L.ptyFont * 1.45} color={genreColor} dark={dark} />
+      ))}
+    </View>
+  ) : null;
+
   // Status-bar sub-clusters (design §4.1 v1.5.0). Wide keeps everything inline in
   // a left cluster; tall splits into three zones — signal left, stereo/tells/PTY
   // centered, controls right — so the signal dB stacks below the icon and the
   // stereo column is truly centered regardless of the side widths.
+  // NOT LIVE, and the number must not pretend otherwise (SIGNAL-METER.md states):
+  // the dial sweeping past other stations during a scan, and the first seconds
+  // after a retune. The retune case already arrives as a null level — the screen
+  // clears it and waits LEVEL_SETTLE_MS, because a reading taken immediately
+  // after tuning ran a mean +17.7 above the same station 20s later. Scanning is
+  // suppressed here, since the level keeps arriving throughout a sweep and
+  // belongs to whatever the dial swept past.
+  const levelLive = !off && !scan;
+  const nwdLevel = levelLive ? signalLevelRaw : null;
+  const sdrDb = levelLive ? signalDb : null;
+  // Same arrangement on BOTH tracks now: the number lives inside the glyph, so
+  // there is no row/column variant to pick between.
   const signalCluster = (
-    <View style={[styles.signalPill, tall && styles.signalPillTall, !tall && { minHeight: L.stereoH, justifyContent: 'center' }]}>
-      {/* Three cases, and only the first is a real measurement.
-          MEASURED (signalBars non-null): the built-in tuner's own level read.
-            Amber like the SDR meter, because it IS live, and the raw number is
-            shown BARE — the scale is anchored to the vendor's seek-stop
-            thresholds but its units are unresolved, so "dB" would be a lie.
-          SDR: live amber bars + a genuine dB figure.
-          ESTIMATE: grey bars and the word EST. It is a database guess from
-            position, not a reading, so it stays grey and never shows a number.
-            Empty until a fix lands, which on a cold start takes a while. */}
+    <View style={[styles.signalPill, !tall && { minHeight: L.stereoH, justifyContent: 'center' }]}>
+      {/* Strength draws the waves; reception loss converts the outermost lit
+          pairs to dotted. The count never shrinks, so a strong carrier arriving
+          in pieces stays distinguishable from a weak one arriving cleanly — the
+          case a level alone renders identically (WERN sat at 53-55 while losing
+          RDS fifteen times across one commute).
+          Grey rather than amber means the value is a GPS+database ESTIMATE, not
+          a reading. Nothing is ever dotted on that path: there is no loss figure
+          to draw with, and absence of data is not evidence of loss. */}
       <SignalWaves
         size={L.signalIcon}
-        strength={off ? 0 : signalBars != null ? signalBars : waveStrength(signalDb)}
-        on={nwdActive && signalBars == null ? pal.dim : pal.amber}
+        strength={off ? 0 : signalLit != null ? signalLit : waveStrength(sdrDb)}
+        on={nwdActive && signalLit == null ? pal.dim : pal.amber}
         off={pal.meterEmpty}
+        dottedPairs={signalDottedPairs}
       />
-      {/* The two numbers stack, level over quality: level is how much signal is
-          arriving, quality how much of it survives to be decoded. Containment,
-          not a ratio. Both boxes are fixed-size and ALWAYS rendered, so neither a
-          third digit nor the quality line vanishing can move the stereo pill.
-          PROVISIONAL SIZES — see signalQualityPct. */}
-      <View style={[styles.signalNums, { width: L.signalNumW }]}>
-        <Text style={[styles.signalText, { fontSize: L.signalDb, lineHeight: L.signalLine, width: L.signalNumW, color: pal.dim }]}>
-          {off ? '--'
-            : signalLevelRaw != null ? `${signalLevelRaw}`
-            : nwdActive ? 'EST'
-            : signalDb == null ? '—' : `${Math.round(signalDb)} dB`}
-        </Text>
-        {/* Quality is meaningful ONLY on the built-in tuner: it is derived from
-            the RDS groups this app decodes itself. The SDR path prints a real dB
-            level above and has its own error rate; it does not borrow this.
-            Powered off, the line asserts nothing — the box stays, the text goes. */}
-        <Text style={[styles.signalQualityText, { fontSize: L.signalQuality, lineHeight: L.signalQualityLine, width: L.signalNumW, color: pal.meterEmpty }]}>
-          {off || !nwdActive ? ''
-            : signalQualityPct != null ? `${signalQualityPct}%`
-            : '—'}
-        </Text>
-      </View>
+      {/* The level, INSIDE the glyph, in the ink-free column below the dot.
+          Absolutely positioned and centred, so 2 → 3 digits moves nothing here or
+          anywhere to the right of it.
+          No unit on the NWD path — the scale is the vendor's and unidentified, so
+          printing dB would be inventing one. The SDR path appends its unit.
+          The glow is a background-coloured ring separating the digits from any
+          arc ink behind them; RN gives one shadow rather than the design's four
+          stacked rings, and it is perceptual only either way. */}
+      <Text
+        pointerEvents="none"
+        style={[styles.signalText, {
+          top: L.signalNumTop,
+          fontSize: L.signalDb,
+          lineHeight: L.signalDb,   // line-height 1, so `top` positions the digits themselves
+          color: pal.dim,
+          textShadowColor: egg?.pageBg || pal.bg,
+          textShadowOffset: { width: 0, height: 0 },
+          textShadowRadius: 4,
+        }]}
+      >
+        {off ? '—'
+          : signalReadout === 'sdr' ? (sdrDb == null ? '—' : `${Math.round(sdrDb)} dB`)
+          : nwdLevel != null ? `${nwdLevel}`
+          : nwdActive ? 'EST'
+          : sdrDb == null ? '—' : `${Math.round(sdrDb)} dB`}
+      </Text>
     </View>
   );
   // §4.7 off: the STEREO/MONO pill goes EMPTY (outline, no waves, no text) and all
@@ -1222,7 +1267,8 @@ export default function CarFmFace(props: CarFmFaceProps) {
             </View>
             <View style={styles.zoneCenter}>
               {stereoCluster}
-              {genreLabel && !off ? (
+              {eggRunes && !off ? eggRunes
+                : genreLabel && !off ? (
                 <ThemedGenre label={genreLabel} cycle={egg?.genreCycle} pulse={egg?.genrePulse} pulseOn={egg?.genrePulseOn} outline={egg?.genreOutline} droop={egg?.genreDroop} dark={dark} color={genreColor} fontFamily={eggGenreFont} fontSize={L.ptyFont} style={styles.ptyCentered} shadow={ptyShadow} />
               ) : null}
             </View>
@@ -1232,7 +1278,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
           <View style={styles.headerLeft}>
             {signalCluster}
             {stereoCluster}
-            {genreLabel && !off ? (
+            {eggRunes && !off ? (
+              <View style={[styles.ptyWrap, { maxWidth: 200, height: L.stereoH }]}>{eggRunes}</View>
+            ) : genreLabel && !off ? (
               <View style={[styles.ptyWrap, { maxWidth: 200, height: L.stereoH }]}>
                 <ThemedGenre label={genreLabel} cycle={egg?.genreCycle} pulse={egg?.genrePulse} pulseOn={egg?.genrePulseOn} outline={egg?.genreOutline} droop={egg?.genreDroop} dark={dark} color={genreColor} fontFamily={eggGenreFont} fontSize={L.ptyFont} style={styles.ptyText} shadow={ptyShadow} />
               </View>
@@ -1250,9 +1298,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
                 it any), but a drive-lock refusal still has to be visible — so the
                 car appears there for the flash alone, absolutely placed left of
                 the gear so its arrival shifts nothing. */}
-            {!tall ? <DrivingStatusIcons pal={pal} /> : (
+            {!tall ? <DrivingStatusIcons pal={pal} airship={egg?.motif === 'runes'} /> : (
               <View pointerEvents="none" style={styles.tallDriveFlash}>
-                <MotionCarGlyph pal={pal} />
+                <MotionCarGlyph pal={pal} airship={egg?.motif === 'runes'} />
               </View>
             )}
             <Pressable
@@ -1261,7 +1309,9 @@ export default function CarFmFace(props: CarFmFaceProps) {
               style={({ pressed }) => [styles.gearBtn, { borderColor: pal.border, backgroundColor: pal.raised }, pressed && { opacity: 0.55 }]}
               accessibilityRole="button" accessibilityLabel="Settings"
             >
-              {egg ? <BandGear motif={egg.motif} size={24} color={egg.settingsBoltColor ?? egg.accent} /> : <GearIcon size={24} color={pal.dim} />}
+              {egg && BAND_GEAR_MOTIFS.has(egg.motif)
+                ? <BandGear motif={egg.motif} size={24} color={egg.settingsBoltColor ?? egg.accent} />
+                : <GearIcon size={24} color={pal.dim} />}
             </Pressable>
           </View>
           {tall ? (
@@ -1657,31 +1707,23 @@ const styles = StyleSheet.create({
   headerNearby: { width: 74, height: 74, borderRadius: 37, alignItems: 'center', justifyContent: 'center' },
   headerDoneCheck: { color: '#FFF', fontSize: 22, fontWeight: '700' },
   headerDoneText: { color: '#FFF', fontFamily: FONT_BOLD, fontSize: 11, letterSpacing: 1.5 },
-  signalPill: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  // Tall: dB stacks below the icon (design signalWrapStyle column, gap 2).
-  signalPillTall: { flexDirection: 'column', gap: 2 },
-  // FIXED WIDTH, always. The measured level reached 103 on 2026-08-05 and the
-  // third digit widened this text, which shifted the stereo pill and everything
-  // else in the row. Nothing on this face may move because a value grew.
+  // The glyph is the whole cluster now — the number lives inside it, so there is
+  // no row to lay out and no track-specific variant.
+  signalPill: { position: 'relative', alignItems: 'center', justifyContent: 'center' },
+  // ABSOLUTELY POSITIONED over the glyph, stretched edge to edge and centred.
+  // Taking it out of flow is what makes the no-reflow guarantee structural rather
+  // than a matter of guessing a wide-enough box: 2 digits, 3 digits or an
+  // em-dash, the cluster is exactly the glyph's width either way, and nothing to
+  // the right of it — the stereo pill above all — can be pushed.
   //
-  // Sized for three digits and centred, so "63" and "103" occupy the same box.
-  // Tabular figures keep the digits themselves from jittering as the value
-  // changes — a proportional "1" is much narrower than a "0".
+  // Tabular figures still matter for the digits themselves: a proportional "1" is
+  // much narrower than a "0", so the number would jitter in place as it counted.
   signalText: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
     fontFamily: FONT_BOLD,
     fontSize: 17,
-    fontVariant: ['tabular-nums'],
-    minWidth: 40,
-    textAlign: 'center',
-  },
-  // The level/quality stack. Its width is set inline from L.signalNumW — fixed,
-  // for the same reason the level is: "84%" is wider than "—" and the column
-  // must not breathe as the figure comes and goes.
-  signalNums: { alignItems: 'center' },
-  // Same tabular figures, one size down; width and line height come from L.
-  signalQualityText: {
-    fontFamily: FONT_BOLD,
-    fontSize: 11,
     fontVariant: ['tabular-nums'],
     textAlign: 'center',
   },

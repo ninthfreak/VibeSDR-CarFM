@@ -118,9 +118,12 @@ export default function App() {
     // which reads lighter than the design's true 700 (design handoff §3).
     'AtkinsonHyperlegible-Bold': require('./assets/fonts/AtkinsonHyperlegible-Bold.ttf'),
   });
-  // Band-theme display faces — the REAL supplied faces from the v1.12.0 handoff
+  // Band-theme display faces — the REAL supplied faces from the v1.13.0 handoff
   // (fonts/), bundled as res/font. No stand-ins, no network fetch; a theme's
   // identity is its typeface (EASTER-EGGS-BUILD §1.1, family names verbatim).
+  //
+  // Anton left with Talking Heads in v1.13.0 — that theme was withdrawn and Led
+  // Zeppelin replaced it, so the face has no consumer and is no longer bundled.
   const [bandFontsLoaded] = useFonts({
     'Squealer':         require('./assets/fonts/Squealer.otf'),          // AC/DC
     'BeatlesYellowSub': require('./assets/fonts/BeatlesYellowSub.ttf'),  // The Beatles (body)
@@ -130,7 +133,7 @@ export default function App() {
     'Onyx':             require('./assets/fonts/Onyx.ttf'),              // Nirvana (hero, 1.5×)
     'Gridnik':          require('./assets/fonts/Gridnik.otf'),           // Nine Inch Nails (body/hero)
     'Singothic':        require('./assets/fonts/Singothic.ttf'),         // Nine Inch Nails (genre/RT/freq)
-    'Anton':            require('./assets/fonts/Anton-Regular.ttf'),     // Talking Heads
+    'Kashmir':          require('./assets/fonts/Kashmir.ttf'),           // Led Zeppelin (hero + RadioText ONLY)
   });
   useEffect(() => { setBandFontsReady(!!bandFontsLoaded); }, [bandFontsLoaded]);
 

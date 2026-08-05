@@ -16,6 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BatteryBolt, SignalWaves, WarningTriangle } from './icons';
 import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 import { EGG_MENU } from './bandThemes';
+import { getTunerBackend, loadTunerBackend, setTunerBackend, readoutFor, type TunerBackend } from '../../services/tunerBackend';
 import { snapshotDate, clearAllStationPrefs } from '../../services/stationDb';
 import { clearAllLogoFiles } from '../../services/logoStore';
 import { clearLogoCache } from '../../services/stationLogoCache';
@@ -29,7 +30,6 @@ import { diag, isDiagEnabled, setDiagEnabled, isDiagOverlayEnabled, setDiagOverl
 export type CarFmTheme = 'system' | 'light' | 'dark';
 
 const APP_VERSION = '0.9.2';
-const BACKEND_KEY = '@carfm/tuner_backend_v1';
 const LOGOS_KEY = '@carfm/logos_enabled_v1';
 
 interface BackendDef { id: string; name: string; kind: string; available: boolean; detected: boolean | null; }
@@ -73,7 +73,7 @@ export default function SettingsPanel({
   onForceEgg?: (id: string | null) => void;
 }) {
   const [diagOpen, setDiagOpen] = useState(false);
-  const [backend, setBackend] = useState('rtl');
+  const [backend, setBackend] = useState<TunerBackend>(getTunerBackend());
   const [batteryExempt, setBatteryExempt] = useState<boolean | null>(null);
   const [nwdAvail, setNwdAvail] = useState<boolean | null>(null);   // built-in NWD tuner present?
   const [logosOn, setLogosOn] = useState(false);
@@ -172,9 +172,9 @@ export default function SettingsPanel({
     if (!visible) return;
     let cancelled = false;
     (async () => {
-      // Ignore the retired hidden 'rtltcp' id so a legacy stored value doesn't
-      // leave the picker with no row highlighted.
-      try { const b = await AsyncStorage.getItem(BACKEND_KEY); if (b && b !== 'rtltcp' && !cancelled) setBackend(b); } catch {}
+      // Retired ids are filtered inside the service, so a legacy stored value
+      // can't leave the picker with no row highlighted.
+      try { const b = await loadTunerBackend(); if (!cancelled) setBackend(b); } catch {}
       try { const l = await AsyncStorage.getItem(LOGOS_KEY); if (!cancelled) setLogosOn(l === '1'); } catch {}
       try { const d = await snapshotDate(); if (!cancelled) setDataDate(d); } catch {}
       try { const n = await isNwdAvailable(); if (!cancelled) setNwdAvail(n); } catch { if (!cancelled) setNwdAvail(false); }
@@ -186,10 +186,13 @@ export default function SettingsPanel({
     return () => { cancelled = true; };
   }, [visible]);
 
+  // §6.3 v1.13.0: the selection is load-bearing now — it drives the face's
+  // readout, this panel's connection row, and whether the RTL-SDR diagnostics
+  // are reachable. It does NOT re-bind the hardware; see services/tunerBackend.
   const pickBackend = useCallback((id: string, available: boolean) => {
     if (!available) return;
-    setBackend(id);
-    AsyncStorage.setItem(BACKEND_KEY, id).catch(() => {});
+    setBackend(id as TunerBackend);
+    setTunerBackend(id as TunerBackend);
   }, []);
   const toggleLogos = useCallback(() => {
     setLogosOn((v) => { const nv = !v; AsyncStorage.setItem(LOGOS_KEY, nv ? '1' : '0').catch(() => {}); return nv; });
@@ -247,6 +250,10 @@ export default function SettingsPanel({
   // rtl_tcp / networked-SDR sources are hidden from the picker for now (the
   // backend still exists; parked for a future advanced/developer mode).
 
+  // The RTL2832U diagnostics name a chip that only the dongle has, so §6.3
+  // shows them on that selection alone.
+  const sdrSelected = readoutFor(backend) === 'sdr';
+
   const badgeFor = (b: BackendDef) =>
     b.detected === null ? '' : b.detected ? 'Detected' : b.available ? 'Not detected' : 'Unavailable';
 
@@ -276,14 +283,14 @@ export default function SettingsPanel({
                 <View style={styles.iconWrap}>
                   {tunerError
                     ? <WarningTriangle size={32} color={pal.amber} />
-                    : <SignalWaves size={34} strength={4} on={pal.amber} off={pal.meterEmpty} />}
+                    : <SignalWaves size={44} strength={5} on={pal.amber} off={pal.meterEmpty} />}
                 </View>
                 <View style={styles.textWrap}>
                   <Text style={[styles.rowTitle, { color: pal.text }]}>{tunerError ? 'Not connected' : 'Connected'}</Text>
                   <Text style={[styles.rowSub, { color: pal.dim }]}>
                     {tunerError ? 'No USB tuner found'
-                      : nwdActive ? 'Built-in tuner · NWD / NOWADA'
-                      : 'Local hardware · RTL-SDR (RTL2832U)'}
+                      : sdrSelected ? 'Local hardware · RTL-SDR (RTL2832U)'
+                      : 'Built-in hardware · NWD/NOWADA FM tuner'}
                   </Text>
                 </View>
                 {tunerError && onRetryTuner ? (
@@ -294,7 +301,7 @@ export default function SettingsPanel({
                   >
                     <Text style={[styles.retryText, { color: pal.blue }]}>RETRY</Text>
                   </Pressable>
-                ) : (!tunerError && !nwdActive) ? (
+                ) : (!tunerError && sdrSelected) ? (
                   <Pressable
                     onPress={() => setDiagOpen((v) => !v)}
                     style={({ pressed }) => [styles.diagBtn, { borderColor: pal.border }, pressed && { opacity: 0.6 }]}

@@ -62,25 +62,97 @@ export const LEVEL_LOC_FLOOR = 31;
 export const LEVEL_TOP = 105;
 
 /**
- * Level → the face's 0..4 bar icon.
+ * Level → how many of the glyph's five elements light (SIGNAL-METER.md).
  *
- *   < 10     0 bars   a DX seek would not stop here
- *   10..30   1 bar    above the DX floor, below the local threshold
- *   31..55   2 bars   the vendor calls this a local station
- *   56..80   3 bars
- *   81+      4 bars
+ *   < 31     0   nothing lit — below the chip's own local-seek floor
+ *   31..44   1   the dot alone
+ *   45..59   2   + pair 1
+ *   60..73   3   + pair 2
+ *   74..88   4   + pair 3
+ *   89+      5   + pair 4
  *
- * Against the fresh driver ratings of 2026-08-05: "breaking up" had a median
- * level of 41 and "clean" a median of 61, so the 2/3 boundary at 56 falls
- * between them. The bands are wide because the level ALONE cannot do better —
- * see the note above about multipath.
+ * REPLACES the old five-state mapping anchored on 10 and 31. Under that one, two
+ * of the five states sat below 31 and were therefore unreachable on any real
+ * preset — the icon had five states and spent three. Across the 156 samples of
+ * 2026-08-05 the minimum was 30 and exactly one sample fell below 31.
+ *
+ * These bands are an even division of the observed range (30..103, p50 63, p75
+ * 79, p90 92), and they land on the listening evidence without having been
+ * fitted to it: "breaking up" had a median level of 41, which falls in the
+ * dot-only band, and "clean" a median of 61, which falls at three elements.
+ *
+ * 31 is kept as the bottom because it is the vendor's own LEVEL_LOC_FLOOR, which
+ * is what makes "nothing lit" mean "the tuner would not call this a station"
+ * rather than an arbitrary cutoff.
  */
-export function levelToBars(level: number | null | undefined): number | null {
+export function levelToLit(level: number | null | undefined): number | null {
   if (level == null || !Number.isFinite(level)) return null;
-  if (level < LEVEL_DX_FLOOR) return 0;
-  if (level < LEVEL_LOC_FLOOR) return 1;
-  const band = (LEVEL_TOP - LEVEL_LOC_FLOOR) / 3;
-  return Math.min(4, 2 + Math.floor((level - LEVEL_LOC_FLOOR) / band));
+  if (level < LEVEL_LOC_FLOOR) return 0;
+  if (level < 45) return 1;
+  if (level < 60) return 2;
+  if (level < 74) return 3;
+  if (level < 89) return 4;
+  return 5;
+}
+
+/**
+ * Reception loss → how many of the outermost LIT pairs are drawn dotted.
+ *
+ *   < 30%    0   nothing dotted
+ *   30..49   1
+ *   50..69   2
+ *   70+      3
+ *
+ * Anchored on measurement rather than on a linear split: audio the driver rated
+ * clean ran ~16% loss and audio rated crackle ~44.5%, at matched signal levels.
+ * 30 is the midpoint between those two populations. 20% was considered and
+ * rejected — it sits on the shoulder of the clean population, so ordinary
+ * variance would break the waves up during audio that sounds fine, and an
+ * indicator that cries wolf stops being read.
+ *
+ * Three is the ceiling by construction, so with all four pairs lit there is
+ * always a solid dot plus a solid innermost pair and "strong but lossy" can
+ * never collapse into reading as weak.
+ *
+ * PROVISIONAL. These rest on two band means rather than a distribution; the
+ * drive logs carry `rate=` and `err=` on the same line and can settle them.
+ */
+export function lossToDottedPairs(lossPct: number | null | undefined): number {
+  if (lossPct == null || !Number.isFinite(lossPct)) return 0;
+  if (lossPct < 30) return 0;
+  if (lossPct < 50) return 1;
+  if (lossPct < 70) return 2;
+  return 3;
+}
+
+/**
+ * Hysteresis for the loss figure, so a value sitting near a band edge cannot
+ * flip a whole wave pair between solid and dotted every poll.
+ *
+ * The two inputs update at wildly different rates — loss every 1.5s, level every
+ * 30s while parked — so the dotting would otherwise twitch against a wave count
+ * that never moves. Nobody counts waves; this display exists to give a fast
+ * impression, and a pair flickering carries no information to offset the motion.
+ *
+ * A new band has to be reached by this margin before it is adopted. Moving
+ * further into the band you are already in is always free.
+ */
+export const LOSS_BAND_MARGIN = 5;
+
+/**
+ * Apply the margin: `prev` is the band currently shown, `raw` the band the
+ * current loss figure would pick on its own. Returns the band to show.
+ *
+ * Pure so it can be tested without a renderer.
+ */
+export function settleDottedPairs(prev: number, lossPct: number | null | undefined): number {
+  const next = lossToDottedPairs(lossPct);
+  if (next === prev) return prev;
+  if (lossPct == null || !Number.isFinite(lossPct)) return next;   // no figure → all solid, at once
+  // Re-test with the margin pushing AGAINST the direction of travel, so the
+  // figure has to commit before the glyph redraws.
+  const nudged = lossToDottedPairs(lossPct + (next > prev ? -LOSS_BAND_MARGIN : LOSS_BAND_MARGIN));
+  return nudged === next ? next : prev;
 }
 
 /** A reading is only trustworthy when the tuner stayed on the frequency we asked
