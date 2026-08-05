@@ -10,12 +10,19 @@
  * the measured level rather than merely averaging. See debugMode.ts for the
  * vocabulary and where it came from.
  *
- * No red/green anywhere — the design's constraint throughout. A press flashes
- * amber and the most recent choice stays outlined, so a glance confirms the tap
- * registered without needing a toast.
+ * MOMENTARY, not a mode. Each press is a timestamped observation about the
+ * moment it was made — "it crackled just then" — and nothing about it persists.
+ * The first build kept the last choice outlined, which read as an ongoing status
+ * that had to be changed rather than a note that had been taken, and made the
+ * driver feel responsible for keeping it accurate.
+ *
+ * So the acknowledgement is a brief amber flash on the button pressed, and then
+ * the bar returns to rest. No selection, no current value, nothing to maintain.
+ *
+ * No red/green anywhere — the design's constraint throughout.
  */
 
-import React from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { RATING_HINTS, RATING_LABELS, type AudioRating } from '../../services/debugSample';
@@ -23,22 +30,36 @@ import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 
 const ORDER: AudioRating[] = ['clean', 'crackle', 'breakup', 'barely'];
 
+/** How long the confirming flash lasts. Long enough to register in peripheral
+ *  vision at a glance, short enough that it never reads as a held state. */
+const FLASH_MS = 900;
+
 export default function RatingBar({
-  pal, current, onRate,
+  pal, onRate,
 }: {
   pal: CarFmPalette;
-  /** The last rating given, outlined so a glance confirms the tap landed. */
-  current: AudioRating | null;
   onRate: (r: AudioRating) => void;
 }) {
+  // Which button is mid-flash. Not a selection — it clears itself.
+  const [flash, setFlash] = useState<AudioRating | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
+  const press = useCallback((r: AudioRating) => {
+    onRate(r);
+    setFlash(r);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setFlash(null), FLASH_MS);
+  }, [onRate]);
+
   return (
     <View style={[styles.wrap, { backgroundColor: pal.backdrop, borderColor: pal.border }]}>
       {ORDER.map((r) => {
-        const active = current === r;
+        const active = flash === r;
         return (
           <Pressable
             key={r}
-            onPress={() => onRate(r)}
+            onPress={() => press(r)}
             accessibilityRole="button"
             accessibilityLabel={`${RATING_LABELS[r]} — ${RATING_HINTS[r]}`}
             style={({ pressed }) => [

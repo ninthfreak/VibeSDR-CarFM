@@ -37,11 +37,11 @@ import { createBackend } from '../services/UberSDRAdapter';
 import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, nwdStartLevelWatch, nwdStopLevelWatch, nwdReadLevelNow,
          onNwd, PANEL_KEY, panelKeyName } from '../services/nwdRadio';
 import { createNwdRdsDecoder } from '../services/nwdRds';
-import { levelToBars, LEVEL_POLL_MS } from '../services/nwdSignalLevel';
+import { levelToBars, LEVEL_POLL_MS, LEVEL_SETTLE_MS } from '../services/nwdSignalLevel';
 import { stripStationFromRt } from '../services/rtStation';
 import {
   isDebugMode, subscribeDebugMode, formatSample, bearingDeg, DEBUG_SAMPLE_MS,
-  RATING_LABELS, type AudioRating, type DebugSample,
+  RATING_LABELS, RATING_FRESH_S, type AudioRating, type DebugSample,
 } from '../services/debugMode';
 import { getDetailedLocation } from '../services/instancesApi';
 import { stationsAtFrequency } from '../services/stationDb';
@@ -456,7 +456,6 @@ export default function RadioScreen({ route, navigation }: Props) {
     debugModeRef.current = isDebugMode();
     setDebugOn(debugModeRef.current);
   }), []);
-  const [fmRating, setFmRating] = useState<AudioRating | null>(null);
   const ratingAtRef = useRef(0);
   /** Stereo transitions since the last sample. The best cheap proxy for what a
    *  level reading cannot see: multipath collapses the pilot, so a station can
@@ -867,9 +866,35 @@ export default function RadioScreen({ route, navigation }: Props) {
    * database yields `?` in that column rather than dropping the sample, because
    * "the level was 54 and we do not know where" is still worth having.
    */
+  /** One sample at a time. getDetailedLocation waits up to 8s for a live fix
+   *  while the 15s tick keeps coming, so without this two samples overlap and
+   *  corrupt each other's window — which is exactly what happened on
+   *  2026-08-05: `tuned=-2s`, `rds=44.0/s` against a physical ceiling of ~11.4,
+   *  and thirteen timestamps carrying two samples each. */
+  const samplingRef = useRef(false);
+
   const writeDebugSample = useCallback(async (level: number) => {
+    if (samplingRef.current) return;
+    samplingRef.current = true;
+    try {
+    // SNAPSHOT EVERYTHING FIRST, then await. Every value below belongs to the
+    // instant the level was measured; reading any of them after the GPS wait
+    // means reading state a later retune or a later sample has already moved.
     const now = Date.now();
     const mhz = curMhzRef.current > 0 ? curMhzRef.current : null;
+    const sinceTuneS = (now - lastTuneAtRef.current) / 1000;
+    const windowS = Math.max(1, (now - lastSampleAtRef.current) / 1000);
+    const st = rdsDecoder.current.stats();
+    const flips = stereoFlipsRef.current;
+    const expiries = rdsExpiriesRef.current;
+    const rating = ratingRef.current;
+    const ratingAgeS = rating ? (now - ratingAtRef.current) / 1000 : null;
+    // Close the window NOW, so groups arriving during the GPS wait count toward
+    // the NEXT sample rather than being double-counted or lost.
+    rdsDecoder.current.resetStats();
+    stereoFlipsRef.current = 0;
+    rdsExpiriesRef.current = 0;
+    lastSampleAtRef.current = now;
 
     const loc = await getDetailedLocation(8000);
 
@@ -899,12 +924,6 @@ export default function RadioScreen({ route, navigation }: Props) {
       } catch { /* leave the prediction columns unknown */ }
     }
 
-    // RDS health over the window that just closed, then start a fresh one.
-    const st = rdsDecoder.current.stats();
-    const windowS = Math.max(1, (now - lastSampleAtRef.current) / 1000);
-    rdsDecoder.current.resetStats();
-    lastSampleAtRef.current = now;
-
     const sample: DebugSample = {
       mhz,
       level,
@@ -918,15 +937,20 @@ export default function RadioScreen({ route, navigation }: Props) {
       predScore, distKm, bearingDeg: brg, erpKw, stationClass, dbCall,
       rdsGroupsPerSec: st.groups / windowS,
       rdsErrPct: st.groups ? (100 * st.piMismatch) / st.groups : null,
-      stereoFlips: stereoFlipsRef.current,
-      rdsExpiries: rdsExpiriesRef.current,
-      sinceTuneS: (now - lastTuneAtRef.current) / 1000,
-      rating: ratingRef.current,
-      ratingAgeS: ratingRef.current ? (now - ratingAtRef.current) / 1000 : null,
+      stereoFlips: flips,
+      rdsExpiries: expiries,
+      sinceTuneS,
+      // A rating is an observation about a MOMENT, not a standing verdict. Past
+      // its freshness window the sample carries none rather than implying the
+      // driver still means it — the first build let one press colour every
+      // sample until the next, which made 111 of 156 samples read "clean".
+      rating: rating && ratingAgeS != null && ratingAgeS <= RATING_FRESH_S ? rating : null,
+      ratingAgeS: rating && ratingAgeS != null && ratingAgeS <= RATING_FRESH_S ? ratingAgeS : null,
     };
-    stereoFlipsRef.current = 0;
-    rdsExpiriesRef.current = 0;
     diag(formatSample(sample));
+    } finally {
+      samplingRef.current = false;
+    }
   }, []);
 
   /** The rating, for the sampler's long-lived closure. */
@@ -934,7 +958,6 @@ export default function RadioScreen({ route, navigation }: Props) {
   const onRateAudio = useCallback((r: AudioRating) => {
     ratingRef.current = r;
     ratingAtRef.current = Date.now();
-    setFmRating(r);
     // Its own event line: the periodic sample carries the rating too, but the
     // moment of the press is when the driver heard the thing.
     diag(`RATE ${r} (${RATING_LABELS[r]}) f=${curMhzRef.current.toFixed(1)} lvl=${fmLevelRef.current ?? '?'}`);
@@ -2534,10 +2557,13 @@ export default function RadioScreen({ route, navigation }: Props) {
     // each station without any interaction. Debounced (reset on every freq
     // change) and de-duped per frequency; only runs while diagnostics are on.
     let probeTimer: ReturnType<typeof setTimeout> | null = null;
+    // Debounced post-tune level read; see the frequency handler.
+    let levelSettleTimer: ReturnType<typeof setTimeout> | null = null;
     let lastProbedMhz = 0;
     const scheduleProbe = (mhz: number) => {
       if (!isDiagEnabled() || !(mhz > 0) || Math.abs(mhz - lastProbedMhz) < 0.05) return;
       if (probeTimer) clearTimeout(probeTimer);
+      if (levelSettleTimer) clearTimeout(levelSettleTimer);
       probeTimer = setTimeout(async () => {
         if (cancelled) return;
         lastProbedMhz = mhz;
@@ -2689,10 +2715,23 @@ export default function RadioScreen({ route, navigation }: Props) {
         // the decoder was just emptied.
         rdsStaleRef.current = false;
         // The level belongs to the station we just left. Drop it and ask for a
-        // fresh one rather than letting the meter lie until the next 30s tick.
+        // fresh one rather than letting the meter lie until the next tick — but
+        // WAIT for the front end to settle first.
+        //
+        // A reading taken immediately after a retune is systematically inflated.
+        // Measured on 2026-08-05 across 24 paired comparisons — the first reading
+        // after a tune against the same station 20s later — the mean excess was
+        // +17.7, with individual cases of +45, +48 and +57. Banded by age the
+        // same drive gives 0-5s mean 70.3 against 5-15s mean 51.8.
+        //
+        // The value comes from seek(), the chip's own scan primitive, so a level
+        // read while the tune is still completing plausibly reflects that
+        // operation rather than the settled channel. Whatever the mechanism, the
+        // number is not usable that early, and the meter was showing it.
         setFmLevel(null);
         lastTuneAtRef.current = Date.now();
-        nwdReadLevelNow();
+        if (levelSettleTimer) clearTimeout(levelSettleTimer);
+        levelSettleTimer = setTimeout(() => { if (!cancelled) nwdReadLevelNow(); }, LEVEL_SETTLE_MS);
         diag(`freq ${p.mhz.toFixed(1)} arg=${p.arg} PS='${p.ps}'`);
         scheduleProbe(p.mhz);
       }));
@@ -2891,6 +2930,7 @@ export default function RadioScreen({ route, navigation }: Props) {
       cancelled = true;
       if (pollTimer) clearInterval(pollTimer);
       if (probeTimer) clearTimeout(probeTimer);
+      if (levelSettleTimer) clearTimeout(levelSettleTimer);
       if (stereoTimer) clearTimeout(stereoTimer);
       if (signalTimer) clearTimeout(signalTimer);
       nwdActiveRef.current = false;
@@ -3083,7 +3123,6 @@ export default function RadioScreen({ route, navigation }: Props) {
       {debugOn ? (
         <RatingBar
           pal={(fmThemeEffective === 'dark' || (fmThemeEffective === 'system' && osScheme === 'dark')) ? DARK : LIGHT}
-          current={fmRating}
           onRate={onRateAudio}
         />
       ) : null}

@@ -44,23 +44,36 @@ export const LEVEL_DX_FLOOR = 10;
  *  The vendor's own weak/solid boundary, and the anchor that matters most. */
 export const LEVEL_LOC_FLOOR = 31;
 
-/** Top of the useful span. PROVISIONAL — the highest reading observed so far is
- *  73 (105.9 up close), so this sits just above it. The two floors below are the
- *  vendor's; this one is ours and is the number most likely to need revising. */
-export const LEVEL_TOP = 75;
+/**
+ * Top of the useful span.
+ *
+ * Was 75, set from twenty manual presses whose highest was 73. The drive of
+ * 2026-08-05 sampled 156 readings and reached 103, so 75 was badly short and
+ * nearly a third of the drive would have pinned to four bars.
+ *
+ * 105 comes from that distribution: p50 63, p75 79, p90 92, p99 101, max 103.
+ * The scale evidently runs to about 100, so the top band starts at 81 and only a
+ * genuinely close, strong station reaches it.
+ *
+ * Still empirical rather than specified — no chip datasheet is reachable — but
+ * it now rests on 156 samples across a commute instead of twenty presses in two
+ * car parks.
+ */
+export const LEVEL_TOP = 105;
 
 /**
  * Level → the face's 0..4 bar icon.
  *
- *   < 10    0 bars   a DX seek would not stop here
- *   10..30  1 bar    above the DX floor, below the local threshold
- *   31..45  2 bars   the vendor calls this a local station
- *   46..60  3 bars
- *   61+     4 bars
+ *   < 10     0 bars   a DX seek would not stop here
+ *   10..30   1 bar    above the DX floor, below the local threshold
+ *   31..55   2 bars   the vendor calls this a local station
+ *   56..80   3 bars
+ *   81+      4 bars
  *
- * Checked against the twenty readings of 2026-08-04: WQLF Rockford heard from
- * Wisconsin lands on 2, the Madison locals on 3, and the two stations driven
- * toward reach 4.
+ * Against the fresh driver ratings of 2026-08-05: "breaking up" had a median
+ * level of 41 and "clean" a median of 61, so the 2/3 boundary at 56 falls
+ * between them. The bands are wide because the level ALONE cannot do better —
+ * see the note above about multipath.
  */
 export function levelToBars(level: number | null | undefined): number | null {
   if (level == null || !Number.isFinite(level)) return null;
@@ -75,6 +88,23 @@ export function levelToBars(level: number | null | undefined): number | null {
 export function levelIsTrustworthy(asked: number, landed: number): boolean {
   return asked > 0 && asked === landed;
 }
+
+/**
+ * How long to wait after a retune before believing a level.
+ *
+ * A reading taken immediately after tuning is systematically inflated. Across 24
+ * paired comparisons on 2026-08-05 — first reading after a tune against the same
+ * station 20 seconds later — the mean excess was +17.7, with cases of +45, +48
+ * and +57. Banded by age: 0-5s mean 70.3, 5-15s mean 51.8.
+ *
+ * The value is the return of seek(), the chip's own scan primitive, so a read
+ * taken while the tune is still completing plausibly reports that operation
+ * rather than the settled channel. Five seconds clears the inflated band.
+ *
+ * Samples still carry `tuned=` so an analysis can discard anything too early
+ * regardless of this delay.
+ */
+export const LEVEL_SETTLE_MS = 5_000;
 
 /** How often to re-read while parked on a station. Each read COMMANDS the tuner,
  *  so this is deliberately slow: the vendor rate-limits its own comparable read
