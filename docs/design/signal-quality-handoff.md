@@ -1,5 +1,12 @@
 # Handoff → Claude Design: signal + reception-quality readout
 
+> **PAUSED 2026-08-05, at the user's direction.** This brief and its answer
+> document grew into a capability/state-contract negotiation when what was wanted
+> was placement and sizing. Both numbers are now on the face with provisional
+> sizes so they can be adjusted directly against the real screen. Keep these two
+> documents for the constraints they record — no unit, nothing moves, no
+> red/green, sub-100% is healthy — but do not treat them as an open work item.
+
 Companion to the FM Radio Face handoffs (same fork, same design language). This
 covers **one cluster** on the face — the signal meter in the header row — which
 now has a second value to show.
@@ -118,6 +125,8 @@ about the blocks it cannot see. Feel free to propose better.
 
 ## Current state of the code
 
-Implemented and on device: the level, the bars, the fixed-width number. The
-quality figure is measured and available (`nwdRds.ts` → `quality()`) but
-**deliberately not yet on screen**, pending this design and the label decision.
+Implemented and on device: the level, the bars, the fixed-width number, **and now
+the quality figure beneath it** — 11pt wide / 13pt tall, dim, unlabelled, in its
+own reserved box. `—` when unknown, blank when the radio is off, absent entirely
+on the SDR path. Placement and size are provisional and meant to be adjusted from
+what the head unit actually looks like; the label wording is still unresolved.
