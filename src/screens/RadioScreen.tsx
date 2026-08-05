@@ -443,6 +443,11 @@ export default function RadioScreen({ route, navigation }: Props) {
    *  reading, and the only measured one CarFM has ever had. Null until the first
    *  tick. UNDER DEVELOPMENT; see nwdSignalLevel.ts. */
   const [fmLevel, setFmLevel] = useState<number | null>(null);
+  /** Rolling reception quality from the RDS decoder — the share of recent groups
+   *  whose PI block survived. Null until enough groups have arrived, and null
+   *  again while RDS is expired. Sampled by the 1.5s poll below; the decoder owns
+   *  the window. UNDER DEVELOPMENT alongside the level. */
+  const [fmQuality, setFmQuality] = useState<number | null>(null);
 
   // ── Debug/testing mode ───────────────────────────────────────────────────
   // Records one structured sample every 15s so the measured level and the
@@ -2897,6 +2902,18 @@ export default function RadioScreen({ route, navigation }: Props) {
           rdsExpiriesRef.current++;
           diag(`RDS expired — no group for ${RDS_STALE_MS / 1000}s`);
         }
+        // Reception quality, sampled onto the face. The decoder's ring is NOT
+        // reset by an expiry (see above), so gate on the stale flag here instead —
+        // a quality figure held over from before the carrier went quiet would be
+        // describing air we are no longer receiving.
+        {
+          const raw = rdsStaleRef.current ? null : rdsDecoder.current.quality().piMatchPct;
+          // Rounded HERE, not at render: the ring's percentage moves by fractions
+          // of a point every poll and an unrounded value would re-render the whole
+          // face 40 times a minute for a number that never visibly changed.
+          const q = raw == null ? null : Math.round(raw);
+          setFmQuality((prev) => (prev === q ? prev : q));
+        }
         // The poll does NOT drive PS / RadioText / PTY.
         //
         // On this unit those getters are worthless: getRtMessage() is a hardcoded
@@ -3090,6 +3107,7 @@ export default function RadioScreen({ route, navigation }: Props) {
         // coarse and only recomputed on retune. UNDER DEVELOPMENT.
         signalBars={levelToBars(fmLevel)}
         signalLevelRaw={fmLevel}
+        signalQualityPct={fmQuality}
         rdsOk={!!liveStation.pi || !!liveStation.name}
         tp={liveStation.tp}
         ta={liveStation.ta}

@@ -63,6 +63,14 @@ export interface CarFmFaceProps {
    *  anchored to the vendor's own seek-stop thresholds but its units are
    *  unresolved, and printing "dB" would be inventing one. */
   signalLevelRaw?: number | null;
+  /** Reception quality 0..100 beneath the level, or null when unknown — which is
+   *  common and must not read as 0%. It is the share of recent RDS groups whose
+   *  PI block matched, NOT "% intact": this tuner reports no per-block validity,
+   *  so the blocks carrying the TEXT cannot be judged at all. ~84% is the healthy
+   *  case, so nothing under 100 may be styled as a fault.
+   *  PLACEMENT AND SIZE ARE PROVISIONAL — this is on the face to be looked at and
+   *  adjusted, and the label wording is still open. */
+  signalQualityPct?: number | null;
   /** RDS decoder has a lock (PI/PS seen) — drives the RDS tell. */
   rdsOk?: boolean;
   /** RDS Traffic Programme flag. */
@@ -522,7 +530,7 @@ function Tell({ label, on, pulse, pal, fontSize = 11, dark = false, off = false 
 
 export default function CarFmFace(props: CarFmFaceProps) {
   const {
-    freqHz, stationName, callsignHint, radioText, stereo, signalDb, signalBars, signalLevelRaw,
+    freqHz, stationName, callsignHint, radioText, stereo, signalDb, signalBars, signalLevelRaw, signalQualityPct,
     rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
     onSetAutostart, onSetTheme, onRetryTuner, presets, nwdActive, onHardwareSeek,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
@@ -649,6 +657,11 @@ export default function CarFmFace(props: CarFmFaceProps) {
         : twoRows ? Math.min(w / 900, h / 810) : Math.min(w / 1024, h / 614)));
   const L = useMemo(() => {
     const s = (v: number) => Math.round(v * k);
+    // Width of the level/quality column. Derived from the level's own type size
+    // rather than fixed in the stylesheet, because the stylesheet does not scale:
+    // at a large system font scale a hard 44 would clip "103". 2.7em holds three
+    // tabular digits with a little air.
+    const signalNum = Math.max(12, s(tall ? 19 : 15));
     return {
       s,
       padH: s(tall ? 16 : 24),
@@ -668,7 +681,18 @@ export default function CarFmFace(props: CarFmFaceProps) {
       // Header element scaling (design renderVals `tall ?` branches). Small
       // status type floors at legibility, not proportion (§10).
       signalIcon: s(tall ? 46 : 33),
-      signalDb: Math.max(12, s(tall ? 19 : 15)),
+      signalDb: signalNum,
+      signalNumW: Math.round(signalNum * 2.7),
+      // The level and quality lines get EXPLICIT line heights. Left to the
+      // platform, an empty quality string collapses its box and the level shifts
+      // down by half a line the moment the figure goes unknown — which happens
+      // several times on a normal drive. Fixed boxes, always.
+      signalLine: Math.max(14, s(tall ? 22 : 18)),
+      // Quality sits subordinate to the level: smaller, dimmer, directly beneath.
+      // PROVISIONAL — 11 wide / 13 tall is a starting point for a look at the
+      // real screen, not a settled size.
+      signalQuality: Math.max(11, s(tall ? 13 : 11)),
+      signalQualityLine: Math.max(13, s(tall ? 16 : 14)),
       stereoFont: Math.max(12, s(tall ? 18 : 15)),
       stereoWave: tall ? { w: s(28), h: s(40) } : { w: s(20), h: s(28) },
       // STEREO/MONO pill chrome (design stereoStyle = pill + minWidth). Heights
@@ -1094,12 +1118,28 @@ export default function CarFmFace(props: CarFmFaceProps) {
         on={nwdActive && signalBars == null ? pal.dim : pal.amber}
         off={pal.meterEmpty}
       />
-      <Text style={[styles.signalText, { fontSize: L.signalDb, color: pal.dim }]}>
-        {off ? '--'
-          : signalLevelRaw != null ? `${signalLevelRaw}`
-          : nwdActive ? 'EST'
-          : signalDb == null ? '—' : `${Math.round(signalDb)} dB`}
-      </Text>
+      {/* The two numbers stack, level over quality: level is how much signal is
+          arriving, quality how much of it survives to be decoded. Containment,
+          not a ratio. Both boxes are fixed-size and ALWAYS rendered, so neither a
+          third digit nor the quality line vanishing can move the stereo pill.
+          PROVISIONAL SIZES — see signalQualityPct. */}
+      <View style={[styles.signalNums, { width: L.signalNumW }]}>
+        <Text style={[styles.signalText, { fontSize: L.signalDb, lineHeight: L.signalLine, width: L.signalNumW, color: pal.dim }]}>
+          {off ? '--'
+            : signalLevelRaw != null ? `${signalLevelRaw}`
+            : nwdActive ? 'EST'
+            : signalDb == null ? '—' : `${Math.round(signalDb)} dB`}
+        </Text>
+        {/* Quality is meaningful ONLY on the built-in tuner: it is derived from
+            the RDS groups this app decodes itself. The SDR path prints a real dB
+            level above and has its own error rate; it does not borrow this.
+            Powered off, the line asserts nothing — the box stays, the text goes. */}
+        <Text style={[styles.signalQualityText, { fontSize: L.signalQuality, lineHeight: L.signalQualityLine, width: L.signalNumW, color: pal.meterEmpty }]}>
+          {off || !nwdActive ? ''
+            : signalQualityPct != null ? `${signalQualityPct}%`
+            : '—'}
+        </Text>
+      </View>
     </View>
   );
   // §4.7 off: the STEREO/MONO pill goes EMPTY (outline, no waves, no text) and all
@@ -1632,6 +1672,17 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontVariant: ['tabular-nums'],
     minWidth: 40,
+    textAlign: 'center',
+  },
+  // The level/quality stack. Its width is set inline from L.signalNumW — fixed,
+  // for the same reason the level is: "84%" is wider than "—" and the column
+  // must not breathe as the figure comes and goes.
+  signalNums: { alignItems: 'center' },
+  // Same tabular figures, one size down; width and line height come from L.
+  signalQualityText: {
+    fontFamily: FONT_BOLD,
+    fontSize: 11,
+    fontVariant: ['tabular-nums'],
     textAlign: 'center',
   },
   stereoCol: { alignItems: 'center', gap: 5 },
