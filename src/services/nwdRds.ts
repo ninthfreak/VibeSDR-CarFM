@@ -109,6 +109,24 @@ export interface NwdRdsDecoder {
    *  trusted PI, i.e. the block error rate. Untouched by reset(). */
   stats(): { groups: number; piMismatch: number };
   resetStats(): void;
+  /**
+   * Rolling reception quality over the last ~64 groups, for a live display.
+   *
+   * `piMatchPct` is the share of recent groups whose block A carried the trusted
+   * PI. NOT a block error rate: this tuner hands over groups with NO per-block
+   * validity, so block A is the only one whose correctness can be judged at all.
+   * Errors in B, C and D are invisible to it — which is precisely why RadioText
+   * arrives corrupt while this figure looks healthy, since the text lives in C
+   * and D. Treat it as a PROXY for channel quality, never as "% intact".
+   *
+   * Null until there are enough groups to mean anything. A station with almost
+   * no RDS would otherwise read as flawless — the "barely there" case of
+   * 2026-08-05 scored 0% errors on 0.5 groups/s.
+   *
+   * Separate from stats() on purpose: those counters are reset every 15s by the
+   * debug sampler, and a display sharing them would blank on every sample.
+   */
+  quality(): { piMatchPct: number | null; samples: number };
 }
 
 export function createNwdRdsDecoder(): NwdRdsDecoder {
@@ -138,6 +156,23 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
   // measurement window, not to a station.
   let statGroups = 0;
   let statPiMismatch = 0;
+  // ROLLING quality, for the face. Deliberately separate from the counters above:
+  // those are reset every 15s by the debug sampler, and a display sharing them
+  // would blank each time a sample closed. A ring of recent outcomes instead —
+  // never reset on a schedule, only when the station changes.
+  //
+  // 64 entries at the ~5 groups/s that actually reach us is roughly a dozen
+  // seconds: long enough to be steady, short enough to follow a drive under a
+  // bridge.
+  const QUALITY_RING = 64;
+  /** Fewest outcomes before a percentage is worth quoting. Below this the answer
+   *  is "not enough data", NOT 100% — the failure mode to avoid is a station with
+   *  almost no groups reading as perfectly intact, which is exactly what the
+   *  "barely there" samples of 2026-08-05 did: 0% errors on 0.5 groups/s. */
+  const QUALITY_MIN = 16;
+  let qRing = new Array<0 | 1>(QUALITY_RING).fill(0);
+  let qAt = 0;
+  let qCount = 0;
   let ptyPending: number | null = null; // block B is corrupted independently of block A
   let ptyCount = 0;
 
@@ -157,6 +192,9 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     rtPublished = false;
     ptyPending = null;
     ptyCount = 0;
+    qRing = new Array<0 | 1>(QUALITY_RING).fill(0);
+    qAt = 0;
+    qCount = 0;
     // piConfirmed is deliberately NOT cleared. Clearing it would drop the decoder
     // into the no-incumbent path where any 3-group run of corruption is adopted
     // outright, with no trusted PI to outvote it. st.pi is re-asserted from
@@ -193,6 +231,15 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     // carry the adopted PI. A genuine station change is persistent — every group
     // carries the new PI — so it clears the threshold in a fraction of a second,
     // while scattered corruption never does.
+    // Ring the block-A outcome for the rolling quality figure. Done here because
+    // this is where the decision already exists; `piConfirmed === null` means we
+    // have no incumbent to judge against yet, so those groups are not counted.
+    if (piConfirmed !== null) {
+      qRing[qAt] = a === piConfirmed ? 1 : 0;
+      qAt = (qAt + 1) % QUALITY_RING;
+      if (qCount < QUALITY_RING) qCount++;
+    }
+
     if (piConfirmed === null) {
       if (a === piPending) piPendingCount++;
       else { piPending = a; piPendingCount = 1; }
@@ -380,5 +427,11 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     state: () => ({ ...st }),
     stats: () => ({ groups: statGroups, piMismatch: statPiMismatch }),
     resetStats: () => { statGroups = 0; statPiMismatch = 0; },
+    quality: () => {
+      if (qCount < QUALITY_MIN) return { piMatchPct: null, samples: qCount };
+      let good = 0;
+      for (let i = 0; i < qCount; i++) good += qRing[i];
+      return { piMatchPct: (100 * good) / qCount, samples: qCount };
+    },
   };
 }

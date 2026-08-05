@@ -37,8 +37,11 @@ const js = src
   .replace(/: RdsState \| null/g, '').replace(/: RdsState/g, '')
   .replace(/: NwdRdsDecoder/g, '').replace(/: string \| null/g, '')
   .replace(/: number \| null/g, '').replace(/: string/g, '').replace(/: number/g, '')
-  .replace(/new Array<string>\(/g, 'new Array(')
-  .replace(/new Set<string>\(\)/g, 'new Set()')
+  // Generalised rather than one rule per type argument: the decoder has grown
+  // new Array<string>, new Array<0 | 1> and new Set<string>, and each new one
+  // silently broke this harness until it was added by hand.
+  .replace(/new Array<[^>]*>\(/g, 'new Array(')
+  .replace(/new Set<[^>]*>\(\)/g, 'new Set()')
   .replace(/export interface [\s\S]*?\n}\n/g, '')
   .replace(/export /g, '');
 const { createNwdRdsDecoder } = await import(
@@ -230,6 +233,39 @@ const RT_FULL = [...RT_LED, ...RT_PAD];
     .map((g) => g.slice(0, 4) + (parseInt(g.slice(4, 8), 16) ^ 0x0010).toString(16).padStart(4, '0') + g.slice(8));
   eq('an A/B flip publishes on its first complete cycle', feed(d, FLIPPED, 1).rt,
     'Whole Lotta Love by Zep');
+}
+
+// ── Rolling reception quality ────────────────────────────────────────────────
+// A PROXY, and the test says so: this tuner gives no per-block validity, so
+// block A is the only block whose correctness can be judged. Errors in C and D
+// — where the text lives — are invisible here, which is why RadioText can arrive
+// mangled while this figure looks healthy.
+{
+  const d = prime(createNwdRdsDecoder(), PS_WERN[0]);
+  eq('too few groups means no answer, NOT a perfect score',
+     d.quality().piMatchPct, null);
+
+  // Feed enough good groups to clear the minimum.
+  for (let i = 0; i < 20; i++) d.push(PS_WERN[0]);
+  eq('a clean run scores 100', d.quality().piMatchPct, 100);
+
+  // A quarter of the next groups carry a corrupt block A. Those are DROPPED for
+  // decoding, but they still count against quality — that is the whole point.
+  for (let i = 0; i < 40; i++) d.push(i % 4 === 0 ? '57ff02c0e0cd2020' : PS_WERN[0]);
+  const q = d.quality();
+  check(`corruption pulls the score down → ${q.piMatchPct.toFixed(1)}%`,
+        q.piMatchPct > 70 && q.piMatchPct < 90);
+  check('and the sample count is capped by the ring', q.samples <= 64);
+}
+
+// A station change must not carry the previous station's quality across.
+{
+  const d = prime(createNwdRdsDecoder(), PS_WERN[0]);
+  for (let i = 0; i < 30; i++) d.push(PS_WERN[0]);
+  eq('quality established', d.quality().piMatchPct, 100);
+  d.reset();
+  eq('reset clears the rolling quality', d.quality().piMatchPct, null);
+  eq('  ...and its sample count', d.quality().samples, 0);
 }
 
 // ── Housekeeping ─────────────────────────────────────────────────────────────

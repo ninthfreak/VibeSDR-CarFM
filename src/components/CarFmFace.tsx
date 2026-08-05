@@ -1620,7 +1620,20 @@ const styles = StyleSheet.create({
   signalPill: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   // Tall: dB stacks below the icon (design signalWrapStyle column, gap 2).
   signalPillTall: { flexDirection: 'column', gap: 2 },
-  signalText: { fontFamily: FONT_BOLD, fontSize: 17, fontVariant: ['tabular-nums'] },
+  // FIXED WIDTH, always. The measured level reached 103 on 2026-08-05 and the
+  // third digit widened this text, which shifted the stereo pill and everything
+  // else in the row. Nothing on this face may move because a value grew.
+  //
+  // Sized for three digits and centred, so "63" and "103" occupy the same box.
+  // Tabular figures keep the digits themselves from jittering as the value
+  // changes — a proportional "1" is much narrower than a "0".
+  signalText: {
+    fontFamily: FONT_BOLD,
+    fontSize: 17,
+    fontVariant: ['tabular-nums'],
+    minWidth: 40,
+    textAlign: 'center',
+  },
   stereoCol: { alignItems: 'center', gap: 5 },
   ptyCentered: { fontFamily: FONT_BOLD, fontSize: 19, letterSpacing: 0.5, textAlign: 'center', maxWidth: '100%' },
   // STEREO/MONO pill: waves flank the label inside a bordered pill (design

@@ -22,6 +22,18 @@
  */
 export type AudioRating = 'clean' | 'crackle' | 'breakup' | 'barely';
 
+/**
+ * How long a rating still describes the moment it was given, in seconds.
+ *
+ * A press is an observation about an instant, not a mode. The first build
+ * carried the last rating onto every subsequent sample, so a single "clean" tap
+ * coloured everything after it — 111 of 156 samples on 2026-08-05 read "clean",
+ * which says nothing about the 110 moments the driver never actually judged.
+ * One sample interval plus a little slack: the rating belongs to its own window
+ * and the next.
+ */
+export const RATING_FRESH_S = 20;
+
 export const RATING_LABELS: Record<AudioRating, string> = {
   clean:   'Clean',
   crackle: 'Pops / crackles',

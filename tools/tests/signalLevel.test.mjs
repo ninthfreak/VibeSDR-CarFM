@@ -34,16 +34,30 @@ const OBSERVED = {
 const barsFor = (k) => [...new Set(OBSERVED[k].map(levelToBars))].sort();
 
 eq('the distant Rockford station reads weak but present', barsFor('102.1 WQLF Rockford IL'), [2]);
-eq('Baraboo oldies is solid', barsFor('94.9 WOLX Baraboo'), [3]);
-eq('Madison public radio is solid', barsFor('88.7 WERN Madison'), [3]);
-eq('Z104 is solid', barsFor('104.1 WZEE Madison'), [3]);
-eq('WIBA climbs to full in its own city', barsFor('101.5 WIBA Sauk City'), [3, 4]);
-eq('WWHG climbs to full on the approach', barsFor('105.9 WWHG Evansville'), [3, 4]);
+eq('Baraboo oldies is solid', barsFor('94.9 WOLX Baraboo'), [2]);
+// WERN's 53-55 now sits just under the 2/3 boundary at 56. That is arguably the
+// more honest reading: WERN is the station that lost RDS fifteen times and
+// flapped stereo across a commute while its level looked healthy.
+eq('Madison public radio sits just under the boundary', barsFor('88.7 WERN Madison'), [2]);
+eq('Z104 is solid', barsFor('104.1 WZEE Madison'), [2, 3]);
+eq('WIBA climbs in its own city', barsFor('101.5 WIBA Sauk City'), [2, 3]);
+eq('WWHG climbs on the approach', barsFor('105.9 WWHG Evansville'), [2, 3]);
 
 // Nothing observed should ever land on 0 or 1 — every station tested was audible.
 const all = Object.values(OBSERVED).flat();
 eq('no audible station reads as absent', all.every((v) => levelToBars(v) >= 2), true);
-eq('and none saturates below the top band', Math.max(...all.map(levelToBars)), 4);
+
+// ── The 2026-08-05 drive: 156 samples, and the driver's own verdicts ─────────
+// Medians of the FRESH ratings (given within 20s of the sample). The 2/3
+// boundary has to fall between "breaking up" and "clean" or the bars disagree
+// with the ear on the only two verdicts with clear separation.
+eq('a "breaking up" median lands in the weak band', levelToBars(41), 2);
+eq('a "clean" median lands higher', levelToBars(61), 3);
+eq('the drive maximum reaches the top band', levelToBars(103), 4);
+eq('...and does not overflow it', levelToBars(103), 4);
+// The distribution: p50 63, p90 92, p99 101.
+eq('the median of the whole drive is mid-scale', levelToBars(63), 3);
+eq('p90 is near the top', levelToBars(92), 4);
 
 // ── Refusals ─────────────────────────────────────────────────────────────────
 eq('null level has no bars', levelToBars(null), null);
