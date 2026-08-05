@@ -38,6 +38,7 @@ import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, n
          onNwd, PANEL_KEY, panelKeyName } from '../services/nwdRadio';
 import { createNwdRdsDecoder } from '../services/nwdRds';
 import { levelToBars, LEVEL_POLL_MS } from '../services/nwdSignalLevel';
+import { stripStationFromRt } from '../services/rtStation';
 import {
   isDebugMode, subscribeDebugMode, formatSample, bearingDeg, DEBUG_SAMPLE_MS,
   RATING_LABELS, type AudioRating, type DebugSample,
@@ -2186,6 +2187,23 @@ export default function RadioScreen({ route, navigation }: Props) {
     return city ? `${piIdentity.callsign} · ${city}` : piIdentity.callsign;
   }, [liveStation.name, piIdentity]);
 
+  // RadioText for the plate, with the station's own name trimmed off the ends.
+  // WIBA sends "101.5 IBA-FM - Walk This Way - Aerosmith" and the hero already
+  // says which station this is, so those eleven characters cost the plate its
+  // scarcest space. Raw text stays in liveStation.text — the band-theme matcher
+  // and anything else that wants the broadcast verbatim reads that.
+  //
+  // The callsign comes from the PI identity or the DB, NEVER from PS: WIBA
+  // scrolls song titles through PS, so a PS of "Walk" would have cut "Walk This
+  // Way" out of its own RadioText.
+  const fmRadioTextDisplay = useMemo(
+    () => stripStationFromRt(liveStation.text, {
+      mhz: status.frequency > 0 ? status.frequency / 1e6 : null,
+      callsign: piIdentity?.callsign ?? null,
+    }),
+    [liveStation.text, status.frequency, piIdentity],
+  );
+
   // Tuner-connection error state (design addendum): true whenever there is no
   // live tuner session. A tunerless launch shows it immediately (that IS the
   // no-tuner presentation — no separate waiting screen). Otherwise: before the
@@ -3024,7 +3042,7 @@ export default function RadioScreen({ route, navigation }: Props) {
         // the strip instead of the raw RT line with its promo framing.
         radioText={liveStation.rtArtist && liveStation.rtTitle
           ? `${liveStation.rtArtist} – ${liveStation.rtTitle}`
-          : liveStation.text}
+          : fmRadioTextDisplay}
         stereo={fmStereo}
         signalDb={fmSignalDb}
         // MEASURED bars, built-in tuner only. Outranks the GPS+database estimate

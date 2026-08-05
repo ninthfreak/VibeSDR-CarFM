@@ -157,14 +157,29 @@ export function normalizeRt(rt: string | null | undefined): string {
   return (rt ?? '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ');
 }
 
-/** The id of the theme that should be active, or null. `forcedId` (from the
- *  secret panel) wins over detection; otherwise the first theme any of whose
- *  `names` appears as a substring of the normalized RadioText. Pure + testable. */
+/**
+ * The id of the theme that should be active, or null. `forcedId` (from the
+ * secret panel) wins over detection; otherwise the first theme any of whose
+ * `names` appears in the normalized RadioText ON TOKEN BOUNDARIES.
+ *
+ * Boundaries, not raw substrings. `normalizeRt` turns punctuation into spaces,
+ * which is what lets "AC/DC" match the stored "ac dc" — but it also means an
+ * advert for "Hometown HVAC DC power" normalizes to "hometown hvac dc power",
+ * which CONTAINS "ac dc" and used to repaint the entire app as AC/DC.
+ *
+ * That stopped being hypothetical on 2026-08-04: WIBA began rotating adverts
+ * through RadioText ("NicoletLaw.com  Injured? Get Nicolet!"), so this matcher
+ * now runs against arbitrary ad copy rather than a fixed station slogan.
+ *
+ * Padding both sides with a space and searching for the padded name gives whole
+ * tokens for free, without a regex per entry. Pure + testable.
+ */
 export function matchEggId(rt: string | null | undefined, forcedId?: string | null): string | null {
   if (forcedId) return forcedId;
   const norm = normalizeRt(rt);
   if (!norm.trim()) return null;
-  for (const e of MATCH_TABLE) if (e.names.some((n) => norm.indexOf(n) >= 0)) return e.id;
+  const padded = ` ${norm.trim().replace(/\s+/g, ' ')} `;
+  for (const e of MATCH_TABLE) if (e.names.some((n) => padded.indexOf(` ${n} `) >= 0)) return e.id;
   return null;
 }
 
