@@ -239,18 +239,15 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.setReconnectFailedNative(failed)
     }
 
-    /** One-shot coarse location for nearest-first instance sorting. JS must
-     *  request ACCESS_COARSE_LOCATION via PermissionsAndroid first. */
-    @ReactMethod
     /**
      * A position good enough to correlate against radio reception.
      *
-     * `getLocation()` below is not: it reads only getLastKnownLocation(), which on
-     * this head unit returns null every time — every drive log since July says
-     * "location: null" — and it discards accuracy, speed, bearing and the age of
-     * the fix. Debug mode needs all four: a stale fix makes distance and bearing
-     * to a transmitter into fiction, and speed separates "bad spot" from "bad
-     * while moving", which is the whole multipath question.
+     * `getLocation()` below is not broken — the nearby-station search works on the
+     * road — but it reads only getLastKnownLocation(), never requests a live fix,
+     * and returns lat/lon alone. Debug mode needs accuracy, speed, bearing and
+     * above all the AGE of the fix: a last-known position minutes old makes
+     * distance and bearing to a transmitter into fiction while the car keeps
+     * moving, and speed is what separates "bad spot" from "bad while moving".
      *
      * So: ask the providers for a LIVE update, wait up to `timeoutMs`, and fall
      * back to the freshest last-known if nothing arrives. Resolves null only when
@@ -324,6 +321,8 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         if (!requested) finish(freshestLastKnown(), false)
     }
 
+    /** One-shot coarse location for nearest-first instance sorting. JS must
+     *  request ACCESS_COARSE_LOCATION via PermissionsAndroid first. */
     @ReactMethod
     fun getLocation(promise: Promise) {
         try {
