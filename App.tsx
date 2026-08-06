@@ -111,8 +111,13 @@ export default function App() {
   // slow startup. They load in parallel and announce themselves when ready; a
   // theme falls back to the default face until then, and eggs resolve off
   // RadioText (seconds after launch) so they are always ready in practice.
+  //
+  // Nixie One is NOT here. Its only consumer is the AMBER theme in ThemeContext,
+  // and setTheme is never called anywhere in the app — the sole mention is a doc
+  // comment, and the default is 'white', which uses Atkinson. So it gated first
+  // paint on every launch for a theme that cannot be selected. The theme itself
+  // is left alone; only the load is dropped.
   const [fontsLoaded] = useFonts({
-    'Nixie One':              require('./assets/fonts/NixieOne-Regular.ttf'),
     'Atkinson Hyperlegible':  require('./assets/fonts/AtkinsonHyperlegible-Regular.ttf'),
     // Real bold cut as its own family: Android fake-bolds a single family,
     // which reads lighter than the design's true 700 (design handoff §3).
