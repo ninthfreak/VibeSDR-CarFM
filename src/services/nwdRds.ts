@@ -16,9 +16,10 @@
  *
  * Scope is what the device actually sends, verified by hand against the drive
  * log of 2026-08-01 (see nwdRds.test.mjs, which replays those exact groups):
- * PI, PTY, TP/TA, PS (group 0A/0B) and RadioText (2A/2B). RT+ and AF are NOT
- * decoded — no evidence yet that this tuner emits them, and guessing is how the
- * earlier fabricated diagnostics happened.
+ * PI, PTY, TP/TA, PS (group 0A/0B), RadioText (2A/2B) and RT+ (3A + the group
+ * the station assigns it to). AF is NOT decoded: every 0A group in the logs
+ * carries COUNT=0, which is each station stating outright that it has no
+ * alternate frequencies, so there is nothing to follow.
  *
  * Reference: EN 50067 / IEC 62106.
  */
@@ -39,9 +40,26 @@ export interface RdsState {
   /** This station uses PS as a scrolling text field rather than as its name, so
    *  `ps` is not an identity and must not reach the hero. See PS_SCROLL_DISTINCT. */
   psScrolling: boolean;
+  /** RT+ artist, sliced out of `rt` by the station's own offsets. Empty unless
+   *  the station broadcasts RT+ AND an item is currently running. */
+  rtArtist: string;
+  /** RT+ title, same. */
+  rtTitle: string;
 }
 
-const BLANK: RdsState = { pi: null, pty: null, tp: false, ta: false, ps: '', rt: '', psScrolling: false };
+const BLANK: RdsState = { pi: null, pty: null, tp: false, ta: false, ps: '', rt: '',
+  psScrolling: false, rtArtist: '', rtTitle: '' };
+
+/** RT+ ODA Application Identifier. A 16-bit exact match, which is what makes a
+ *  single declaration trustworthy: a corrupt block landing on this value by
+ *  chance is a 1-in-65536 event, on top of the group already having to be a
+ *  well-formed 3A carrying the confirmed PI. */
+const RTPLUS_AID = 0x4bd7;
+
+/** RT+ content-type codes. The full class list runs to 63; these are the two the
+ *  face has fields for. */
+const RTPLUS_TITLE = 1;
+const RTPLUS_ARTIST = 4;
 
 /**
  * Distinct published PS values, on ONE station, that mean the PS is a scrolling
@@ -175,6 +193,13 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
   let qCount = 0;
   let ptyPending: number | null = null; // block B is corrupted independently of block A
   let ptyCount = 0;
+  // RT+ (ODA, AID 0x4BD7). The group it rides in is NOT fixed by the standard —
+  // the station announces it in a 3A group and may pick any type. WIBA uses 12A;
+  // another station may use 11A. So the assignment has to be learned from the air
+  // per station rather than hard-coded, which is also why no amount of probing
+  // could have short-circuited this: the app must discover it at runtime anyway.
+  let rtPlusGroup: number | null = null;   // group TYPE carrying RT+
+  let rtPlusVerB = false;                  // ...and its version
 
   const reset = () => {
     st = { ...BLANK };
@@ -192,6 +217,10 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     rtPublished = false;
     ptyPending = null;
     ptyCount = 0;
+    // The ODA assignment belongs to the station, so it goes with the rest of the
+    // station's state on a retune.
+    rtPlusGroup = null;
+    rtPlusVerB = false;
     qRing = new Array<0 | 1>(QUALITY_RING).fill(0);
     qAt = 0;
     qCount = 0;
@@ -343,7 +372,11 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
       const seg = b & 0xf;
       const ab = (b >>> 4) & 1;
       if (rtAb !== null && ab !== rtAb) {
-        // A/B flipped: the broadcaster is starting a new message.
+        // A/B flipped: the broadcaster is starting a new message. Any RT+ markers
+        // we hold point into the OLD string and are meaningless against the new
+        // one, so they go with it.
+        st.rtArtist = '';
+        st.rtTitle = '';
         rtBuf = new Array<string>(64).fill(' ');
         rtSeen = 0;
         rtEnd = null;
@@ -414,6 +447,55 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
         rtEnd = null;
         rtEndSeg = null;
         rtBuf = new Array<string>(64).fill(' ');
+      }
+    }
+
+    // ── RT+ ─────────────────────────────────────────────────────────────────
+    //
+    // 3A announces which group carries an ODA and which application it is. The
+    // five low bits of block B are the application group type: four bits of group
+    // number and one of version. Block D is the AID.
+    if (groupType === 3 && !versionB) {
+      if (d === RTPLUS_AID) {
+        const agt = b & 0x1f;
+        rtPlusGroup = agt >>> 1;
+        rtPlusVerB = (agt & 1) === 1;
+      }
+    } else if (rtPlusGroup !== null && groupType === rtPlusGroup && versionB === rtPlusVerB) {
+      // The payload is 37 bits spread across the five spare bits of B and all of
+      // C and D: a toggle, a running flag, then two (content type, start, length)
+      // triplets. Length markers are one less than the real length.
+      const running = ((b >>> 3) & 1) === 1;
+      const ct1 = (((b & 0x7) << 3) | (c >>> 13)) & 0x3f;
+      const start1 = (c >>> 7) & 0x3f;
+      const len1 = ((c >>> 1) & 0x3f) + 1;
+      const ct2 = (((c & 0x1) << 5) | (d >>> 11)) & 0x3f;
+      const start2 = (d >>> 5) & 0x3f;
+      const len2 = (d & 0x1f) + 1;
+      if (!running) {
+        // The item has ENDED. Keeping the last song on screen over the next one
+        // is the same staleness the rest of this decoder works to avoid.
+        st.rtArtist = '';
+        st.rtTitle = '';
+      } else if (rtPublished && st.rt) {
+        // Offsets index into the RadioText AS TRANSMITTED. Applying them to a
+        // half-assembled or corrupt string yields confident nonsense, so this
+        // only ever runs against text that has already passed the publish gate —
+        // and even then a marker running off the end is rejected rather than
+        // clamped, because a truncated artist is still a wrong artist.
+        const slice = (start: number, len: number): string | null => {
+          if (start + len > st.rt.length) return null;
+          const v = st.rt.slice(start, start + len).trim();
+          return v || null;
+        };
+        const apply = (ct: number, start: number, len: number): void => {
+          const v = slice(start, len);
+          if (v === null) return;
+          if (ct === RTPLUS_ARTIST) st.rtArtist = v;
+          else if (ct === RTPLUS_TITLE) st.rtTitle = v;
+        };
+        apply(ct1, start1, len1);
+        apply(ct2, start2, len2);
       }
     }
 

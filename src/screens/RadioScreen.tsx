@@ -2834,6 +2834,17 @@ export default function RadioScreen({ route, navigation }: Props) {
           // PI-derived identity take over, which is what the hero falls back to.
           name: s.psScrolling ? undefined : (s.ps || prev.name),
           text: s.rt || prev.text,
+          // RT+ — the station's own markers into its RadioText, so artist and
+          // title are LABELLED rather than guessed. Raw RT cannot be split on
+          // these stations: WIBA sent "Whole Lotta Love - Led Zeppelin" and
+          // "Led Zeppelin - Kashmir" within one hour, field order reversed.
+          //
+          // Unlike the other fields these do NOT fall back to `prev`. Empty means
+          // the decoder is actively saying it has no labelled artist or title —
+          // the item ended, or a new RadioText message invalidated the offsets —
+          // and `|| prev` would pin the last song on screen over the next one.
+          rtArtist: s.rtArtist || undefined,
+          rtTitle: s.rtTitle || undefined,
           pty: s.pty ?? prev.pty,
           tp: s.tp,
           ta: s.ta,

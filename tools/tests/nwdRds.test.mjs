@@ -37,6 +37,9 @@ const js = src
   .replace(/: RdsState \| null/g, '').replace(/: RdsState/g, '')
   .replace(/: NwdRdsDecoder/g, '').replace(/: string \| null/g, '')
   .replace(/: number \| null/g, '').replace(/: string/g, '').replace(/: number/g, '')
+  // Same lesson as the generic-constructor rules below: each new annotation
+  // shape broke this silently until it was added. RT+ brought `: void`.
+  .replace(/: void/g, '').replace(/: boolean/g, '')
   // Generalised rather than one rule per type argument: the decoder has grown
   // new Array<string>, new Array<0 | 1> and new Set<string>, and each new one
   // silently broke this harness until it was added by hand.
@@ -371,6 +374,66 @@ const RT_FULL = [...RT_LED, ...RT_PAD];
     d.push(`a6ff${(0x0000 | (pty << 5)).toString(16).padStart(4, '0')}e0cd2020`);
   }
   eq('a burst of one-off PTYs never reaches the label', d.state().pty, settled);
+}
+
+
+// ── RT+ (ODA, AID 0x4BD7) ────────────────────────────────────────────────────
+// Raw groups replayed from the drive log of 2026-08-01. WIBA's own 3A is used
+// verbatim; the RT+ payload groups are synthesised, because 12A was never
+// captured — only the announcement that 12A is where RT+ lives.
+{
+  const d = createNwdRdsDecoder();
+  const PI = 0x19e2;                       // WIBA as transmitted (see piLowBits)
+  const hex = (a, b, c, dd) => [a, b, c, dd].map((x) => x.toString(16).padStart(4, '0')).join('');
+  // Trust the PI first — every branch below is behind the consensus gate.
+  for (let i = 0; i < 4; i++) d.push(hex(PI, 0x0000, 0x0000, 0x2020));
+
+  // Lay down a RadioText the offsets can point into, and let it publish.
+  //             0123456789...
+  const RT = 'Led Zeppelin - Kashmir\r';
+  const put = (seg) => {
+    const ch = (k) => (RT.charCodeAt(seg * 4 + k) || 0x20);
+    return hex(PI, 0x2000 | seg, (ch(0) << 8) | ch(1), (ch(2) << 8) | ch(3));
+  };
+  for (let pass = 0; pass < 2; pass++) for (let seg = 0; seg < 6; seg++) d.push(put(seg));
+  eq('the RadioText publishes first', d.state().rt, 'Led Zeppelin - Kashmir');
+
+  // WIBA's ACTUAL announcement, byte for byte from the log: 19e2 34d8 0000 4bd7.
+  // 0x34d8 -> group 3A, and the low five bits (0x18 = 24) say group 12, version A.
+  eq('RT+ is not claimed before it is announced', d.state().rtArtist, '');
+  d.push('19e234d800004bd7');
+
+  // Group 12A payload. running=1, then (artist @0 len 12) and (title @15 len 7).
+  //   B: 0xC000 group 12A | running bit 3 | top 3 bits of content type 4 = 0b000
+  //   C: low 3 bits of ct1 (0b100) <<13 | start 0 <<7 | (len-1) 11 <<1 | ct2 msb 0
+  //   D: ct2 remaining 5 bits (1 = TITLE) <<11 | start 15 <<5 | (len-1) 6
+  const B = 0xc000 | (1 << 3) | 0b000;
+  const C = (0b100 << 13) | (0 << 7) | (11 << 1) | 0;
+  const D = (1 << 11) | (15 << 5) | 6;
+  d.push(hex(PI, B, C, D));
+  eq('RT+ labels the artist', d.state().rtArtist, 'Led Zeppelin');
+  eq('RT+ labels the title', d.state().rtTitle, 'Kashmir');
+
+  // running=0 means the item ENDED. Holding the last song over the next one is
+  // the staleness the rest of this decoder exists to prevent.
+  d.push(hex(PI, 0xc000 | 0b000, C, D));
+  eq('an ended item clears the artist', d.state().rtArtist, '');
+  eq('an ended item clears the title', d.state().rtTitle, '');
+
+  // A marker running off the end of the RadioText is REJECTED, not clamped — a
+  // truncated artist is still a wrong artist.
+  d.push(hex(PI, B, C, D));
+  eq('...and a fresh running item restores them', d.state().rtArtist, 'Led Zeppelin');
+  const farC = (0b100 << 13) | (60 << 7) | (11 << 1) | 0;
+  d.push(hex(PI, B, farC, D));
+  eq('an out-of-range marker is refused, not clamped', d.state().rtArtist, 'Led Zeppelin');
+
+  // A different station's ODA must not be adopted.
+  const d2 = createNwdRdsDecoder();
+  for (let i = 0; i < 4; i++) d2.push(hex(PI, 0x0000, 0x0000, 0x2020));
+  d2.push(hex(PI, 0x34d8, 0x0000, 0x1234));      // some other AID in the same slot
+  d2.push(hex(PI, B, C, D));
+  eq('a non-RT+ ODA declaration is ignored', d2.state().rtArtist, '');
 }
 
 console.log(bad ? `\nnwdRds: ${bad} FAILED` : '\nnwdRds: ALL PASS');
