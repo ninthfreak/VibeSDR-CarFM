@@ -42,7 +42,7 @@ import { getTunerBackend, loadTunerBackend, subscribeTunerBackend, readoutFor } 
 import { stripStationFromRt } from '../services/rtStation';
 import {
   isDebugMode, subscribeDebugMode, formatSample, bearingDeg, DEBUG_SAMPLE_MS,
-  RATING_LABELS, RATING_FRESH_S, type AudioRating, type DebugSample,
+  RATING_LABELS, RATING_FRESH_S, ratingBelongsHere, type AudioRating, type DebugSample,
 } from '../services/debugMode';
 import { getDetailedLocation } from '../services/instancesApi';
 import { stationsAtFrequency } from '../services/stationDb';
@@ -904,7 +904,17 @@ export default function RadioScreen({ route, navigation }: Props) {
     const st = rdsDecoder.current.stats();
     const flips = stereoFlipsRef.current;
     const expiries = rdsExpiriesRef.current;
-    const rating = ratingRef.current;
+    // A rating only counts for the station it was pressed on. Retuning clears it
+    // (see the frequency handler), and this second check catches the race where a
+    // press and a retune land between two samples: the press must be NEWER than
+    // the tune, and on the same dial position.
+    const ratingOwned = ratingRef.current != null && ratingBelongsHere({
+      pressedAtMs: ratingAtRef.current || null,
+      pressedMhz: ratingMhzRef.current,
+      tunedAtMs: lastTuneAtRef.current,
+      currentMhz: mhz,
+    });
+    const rating = ratingOwned ? ratingRef.current : null;
     const ratingAgeS = rating ? (now - ratingAtRef.current) / 1000 : null;
     // Close the window NOW, so groups arriving during the GPS wait count toward
     // the NEXT sample rather than being double-counted or lost.
@@ -961,6 +971,13 @@ export default function RadioScreen({ route, navigation }: Props) {
       // its freshness window the sample carries none rather than implying the
       // driver still means it — the first build let one press colour every
       // sample until the next, which made 111 of 156 samples read "clean".
+      //
+      // It is also an observation about a STATION. The 2026-08-06 drive proved
+      // that mattered: a hop across six presets in ninety seconds filed seven
+      // verdicts against stations the driver had already left, including a
+      // "clean" recorded against a frequency tuned zero seconds earlier. Those
+      // rows are indistinguishable from real data unless `tuned=` happens to
+      // expose the mismatch, and they land squarely on the loss thresholds.
       rating: rating && ratingAgeS != null && ratingAgeS <= RATING_FRESH_S ? rating : null,
       ratingAgeS: rating && ratingAgeS != null && ratingAgeS <= RATING_FRESH_S ? ratingAgeS : null,
     };
@@ -972,9 +989,12 @@ export default function RadioScreen({ route, navigation }: Props) {
 
   /** The rating, for the sampler's long-lived closure. */
   const ratingRef = useRef<AudioRating | null>(null);
+  /** The dial position the rating was pressed on — the address on the verdict. */
+  const ratingMhzRef = useRef<number | null>(null);
   const onRateAudio = useCallback((r: AudioRating) => {
     ratingRef.current = r;
     ratingAtRef.current = Date.now();
+    ratingMhzRef.current = curMhzRef.current > 0 ? curMhzRef.current : null;
     // Its own event line: the periodic sample carries the rating too, but the
     // moment of the press is when the driver heard the thing.
     diag(`RATE ${r} (${RATING_LABELS[r]}) f=${curMhzRef.current.toFixed(1)} lvl=${fmLevelRef.current ?? '?'}`);
@@ -2746,6 +2766,11 @@ export default function RadioScreen({ route, navigation }: Props) {
         // operation rather than the settled channel. Whatever the mechanism, the
         // number is not usable that early, and the meter was showing it.
         setFmLevel(null);
+        // The rating belongs to the station we just left, exactly like the level
+        // and the decoder's text above it. Left standing it follows the driver
+        // onto the new frequency and is filed there as though it described it.
+        ratingRef.current = null;
+        ratingMhzRef.current = null;
         lastTuneAtRef.current = Date.now();
         if (levelSettleTimer) clearTimeout(levelSettleTimer);
         levelSettleTimer = setTimeout(() => { if (!cancelled) nwdReadLevelNow(); }, LEVEL_SETTLE_MS);

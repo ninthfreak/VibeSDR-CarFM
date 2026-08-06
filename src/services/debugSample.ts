@@ -130,3 +130,33 @@ export function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: numbe
   const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
   return (Math.atan2(y, x) / d2r + 360) % 360;
 }
+
+/**
+ * Does a rating describe the station currently being sampled?
+ *
+ * A press is an observation about a moment AND about a station, and only the
+ * first of those was ever enforced. On the drive of 2026-08-06 a hop across six
+ * presets in ninety seconds filed seven verdicts against stations the driver had
+ * already left — including a "clean" recorded against a frequency tuned zero
+ * seconds earlier. Nothing in the resulting line marks it as wrong, so those rows
+ * read as ordinary data and land directly on the reception-loss thresholds.
+ *
+ * Three conditions, all necessary:
+ *  - there is a press at all;
+ *  - it happened AFTER the current station was tuned, not before;
+ *  - it happened on the same dial position being sampled now.
+ *
+ * The second and third are not redundant. Retuning away and back leaves the
+ * frequency matching while the verdict belongs to an earlier visit, and a press
+ * during a hop can match the tune order while naming a different station.
+ */
+export function ratingBelongsHere(a: {
+  pressedAtMs: number | null;
+  pressedMhz: number | null;
+  tunedAtMs: number;
+  currentMhz: number | null;
+}): boolean {
+  if (a.pressedAtMs == null) return false;
+  if (a.pressedAtMs <= a.tunedAtMs) return false;
+  return a.pressedMhz != null && a.pressedMhz === a.currentMhz;
+}

@@ -5,7 +5,7 @@
 //
 // Run: node tools/tests/debugSample.test.mjs
 
-import { formatSample, bearingDeg, RATING_LABELS, RATING_HINTS } from '../../src/services/debugSample.ts';
+import { formatSample, bearingDeg, RATING_LABELS, RATING_HINTS, ratingBelongsHere } from '../../src/services/debugSample.ts';
 
 let fails = 0;
 const eq = (name, got, want) => {
@@ -55,6 +55,33 @@ check('WWHG from Madison reads south-east',
 // The vocabulary must stay in step: a label for every hint and vice versa.
 eq('four ratings', Object.keys(RATING_LABELS).length, 4);
 eq('every label has a hint', Object.keys(RATING_LABELS).sort(), Object.keys(RATING_HINTS).sort());
+
+
+// ── A rating is about a STATION, not just a moment ───────────────────────────
+// The 2026-08-06 drive filed seven verdicts against stations already left.
+{
+  const base = { pressedAtMs: 2000, pressedMhz: 105.9, tunedAtMs: 1000, currentMhz: 105.9 };
+  eq('a press on this station, after tuning it, counts',
+     ratingBelongsHere(base), true);
+  eq('no press at all',
+     ratingBelongsHere({ ...base, pressedAtMs: null }), false);
+  // The 07:43 hop: "clean" pressed on WERN, then 104.1 tuned four seconds later.
+  eq('a press made BEFORE the tune belongs to the previous station',
+     ratingBelongsHere({ ...base, pressedAtMs: 500 }), false);
+  eq('...even at the exact instant of the tune',
+     ratingBelongsHere({ ...base, pressedAtMs: 1000 }), false);
+  // Same tune order, different dial position — a hop fast enough to beat the clear.
+  eq('a press on a DIFFERENT frequency does not count',
+     ratingBelongsHere({ ...base, pressedMhz: 88.7 }), false);
+  eq('an unknown press frequency does not count',
+     ratingBelongsHere({ ...base, pressedMhz: null }), false);
+  eq('an unknown current frequency does not count',
+     ratingBelongsHere({ ...base, currentMhz: null }), false);
+  // Tuning away and back: the frequency matches again, but the verdict was about
+  // an earlier visit and the tune time is what catches it.
+  eq('a press from an earlier visit to the same frequency does not count',
+     ratingBelongsHere({ pressedAtMs: 2000, pressedMhz: 105.9, tunedAtMs: 5000, currentMhz: 105.9 }), false);
+}
 
 console.log(fails ? `\ndebugSample: ${fails} FAILED` : '\ndebugSample: ALL PASS');
 process.exit(fails ? 1 : 0);

@@ -54,4 +54,5 @@ export function subscribeDebugMode(l: () => void): () => void {
 }
 
 export type { DebugSample, AudioRating } from './debugSample';
-export { RATING_LABELS, RATING_HINTS, RATING_FRESH_S, formatSample, bearingDeg } from './debugSample';
+export { RATING_LABELS, RATING_HINTS, RATING_FRESH_S, formatSample,
+  ratingBelongsHere, bearingDeg } from './debugSample';
