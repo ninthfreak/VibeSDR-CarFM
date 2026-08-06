@@ -32,6 +32,20 @@ import { useKeepAwake }       from 'expo-keep-awake';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList }     from '../../App';
 
+// THE ONLY TWO VALUE-LEVEL IMPORTS OF THE SDR STACK. Everything else that
+// mentions these modules imports types, which are erased.
+//
+// That matters for startup on the built-in tuner. With inline requires on
+// (metro.config.js), each of these executes at its USE SITE rather than here —
+// and neither use site is reached on the NWD path: createBackend sits behind the
+// `route.params.tunerless` early return in the connect effect, and
+// MODE_BANDWIDTHS is only read in handlers that fire on SDR backend events. So
+// UberSDRClient, its pako dependency, the adapter and the three server adapters
+// it pulls in never run on a head unit.
+//
+// KEEP IT THAT WAY. Referencing either of these at module scope, or from a code
+// path that runs before the tunerless check, silently re-adds the whole subtree
+// to every launch.
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { createBackend } from '../services/UberSDRAdapter';
 import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, nwdStartLevelWatch, nwdStopLevelWatch, nwdReadLevelNow,
