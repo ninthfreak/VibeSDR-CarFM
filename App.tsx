@@ -13,7 +13,6 @@ import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import RadioScreen            from './src/screens/RadioScreen';
 import CrashBoundary        from './src/components/CrashBoundary';
 import { installCrashGuard } from './src/services/crashGuard';
-import { ThemeProvider }    from './src/contexts/ThemeContext';
 import type { ViewMode }    from './src/services/viewMode';
 import type { SDRMode }     from './src/services/UberSDRClient';
 import { useDeepLinks }     from './src/linking/useDeepLinks';
@@ -112,11 +111,10 @@ export default function App() {
   // theme falls back to the default face until then, and eggs resolve off
   // RadioText (seconds after launch) so they are always ready in practice.
   //
-  // Nixie One is NOT here. Its only consumer is the AMBER theme in ThemeContext,
-  // and setTheme is never called anywhere in the app — the sole mention is a doc
-  // comment, and the default is 'white', which uses Atkinson. So it gated first
-  // paint on every launch for a theme that cannot be selected. The theme itself
-  // is left alone; only the load is dropped.
+  // TWO CUTS OF ONE FAMILY, not two typefaces. Atkinson Hyperlegible is the only
+  // face the interface uses; the bold is registered separately because Android
+  // fake-bolds a single family and the synthetic weight reads lighter than the
+  // design's true 700 (handoff §3).
   const [fontsLoaded] = useFonts({
     'Atkinson Hyperlegible':  require('./assets/fonts/AtkinsonHyperlegible-Regular.ttf'),
     // Real bold cut as its own family: Android fake-bolds a single family,
@@ -195,7 +193,6 @@ export default function App() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeProvider>
       <View style={{ flex: 1, backgroundColor: '#161E29' }}>
         <CrashBoundary>
         <NavigationContainer ref={navigationRef}>
@@ -231,7 +228,6 @@ export default function App() {
           </Animated.View>
         )}
       </View>
-      </ThemeProvider>
     </GestureHandlerRootView>
   );
 }

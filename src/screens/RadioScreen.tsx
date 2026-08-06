@@ -76,7 +76,6 @@ import { type SDRBackend, type ProfileInfo, type DabProgramme,
 import { MIN_HZ, MAX_HZ }                              from '../services/sdrTypes';
 import { v4 as uuidv4 }                                from 'uuid';
 import AsyncStorage                                    from '@react-native-async-storage/async-storage';
-import { useTheme }                                     from '../contexts/ThemeContext';
 
 import AudioPlayer, { VibePowerModule } from '../components/AudioPlayer';
 import LocalAudioPlayer from '../components/LocalAudioPlayer';
@@ -1086,8 +1085,6 @@ export default function RadioScreen({ route, navigation }: Props) {
     return () => sub.remove();
   }, []);
 
-  // ── Display style — wired to ThemeContext so the whole app re-renders ────────
-  const { themeName, setTheme } = useTheme();
   // ── Media control tune events (iOS lock screen) ───────────────────────────
 
   const dspSeen = useRef(false);
