@@ -42,7 +42,7 @@ import { getTunerBackend, loadTunerBackend, subscribeTunerBackend, readoutFor } 
 import { stripStationFromRt } from '../services/rtStation';
 import {
   isDebugMode, subscribeDebugMode, formatSample, bearingDeg, DEBUG_SAMPLE_MS,
-  RATING_LABELS, RATING_FRESH_S, ratingBelongsHere, type AudioRating, type DebugSample,
+  RATING_LABELS, RATING_FRESH_S, ratingBelongsHere, windowRates, type AudioRating, type DebugSample,
 } from '../services/debugMode';
 import { getDetailedLocation } from '../services/instancesApi';
 import { stationsAtFrequency } from '../services/stationDb';
@@ -899,9 +899,15 @@ export default function RadioScreen({ route, navigation }: Props) {
     // means reading state a later retune or a later sample has already moved.
     const now = Date.now();
     const mhz = curMhzRef.current > 0 ? curMhzRef.current : null;
-    const sinceTuneS = (now - lastTuneAtRef.current) / 1000;
-    const windowS = Math.max(1, (now - lastSampleAtRef.current) / 1000);
+    // Clamped at zero: a retune landing between the snapshot and the tune stamp
+    // produced `tuned=-0s` in the 2026-08-06 log, and a negative age since an
+    // event that has already happened is nonsense.
+    const sinceTuneS = Math.max(0, (now - lastTuneAtRef.current) / 1000);
+    // NOT clamped to a floor — a short window means the rate is unknowable, and
+    // windowRates() says so rather than dividing by a made-up denominator.
+    const windowS = (now - lastSampleAtRef.current) / 1000;
     const st = rdsDecoder.current.stats();
+    const rates = windowRates({ groups: st.groups, piMismatch: st.piMismatch, windowS });
     const flips = stereoFlipsRef.current;
     const expiries = rdsExpiriesRef.current;
     // A rating only counts for the station it was pressed on. Retuning clears it
@@ -962,8 +968,8 @@ export default function RadioScreen({ route, navigation }: Props) {
       headingDeg: loc?.headingDeg ?? null,
       fixAgeS: loc?.fixAgeS ?? null,
       predScore, distKm, bearingDeg: brg, erpKw, stationClass, dbCall,
-      rdsGroupsPerSec: st.groups / windowS,
-      rdsErrPct: st.groups ? (100 * st.piMismatch) / st.groups : null,
+      rdsGroupsPerSec: rates.groupsPerSec,
+      rdsErrPct: rates.errPct,
       stereoFlips: flips,
       rdsExpiries: expiries,
       sinceTuneS,

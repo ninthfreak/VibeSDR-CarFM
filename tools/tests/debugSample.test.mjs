@@ -5,7 +5,7 @@
 //
 // Run: node tools/tests/debugSample.test.mjs
 
-import { formatSample, bearingDeg, RATING_LABELS, RATING_HINTS, ratingBelongsHere } from '../../src/services/debugSample.ts';
+import { formatSample, bearingDeg, RATING_LABELS, RATING_HINTS, ratingBelongsHere, windowRates, SAMPLE_MIN_WINDOW_S, SAMPLE_MIN_GROUPS } from '../../src/services/debugSample.ts';
 
 let fails = 0;
 const eq = (name, got, want) => {
@@ -81,6 +81,40 @@ eq('every label has a hint', Object.keys(RATING_LABELS).sort(), Object.keys(RATI
   // an earlier visit and the tune time is what catches it.
   eq('a press from an earlier visit to the same frequency does not count',
      ratingBelongsHere({ pressedAtMs: 2000, pressedMhz: 105.9, tunedAtMs: 5000, currentMhz: 105.9 }), false);
+}
+
+
+// ── A short window cannot carry a rate ───────────────────────────────────────
+// The old code divided by max(1, elapsed), which fabricates rather than protects.
+{
+  const w = (groups, piMismatch, windowS) => windowRates({ groups, piMismatch, windowS });
+  eq('an ordinary 15s window reports a rate',
+     w(75, 12, 15).groupsPerSec, 5);
+  // 2026-08-06, the launch sample: 50 groups over a window floored to 1 second.
+  // RDS tops out near 11 groups/s, so this was physically impossible.
+  eq('the launch sample no longer invents 50 groups per second',
+     w(50, 0, 1).groupsPerSec, null);
+  eq('a retune double-sample cannot report a rate either',
+     w(9, 1, 1.4).groupsPerSec, null);
+  eq('the boundary window is long enough',
+     w(50, 0, SAMPLE_MIN_WINDOW_S).groupsPerSec, 10);
+  eq('a non-finite window reports nothing',
+     w(50, 0, NaN).groupsPerSec, null);
+  // The error percentage is gated on GROUPS, not on time — a long window with
+  // almost nothing in it is just as unquotable.
+  eq('a real window quotes the mismatch rate',
+     w(50, 20, 15).errPct, 40);
+  // 2026-08-06 had `rds=0.5/s err=100%` rows: three outcomes, all bad.
+  eq('too few groups to quote a percentage',
+     w(3, 3, 15).errPct, null);
+  eq('the boundary group count is quotable',
+     w(SAMPLE_MIN_GROUPS, 4, 15).errPct, 50);
+  eq('no groups at all is not zero percent',
+     w(0, 0, 15).errPct, null);
+  // A short window still yields a percentage if enough groups arrived — the two
+  // gates are independent, and the ratio does not depend on the clock.
+  eq('a short window can still quote a percentage',
+     w(20, 5, 1).errPct, 25);
 }
 
 console.log(fails ? `\ndebugSample: ${fails} FAILED` : '\ndebugSample: ALL PASS');
