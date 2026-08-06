@@ -523,97 +523,11 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     // com.nwd.app.NwdFmManager, via com.nwd.radio.arm.allwinner.AWNative:
     //   getRadioRDSDataArm() -> String, raw RDS      getRadioRDSFunArm() -> 1 if supported
     //   getFreAndStrength()  -> hi16 = strength      getStationStereoState() -> real stereo
-    // See docs/BUILTIN-TUNER-FINDINGS.md, "The REAL transport found". Repointing
-    // this probe at NwdFmManager is the next step; until that runs, RSSI and raw
-    // RDS stay unavailable. Do NOT re-add speculative parseJson calls.
+    // See docs/BUILTIN-TUNER-FINDINGS.md, "The REAL transport found".
     //
-    // What the dump DID give us is a set of real, read-only radio getters, which
-    // is what this probe now reads. They are the honest replacement for the
-    // representative strings in the settings diagnostics.
-    private val hardwareGetters = listOf(
-        "isArmFmSupported",      // is the FM front-end the ARM/Si module path?
-        "getRadioModuleArm",     // which radio module the MCU reports
-        "getMcuType",
-        "getAudioICState",
-        "getCameraICType",       // String; names the board's IC family
-        "getTouchScreenVersion", // String; a firmware fingerprint for the unit
-    )
-
-    /** Call a no-arg static getter on android.os.Hardware and format the result.
-     *  Read-only by construction: only names from `hardwareGetters` are invoked,
-     *  and every one of them is a getter. Nothing here changes tuner state. */
-    private fun hardwareGet(name: String): String {
-        val cls = Class.forName("android.os.Hardware")
-        val m = try {
-            cls.getMethod(name)
-        } catch (_: NoSuchMethodException) {
-            cls.getDeclaredMethod(name).apply { isAccessible = true }
-        }
-        return m.invoke(null)?.toString() ?: "(null)"
-    }
-
-    /** Read the radio-related getters the firmware actually exposes and report
-     *  exactly what happened for each, success or failure. */
-    @ReactMethod
-    fun probeJsonHardware(promise: Promise) {
-        val sb = StringBuilder("HARDWARE PROBE (android.os.Hardware getters)\n")
-        // Confirm the negative result stays true on any unit this runs on, in one
-        // line rather than the four identical ERR lines the old probe emitted.
-        sb.append("  parseJson(String) present? = ")
-        sb.append(
-            try { Class.forName("android.os.Hardware").getDeclaredMethod("parseJson", String::class.java); "YES" }
-            catch (e: Throwable) { "no (${e.javaClass.simpleName})" },
-        ).append('\n')
-        for (name in hardwareGetters) {
-            sb.append("  ").append(name).append("() = ")
-            try {
-                sb.append(hardwareGet(name))
-            } catch (e: Throwable) {
-                // The exception TYPE is the diagnosis: ClassNotFoundException =
-                // this ROM has no such class; NoSuchMethodException = absent on
-                // this firmware; SecurityException / InvocationTargetException =
-                // reachable but refused.
-                sb.append("ERR ").append(e.javaClass.name).append(": ").append(e.message)
-            }
-            sb.append('\n')
-        }
-        promise.resolve(sb.toString())
-    }
-
-    // ── The transport this unit ACTUALLY uses ────────────────────────────────
-    // NewRdsManager reads RDS through com.nwd.radio.arm.allwinner.AWNative, and
-    // AWNative is a thin reflection shim over the vendor framework class
-    // com.nwd.app.NwdFmManager. Every name below is a GETTER lifted verbatim from
-    // that dump — no setter appears here, so this probe cannot change tuner state.
-    //
-    // The open question is REACHABILITY: the radio service is a system app and we
-    // are not. Encouraging sign — android.os.Hardware resolved fine from our
-    // process (that probe failed on the METHOD, not the class), so ROM framework
-    // classes are on our classloader and not hidden-API blocked.
-    private val nwdFmManagerClass = "com.nwd.app.NwdFmManager"
-
-    private val nwdFmGetters = listOf(
-        "getRadioRDSFunArm" to "1 = hardware supports RDS",
-        "getRadioRDSDataArm" to "16 hex chars = one raw RDS group",
-        // Reads 0 on this unit in all five probes of 2026-08-03, on four
-        // different stations with strong signal. Not implemented here, and NOT
-        // the source of the packed freq+strength int — that is the RETURN of
-        // NwdFmManager.seek(frequency); see the findings doc.
-        "getCurrentFrequency" to "0 on this unit — not implemented",
-        // Was labelled "real per-station stereo (vs the stuck isStreroOn)". It is
-        // not: it read 1 in all five probes, including on 102.1, a channel with
-        // no RDS at all and the AIDL stereo callback flapping. Stuck true exactly
-        // like isStreroOn(), and must not be used to drive the pill.
-        "getStationStereoState" to "reads 1 always — stuck, like isStreroOn()",
-        "getStereo" to "stereo mode flag",
-        "getLoc" to "local/DX",
-        "getRadioModuleArm" to "which module the MCU reports (12 here)",
-        // Was called a reachability canary. It reads 0 while FM is audibly
-        // playing, so it is neither the head unit's volume nor evidence of
-        // anything working.
-        "getVolue" to "vendor's spelling; reads 0 even while playing",
-    )
-
+    // The probe that read that channel, and the getter list it walked, are GONE —
+    // task #43 closed the question and the answer was "absent", so it could only
+    // ever report "not there". Do NOT re-add speculative parseJson calls.
     /** One RDS read almost always returns the all-zero "no data this poll"
      *  sentinel, which reads like a failure. Burst it so a real group has a
      *  chance to land. */
@@ -781,41 +695,10 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         Thread { emitLevel(seekHere()) }.apply { isDaemon = true }.start()
     }
 
-    /** One `NwdFmManager.seek(currentRawFrequency)`, reported verbatim.
-     *
-     *  Resolves a human-readable block for the tuner log — never rejects, because
-     *  the failure modes are the result. `landedOk` is the safety verdict: the
-     *  low half of the return must equal the frequency we asked for. */
-    @ReactMethod
-    fun seekStrengthTest(promise: Promise) {
-        val sb = StringBuilder()
-        sb.append("SEEK STRENGTH TEST (NwdFmManager.seek — this is a COMMAND)\n")
-        // The SAME seekHere() the periodic watch uses, so the manual test can
-        // never diverge from what ships. Only the reporting differs.
-        val s = seekHere()
-        if (s.err != null) { promise.resolve(sb.append("  ").append(s.err).append(" — aborted\n").toString()); return }
-        sb.append("  asking for raw freq = ").append(s.asked)
-            .append("  (~").append(s.asked.toDouble() / freqMult).append(" MHz)\n")
-        val packed = (s.strength shl 16) or s.landed
-        sb.append("  raw return  = ").append(packed)
-            // Integer.toHexString + padStart rather than String.format: the
-            // decompiled getFreAndStrength splits on the %08x form, so the padded
-            // eight digits are what makes the high/low halves readable by eye.
-            .append("  (0x").append(Integer.toHexString(packed).padStart(8, '0')).append(")\n")
-        sb.append("  strength    = ").append(s.strength).append("   // high 16 bits\n")
-        sb.append("  landed freq = ").append(s.landed).append("   // low 16 bits\n")
-        sb.append("  landedOk    = ").append(s.landed == s.asked)
-            .append(if (s.landed == s.asked) "   // stayed put — strength is trustworthy\n"
-                    else "   // MOVED. AWNative would return 0 here; distrust the level\n")
-        // Did the tuner really stay? getCurrentFrequency() is the independent
-        // check — `landed` is the seek's own account of itself.
-        val after = try { radio?.getCurrentFrequency()?.freq ?: -1 } catch (_: Throwable) { -1 }
-        sb.append("  freq after  = ").append(after)
-            .append(if (after == s.asked) "   // confirmed by the binder\n" else "   // CHANGED\n")
-        sb.append("  >>> Is the audio still playing? That is the other half of this test.\n")
-        promise.resolve(sb.toString())
-    }
-
+    // seekStrengthTest lived here and is GONE. It existed to prove seek() was safe
+    // to call after an earlier method cut the audio; twenty presses and two drives
+    // answered that, and startLevelWatch now makes the same seekHere() call every
+    // 30 seconds unattended. seekHere itself stays — it is the shipping read.
     /** Read an MCU settings key, trying each table in turn. Read-only. */
     private fun settingsRead(key: String): String {
         val cr = reactContext.contentResolver
@@ -1013,13 +896,12 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         )
     }
 
-    /** The heavier physical source-switch broadcasts (like pressing "Radio" on the
-     *  unit). Kept as a separate, opt-in call — NOT fired automatically. */
-    @ReactMethod
-    fun requestAudioSource() {
-        reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE").putExtra("extra_source_id", 4.toByte()))
-        reactContext.sendBroadcast(Intent("com.nwd.action.ACTION_CHANGE_SOURCE").putExtra("extra_source_id", 4.toByte()))
-    }
+    // requestAudioSource lived here and is GONE. It broadcast ACTION_CHANGE_SOURCE
+    // with source id 4 (FM) to test whether becoming the MCU's radio source woke
+    // audio and callbacks; task #14 answered that. Removed rather than left as a
+    // dormant button because pressing it now works against the user: declaring FM
+    // as the current source is exactly what the firmware's last-source restore
+    // acts on when the ignition returns.
 
 
 

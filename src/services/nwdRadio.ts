@@ -23,14 +23,11 @@ type NwdNative = {
   setRdsEnabled(on: boolean): void;
   setAudioEnabled(on: boolean): void;
   sendPanelKey?(key: number): void;
-  probeJsonHardware?(): Promise<string>;
   probeNwdFmManager?(): Promise<string>;
-  seekStrengthTest?(): Promise<string>;
   startLevelWatch?(intervalMs: number): void;
   stopLevelWatch?(): void;
   readLevelNow?(): void;
   startIlluminationWatch?(): void;
-  requestAudioSource(): void;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 };
@@ -91,10 +88,6 @@ export async function nwdProbe(): Promise<string> {
 }
 export function nwdSetRds(on: boolean): void { native?.setRdsEnabled(on); }
 export function nwdSetAudio(on: boolean): void { native?.setAudioEnabled(on); }
-/** Fire the MCU source-switch broadcasts (they launch the stock radio app) —
- *  a deliberate test of whether becoming the radio "source" brings audio +
- *  callbacks alive. Not called automatically. */
-export function nwdRequestAudioSource(): void { native?.requestAudioSource(); }
 
 // ── Events ───────────────────────────────────────────────────────────────────
 export type NwdEvents = {
@@ -159,17 +152,6 @@ export function nwdSendPanelKey(key: number): void { native?.sendPanelKey?.(key)
  *  needs it just as much. Idempotent; a no-op off an NWD unit. */
 export function nwdStartIlluminationWatch(): void { native?.startIlluminationWatch?.(); }
 
-/**
- * Probe the vendor JSON channel (android.os.Hardware.parseJson) that the radio
- * service uses for SIGNAL and RAW RDS — the two things the bound AIDL genuinely
- * cannot provide (getRtMessage() is hardcoded to "" on this unit's manager, and
- * no RSSI method exists on the interface at all). Reports the exact result or
- * the exact failure; read-only, changes no tuner state. See NwdRadioModule.
- */
-export async function nwdProbeJsonHardware(): Promise<string> {
-  try { return (await native?.probeJsonHardware?.()) ?? 'module unavailable'; }
-  catch (e) { return `probe threw: ${String((e as Error)?.message ?? e)}`; }
-}
 
 /**
  * Probe `com.nwd.app.NwdFmManager` — the vendor framework class this unit's
@@ -187,26 +169,9 @@ export async function nwdProbeFmManager(): Promise<string> {
   catch (e) { return `probe threw: ${String((e as Error)?.message ?? e)}`; }
 }
 
-/**
- * THE ONE COMMAND IN THIS FILE. Calls `NwdFmManager.seek(currentRawFrequency)`
- * exactly once and reports the packed return: strength in the high 16 bits,
- * the frequency it landed on in the low 16.
- *
- * Deliberately NOT part of nwdProbe(), which auto-fires a few seconds after every
- * retune while diagnostics are on. This retunes the front end — to the frequency
- * it is already on, which is how the vendor's own AF follower restores itself
- * after scanning, but a retune nonetheless. Manual, single-shot, stationary, with
- * someone listening. See docs/BUILTIN-TUNER-FINDINGS.md and task #58.
- *
- * Never rejects: an exception from the vendor class IS the result.
- */
-export async function nwdSeekStrengthTest(): Promise<string> {
-  try { return (await native?.seekStrengthTest?.()) ?? 'module unavailable'; }
-  catch (e) { return `seek test threw: ${String((e as Error)?.message ?? e)}`; }
-}
 
 /** Start the periodic level read. Each tick COMMANDS the tuner (see
- *  nwdSeekStrengthTest), so the native side floors the interval at 5s and skips
+ *  seekHere in NwdRadioModule), so the native side floors it at 5s and skips
  *  any tick where the MCU says FM is not the current source. Idempotent. */
 export function nwdStartLevelWatch(intervalMs: number): void { native?.startLevelWatch?.(intervalMs); }
 export function nwdStopLevelWatch(): void { native?.stopLevelWatch?.(); }
