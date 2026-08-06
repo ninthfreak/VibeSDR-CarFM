@@ -137,6 +137,39 @@ export default function SettingsPanel({
     for (const l of dump.split('\n')) if (l.trim()) diag(l);
   }, []);
 
+  // The head unit's OWN configuration, which is not exposed anywhere in its
+  // visible settings. The vendor radio service reads Settings.System directly and
+  // knows about navigation_packagename, AUTO_START_NAVI_WHEN_ACC_ON and a
+  // five-valued APP_EXIT_MODE — between them these decide what the unit brings to
+  // the front when the ignition comes back, which is why the vendor radio app
+  // lands on top of CarFM after every ACC cycle.
+  //
+  // Read-only, and no permission needed. Filtered rather than dumped whole: these
+  // tables run to hundreds of keys and the log has to stay readable on a 7-inch
+  // screen in a car.
+  const dumpSettings = useCallback(async () => {
+    if (!isDiagEnabled()) setDiagEnabled(true);
+    const mod = NativeModules.VibePowerModule as
+      { dumpSystemSettings?: (f: string) => Promise<string> } | undefined;
+    if (!mod?.dumpSystemSettings) { Alert.alert('Not available', 'This build has no settings dump.'); return; }
+    diag('— head unit settings —');
+    for (const needle of ['navi', 'exit', 'last', 'auto', 'boot', 'source', 'power']) {
+      try {
+        const dump = await mod.dumpSystemSettings(needle);
+        for (const l of dump.split('\n')) {
+          // The per-table tallies are only worth printing when something matched;
+          // seven filters times three tables of "0 matched" would bury the hits.
+          if (!l.trim()) continue;
+          if (/ \d+ of \d+ key\(s\) matched$/.test(l) && l.startsWith(l.split(' ')[0] + ': 0 of')) continue;
+          diag(`[${needle}] ${l}`);
+        }
+      } catch (e) {
+        diag(`[${needle}] failed: ${String(e)}`);
+      }
+    }
+    diag('— end settings —');
+  }, []);
+
   // THE SIGNAL-LEVEL EXPERIMENT (task #58). Unlike every other row here this one
   // COMMANDS the tuner, so it confirms first and runs exactly once per press —
   // never on a timer, never folded into the auto-probe. See nwdSeekStrengthTest.
@@ -500,6 +533,11 @@ export default function SettingsPanel({
                   </Pressable>
                   {nwdActive ? (
                     <>
+                      <View style={[styles.divider, { backgroundColor: pal.border }]} />
+                      <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={dumpSettings} accessibilityRole="button" accessibilityLabel="Dump head unit settings">
+                        <Text style={[styles.clearText, { color: pal.blue }]}>Dump head unit settings (boot / power-on behaviour)</Text>
+                        <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
+                      </Pressable>
                       <View style={[styles.divider, { backgroundColor: pal.border }]} />
                       <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={runProbe} accessibilityRole="button" accessibilityLabel="Run RDS probe">
                         <Text style={[styles.clearText, { color: pal.blue }]}>Run RDS probe (dumps every tuner getter)</Text>
