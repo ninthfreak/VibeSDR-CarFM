@@ -157,9 +157,19 @@ export default function App() {
     AsyncStorage.setItem(SPLASH_SEEN_KEY, '1').catch(() => {});
   }, []);
 
+  // NO FADE. The overlay is a flat dark rectangle the same colour as everything
+  // behind it — a 450ms cross-fade from a colour to itself is 450ms of nothing,
+  // every launch. The fade existed when this was VibeSDR's amber-on-black splash
+  // with artwork worth easing out; that imagery was deliberately removed and the
+  // animation outlived it.
+  //
+  // The overlay itself STAYS: it still hides the picker's handoff, which is a
+  // real job. It can go entirely once the picker stops rendering during its
+  // decision, and then this callback goes with it.
   const fadeSplash = useCallback(() => {
-    Animated.timing(splashOpacity, { toValue: 0, duration: 450, useNativeDriver: true })
-      .start(() => { setSplashDone(true); splashBridge._notifyDismissed(); });
+    splashOpacity.setValue(0);
+    setSplashDone(true);
+    splashBridge._notifyDismissed();
   }, [splashOpacity]);
 
   // The overlay is a plain solid screen (no logo, no wordmark, no status text —
