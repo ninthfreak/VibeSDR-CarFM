@@ -87,7 +87,7 @@ import { getCarAutostart, setCarAutostart } from '../services/carMode';
 import CarFmFace, { type CarFmPreset } from '../components/CarFmFace';
 import DiagOverlay from '../components/carfm/DiagOverlay';
 import { DARK, LIGHT } from '../components/carfm/tokens';
-import { identifyByPi, initLogoService, consumeSharedLogo, getNearbyStations, callsignForFreq, estimatedSignalDbForFreq } from '../services/stationFinder';
+import { identifyByPi, initLogoService, consumeSharedLogo, getNearbyStations, callsignForFreq } from '../services/stationFinder';
 import { warmStationLogos } from '../components/carfm/LogoTile';
 import type { StationIdentity } from '../services/stationTypes';
 import { loadActiveEibi } from '../services/eibi';
@@ -439,6 +439,10 @@ export default function RadioScreen({ route, navigation }: Props) {
    */
   const RDS_STALE_MS = 25_000;
 
+  /** SDR-path signal figure, from the audio SNR the native side emits. The ONLY
+   *  writer now that the GPS+database estimate is gone; on the built-in tuner
+   *  this stays null and the measured level below drives the meter.
+   *  See task #60 — the value is an SNR minus an arbitrary display constant. */
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
   /** Measured level from NwdFmManager.seek — the built-in tuner's real signal
    *  reading, and the only measured one CarFM has ever had. Null until the first
@@ -2642,20 +2646,20 @@ export default function RadioScreen({ route, navigation }: Props) {
       if (stereoTimer) clearTimeout(stereoTimer);
       stereoTimer = setTimeout(() => { if (!cancelled) setFmStereo(on); }, 2000);
     };
-    // Estimated signal: this tuner reports NO signal level (arg is just the preset
-    // slot). So on a settled tune, estimate receivability from the FCC DB + live
-    // GPS; the face renders it GREY ("not live") and shows zero when there's no fix
-    // or no dataset entry. Debounced so seeks don't thrash it.
-    let signalTimer: ReturnType<typeof setTimeout> | null = null;
-    const scheduleSignalEst = (mhz: number) => {
-      if (!(mhz > 0)) return;
-      setFmSignalDb(null);   // clear immediately → zero/grey until the estimate lands
-      if (signalTimer) clearTimeout(signalTimer);
-      signalTimer = setTimeout(async () => {
-        const db = await estimatedSignalDbForFreq(mhz);
-        if (!cancelled) setFmSignalDb(db);
-      }, 1200);
-    };
+    // The estimated-signal meter is GONE. It existed because this tuner was
+    // believed to report no signal level, so receivability was predicted from the
+    // FCC dataset and a GPS fix and drawn in grey. NwdFmManager.seek turned out to
+    // return a real level, which the meter now uses.
+    //
+    // Removed rather than kept as a fallback, because measuring the prediction
+    // against 232 settled samples showed it is the wrong instrument for this job.
+    // Pooled it looks excellent — r = +0.924 against measured level — but almost
+    // all of that is BETWEEN stations, where ERP and distance differ a lot. Within
+    // one station it collapses: on WERN across 85 samples the prediction moved by
+    // 3.1 while the measured level swung 27, giving r = -0.268. What actually
+    // moves a signal on one station is terrain and multipath, and the dataset
+    // cannot see either. Ranking stations against each other is a different job
+    // and Nearby still does it with the same score.
     const subs: Array<() => void> = [];
     (async () => {
       const avail = await isNwdAvailable();
@@ -2713,7 +2717,6 @@ export default function RadioScreen({ route, navigation }: Props) {
         if (typeof info.mhz === 'number' && info.mhz > 0) {
           setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(info.mhz! * 1e6) }));
           if (info.ps) liveStationRef.current = info.ps;
-          scheduleSignalEst(info.mhz);   // seed the estimated meter for the boot station
         }
       } catch (e) {
         diag(`NWD connect FAILED: ${String(e)}`);
@@ -2746,7 +2749,6 @@ export default function RadioScreen({ route, navigation }: Props) {
         // the frequency's position in the factory preset list, −1 otherwise). The
         // tuner exposes no real signal level, so drive the meter from the DB+GPS
         // estimate instead (grey/estimated on the face).
-        scheduleSignalEst(p.mhz);
         // PS/RadioText belong to the station we just left. A PI change clears
         // them too, but the dial moves first and PI only arrives with the next
         // group — without this the old name lingers across a preset step.
@@ -3005,7 +3007,6 @@ export default function RadioScreen({ route, navigation }: Props) {
       if (probeTimer) clearTimeout(probeTimer);
       if (levelSettleTimer) clearTimeout(levelSettleTimer);
       if (stereoTimer) clearTimeout(stereoTimer);
-      if (signalTimer) clearTimeout(signalTimer);
       nwdActiveRef.current = false;
       setNwdActive(false);
       subs.forEach((u) => u());

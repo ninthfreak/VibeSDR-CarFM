@@ -1149,13 +1149,13 @@ export default function CarFmFace(props: CarFmFaceProps) {
           in pieces stays distinguishable from a weak one arriving cleanly — the
           case a level alone renders identically (WERN sat at 53-55 while losing
           RDS fifteen times across one commute).
-          Grey rather than amber means the value is a GPS+database ESTIMATE, not
-          a reading. Nothing is ever dotted on that path: there is no loss figure
-          to draw with, and absence of data is not evidence of loss. */}
+          ALWAYS AMBER now. Grey used to mean "this is a GPS+database estimate
+          rather than a reading", and there is no longer any such path — every
+          number this cluster draws is measured. */}
       <SignalWaves
         size={L.signalIcon}
-        strength={off ? 0 : signalLit != null ? signalLit : waveStrength(sdrDb)}
-        on={nwdActive && signalLit == null ? pal.dim : pal.amber}
+        strength={off ? 0 : signalReadout === 'sdr' ? waveStrength(sdrDb) : (signalLit ?? 0)}
+        on={pal.amber}
         off={pal.meterEmpty}
         dottedPairs={signalDottedPairs}
       />
@@ -1181,9 +1181,7 @@ export default function CarFmFace(props: CarFmFaceProps) {
       >
         {off ? '—'
           : signalReadout === 'sdr' ? (sdrDb == null ? '—' : `${Math.round(sdrDb)} dB`)
-          : nwdLevel != null ? `${nwdLevel}`
-          : nwdActive ? 'EST'
-          : sdrDb == null ? '—' : `${Math.round(sdrDb)} dB`}
+          : nwdLevel == null ? '—' : `${nwdLevel}`}
       </Text>
     </View>
   );
