@@ -465,6 +465,7 @@ export default function RadioScreen({ route, navigation }: Props) {
   const fmDottedRef = useRef(0);
   useEffect(() => { fmDottedRef.current = fmDotted; }, [fmDotted]);
 
+
   // ── Debug/testing mode ───────────────────────────────────────────────────
   // Records one structured sample every 15s so the measured level and the
   // database's PREDICTION can be checked against what a person actually hears.
@@ -3109,6 +3110,18 @@ export default function RadioScreen({ route, navigation }: Props) {
 
   // ── Layout ────────────────────────────────────────────────────────────────
 
+
+  /**
+   * Which reading the face draws.
+   *
+   * The picker chooses between sources that EXIST; it cannot conjure one that
+   * does not. With no NWD tuner bound the SDR figure is the only reading there
+   * is, so honouring a stale 'nwd' selection would leave the meter showing an
+   * em-dash forever while a live value sat unused — which is what the default
+   * selection did to an SDR-only install until this was caught.
+   */
+  const signalReadout = nwdActive ? readoutFor(tunerSel) : 'sdr';
+
   return (
     <View
       style={styles.root}
@@ -3165,7 +3178,7 @@ export default function RadioScreen({ route, navigation }: Props) {
         signalLit={levelToLit(fmLevel)}
         signalLevelRaw={fmLevel}
         signalDottedPairs={fmDotted}
-        signalReadout={readoutFor(tunerSel)}
+        signalReadout={signalReadout}
         rdsOk={!!liveStation.pi || !!liveStation.name}
         tp={liveStation.tp}
         ta={liveStation.ta}
