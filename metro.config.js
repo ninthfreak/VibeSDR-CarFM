@@ -32,4 +32,24 @@ config.transformer.transformIgnorePatterns = [
   ')/)',
 ];
 
+// INLINE REQUIRES. Off by default, and the single biggest startup lever here:
+// without it every top-level require in a module executes the moment that module
+// loads, so pulling in RadioScreen executes all 48 of its imports and their whole
+// dependency trees before anything renders. That includes the entire SDR client
+// stack — UberSDRClient and the backend adapter — which the built-in NWD tuner
+// never touches, executed on every launch to serve a dongle that is not plugged
+// in. With this on, Metro rewrites those requires into inline calls at first use
+// and a module that is never touched never runs.
+//
+// Wrapped rather than replaced: the default getTransformOptions carries other
+// keys, and clobbering it would silently drop them.
+const baseGetTransformOptions = config.transformer.getTransformOptions;
+config.transformer.getTransformOptions = async (...args) => {
+  const base = baseGetTransformOptions ? await baseGetTransformOptions(...args) : {};
+  return {
+    ...base,
+    transform: { ...(base.transform ?? {}), inlineRequires: true },
+  };
+};
+
 module.exports = config;

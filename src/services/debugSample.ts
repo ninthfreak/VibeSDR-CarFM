@@ -130,3 +130,75 @@ export function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: numbe
   const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
   return (Math.atan2(y, x) / d2r + 360) % 360;
 }
+
+/**
+ * Does a rating describe the station currently being sampled?
+ *
+ * A press is an observation about a moment AND about a station, and only the
+ * first of those was ever enforced. On the drive of 2026-08-06 a hop across six
+ * presets in ninety seconds filed seven verdicts against stations the driver had
+ * already left — including a "clean" recorded against a frequency tuned zero
+ * seconds earlier. Nothing in the resulting line marks it as wrong, so those rows
+ * read as ordinary data and land directly on the reception-loss thresholds.
+ *
+ * Three conditions, all necessary:
+ *  - there is a press at all;
+ *  - it happened AFTER the current station was tuned, not before;
+ *  - it happened on the same dial position being sampled now.
+ *
+ * The second and third are not redundant. Retuning away and back leaves the
+ * frequency matching while the verdict belongs to an earlier visit, and a press
+ * during a hop can match the tune order while naming a different station.
+ */
+export function ratingBelongsHere(a: {
+  pressedAtMs: number | null;
+  pressedMhz: number | null;
+  tunedAtMs: number;
+  currentMhz: number | null;
+}): boolean {
+  if (a.pressedAtMs == null) return false;
+  if (a.pressedAtMs <= a.tunedAtMs) return false;
+  return a.pressedMhz != null && a.pressedMhz === a.currentMhz;
+}
+
+/**
+ * Shortest measurement window that can carry a per-second rate.
+ *
+ * The sampler used to divide by `max(1, elapsed)`, which does not protect a
+ * rate — it fabricates one. Two samples landing a second apart (which happens at
+ * every retune, since a settle read fires on top of the periodic watch) divided a
+ * whole window's groups by 1 and published the result as a rate. The launch
+ * sample was the worst case: `rds=50.0/s` on 2026-08-06, against an RDS ceiling
+ * of about 11 groups per second. Physically impossible, and indistinguishable in
+ * the log from a real reading.
+ *
+ * Five seconds is well under the 15s cadence, so an ordinary sample is never
+ * affected; only the off-cadence ones are.
+ */
+export const SAMPLE_MIN_WINDOW_S = 5;
+
+/**
+ * Fewest groups a mismatch percentage may be quoted from.
+ *
+ * Same reasoning as the decoder's rolling figure: a station delivering half a
+ * group per second produces a percentage from two or three outcomes, and 0% or
+ * 100% from that is not a measurement. The 2026-08-06 drive has `rds=0.5/s
+ * err=100%` rows that mean nothing beyond "almost nothing arrived".
+ */
+export const SAMPLE_MIN_GROUPS = 8;
+
+/**
+ * Per-window RDS figures, or null where the window cannot support them.
+ *
+ * Returning null is the point. An absent column reads as "not measured", which is
+ * true; a fabricated one reads as data and silently poisons any average taken
+ * over the log.
+ */
+export function windowRates(a: { groups: number; piMismatch: number; windowS: number }):
+  { groupsPerSec: number | null; errPct: number | null } {
+  const longEnough = Number.isFinite(a.windowS) && a.windowS >= SAMPLE_MIN_WINDOW_S;
+  return {
+    groupsPerSec: longEnough ? a.groups / a.windowS : null,
+    errPct: a.groups >= SAMPLE_MIN_GROUPS ? (100 * a.piMismatch) / a.groups : null,
+  };
+}

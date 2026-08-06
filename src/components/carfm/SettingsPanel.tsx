@@ -16,12 +16,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BatteryBolt, SignalWaves, WarningTriangle } from './icons';
 import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 import { EGG_MENU } from './bandThemes';
+import { getTunerBackend, loadTunerBackend, setTunerBackend, readoutFor, type TunerBackend } from '../../services/tunerBackend';
 import { snapshotDate, clearAllStationPrefs } from '../../services/stationDb';
 import { clearAllLogoFiles } from '../../services/logoStore';
 import { clearLogoCache } from '../../services/stationLogoCache';
 import { invalidateLogoTile, invalidateStationDisplay } from './LogoTile';
-import { isNwdAvailable, nwdRequestAudioSource, nwdProbe, nwdProbeJsonHardware, nwdProbeFmManager,
-         nwdSeekStrengthTest } from '../../services/nwdRadio';
+import { isNwdAvailable, nwdProbe, nwdProbeFmManager } from '../../services/nwdRadio';
 import { isDebugMode, setDebugMode } from '../../services/debugMode';
 import { diag, isDiagEnabled, setDiagEnabled, isDiagOverlayEnabled, setDiagOverlayEnabled,
          diagLines, diagText, clearDiag, subscribeDiag } from '../../services/diag';
@@ -29,7 +29,6 @@ import { diag, isDiagEnabled, setDiagEnabled, isDiagOverlayEnabled, setDiagOverl
 export type CarFmTheme = 'system' | 'light' | 'dark';
 
 const APP_VERSION = '0.9.2';
-const BACKEND_KEY = '@carfm/tuner_backend_v1';
 const LOGOS_KEY = '@carfm/logos_enabled_v1';
 
 interface BackendDef { id: string; name: string; kind: string; available: boolean; detected: boolean | null; }
@@ -73,7 +72,7 @@ export default function SettingsPanel({
   onForceEgg?: (id: string | null) => void;
 }) {
   const [diagOpen, setDiagOpen] = useState(false);
-  const [backend, setBackend] = useState('rtl');
+  const [backend, setBackend] = useState<TunerBackend>(getTunerBackend());
   const [batteryExempt, setBatteryExempt] = useState<boolean | null>(null);
   const [nwdAvail, setNwdAvail] = useState<boolean | null>(null);   // built-in NWD tuner present?
   const [logosOn, setLogosOn] = useState(false);
@@ -137,30 +136,37 @@ export default function SettingsPanel({
     for (const l of dump.split('\n')) if (l.trim()) diag(l);
   }, []);
 
-  // THE SIGNAL-LEVEL EXPERIMENT (task #58). Unlike every other row here this one
-  // COMMANDS the tuner, so it confirms first and runs exactly once per press —
-  // never on a timer, never folded into the auto-probe. See nwdSeekStrengthTest.
-  const runSeekStrengthTest = useCallback(() => {
-    Alert.alert(
-      'Test signal level?',
-      'This retunes the tuner to the frequency it is already on, which is how the '
-      + 'vendor reads a level. It should be silent, but it is a command — an earlier '
-      + 'attempt at a different method cut the audio.\n\n'
-      + 'Park first, keep the radio playing, and listen while it runs.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Run once',
-          style: 'destructive',
-          onPress: async () => {
-            if (!isDiagEnabled()) setDiagEnabled(true);
-            diag('— seek strength test —');
-            const dump = await nwdSeekStrengthTest();
-            for (const l of dump.split('\n')) if (l.trim()) diag(l);
-          },
-        },
-      ],
-    );
+  // The head unit's OWN configuration, which is not exposed anywhere in its
+  // visible settings. The vendor radio service reads Settings.System directly and
+  // knows about navigation_packagename, AUTO_START_NAVI_WHEN_ACC_ON and a
+  // five-valued APP_EXIT_MODE — between them these decide what the unit brings to
+  // the front when the ignition comes back, which is why the vendor radio app
+  // lands on top of CarFM after every ACC cycle.
+  //
+  // Read-only, and no permission needed. Filtered rather than dumped whole: these
+  // tables run to hundreds of keys and the log has to stay readable on a 7-inch
+  // screen in a car.
+  const dumpSettings = useCallback(async () => {
+    if (!isDiagEnabled()) setDiagEnabled(true);
+    const mod = NativeModules.VibePowerModule as
+      { dumpSystemSettings?: (f: string) => Promise<string> } | undefined;
+    if (!mod?.dumpSystemSettings) { Alert.alert('Not available', 'This build has no settings dump.'); return; }
+    diag('— head unit settings —');
+    for (const needle of ['navi', 'exit', 'last', 'auto', 'boot', 'source', 'power']) {
+      try {
+        const dump = await mod.dumpSystemSettings(needle);
+        for (const l of dump.split('\n')) {
+          // The per-table tallies are only worth printing when something matched;
+          // seven filters times three tables of "0 matched" would bury the hits.
+          if (!l.trim()) continue;
+          if (/ \d+ of \d+ key\(s\) matched$/.test(l) && l.startsWith(l.split(' ')[0] + ': 0 of')) continue;
+          diag(`[${needle}] ${l}`);
+        }
+      } catch (e) {
+        diag(`[${needle}] failed: ${String(e)}`);
+      }
+    }
+    diag('— end settings —');
   }, []);
 
   const Local = (NativeModules as any).VibeLocalSDR as
@@ -172,9 +178,9 @@ export default function SettingsPanel({
     if (!visible) return;
     let cancelled = false;
     (async () => {
-      // Ignore the retired hidden 'rtltcp' id so a legacy stored value doesn't
-      // leave the picker with no row highlighted.
-      try { const b = await AsyncStorage.getItem(BACKEND_KEY); if (b && b !== 'rtltcp' && !cancelled) setBackend(b); } catch {}
+      // Retired ids are filtered inside the service, so a legacy stored value
+      // can't leave the picker with no row highlighted.
+      try { const b = await loadTunerBackend(); if (!cancelled) setBackend(b); } catch {}
       try { const l = await AsyncStorage.getItem(LOGOS_KEY); if (!cancelled) setLogosOn(l === '1'); } catch {}
       try { const d = await snapshotDate(); if (!cancelled) setDataDate(d); } catch {}
       try { const n = await isNwdAvailable(); if (!cancelled) setNwdAvail(n); } catch { if (!cancelled) setNwdAvail(false); }
@@ -186,10 +192,13 @@ export default function SettingsPanel({
     return () => { cancelled = true; };
   }, [visible]);
 
+  // §6.3 v1.13.0: the selection is load-bearing now — it drives the face's
+  // readout, this panel's connection row, and whether the RTL-SDR diagnostics
+  // are reachable. It does NOT re-bind the hardware; see services/tunerBackend.
   const pickBackend = useCallback((id: string, available: boolean) => {
     if (!available) return;
-    setBackend(id);
-    AsyncStorage.setItem(BACKEND_KEY, id).catch(() => {});
+    setBackend(id as TunerBackend);
+    setTunerBackend(id as TunerBackend);
   }, []);
   const toggleLogos = useCallback(() => {
     setLogosOn((v) => { const nv = !v; AsyncStorage.setItem(LOGOS_KEY, nv ? '1' : '0').catch(() => {}); return nv; });
@@ -247,6 +256,10 @@ export default function SettingsPanel({
   // rtl_tcp / networked-SDR sources are hidden from the picker for now (the
   // backend still exists; parked for a future advanced/developer mode).
 
+  // The RTL2832U diagnostics name a chip that only the dongle has, so §6.3
+  // shows them on that selection alone.
+  const sdrSelected = readoutFor(backend) === 'sdr';
+
   const badgeFor = (b: BackendDef) =>
     b.detected === null ? '' : b.detected ? 'Detected' : b.available ? 'Not detected' : 'Unavailable';
 
@@ -276,14 +289,14 @@ export default function SettingsPanel({
                 <View style={styles.iconWrap}>
                   {tunerError
                     ? <WarningTriangle size={32} color={pal.amber} />
-                    : <SignalWaves size={34} strength={4} on={pal.amber} off={pal.meterEmpty} />}
+                    : <SignalWaves size={44} strength={5} on={pal.amber} off={pal.meterEmpty} />}
                 </View>
                 <View style={styles.textWrap}>
                   <Text style={[styles.rowTitle, { color: pal.text }]}>{tunerError ? 'Not connected' : 'Connected'}</Text>
                   <Text style={[styles.rowSub, { color: pal.dim }]}>
                     {tunerError ? 'No USB tuner found'
-                      : nwdActive ? 'Built-in tuner · NWD / NOWADA'
-                      : 'Local hardware · RTL-SDR (RTL2832U)'}
+                      : sdrSelected ? 'Local hardware · RTL-SDR (RTL2832U)'
+                      : 'Built-in hardware · NWD/NOWADA FM tuner'}
                   </Text>
                 </View>
                 {tunerError && onRetryTuner ? (
@@ -294,7 +307,7 @@ export default function SettingsPanel({
                   >
                     <Text style={[styles.retryText, { color: pal.blue }]}>RETRY</Text>
                   </Pressable>
-                ) : (!tunerError && !nwdActive) ? (
+                ) : (!tunerError && sdrSelected) ? (
                   <Pressable
                     onPress={() => setDiagOpen((v) => !v)}
                     style={({ pressed }) => [styles.diagBtn, { borderColor: pal.border }, pressed && { opacity: 0.6 }]}
@@ -494,17 +507,13 @@ export default function SettingsPanel({
                   {nwdActive ? (
                     <>
                       <View style={[styles.divider, { backgroundColor: pal.border }]} />
-                      <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={runProbe} accessibilityRole="button" accessibilityLabel="Run RDS probe">
-                        <Text style={[styles.clearText, { color: pal.blue }]}>Run RDS probe (dumps every tuner getter)</Text>
+                      <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={dumpSettings} accessibilityRole="button" accessibilityLabel="Dump head unit settings">
+                        <Text style={[styles.clearText, { color: pal.blue }]}>Dump head unit settings (boot / power-on behaviour)</Text>
                         <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                       </Pressable>
                       <View style={[styles.divider, { backgroundColor: pal.border }]} />
-                      <Pressable
-                        style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]}
-                        onPress={() => { nwdProbeJsonHardware().then((t) => { for (const l of t.split('\n')) if (l.trim()) diag(l); }); }}
-                        accessibilityRole="button" accessibilityLabel="Probe the vendor JSON channel for signal and RDS"
-                      >
-                        <Text style={[styles.clearText, { color: pal.blue }]}>Probe signal + raw RDS (JSON channel)</Text>
+                      <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={runProbe} accessibilityRole="button" accessibilityLabel="Run RDS probe">
+                        <Text style={[styles.clearText, { color: pal.blue }]}>Run RDS probe (dumps every tuner getter)</Text>
                         <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                       </Pressable>
                       <View style={[styles.divider, { backgroundColor: pal.border }]} />
@@ -516,27 +525,8 @@ export default function SettingsPanel({
                         <Text style={[styles.clearText, { color: pal.blue }]}>Probe NwdFmManager (signal · raw RDS · stereo)</Text>
                         <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                       </Pressable>
-                      {/* AMBER, not blue, and it asks first. Everything above is a
-                          passive read that the auto-probe also fires by itself;
-                          this one commands the tuner and only ever runs on a
-                          deliberate press. The colour difference is the point. */}
-                      <View style={[styles.divider, { backgroundColor: pal.border }]} />
-                      <Pressable
-                        style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.amberFill }]}
-                        onPress={runSeekStrengthTest}
-                        accessibilityRole="button"
-                        accessibilityLabel="Test signal level — commands the tuner, park first"
-                      >
-                        <Text style={[styles.clearText, { color: pal.amber }]}>Test signal level (commands the tuner — park first)</Text>
-                        <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
-                      </Pressable>
                     </>
                   ) : null}
-                  <View style={[styles.divider, { backgroundColor: pal.border }]} />
-                  <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={() => nwdRequestAudioSource()} accessibilityRole="button" accessibilityLabel="Test audio source switch">
-                    <Text style={[styles.clearText, { color: pal.blue }]}>Test audio source (launches stock app)</Text>
-                    <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
-                  </Pressable>
                   <View style={[styles.divider, { backgroundColor: pal.border }]} />
                   <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={clearDiag} accessibilityRole="button" accessibilityLabel="Clear log">
                     <Text style={[styles.clearText, { color: pal.blue }]}>Clear log</Text>

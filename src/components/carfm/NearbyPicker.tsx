@@ -44,12 +44,12 @@ function Chip({ label, active, pal, onPress }: { label: string; active: boolean;
 }
 
 function strengthOf(st: NearbyStation, list: NearbyStation[]): number {
-  // score is a relative rank (higher = better); bucket it into 1–4 waves by
+  // score is a relative rank (higher = better); bucket it into 1–5 waves by
   // position within this result set. Never colour alone: count encodes it.
-  if (list.length <= 1) return 4;
+  if (list.length <= 1) return 5;
   const max = list[0].score, min = list[list.length - 1].score;
   const f = (st.score - min) / ((max - min) || 1);
-  return 1 + Math.round(f * 3);
+  return 1 + Math.round(f * 4);
 }
 
 // Row metrics reflow for a NARROW picker (phone-portrait / ⅓ slice, card clamped

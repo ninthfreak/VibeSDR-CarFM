@@ -13,7 +13,6 @@ import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import RadioScreen            from './src/screens/RadioScreen';
 import CrashBoundary        from './src/components/CrashBoundary';
 import { installCrashGuard } from './src/services/crashGuard';
-import { ThemeProvider }    from './src/contexts/ThemeContext';
 import type { ViewMode }    from './src/services/viewMode';
 import type { SDRMode }     from './src/services/UberSDRClient';
 import { useDeepLinks }     from './src/linking/useDeepLinks';
@@ -111,16 +110,23 @@ export default function App() {
   // slow startup. They load in parallel and announce themselves when ready; a
   // theme falls back to the default face until then, and eggs resolve off
   // RadioText (seconds after launch) so they are always ready in practice.
+  //
+  // TWO CUTS OF ONE FAMILY, not two typefaces. Atkinson Hyperlegible is the only
+  // face the interface uses; the bold is registered separately because Android
+  // fake-bolds a single family and the synthetic weight reads lighter than the
+  // design's true 700 (handoff §3).
   const [fontsLoaded] = useFonts({
-    'Nixie One':              require('./assets/fonts/NixieOne-Regular.ttf'),
     'Atkinson Hyperlegible':  require('./assets/fonts/AtkinsonHyperlegible-Regular.ttf'),
     // Real bold cut as its own family: Android fake-bolds a single family,
     // which reads lighter than the design's true 700 (design handoff §3).
     'AtkinsonHyperlegible-Bold': require('./assets/fonts/AtkinsonHyperlegible-Bold.ttf'),
   });
-  // Band-theme display faces — the REAL supplied faces from the v1.12.0 handoff
+  // Band-theme display faces — the REAL supplied faces from the v1.13.0 handoff
   // (fonts/), bundled as res/font. No stand-ins, no network fetch; a theme's
   // identity is its typeface (EASTER-EGGS-BUILD §1.1, family names verbatim).
+  //
+  // Anton left with Talking Heads in v1.13.0 — that theme was withdrawn and Led
+  // Zeppelin replaced it, so the face has no consumer and is no longer bundled.
   const [bandFontsLoaded] = useFonts({
     'Squealer':         require('./assets/fonts/Squealer.otf'),          // AC/DC
     'BeatlesYellowSub': require('./assets/fonts/BeatlesYellowSub.ttf'),  // The Beatles (body)
@@ -130,7 +136,7 @@ export default function App() {
     'Onyx':             require('./assets/fonts/Onyx.ttf'),              // Nirvana (hero, 1.5×)
     'Gridnik':          require('./assets/fonts/Gridnik.otf'),           // Nine Inch Nails (body/hero)
     'Singothic':        require('./assets/fonts/Singothic.ttf'),         // Nine Inch Nails (genre/RT/freq)
-    'Anton':            require('./assets/fonts/Anton-Regular.ttf'),     // Talking Heads
+    'Kashmir':          require('./assets/fonts/Kashmir.ttf'),           // Led Zeppelin (hero + RadioText ONLY)
   });
   useEffect(() => { setBandFontsReady(!!bandFontsLoaded); }, [bandFontsLoaded]);
 
@@ -154,9 +160,19 @@ export default function App() {
     AsyncStorage.setItem(SPLASH_SEEN_KEY, '1').catch(() => {});
   }, []);
 
+  // NO FADE. The overlay is a flat dark rectangle the same colour as everything
+  // behind it — a 450ms cross-fade from a colour to itself is 450ms of nothing,
+  // every launch. The fade existed when this was VibeSDR's amber-on-black splash
+  // with artwork worth easing out; that imagery was deliberately removed and the
+  // animation outlived it.
+  //
+  // The overlay itself STAYS: it still hides the picker's handoff, which is a
+  // real job. It can go entirely once the picker stops rendering during its
+  // decision, and then this callback goes with it.
   const fadeSplash = useCallback(() => {
-    Animated.timing(splashOpacity, { toValue: 0, duration: 450, useNativeDriver: true })
-      .start(() => { setSplashDone(true); splashBridge._notifyDismissed(); });
+    splashOpacity.setValue(0);
+    setSplashDone(true);
+    splashBridge._notifyDismissed();
   }, [splashOpacity]);
 
   // The overlay is a plain solid screen (no logo, no wordmark, no status text —
@@ -177,7 +193,6 @@ export default function App() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeProvider>
       <View style={{ flex: 1, backgroundColor: '#161E29' }}>
         <CrashBoundary>
         <NavigationContainer ref={navigationRef}>
@@ -213,7 +228,6 @@ export default function App() {
           </Animated.View>
         )}
       </View>
-      </ThemeProvider>
     </GestureHandlerRootView>
   );
 }

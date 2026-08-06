@@ -16,7 +16,12 @@
  *  palette — kept structural so this file needs no token import). */
 export type EggPalette = { text: string; dim: string; border: string; blue: string; blueFill: string };
 
-export type Motif = 'acdc' | 'submarine' | 'bigsuit' | 'xerox' | 'spiral';
+export type Motif = 'acdc' | 'submarine' | 'xerox' | 'spiral' | 'runes';
+
+/** The four marks from Led Zeppelin's untitled fourth record, in sleeve order.
+ *  Keys into RUNE_PATHS (bandArt) — the art is specific, traced outlines, never
+ *  lettering and never a font glyph. */
+export type RuneKey = 'zoso' | 'triquetra' | 'rings' | 'feather';
 
 /** A resolved band theme. Every field is optional except identity; a consumer
  *  reads only what it needs and falls back to the default token otherwise. All
@@ -29,8 +34,17 @@ export type Egg = {
   font?: string; heroFont?: string; heroScale?: number; heroTrack?: number; heroCase?: 'lower';
   freqFont?: string; freqScale?: number; freqColor?: string;
   rtFont?: string; rtSpacing?: number; bold?: boolean;
+  /** Limits the theme's typeface to one region. `'hero'` puts it on the hero card
+   *  and RadioText ONLY, leaving preset tiles and peek cards on the default face
+   *  (Led Zeppelin). Absent = the face applies everywhere, as before. */
+  fontScope?: 'hero';
+  /** Outline weight on the hero lettering, in px. */
+  heroStroke?: number;
   // genre line
   genreText?: string; genreColor?: string; genreFont?: string; genreDroop?: boolean;
+  /** Marks drawn IN PLACE OF the genre line. Debossed rather than printed —
+   *  see LOSSY-ELEMENTS #14 and the note on RUNE_SHADOW in bandArt. */
+  genreArt?: RuneKey[];
   genreCycle?: string[]; genrePulse?: { light: string[]; dark: string[] }; genrePulseOn?: boolean;
   genreOutline?: { color: string; width: number };
   // surfaces
@@ -58,7 +72,7 @@ export type Egg = {
 /** The band-theme display faces are bundled (App.tsx useFonts) — the REAL supplied
  *  faces from the v1.12.0 handoff, registered under the family names below verbatim
  *  (Squealer, BeatlesYellowSub, SgtPeppers, MadieRoger, PermanentMarker, Onyx,
- *  Gridnik, Singothic, Anton). No stand-ins. Set false to fall back to Atkinson. */
+ *  Gridnik, Singothic, Kashmir). No stand-ins. Set false to fall back to Atkinson. */
 // The nine band-theme display faces are decorative and load in the BACKGROUND —
 // blocking first paint on them cost seconds of blank screen at every launch. A
 // theme only applies its typeface once they've actually arrived; until then it
@@ -118,15 +132,20 @@ export function buildEggs(pal: EggPalette): Egg[] {
       stripes: true, suppressLogos: true,
     },
     {
-      id: 'Talking Heads', names: ['talking heads'], motif: 'bigsuit',
-      font: 'Anton',
-      accent: '#D8231C', glow: '#FF4A2E',
-      genreText: 'Same As It Ever Was', genreColor: '#D8231C',
-      card: { bg: '#EFE9DE', border: '#111111', text: '#111111', sub: '#6B6560' },
-      cardFrame: { width: 3, rings: ['#EFE9DE 4px', '#D8231C 5.5px'] },
-      nameBlock: { bg: '#D8231C', color: '#EFE9DE', pad: '2px 18px 6px' },
-      rtPlate: { bg: '#EFE9DE', border: '#111111', text: '#111111' },
-      suppressLogos: true, rtSpacing: 1.5,
+      // v1.13.0 replaced Talking Heads with this one. NO PALETTE CHANGES AT ALL —
+      // default theme colours throughout, exactly like Nirvana below. Type and
+      // marks only; the accent/glow/chromeInk just restate the theme's own tokens.
+      id: 'Led Zeppelin', names: ['led zeppelin', 'zeppelin'], motif: 'runes',
+      // Kashmir is scoped to the hero card and RadioText. Preset tiles and peek
+      // cards keep the default face — a display cut at tile size is unreadable,
+      // and the theme reads from the hero anyway.
+      font: 'Kashmir', fontScope: 'hero',
+      heroFont: 'Kashmir', heroScale: 1.3, heroStroke: 0.9,
+      rtFont: 'Kashmir', rtSpacing: 2,
+      accent: pal.text, glow: pal.border, chromeInk: pal.text,
+      // The four marks stand IN PLACE OF the genre line, in sleeve order.
+      genreArt: ['zoso', 'triquetra', 'rings', 'feather'],
+      suppressLogos: true,
     },
     {
       id: 'Nirvana', names: ['nirvana'], motif: 'xerox',
@@ -187,7 +206,7 @@ export function matchEggId(rt: string | null | undefined, forcedId?: string | nu
 const MATCH_TABLE: { id: string; names: string[] }[] = [
   { id: 'AC/DC', names: ['ac dc', 'acdc'] },
   { id: 'The Beatles', names: ['beatles'] },
-  { id: 'Talking Heads', names: ['talking heads'] },
+  { id: 'Led Zeppelin', names: ['led zeppelin', 'zeppelin'] },
   { id: 'Nirvana', names: ['nirvana'] },
   { id: 'Nine Inch Nails', names: ['nine inch nails'] },
 ];
@@ -196,7 +215,7 @@ const MATCH_TABLE: { id: string; names: string[] }[] = [
 export const EGG_MENU: { id: string; label: string }[] = [
   { id: 'AC/DC', label: 'Powerage' },
   { id: 'The Beatles', label: 'The Walrus was Paul' },
-  { id: 'Talking Heads', label: 'Big Suit' },
+  { id: 'Led Zeppelin', label: 'Four Symbols' },
   { id: 'Nirvana', label: 'Smells Like Gen X' },
   { id: 'Nine Inch Nails', label: 'Now I’m Nothing' },
 ];

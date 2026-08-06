@@ -323,33 +323,18 @@ export async function callsignForFreq(freqMhz?: number): Promise<string | null> 
   return freqCallsignCache.map.get(k) ?? null;
 }
 
-// ── estimated signal (DB + live GPS) ──────────────────────────────────────────
-/**
- * Estimated signal for a dial frequency, as a dBFS-ish value the CarFM meter
- * maps to bars (−95 ≈ empty, −55 ≈ full). It is NOT a live measurement — the
- * built-in NWD tuner exposes no signal strength — so this is derived from the
- * FCC dataset (ERP + station class + distance via receivabilityScore) using the
- * CURRENT GPS fix. Returns null when there's no live fix or no station on this
- * frequency; the meter then shows zero, greyed, to signal "no data" (never a
- * fake reading). Deliberately not persisted like the callsign cache: a distance
- * estimate from a stale location would be meaningless.
- */
-export async function estimatedSignalDbForFreq(freqMhz?: number): Promise<number | null> {
-  if (freqMhz == null || !isFinite(freqMhz)) return null;
-  let stations: NearbyStation[];
-  try { ({ stations } = await getNearbyStations({ enrich: false })); }  // uses live GPS; [] if no fix
-  catch { return null; }
-  if (!stations.length) return null;
-  const k = Math.round(freqMhz * 10);
-  const best = stations
-    .filter((s) => s.service === 'FM' && Math.round(s.frequencyMhz * 10) === k)
-    .sort((a, b) => b.score - a.score)[0];   // best-receivability station on this channel
-  if (!best) return null;
-  // score is a relative dB proxy (~ −40 weak .. +10 strong); map into the meter's
-  // −95..−55 window so the grey "estimated" bars track likely receivability.
-  const frac = Math.max(0, Math.min(1, (best.score + 40) / 50));
-  return -95 + frac * 40;
-}
+// The estimated-signal meter lived here and is GONE. It mapped a receivability
+// score into a fake dBFS window so the face could draw grey "not live" bars, on
+// the belief that this tuner reported no signal level. It does — seek() returns
+// one — and the meter uses it.
+//
+// The prediction itself is NOT discredited and receivabilityScore stays: Nearby
+// still ranks stations with it, which is what it is good at. Measured against 232
+// settled samples it explained 85% of the variance in level BETWEEN stations
+// (r = +0.924) and essentially none WITHIN one — on WERN the prediction moved 3.1
+// while the level swung 27. Terrain and multipath are what move a signal on one
+// station, and no dataset can see them, so this was always the wrong instrument
+// for a live meter.
 
 // ── manual assignment + web image search (addendum §7, user addition) ─────────
 /**

@@ -5,30 +5,85 @@
 import React from 'react';
 import Svg, { Circle, G, Line, Path, Polygon, Rect } from 'react-native-svg';
 
+/** Signal-glyph viewBox (SIGNAL-METER.md). Exported so the face can size the
+ *  level number's overlay against the same box the arcs are drawn in. */
+export const SIGNAL_VB_W = 58;
+export const SIGNAL_VB_H = 32;
+
 /**
- * Three concentric broadcast waves around a dot; `strength` 0–4 controls how
- * many waves are amber (position encodes strength — never colour alone).
+ * Arc-pair geometry, straight from SIGNAL-METER.md's table. Inner → outer.
+ *
+ * ELLIPTICAL, not circular — rx is 1.3× and ry 1.1× the old circular radii. That
+ * was authored into the path data rather than applied as a transform on the box,
+ * because a non-uniform scale would thin the horizontal strokes and thicken the
+ * vertical ones and destroy the even 2.2 weight.
+ *
+ * Every edge including the round caps falls inside the viewBox (extremes x 0.64,
+ * y 0.6/31.4), so nothing clips. The old 34×24 box was centred on x=15 of 34 and
+ * clipped the left outer arc's tip; that asymmetry is gone.
  */
-export function SignalWaves({ size = 33, strength, on, off }: {
-  size?: number; strength: number; on: string; off: string;
+const PAIRS = [
+  { rx: 6.5,   ry: 5.5,   xL: 23.8,  xR: 34.2,  y0: 11.6, y1: 20.4 },
+  { rx: 11.31, ry: 9.57,  xL: 19.25, xR: 38.75, y0: 8.3,  y1: 23.7 },
+  { rx: 16.25, ry: 13.75, xL: 14.7,  xR: 43.3,  y0: 5,    y1: 27 },
+  { rx: 21.19, ry: 17.93, xL: 10.15, xR: 47.85, y0: 1.7,  y1: 30.3 },
+];
+
+/**
+ * Dot pattern for a lossy wave.
+ *
+ * The idiom is a ZERO-length dash with a round cap: the cap alone renders a disc
+ * of the full 2.2 stroke diameter, so the mark keeps its weight instead of
+ * thinning to an outline — which is why dots beat both dashes and a hollow arc at
+ * this size.
+ *
+ * The dash is 0.01 rather than a true 0 because Android's DashPathEffect requires
+ * every interval to be positive and silently drops the effect otherwise, which
+ * would render a lossy arc as a solid one — the exact failure this is meant to
+ * show. Period stays 4.8: Design measured 3.4 as too tight (1.1px between dots,
+ * closer together than they are wide, reads solid) and 4.8 as clearly dotted.
+ */
+const DOT_DASH = [0.01, 4.79];
+
+/**
+ * Broadcast glyph: a centre dot with four elliptical arc pairs radiating left and
+ * right. NOT a tower and not bars — a point source, bilaterally symmetric.
+ *
+ * `strength` is 0–5: 0 lights nothing, 1 the dot, 2–5 the dot plus that many
+ * pairs outward. `dottedPairs` converts that many of the OUTERMOST LIT pairs from
+ * solid to dotted, which is how reception loss is drawn — the count never shrinks,
+ * so a strong carrier arriving in pieces stays distinguishable from a weak one
+ * arriving cleanly.
+ *
+ * Every element always renders; unlit ones take `off`, so zero strength is the
+ * full glyph gone dim rather than a vanishing icon.
+ */
+export function SignalWaves({ size = 54.6, strength, on, off, dottedPairs = 0 }: {
+  size?: number; strength: number; on: string; off: string; dottedPairs?: number;
 }) {
-  // Exact port of RadioFace.dc.html `signalIcon`: viewBox 0 0 34 24, centre dot +
-  // three concentric arc pairs at r 5 / 8.7 / 12.5, lit by level (dot ≥1, pairs
-  // ≥2/≥3/≥4). Width from the caller; height keeps the 34:24 viewBox aspect.
-  const s = Math.max(0, Math.min(4, strength));
-  const col = (n: number) => (s >= n ? on : off);
-  const arc = (d: string, lvl: number) => (
-    <Path d={d} stroke={col(lvl)} strokeWidth={2.2} strokeLinecap="round" fill="none" />
-  );
+  const lit = Math.max(0, Math.min(5, strength));
+  const litPairs = Math.max(0, lit - 1);           // state 1 is the dot alone
+  // Dotting eats inward from the outside and is CLAMPED to what is lit — "dot two
+  // pairs" is meaningless when one is lit. It can never reach the dot: a filled
+  // circle has no dotted form, so the worst case is a lone solid dot.
+  const dotted = Math.max(0, Math.min(litPairs, dottedPairs));
   return (
-    <Svg width={size} height={Math.round((size * 24) / 34)} viewBox="0 0 34 24">
-      <Circle cx={15} cy={12} r={2.6} fill={col(1)} />
-      {arc('M11 8 A 5 5 0 0 0 11 16', 2)}
-      {arc('M19 8 A 5 5 0 0 1 19 16', 2)}
-      {arc('M7.5 5 A 8.7 8.7 0 0 0 7.5 19', 3)}
-      {arc('M22.5 5 A 8.7 8.7 0 0 1 22.5 19', 3)}
-      {arc('M4 2 A 12.5 12.5 0 0 0 4 22', 4)}
-      {arc('M26 2 A 12.5 12.5 0 0 1 26 22', 4)}
+    <Svg width={size} height={(size * SIGNAL_VB_H) / SIGNAL_VB_W} viewBox={`0 0 ${SIGNAL_VB_W} ${SIGNAL_VB_H}`}>
+      <Circle cx={29} cy={16} r={2.6} fill={lit >= 1 ? on : off} />
+      {PAIRS.map((p, i) => {
+        const isLit = i < litPairs;
+        const isDotted = isLit && i >= litPairs - dotted;
+        const stroke = isLit ? on : off;
+        const dash = isDotted ? DOT_DASH : undefined;
+        return (
+          <G key={i}>
+            <Path d={`M${p.xL} ${p.y0} A ${p.rx} ${p.ry} 0 0 0 ${p.xL} ${p.y1}`}
+              stroke={stroke} strokeWidth={2.2} strokeLinecap="round" strokeDasharray={dash} fill="none" />
+            <Path d={`M${p.xR} ${p.y0} A ${p.rx} ${p.ry} 0 0 1 ${p.xR} ${p.y1}`}
+              stroke={stroke} strokeWidth={2.2} strokeLinecap="round" strokeDasharray={dash} fill="none" />
+          </G>
+        );
+      })}
     </Svg>
   );
 }

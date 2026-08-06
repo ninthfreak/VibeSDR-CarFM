@@ -16,7 +16,10 @@ ok('normalize handles null', normalizeRt(null) === '');
 ok('AC/DC via slash', matchEggId('AC/DC - Thunderstruck') === 'AC/DC');
 ok('AC/DC via "acdc"', matchEggId('Now: ACDC Back In Black') === 'AC/DC');
 ok('Nirvana anywhere in the text', matchEggId('Now Playing — Nirvana / Lithium') === 'Nirvana');
-ok('Talking Heads', matchEggId('talking heads — once in a lifetime') === 'Talking Heads');
+ok('Led Zeppelin, full name', matchEggId('led zeppelin — kashmir') === 'Led Zeppelin');
+// v1.13.0 gives this theme a SECOND name, which no other entry has: stations
+// abbreviate it constantly ("Zeppelin - Whole Lotta Love").
+ok('Led Zeppelin, surname only', matchEggId('Zeppelin - Whole Lotta Love') === 'Led Zeppelin');
 ok('Nine Inch Nails', matchEggId('NINE INCH NAILS - Hurt') === 'Nine Inch Nails');
 ok('The Beatles', matchEggId('The Beatles - Hey Jude') === 'The Beatles');
 
@@ -44,7 +47,7 @@ ok('unrelated text does not match beatles', matchEggId('beat it - michael jackso
 
 // forced override wins over detection (secret panel)
 ok('forced id overrides detection', matchEggId('AC/DC', 'Nirvana') === 'Nirvana');
-ok('forced id with no RadioText', matchEggId('', 'Talking Heads') === 'Talking Heads');
+ok('forced id with no RadioText', matchEggId('', 'Led Zeppelin') === 'Led Zeppelin');
 
 // first match wins when two artists are present (registry order)
 ok('first match wins (AC/DC before Nirvana)', matchEggId('acdc and nirvana medley') === 'AC/DC');

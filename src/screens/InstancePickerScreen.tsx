@@ -16,6 +16,7 @@ import { isDeepLinkActive, whenInitialLinkChecked } from '../linking/deepLinkSta
 import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
 import { VibePowerModule } from '../components/AudioPlayer';
 import { getCarAutostart } from '../services/carMode';
+import { loadTunerBackend } from '../services/tunerBackend';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'InstancePicker'>;
 
@@ -81,15 +82,28 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // path below. Launch does not need location.
       getUserLocation().catch(() => {});
 
+      // DONGLE PROBES ARE GATED ON THE TUNER SELECTION.
+      //
+      // Both of the probes below are awaited, and on a head unit with the built-in
+      // NWD tuner selected both are guaranteed to fail — there is no USB tuner and
+      // there never will be. They ran on every launch regardless, delaying the
+      // screen the driver actually wanted while looking for hardware the user had
+      // already said was not there.
+      //
+      // 'rtl' looks for its dongle; 'auto' probes everything, which is what Auto
+      // means; the built-in tuners skip straight through and let the NWD module
+      // bind inside RadioScreen as it already does.
+      const backend = await loadTunerBackend();
+      const wantsDongle = backend === 'rtl' || backend === 'auto';
       // Launched by plugging in an RTL-SDR? Go straight to Local Hardware and skip
       // the default-instance auto-connect below (which would otherwise win the
       // race and open the default server / leave us on the picker).
-      if (!cancelled && await tryUsbLaunchRef.current?.(mode)) return;
+      if (wantsDongle && !cancelled && await tryUsbLaunchRef.current?.(mode)) return;
       // CarFM: a permanent install boots with the dongle already attached, so no
       // USB_DEVICE_ATTACHED fires. If a dongle is present and autostart is on,
       // connect it and drop into the FM face — the radio screen restores the last
       // station. Guarded like the default-instance connect below (link).
-      if (!cancelled && !isDeepLinkActive()
+      if (wantsDongle && !cancelled && !isDeepLinkActive()
           && !route.params?.noAutoConnect
           && await tryCarAutostartRef.current?.(mode)) return;
       if (!cancelled) splashBridge.dismiss();

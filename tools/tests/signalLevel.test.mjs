@@ -1,12 +1,14 @@
-// nwdSignalLevel — the level→bars map, checked against the real readings.
+// nwdSignalLevel — the level→lit map and the loss→dotted overlay, checked
+// against the real readings.
 //
-// The two floors are the vendor's own seek-stop constants, lifted from the
-// decompiled NewRdsManager; the top of the span is ours and provisional. Every
-// reading below is verbatim from the drive logs of 2026-08-04.
+// The bottom of the scale is the vendor's own local-seek constant, lifted from
+// the decompiled NewRdsManager; the bands above it are ours and provisional.
+// Every reading below is verbatim from the drive logs of 2026-08-04 / 08-05.
 //
 // Run: node tools/tests/signalLevel.test.mjs
 
-import { levelToBars, levelIsTrustworthy, LEVEL_DX_FLOOR, LEVEL_LOC_FLOOR }
+import { levelToLit, lossToDottedPairs, settleDottedPairs, levelIsTrustworthy,
+  LEVEL_LOC_FLOOR, LOSS_BAND_MARGIN }
   from '../../src/services/nwdSignalLevel.ts';
 
 let fails = 0;
@@ -16,11 +18,11 @@ const eq = (name, got, want) => {
   else { console.log(`FAIL ${name}\n  got  ${g}\n  want ${w}`); fails++; }
 };
 
-// ── The vendor's anchors ─────────────────────────────────────────────────────
-eq('below the DX floor is no station at all', levelToBars(LEVEL_DX_FLOOR - 1), 0);
-eq('the DX floor itself is one bar', levelToBars(LEVEL_DX_FLOOR), 1);
-eq('just under the LOC floor is still one bar', levelToBars(LEVEL_LOC_FLOOR - 1), 1);
-eq('the LOC floor is where "local" starts', levelToBars(LEVEL_LOC_FLOOR), 2);
+// ── The vendor's anchor ──────────────────────────────────────────────────────
+// Below the local-seek floor the tuner itself refuses to call the frequency a
+// station, which is what makes "nothing lit" mean something.
+eq('just under the LOC floor lights nothing', levelToLit(LEVEL_LOC_FLOOR - 1), 0);
+eq('the LOC floor lights the dot', levelToLit(LEVEL_LOC_FLOOR), 1);
 
 // ── Real readings, 2026-08-04 ────────────────────────────────────────────────
 const OBSERVED = {
@@ -31,40 +33,73 @@ const OBSERVED = {
   '104.1 WZEE Madison':       [51, 58],
   '105.9 WWHG Evansville':    [54, 73, 72, 58],
 };
-const barsFor = (k) => [...new Set(OBSERVED[k].map(levelToBars))].sort();
+const litFor = (k) => [...new Set(OBSERVED[k].map(levelToLit))].sort();
 
-eq('the distant Rockford station reads weak but present', barsFor('102.1 WQLF Rockford IL'), [2]);
-eq('Baraboo oldies is solid', barsFor('94.9 WOLX Baraboo'), [2]);
-// WERN's 53-55 now sits just under the 2/3 boundary at 56. That is arguably the
-// more honest reading: WERN is the station that lost RDS fifteen times and
-// flapped stereo across a commute while its level looked healthy.
-eq('Madison public radio sits just under the boundary', barsFor('88.7 WERN Madison'), [2]);
-eq('Z104 is solid', barsFor('104.1 WZEE Madison'), [2, 3]);
-eq('WIBA climbs in its own city', barsFor('101.5 WIBA Sauk City'), [2, 3]);
-eq('WWHG climbs on the approach', barsFor('105.9 WWHG Evansville'), [2, 3]);
+eq('the distant Rockford station reads weak but present', litFor('102.1 WQLF Rockford IL'), [1]);
+eq('Baraboo oldies is mid-scale', litFor('94.9 WOLX Baraboo'), [2]);
+eq('Madison public radio is mid-scale', litFor('88.7 WERN Madison'), [2]);
+eq('Z104 straddles a boundary', litFor('104.1 WZEE Madison'), [2]);
+eq('WIBA climbs in its own city', litFor('101.5 WIBA Sauk City'), [2, 3]);
+eq('WWHG climbs on the approach', litFor('105.9 WWHG Evansville'), [2, 3]);
 
-// Nothing observed should ever land on 0 or 1 — every station tested was audible.
+// Every station tested was audible, so none may render as dead air.
 const all = Object.values(OBSERVED).flat();
-eq('no audible station reads as absent', all.every((v) => levelToBars(v) >= 2), true);
+eq('no audible station reads as absent', all.every((v) => levelToLit(v) >= 1), true);
 
 // ── The 2026-08-05 drive: 156 samples, and the driver's own verdicts ─────────
-// Medians of the FRESH ratings (given within 20s of the sample). The 2/3
-// boundary has to fall between "breaking up" and "clean" or the bars disagree
-// with the ear on the only two verdicts with clear separation.
-eq('a "breaking up" median lands in the weak band', levelToBars(41), 2);
-eq('a "clean" median lands higher', levelToBars(61), 3);
-eq('the drive maximum reaches the top band', levelToBars(103), 4);
-eq('...and does not overflow it', levelToBars(103), 4);
-// The distribution: p50 63, p90 92, p99 101.
-eq('the median of the whole drive is mid-scale', levelToBars(63), 3);
-eq('p90 is near the top', levelToBars(92), 4);
+// The bands are an even division of the observed range, NOT fitted to these two
+// medians — that they separate is the check, not the construction.
+eq('a "breaking up" median lands in the dot-only band', levelToLit(41), 1);
+eq('a "clean" median lands three elements up', levelToLit(61), 3);
+eq('the drive maximum reaches the top band', levelToLit(103), 5);
+// The distribution: min 30, p50 63, p75 79, p90 92, p99 101.
+eq('the drive minimum is below the floor', levelToLit(30), 0);
+eq('the median of the whole drive is mid-scale', levelToLit(63), 3);
+eq('p75 is one below the top', levelToLit(79), 4);
+eq('p90 reaches the top', levelToLit(92), 5);
+
+// Every one of the six states must be reachable — the fault in the OLD mapping
+// was that two of five sat below 31 and no real preset could ever show them.
+eq('all six states are reachable', [...new Set([20, 35, 50, 65, 80, 95].map(levelToLit))], [0, 1, 2, 3, 4, 5]);
 
 // ── Refusals ─────────────────────────────────────────────────────────────────
-eq('null level has no bars', levelToBars(null), null);
-eq('undefined level has no bars', levelToBars(undefined), null);
-eq('a non-finite level has no bars', levelToBars(NaN), null);
-eq('zero is below the DX floor', levelToBars(0), 0);
-eq('an absurdly high level clamps to full', levelToBars(9999), 4);
+eq('null level lights nothing knowable', levelToLit(null), null);
+eq('undefined level lights nothing knowable', levelToLit(undefined), null);
+eq('a non-finite level lights nothing knowable', levelToLit(NaN), null);
+eq('zero is below the floor', levelToLit(0), 0);
+eq('an absurdly high level clamps to full', levelToLit(9999), 5);
+
+// ── Loss → dotted pairs ──────────────────────────────────────────────────────
+// Anchored on measurement: clean audio ran ~16% loss, crackle ~44.5%, at matched
+// signal levels. 30 is the midpoint. 20 was rejected as sitting on the shoulder
+// of the clean population.
+eq('the clean measurement dots nothing', lossToDottedPairs(16), 0);
+eq('the crackle measurement dots one pair', lossToDottedPairs(44.5), 1);
+eq('just under the first boundary is still clean', lossToDottedPairs(29.9), 0);
+eq('the first boundary dots one', lossToDottedPairs(30), 1);
+eq('the second boundary dots two', lossToDottedPairs(50), 2);
+eq('the third boundary dots three', lossToDottedPairs(70), 3);
+eq('total loss dots three, never more', lossToDottedPairs(100), 3);
+eq('no figure dots nothing', lossToDottedPairs(null), 0);
+eq('a non-finite figure dots nothing', lossToDottedPairs(NaN), 0);
+// The strong-but-lossy sample of 2026-08-05: level 96, 42% loss. The whole point
+// of the overlay is that this looks different from a weak clean signal.
+eq('level 96 lights everything', levelToLit(96), 5);
+eq('...and 42% loss breaks the outer pair', lossToDottedPairs(42), 1);
+
+// ── Hysteresis ───────────────────────────────────────────────────────────────
+// Nobody counts waves. A pair flipping between solid and dotted every 1.5s
+// carries no information to offset the movement.
+eq('a clear move up is adopted', settleDottedPairs(0, 60), 2);
+eq('a clear move down is adopted', settleDottedPairs(2, 10), 0);
+eq('a hair over the boundary is NOT adopted', settleDottedPairs(0, 31), 0);
+eq('...nor is a hair under it, coming down', settleDottedPairs(1, 29), 1);
+eq('committing past the margin IS adopted', settleDottedPairs(0, 30 + LOSS_BAND_MARGIN), 1);
+eq('...and the same coming down', settleDottedPairs(1, 30 - LOSS_BAND_MARGIN - 1), 0);
+eq('staying inside the current band changes nothing', settleDottedPairs(1, 40), 1);
+// Losing the figure entirely is not a boundary crossing — it is the absence of
+// evidence, and the waves must go solid at once rather than lag by a margin.
+eq('losing the figure goes solid immediately', settleDottedPairs(3, null), 0);
 
 // ── The safety check ─────────────────────────────────────────────────────────
 eq('a reading that stayed put is trusted', levelIsTrustworthy(10150, 10150), true);

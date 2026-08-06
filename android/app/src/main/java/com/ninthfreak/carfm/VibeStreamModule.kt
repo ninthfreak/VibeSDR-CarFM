@@ -413,6 +413,69 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.shareRecordingNative(path)
     }
 
+    /**
+     * Dump the head unit's own system settings, filtered by substring.
+     *
+     * WHY THIS EXISTS. The vendor firmware keeps its configuration in
+     * `Settings.System` — the radio service reads `android.provider.Settings$System`
+     * directly — and among the keys it knows about are `navigation_packagename`,
+     * `AUTO_START_NAVI_WHEN_ACC_ON` and a five-valued exit mode
+     * (`APP_EXIT_MODE_LASTAPP` / `LASTSOURCE` / `LAUNCHER` / `SENDKEY` / `NONE`).
+     * Those decide what the unit brings up when the ignition comes back on, which
+     * is why the vendor radio app appears in front of CarFM after every ACC cycle.
+     * None of it is exposed in the visible settings.
+     *
+     * Reading these needs no permission, and doing it here rather than over ADB
+     * means it can be done from the driver's seat with no laptop — which for a
+     * device bolted into a dashboard is the difference between a check that
+     * happens and one that does not.
+     *
+     * ENUMERATES rather than probing known names, because the interesting keys are
+     * exactly the ones we cannot guess. Queries the settings provider directly; a
+     * per-table failure is reported inline rather than aborting the dump, since
+     * Secure is the one most likely to be restricted and the other two still
+     * answer.
+     *
+     * READ-ONLY on purpose. Writing `Settings.System` needs WRITE_SETTINGS, and
+     * whether the MCU would even honour a changed value is unknown — it may read
+     * these once at boot and hold the real state itself. Find out what is there
+     * first.
+     */
+    @ReactMethod
+    fun dumpSystemSettings(filter: String, promise: Promise) {
+        val needle = filter.trim().lowercase()
+        val out = StringBuilder()
+        val tables = listOf(
+            "system" to android.provider.Settings.System.CONTENT_URI,
+            "global" to android.provider.Settings.Global.CONTENT_URI,
+            "secure" to android.provider.Settings.Secure.CONTENT_URI,
+        )
+        for ((label, uri) in tables) {
+            var shown = 0
+            var total = 0
+            try {
+                reactContext.contentResolver.query(uri, arrayOf("name", "value"), null, null, null)
+                    .use { cur ->
+                        if (cur == null) { out.append("$label: no cursor\n"); return@use }
+                        while (cur.moveToNext()) {
+                            total++
+                            val name = cur.getString(0) ?: continue
+                            if (needle.isNotEmpty() && !name.lowercase().contains(needle)) continue
+                            val v = cur.getString(1) ?: ""
+                            // Long values are almost always packed blobs of unrelated
+                            // state; the head is enough to recognise a package name.
+                            out.append("$label  $name = ${if (v.length > 120) v.take(120) + "…" else v}\n")
+                            shown++
+                        }
+                    }
+                out.append("$label: $shown of $total key(s) matched\n")
+            } catch (e: Exception) {
+                out.append("$label: unreadable (${e.message})\n")
+            }
+        }
+        promise.resolve(out.toString())
+    }
+
     /** Write text to the PUBLIC Downloads folder and return a human path. No SAF /
      *  no picker Activity (so it can't crash on units without DocumentsUI), and
      *  Downloads is a standard location a file manager can see + copy to USB.

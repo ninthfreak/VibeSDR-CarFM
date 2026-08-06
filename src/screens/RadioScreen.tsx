@@ -32,16 +32,31 @@ import { useKeepAwake }       from 'expo-keep-awake';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList }     from '../../App';
 
+// THE ONLY TWO VALUE-LEVEL IMPORTS OF THE SDR STACK. Everything else that
+// mentions these modules imports types, which are erased.
+//
+// That matters for startup on the built-in tuner. With inline requires on
+// (metro.config.js), each of these executes at its USE SITE rather than here —
+// and neither use site is reached on the NWD path: createBackend sits behind the
+// `route.params.tunerless` early return in the connect effect, and
+// MODE_BANDWIDTHS is only read in handlers that fire on SDR backend events. So
+// UberSDRClient, its pako dependency, the adapter and the three server adapters
+// it pulls in never run on a head unit.
+//
+// KEEP IT THAT WAY. Referencing either of these at module scope, or from a code
+// path that runs before the tunerless check, silently re-adds the whole subtree
+// to every launch.
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode } from '../services/UberSDRClient';
 import { createBackend } from '../services/UberSDRAdapter';
 import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, nwdStartLevelWatch, nwdStopLevelWatch, nwdReadLevelNow,
          onNwd, PANEL_KEY, panelKeyName } from '../services/nwdRadio';
 import { createNwdRdsDecoder } from '../services/nwdRds';
-import { levelToBars, LEVEL_POLL_MS, LEVEL_SETTLE_MS } from '../services/nwdSignalLevel';
+import { levelToLit, settleDottedPairs, LEVEL_POLL_MS, LEVEL_SETTLE_MS } from '../services/nwdSignalLevel';
+import { getTunerBackend, loadTunerBackend, subscribeTunerBackend, readoutFor } from '../services/tunerBackend';
 import { stripStationFromRt } from '../services/rtStation';
 import {
   isDebugMode, subscribeDebugMode, formatSample, bearingDeg, DEBUG_SAMPLE_MS,
-  RATING_LABELS, RATING_FRESH_S, type AudioRating, type DebugSample,
+  RATING_LABELS, RATING_FRESH_S, ratingBelongsHere, windowRates, type AudioRating, type DebugSample,
 } from '../services/debugMode';
 import { getDetailedLocation } from '../services/instancesApi';
 import { stationsAtFrequency } from '../services/stationDb';
@@ -61,7 +76,6 @@ import { type SDRBackend, type ProfileInfo, type DabProgramme,
 import { MIN_HZ, MAX_HZ }                              from '../services/sdrTypes';
 import { v4 as uuidv4 }                                from 'uuid';
 import AsyncStorage                                    from '@react-native-async-storage/async-storage';
-import { useTheme }                                     from '../contexts/ThemeContext';
 
 import AudioPlayer, { VibePowerModule } from '../components/AudioPlayer';
 import LocalAudioPlayer from '../components/LocalAudioPlayer';
@@ -86,7 +100,7 @@ import { getCarAutostart, setCarAutostart } from '../services/carMode';
 import CarFmFace, { type CarFmPreset } from '../components/CarFmFace';
 import DiagOverlay from '../components/carfm/DiagOverlay';
 import { DARK, LIGHT } from '../components/carfm/tokens';
-import { identifyByPi, initLogoService, consumeSharedLogo, getNearbyStations, callsignForFreq, estimatedSignalDbForFreq } from '../services/stationFinder';
+import { identifyByPi, initLogoService, consumeSharedLogo, getNearbyStations, callsignForFreq } from '../services/stationFinder';
 import { warmStationLogos } from '../components/carfm/LogoTile';
 import type { StationIdentity } from '../services/stationTypes';
 import { loadActiveEibi } from '../services/eibi';
@@ -438,16 +452,32 @@ export default function RadioScreen({ route, navigation }: Props) {
    */
   const RDS_STALE_MS = 25_000;
 
+  /** SDR-path signal figure, from the audio SNR the native side emits. The ONLY
+   *  writer now that the GPS+database estimate is gone; on the built-in tuner
+   *  this stays null and the measured level below drives the meter.
+   *  See task #60 — the value is an SNR minus an arbitrary display constant. */
   const [fmSignalDb, setFmSignalDb] = useState<number | null>(null);
   /** Measured level from NwdFmManager.seek — the built-in tuner's real signal
    *  reading, and the only measured one CarFM has ever had. Null until the first
    *  tick. UNDER DEVELOPMENT; see nwdSignalLevel.ts. */
   const [fmLevel, setFmLevel] = useState<number | null>(null);
-  /** Rolling reception quality from the RDS decoder — the share of recent groups
-   *  whose PI block survived. Null until enough groups have arrived, and null
-   *  again while RDS is expired. Sampled by the 1.5s poll below; the decoder owns
-   *  the window. UNDER DEVELOPMENT alongside the level. */
-  const [fmQuality, setFmQuality] = useState<number | null>(null);
+  /** How many of the glyph's outermost lit wave pairs are drawn dotted — the
+   *  reception-loss overlay. Derived from the decoder's rolling PI-match figure,
+   *  through a hysteresis band so a value near a boundary cannot flicker a whole
+   *  pair on and off. 0 whenever there is no figure at all. */
+  // Which readout the face draws — the SETTINGS SELECTION, not the live probe
+  // (ANDROID §6.3 v1.13.0). Presentation only; picking RTL-SDR does not re-bind
+  // the hardware. See services/tunerBackend.
+  const [tunerSel, setTunerSel] = useState(getTunerBackend());
+  useEffect(() => {
+    void loadTunerBackend().then(setTunerSel);
+    return subscribeTunerBackend(() => setTunerSel(getTunerBackend()));
+  }, []);
+
+  const [fmDotted, setFmDotted] = useState(0);
+  const fmDottedRef = useRef(0);
+  useEffect(() => { fmDottedRef.current = fmDotted; }, [fmDotted]);
+
 
   // ── Debug/testing mode ───────────────────────────────────────────────────
   // Records one structured sample every 15s so the measured level and the
@@ -887,12 +917,28 @@ export default function RadioScreen({ route, navigation }: Props) {
     // means reading state a later retune or a later sample has already moved.
     const now = Date.now();
     const mhz = curMhzRef.current > 0 ? curMhzRef.current : null;
-    const sinceTuneS = (now - lastTuneAtRef.current) / 1000;
-    const windowS = Math.max(1, (now - lastSampleAtRef.current) / 1000);
+    // Clamped at zero: a retune landing between the snapshot and the tune stamp
+    // produced `tuned=-0s` in the 2026-08-06 log, and a negative age since an
+    // event that has already happened is nonsense.
+    const sinceTuneS = Math.max(0, (now - lastTuneAtRef.current) / 1000);
+    // NOT clamped to a floor — a short window means the rate is unknowable, and
+    // windowRates() says so rather than dividing by a made-up denominator.
+    const windowS = (now - lastSampleAtRef.current) / 1000;
     const st = rdsDecoder.current.stats();
+    const rates = windowRates({ groups: st.groups, piMismatch: st.piMismatch, windowS });
     const flips = stereoFlipsRef.current;
     const expiries = rdsExpiriesRef.current;
-    const rating = ratingRef.current;
+    // A rating only counts for the station it was pressed on. Retuning clears it
+    // (see the frequency handler), and this second check catches the race where a
+    // press and a retune land between two samples: the press must be NEWER than
+    // the tune, and on the same dial position.
+    const ratingOwned = ratingRef.current != null && ratingBelongsHere({
+      pressedAtMs: ratingAtRef.current || null,
+      pressedMhz: ratingMhzRef.current,
+      tunedAtMs: lastTuneAtRef.current,
+      currentMhz: mhz,
+    });
+    const rating = ratingOwned ? ratingRef.current : null;
     const ratingAgeS = rating ? (now - ratingAtRef.current) / 1000 : null;
     // Close the window NOW, so groups arriving during the GPS wait count toward
     // the NEXT sample rather than being double-counted or lost.
@@ -932,7 +978,7 @@ export default function RadioScreen({ route, navigation }: Props) {
     const sample: DebugSample = {
       mhz,
       level,
-      bars: levelToBars(level),
+      bars: levelToLit(level),
       lat: loc?.lat ?? null,
       lon: loc?.lon ?? null,
       accM: loc?.accM ?? null,
@@ -940,8 +986,8 @@ export default function RadioScreen({ route, navigation }: Props) {
       headingDeg: loc?.headingDeg ?? null,
       fixAgeS: loc?.fixAgeS ?? null,
       predScore, distKm, bearingDeg: brg, erpKw, stationClass, dbCall,
-      rdsGroupsPerSec: st.groups / windowS,
-      rdsErrPct: st.groups ? (100 * st.piMismatch) / st.groups : null,
+      rdsGroupsPerSec: rates.groupsPerSec,
+      rdsErrPct: rates.errPct,
       stereoFlips: flips,
       rdsExpiries: expiries,
       sinceTuneS,
@@ -949,6 +995,13 @@ export default function RadioScreen({ route, navigation }: Props) {
       // its freshness window the sample carries none rather than implying the
       // driver still means it — the first build let one press colour every
       // sample until the next, which made 111 of 156 samples read "clean".
+      //
+      // It is also an observation about a STATION. The 2026-08-06 drive proved
+      // that mattered: a hop across six presets in ninety seconds filed seven
+      // verdicts against stations the driver had already left, including a
+      // "clean" recorded against a frequency tuned zero seconds earlier. Those
+      // rows are indistinguishable from real data unless `tuned=` happens to
+      // expose the mismatch, and they land squarely on the loss thresholds.
       rating: rating && ratingAgeS != null && ratingAgeS <= RATING_FRESH_S ? rating : null,
       ratingAgeS: rating && ratingAgeS != null && ratingAgeS <= RATING_FRESH_S ? ratingAgeS : null,
     };
@@ -960,9 +1013,12 @@ export default function RadioScreen({ route, navigation }: Props) {
 
   /** The rating, for the sampler's long-lived closure. */
   const ratingRef = useRef<AudioRating | null>(null);
+  /** The dial position the rating was pressed on — the address on the verdict. */
+  const ratingMhzRef = useRef<number | null>(null);
   const onRateAudio = useCallback((r: AudioRating) => {
     ratingRef.current = r;
     ratingAtRef.current = Date.now();
+    ratingMhzRef.current = curMhzRef.current > 0 ? curMhzRef.current : null;
     // Its own event line: the periodic sample carries the rating too, but the
     // moment of the press is when the driver heard the thing.
     diag(`RATE ${r} (${RATING_LABELS[r]}) f=${curMhzRef.current.toFixed(1)} lvl=${fmLevelRef.current ?? '?'}`);
@@ -1029,8 +1085,6 @@ export default function RadioScreen({ route, navigation }: Props) {
     return () => sub.remove();
   }, []);
 
-  // ── Display style — wired to ThemeContext so the whole app re-renders ────────
-  const { themeName, setTheme } = useTheme();
   // ── Media control tune events (iOS lock screen) ───────────────────────────
 
   const dspSeen = useRef(false);
@@ -2604,20 +2658,20 @@ export default function RadioScreen({ route, navigation }: Props) {
       if (stereoTimer) clearTimeout(stereoTimer);
       stereoTimer = setTimeout(() => { if (!cancelled) setFmStereo(on); }, 2000);
     };
-    // Estimated signal: this tuner reports NO signal level (arg is just the preset
-    // slot). So on a settled tune, estimate receivability from the FCC DB + live
-    // GPS; the face renders it GREY ("not live") and shows zero when there's no fix
-    // or no dataset entry. Debounced so seeks don't thrash it.
-    let signalTimer: ReturnType<typeof setTimeout> | null = null;
-    const scheduleSignalEst = (mhz: number) => {
-      if (!(mhz > 0)) return;
-      setFmSignalDb(null);   // clear immediately → zero/grey until the estimate lands
-      if (signalTimer) clearTimeout(signalTimer);
-      signalTimer = setTimeout(async () => {
-        const db = await estimatedSignalDbForFreq(mhz);
-        if (!cancelled) setFmSignalDb(db);
-      }, 1200);
-    };
+    // The estimated-signal meter is GONE. It existed because this tuner was
+    // believed to report no signal level, so receivability was predicted from the
+    // FCC dataset and a GPS fix and drawn in grey. NwdFmManager.seek turned out to
+    // return a real level, which the meter now uses.
+    //
+    // Removed rather than kept as a fallback, because measuring the prediction
+    // against 232 settled samples showed it is the wrong instrument for this job.
+    // Pooled it looks excellent — r = +0.924 against measured level — but almost
+    // all of that is BETWEEN stations, where ERP and distance differ a lot. Within
+    // one station it collapses: on WERN across 85 samples the prediction moved by
+    // 3.1 while the measured level swung 27, giving r = -0.268. What actually
+    // moves a signal on one station is terrain and multipath, and the dataset
+    // cannot see either. Ranking stations against each other is a different job
+    // and Nearby still does it with the same score.
     const subs: Array<() => void> = [];
     (async () => {
       const avail = await isNwdAvailable();
@@ -2675,7 +2729,6 @@ export default function RadioScreen({ route, navigation }: Props) {
         if (typeof info.mhz === 'number' && info.mhz > 0) {
           setStatus((prev: SDRStatus) => ({ ...prev, frequency: Math.round(info.mhz! * 1e6) }));
           if (info.ps) liveStationRef.current = info.ps;
-          scheduleSignalEst(info.mhz);   // seed the estimated meter for the boot station
         }
       } catch (e) {
         diag(`NWD connect FAILED: ${String(e)}`);
@@ -2708,7 +2761,6 @@ export default function RadioScreen({ route, navigation }: Props) {
         // the frequency's position in the factory preset list, −1 otherwise). The
         // tuner exposes no real signal level, so drive the meter from the DB+GPS
         // estimate instead (grey/estimated on the face).
-        scheduleSignalEst(p.mhz);
         // PS/RadioText belong to the station we just left. A PI change clears
         // them too, but the dial moves first and PI only arrives with the next
         // group — without this the old name lingers across a preset step.
@@ -2734,6 +2786,11 @@ export default function RadioScreen({ route, navigation }: Props) {
         // operation rather than the settled channel. Whatever the mechanism, the
         // number is not usable that early, and the meter was showing it.
         setFmLevel(null);
+        // The rating belongs to the station we just left, exactly like the level
+        // and the decoder's text above it. Left standing it follows the driver
+        // onto the new frequency and is filed there as though it described it.
+        ratingRef.current = null;
+        ratingMhzRef.current = null;
         lastTuneAtRef.current = Date.now();
         if (levelSettleTimer) clearTimeout(levelSettleTimer);
         levelSettleTimer = setTimeout(() => { if (!cancelled) nwdReadLevelNow(); }, LEVEL_SETTLE_MS);
@@ -2756,7 +2813,7 @@ export default function RadioScreen({ route, navigation }: Props) {
         if (!p.ok) { diag(`level: REJECTED asked=${p.asked} landed=${p.landed}${p.err ? ` ${p.err}` : ''}`); return; }
         setFmLevel(p.level);
         if (!debugModeRef.current) {
-          diag(`level ${p.level} @ ${p.asked} → ${levelToBars(p.level)} bars`);
+          diag(`level ${p.level} @ ${p.asked} → ${levelToLit(p.level)} lit`);
           return;
         }
         // DEBUG MODE: this reading is the heartbeat of the dataset. Take the
@@ -2791,6 +2848,17 @@ export default function RadioScreen({ route, navigation }: Props) {
           // PI-derived identity take over, which is what the hero falls back to.
           name: s.psScrolling ? undefined : (s.ps || prev.name),
           text: s.rt || prev.text,
+          // RT+ — the station's own markers into its RadioText, so artist and
+          // title are LABELLED rather than guessed. Raw RT cannot be split on
+          // these stations: WIBA sent "Whole Lotta Love - Led Zeppelin" and
+          // "Led Zeppelin - Kashmir" within one hour, field order reversed.
+          //
+          // Unlike the other fields these do NOT fall back to `prev`. Empty means
+          // the decoder is actively saying it has no labelled artist or title —
+          // the item ended, or a new RadioText message invalidated the offsets —
+          // and `|| prev` would pin the last song on screen over the next one.
+          rtArtist: s.rtArtist || undefined,
+          rtTitle: s.rtTitle || undefined,
           pty: s.pty ?? prev.pty,
           tp: s.tp,
           ta: s.ta,
@@ -2902,17 +2970,19 @@ export default function RadioScreen({ route, navigation }: Props) {
           rdsExpiriesRef.current++;
           diag(`RDS expired — no group for ${RDS_STALE_MS / 1000}s`);
         }
-        // Reception quality, sampled onto the face. The decoder's ring is NOT
+        // Reception loss → the dotted-wave overlay. The decoder's ring is NOT
         // reset by an expiry (see above), so gate on the stale flag here instead —
-        // a quality figure held over from before the carrier went quiet would be
+        // a figure held over from before the carrier went quiet would be
         // describing air we are no longer receiving.
+        //
+        // The band is settled HERE rather than at render: the ring's percentage
+        // drifts by fractions of a point every poll, and both the rounding and the
+        // hysteresis have to happen once, against the band actually on screen.
         {
-          const raw = rdsStaleRef.current ? null : rdsDecoder.current.quality().piMatchPct;
-          // Rounded HERE, not at render: the ring's percentage moves by fractions
-          // of a point every poll and an unrounded value would re-render the whole
-          // face 40 times a minute for a number that never visibly changed.
-          const q = raw == null ? null : Math.round(raw);
-          setFmQuality((prev) => (prev === q ? prev : q));
+          const match = rdsStaleRef.current ? null : rdsDecoder.current.quality().piMatchPct;
+          const loss = match == null ? null : 100 - match;
+          const next = settleDottedPairs(fmDottedRef.current, loss);
+          if (next !== fmDottedRef.current) setFmDotted(next);
         }
         // The poll does NOT drive PS / RadioText / PTY.
         //
@@ -2949,7 +3019,6 @@ export default function RadioScreen({ route, navigation }: Props) {
       if (probeTimer) clearTimeout(probeTimer);
       if (levelSettleTimer) clearTimeout(levelSettleTimer);
       if (stereoTimer) clearTimeout(stereoTimer);
-      if (signalTimer) clearTimeout(signalTimer);
       nwdActiveRef.current = false;
       setNwdActive(false);
       subs.forEach((u) => u());
@@ -3052,6 +3121,18 @@ export default function RadioScreen({ route, navigation }: Props) {
 
   // ── Layout ────────────────────────────────────────────────────────────────
 
+
+  /**
+   * Which reading the face draws.
+   *
+   * The picker chooses between sources that EXIST; it cannot conjure one that
+   * does not. With no NWD tuner bound the SDR figure is the only reading there
+   * is, so honouring a stale 'nwd' selection would leave the meter showing an
+   * em-dash forever while a live value sat unused — which is what the default
+   * selection did to an SDR-only install until this was caught.
+   */
+  const signalReadout = nwdActive ? readoutFor(tunerSel) : 'sdr';
+
   return (
     <View
       style={styles.root}
@@ -3105,9 +3186,10 @@ export default function RadioScreen({ route, navigation }: Props) {
         // MEASURED bars, built-in tuner only. Outranks the GPS+database estimate
         // because it is a reading rather than a prediction — the estimate is
         // coarse and only recomputed on retune. UNDER DEVELOPMENT.
-        signalBars={levelToBars(fmLevel)}
+        signalLit={levelToLit(fmLevel)}
         signalLevelRaw={fmLevel}
-        signalQualityPct={fmQuality}
+        signalDottedPairs={fmDotted}
+        signalReadout={signalReadout}
         rdsOk={!!liveStation.pi || !!liveStation.name}
         tp={liveStation.tp}
         ta={liveStation.ta}
