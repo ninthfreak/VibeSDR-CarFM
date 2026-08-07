@@ -26,6 +26,10 @@ class MainActivity : ReactActivity() {
     // long-presses it, and shares it here. JS reads+clears it via
     // VibeLocalSDR.consumeSharedLogo() and assigns it to the pending station.
     @Volatile @JvmField var sharedImagePending: Uri? = null
+
+    /** Shared with BootReceiver — see noteForeground below. */
+    const val WAKE_PREFS = "carfm_wake"
+    const val WAKE_KEY_WAS_FOREGROUND = "was_foreground"
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -35,6 +39,36 @@ class MainActivity : ReactActivity() {
     setTheme(R.style.AppTheme);
     noteIntent(intent)   // cold start: JS reads the flags when the UI mounts
     super.onCreate(null)
+  }
+
+  /**
+   * Record whether CarFM is the app the driver is actually using.
+   *
+   * The head unit SLEEPS on ACC-off rather than shutting down, and kills this
+   * process while it is asleep; on ACC-on it restores its own radio app. A
+   * receiver brings CarFM back (see BootReceiver), but it must not do so
+   * unconditionally — if the driver was on maps or a music app when the ignition
+   * went off, stealing the foreground on the way back would be obnoxious.
+   *
+   * The process is killed, so it cannot observe the sleep. It can record what it
+   * was doing the last time it was alive, which is enough: the flag survives in
+   * SharedPreferences and is exactly the question the receiver needs answered.
+   */
+  private fun noteForeground(inFront: Boolean) {
+    try {
+      getSharedPreferences(WAKE_PREFS, MODE_PRIVATE)
+        .edit().putBoolean(WAKE_KEY_WAS_FOREGROUND, inFront).apply()
+    } catch (_: Exception) { /* a preference write must never crash the activity */ }
+  }
+
+  override fun onResume() {
+    super.onResume()
+    noteForeground(true)
+  }
+
+  override fun onPause() {
+    super.onPause()
+    noteForeground(false)
   }
 
   override fun onNewIntent(intent: Intent?) {

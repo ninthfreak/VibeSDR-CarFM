@@ -76,6 +76,12 @@
         <action android:name="android.intent.action.BOOT_COMPLETED"/>
         <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
         <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+        <!-- The MCU's wake broadcast. This unit SLEEPS on ACC-off rather than
+             shutting down, so BOOT_COMPLETED above never fires on an ignition
+             cycle — this is the one that actually happens. Declared here rather
+             than registered at runtime because the process is killed while the
+             unit sleeps, and only a manifest receiver gets it restarted. -->
+        <action android:name="com.nwd.ACTION_OS_WAKE_UP"/>
       </intent-filter>
     </receiver>
     <service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice" android:exported="false"/>
