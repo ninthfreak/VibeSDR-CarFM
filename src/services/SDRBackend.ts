@@ -40,6 +40,7 @@ export interface FmdxState {
   rt:      string;    // current RadioText bank
   pty:     number;    // programme type (European RDS table)
   tp:      boolean;
+  ta:      boolean;
   af:      number[];  // alternative frequencies, Hz
   users:   number;
   tx?:     FmdxTxInfo;
@@ -188,6 +189,8 @@ export interface StationMeta {
   rtTitle?: string;
   /** RDS Traffic Programme flag (block B bit 10). */
   tp?: boolean;
+  /** RDS Traffic Announcement in progress (group 0 bit 4). */
+  ta?: boolean;
   /** RDS Programme Type code 0–31 (RBDS table in region 2). */
   pty?: number;
   /** Station transmits an Alternative Frequencies list. */

@@ -6,7 +6,7 @@
 //
 // This backend is unlike the SDR adapters: audio is analog + MCU-routed (nothing
 // streams to the app), there is no spectrum, and RDS arrives already decoded
-// (PS / RadioText / PTY / stereo) via native callback events. So it does NOT
+// (PS / RadioText / PTY / TA / stereo) via native callback events. So it does NOT
 // implement SDRBackend — RadioScreen drives the CarFM face from these events
 // directly (see the carFm NWD effect there).
 

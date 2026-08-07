@@ -16,7 +16,7 @@
  *
  * Scope is what the device actually sends, verified by hand against the drive
  * log of 2026-08-01 (see nwdRds.test.mjs, which replays those exact groups):
- * PI, PTY, TP, PS (group 0A/0B), RadioText (2A/2B) and RT+ (3A + the group
+ * PI, PTY, TP/TA, PS (group 0A/0B), RadioText (2A/2B) and RT+ (3A + the group
  * the station assigns it to). AF is NOT decoded: every 0A group in the logs
  * carries COUNT=0, which is each station stating outright that it has no
  * alternate frequencies, so there is nothing to follow.
@@ -30,16 +30,28 @@ export interface RdsState {
   /** Programme Type, 0-31. */
   pty: number | null;
   /** Traffic Programme flag — "this station carries traffic announcements at
-   *  all". Static per station, and consensus-gated on its own bit (see push).
-   *
-   *  There is deliberately no `ta` beside it. Traffic Announcement — "an
-   *  announcement is happening right now" — was published from bit 4 of the same
-   *  block, gated on the PTY field's consensus rather than its own, so a single
-   *  corrupt group could raise it. That drove a pulsing tell AND lifted the
-   *  user's mute. TA is the one field here that must react within a group or two
-   *  to be worth anything, which rules out the consensus that would make it
-   *  trustworthy, so it is not decoded at all rather than decoded badly. */
+   *  all". Static per station, and consensus-gated on its own bit (see push). */
   tp: boolean;
+  /** Traffic Announcement in progress — "one is happening RIGHT NOW".
+   *
+   *  THREE GUARDS, because an earlier build had none of them and a single
+   *  corrupt group could raise this:
+   *
+   *  1. Read only from group type 0. Bit 4 is TA there; in a 2A RadioText group
+   *     the same bit is the text A/B flag, so reading it everywhere is reading
+   *     noise. (This one was always right.)
+   *  2. Its own consensus tally, not the PTY field's. The old gate voted on bits
+   *     9-5 and then published bit 4 from whichever group satisfied it, so a
+   *     corruption leaving PTY intact moved TA off one group.
+   *  3. Gated on a CONFIRMED TP. A station that does not carry traffic cannot be
+   *     making a traffic announcement, so TP being false suppresses TA outright —
+   *     which on the local stations measured rules out most of them.
+   *
+   *  Consensus is affordable here despite TA being the one field that has to
+   *  react promptly: an announcement runs tens of seconds — hundreds of groups —
+   *  so three agreeing groups is well under a second against the length of the
+   *  event. */
+  ta: boolean;
   /** Programme Service name, 8 chars, trimmed. Empty until fully assembled. */
   ps: string;
   /** RadioText, up to 64 chars, trimmed. Empty until a terminator or full fill. */
@@ -54,7 +66,7 @@ export interface RdsState {
   rtTitle: string;
 }
 
-const BLANK: RdsState = { pi: null, pty: null, tp: false, ps: '', rt: '',
+const BLANK: RdsState = { pi: null, pty: null, tp: false, ta: false, ps: '', rt: '',
   psScrolling: false, rtArtist: '', rtTitle: '' };
 
 /** RT+ ODA Application Identifier. A 16-bit exact match, which is what makes a
@@ -222,6 +234,10 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
   // groups once, and then never moves.
   let tpPending: boolean | null = null;
   let tpCount = 0;
+  // TA gets the same treatment as TP but is only counted on group 0, where bit 4
+  // actually means TA — so this tally advances far more slowly than TP's.
+  let taPending: boolean | null = null;
+  let taCount = 0;
   // RT+ (ODA, AID 0x4BD7). The group it rides in is NOT fixed by the standard —
   // the station announces it in a 3A group and may pick any type. WIBA uses 12A;
   // another station may use 11A. So the assignment has to be learned from the air
@@ -248,6 +264,8 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     ptyCount = 0;
     tpPending = null;
     tpCount = 0;
+    taPending = null;
+    taCount = 0;
     // The ODA assignment belongs to the station, so it goes with the rest of the
     // station's state on a retune.
     rtPlusGroup = null;
@@ -352,12 +370,25 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     const tp = ((b >>> 10) & 1) === 1;
     if (tp === tpPending) tpCount++;
     else { tpPending = tp; tpCount = 1; }
-    if (tpCount >= PI_CONFIRM) st.tp = tp;
+    if (tpCount >= PI_CONFIRM) {
+      st.tp = tp;
+      // TA is conditioned on TP, so losing TP has to drop a latched TA with it —
+      // otherwise a retune onto a non-traffic station could inherit the previous
+      // one's announcement and hold it until the next group 0 arrives.
+      if (!tp) st.ta = false;
+    }
 
     if (groupType === 0) {
       // 0A / 0B — Programme Service name. Two chars per group in block D, and
-      // the segment index is the low 2 bits. Bit 4 carries TA, which this
-      // decoder deliberately does not publish — see the RdsState.tp comment.
+      // the segment index is the low 2 bits. Bit 4 carries TA here, and ONLY
+      // here: the same bit in a 2A group is the RadioText A/B flag.
+      const ta = ((b >>> 4) & 1) === 1;
+      if (ta === taPending) taCount++;
+      else { taPending = ta; taCount = 1; }
+      // st.tp, not the raw bit: a station that does not carry traffic at all
+      // cannot be announcing any. An unconfirmed TP suppresses TA too, which
+      // costs nothing — TP is static and confirms off any three groups.
+      if (taCount >= PI_CONFIRM) st.ta = st.tp && ta;
       const seg = b & 0x3;
       psBuf[seg * 2] = chr((d >>> 8) & 0xff);
       psBuf[seg * 2 + 1] = chr(d & 0xff);

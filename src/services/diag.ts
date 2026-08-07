@@ -2,7 +2,7 @@
 //
 // The head unit isn't networked to a dev machine, so there's no logcat. When the
 // user turns on "Tuner diagnostics" in settings, tuner events (bind, tune, the
-// signal level, RDS/PS/RadioText, stereo, PTY, audio-switch attempts, errors)
+// signal level, RDS/PS/RadioText, stereo, PTY/TA, audio-switch attempts, errors)
 // are captured into a ring buffer that a settings panel can display + copy.
 //
 // Cheap when off: `diag()` no-ops unless enabled, so it's safe to sprinkle at

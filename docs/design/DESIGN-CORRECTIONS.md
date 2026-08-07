@@ -78,25 +78,27 @@ The note that "resolution needs two or more drawn arcs" is exactly right and now
 has a real consequence: on a weak station the glyph draws one arc, so every loss
 from 30 to 100 renders identically.
 
-## 4. FYI — TA is no longer decoded
+## 4. FYI — TA is decoded here with three guards
 
 **Where:** `ANDROID-IMPLEMENTATION.md` § *Tell strip*: "**TA** replaces TP while a
 traffic announcement is active and **pulses**."
 
-The app has removed TA end to end and always shows TP. Not a design
-disagreement — a data-quality one. TA rode bit 4 of the same block as PTY and was
-published under the PTY field's consensus rather than its own, so a single
-corrupt group raised it. That drove the pulsing tell *and* lifted the user's
-mute.
+Implemented as specified, including the pulse and the TP↔TA slot swap. Noting the
+decode side because the spec does not say how TA should be trusted, and a naive
+reading of it is dangerous on this hardware:
 
-A flag meaning "an announcement is happening right now" has to react within a
-group or two to be useful, which rules out the consensus that would make it
-trustworthy — and in poor reception a genuine announcement might never accumulate
-three clean groups, so gating it would suppress the true positives along with the
-false ones.
+- **Bit 4 is TA only in group type 0.** In a 2A RadioText group the same bit is
+  the text A/B flag. Reading it everywhere reads noise.
+- **It needs its own consensus.** Publishing it under the PTY field's gate — the
+  natural thing to do, since PTY, TP and TA share block B — means a corruption
+  that leaves bits 9-5 intact moves TA off a single group.
+- **It should be conditioned on a confirmed TP.** A station that does not carry
+  traffic cannot be announcing any, and on the stations measured locally that
+  rules out most of them.
 
-TP is unaffected and now has its own consensus.
+This matters more than a tell normally would because TA breaks the user's mute,
+so a false positive turns the radio on when they have deliberately silenced it.
+An earlier build here had none of the three guards and did exactly that.
 
-The spec can keep TA if you want the design to describe an ideal receiver; it
-just will not appear in this build. Flagging it so a future reference screenshot
-showing a pulsing TA is not read as a build defect.
+Worth a sentence in the spec: TA is the one flag whose false-positive cost is
+higher than its false-negative cost.

@@ -1029,6 +1029,7 @@ export class UberSDRClient {
         rtArtist: rtArtist || undefined,
         rtTitle: rtTitle || undefined,
         tp: msg.tp === true,
+        ta: msg.ta === true,
         pty: typeof msg.pty === 'number' ? msg.pty : undefined,
         af: msg.af === true,
         afMhz: Array.isArray(msg.af_list)

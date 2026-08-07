@@ -981,9 +981,17 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         override fun notifyPrefabFrequency(arr: Array<Frequency>?) {}
         override fun notifyPrefabPTYType(pty: Byte) {}
         override fun notifyRadioPoint(arr: Array<com.nwd.radio.service.data.RadioPoint>?) {}
-        // Required by the vendor RadioCallback interface, so it cannot be removed
-        // — but nothing listens any more. TA is no longer decoded or displayed:
-        // see RdsState.tp in src/services/nwdRds.ts.
+        // Required by the vendor RadioCallback interface, so it cannot be removed,
+        // but deliberately not forwarded. TA IS decoded and displayed — from the
+        // raw groups in src/services/nwdRds.ts, where it carries three guards
+        // (group-0 only, its own consensus, conditioned on a confirmed TP).
+        //
+        // This callback would be a SECOND writer with none of them, racing the
+        // decoded value, and there is no evidence it works: the vendor's other
+        // getters on this unit are hollow (getRtMessage is a hardcoded "",
+        // psName stays empty for a passive client, getPTYType returns 0). One
+        // trustworthy source beats two of unknown quality — TA lifts the user's
+        // mute, so a wrong one is expensive.
         override fun notifyCurrentIsTA(ta: Boolean) {}
         override fun notifyRdsShowState(on: Boolean) {}
         override fun notifyRtMessage(rt: String?) = emit("NwdRadioRt", Arguments.createMap().apply { putString("rt", rt ?: "") })

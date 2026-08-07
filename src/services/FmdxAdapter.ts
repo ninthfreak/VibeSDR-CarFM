@@ -195,6 +195,7 @@ export class FmdxAdapter implements SDRBackend {
       rt,
       pty:    Number(j?.pty) || 0,
       tp:     !!j?.tp,
+      ta:     !!j?.ta,
       af:     Array.isArray(j?.af) ? j.af.map((k: any) => Math.round(Number(k) * 1000)).filter((n: number) => Number.isFinite(n)) : [],
       users:  Number(j?.users) || 0,
       tx,

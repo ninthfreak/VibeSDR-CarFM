@@ -469,12 +469,61 @@ const RT_FULL = [...RT_LED, ...RT_PAD];
   d.push(hx(PI, B_PLAIN, 0xe0cd, 0x2020));
   eq('one contrary group does not clear TP', d.state().tp, true);
 
-  // TA is gone from the state surface entirely.
-  check('TA is not on the decoder state', !('ta' in d.state()));
+}
+
+// ── TA: three guards, tested one at a time ──────────────────────────────────
+// An earlier build read bit 4 from EVERY group under the PTY field's consensus,
+// so one corrupt group raised TA — and TA lifts the user's mute. Guards are:
+// group-0 only, its own tally, and conditioned on a confirmed TP.
+{
+  const PI = 0xa6ff;
+  const hx = (a, b, c, dd) => [a, b, c, dd].map((x) => x.toString(16).padStart(4, '0')).join('');
+  // Group 0A. TP is bit 10, TA is bit 4, PTY bits 9-5, segment in bits 1-0.
+  const g0 = (tp, ta, seg) => hx(PI, (0 << 12) | (tp << 10) | (0x16 << 5) | (ta << 4) | seg, 0x0000, 0x2020);
+  // Group 2A. Bit 4 here is the RadioText A/B flag, NOT TA.
+  const g2 = (tp, bit4) => hx(PI, (2 << 12) | (tp << 10) | (0x16 << 5) | (bit4 << 4), 0x2020, 0x2020);
+
+  // GUARD 1 — bit 4 outside group 0 is not TA.
+  const d = createNwdRdsDecoder();
+  for (let i = 0; i < 6; i++) d.push(g0(1, 0, i % 4));      // TP on, TA off, PI+TP confirmed
+  eq('TP confirms', d.state().tp, true);
+  eq('TA starts clear', d.state().ta, false);
+  for (let i = 0; i < 10; i++) d.push(g2(1, 1));            // bit 4 set, but in a 2A
+  eq('bit 4 in a RadioText group never raises TA', d.state().ta, false);
+
+  // GUARD 2 — TA needs its OWN consensus, not the PTY field's.
+  d.push(g0(1, 1, 0));
+  eq('one group-0 with TA does not raise it', d.state().ta, false);
+  d.push(g0(1, 1, 1));
+  eq('two do not either', d.state().ta, false);
+  d.push(g0(1, 1, 2));
+  eq('three consecutive do', d.state().ta, true);
+  // And it clears the same way, not on a single contrary group.
+  d.push(g0(1, 0, 3));
+  eq('one contrary group does not clear TA', d.state().ta, true);
+  d.push(g0(1, 0, 0)); d.push(g0(1, 0, 1));
+  eq('three consecutive clear it', d.state().ta, false);
+
+  // GUARD 3 — no TA on a station that does not carry traffic.
   const d2 = createNwdRdsDecoder();
-  for (let i = 0; i < 8; i++) d2.push(hx(PI, B_PLAIN, 0xe0cd, 0x2020));
-  d2.push(hx(PI, B_TA, 0xe0cd, 0x2020));
-  check('a TA bit publishes nothing', !('ta' in d2.state()));
+  for (let i = 0; i < 6; i++) d2.push(g0(0, 0, i % 4));     // TP OFF, confirmed
+  eq('TP is off', d2.state().tp, false);
+  for (let i = 0; i < 6; i++) d2.push(g0(0, 1, i % 4));     // TA claimed anyway
+  eq('TA is suppressed without a confirmed TP', d2.state().ta, false);
+
+  // Losing TP must drop a latched TA with it.
+  const d3 = createNwdRdsDecoder();
+  for (let i = 0; i < 6; i++) d3.push(g0(1, 1, i % 4));
+  eq('TA latches on a traffic station', d3.state().ta, true);
+  for (let i = 0; i < 4; i++) d3.push(g0(0, 1, i % 4));
+  eq('...and drops when TP goes away', d3.state().ta, false);
+
+  // reset() clears the tally, so a retune cannot inherit an announcement.
+  const d4 = createNwdRdsDecoder();
+  for (let i = 0; i < 6; i++) d4.push(g0(1, 1, i % 4));
+  eq('TA is set before the reset', d4.state().ta, true);
+  d4.reset();
+  eq('reset clears TA', d4.state().ta, false);
 }
 
 // ── resetForRetune clears the PI; reset does not ────────────────────────────
