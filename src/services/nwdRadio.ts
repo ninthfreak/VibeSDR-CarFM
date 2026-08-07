@@ -6,7 +6,7 @@
 //
 // This backend is unlike the SDR adapters: audio is analog + MCU-routed (nothing
 // streams to the app), there is no spectrum, and RDS arrives already decoded
-// (PS / RadioText / PTY / TA / stereo) via native callback events. So it does NOT
+// (PS / RadioText / PTY / stereo) via native callback events. So it does NOT
 // implement SDRBackend — RadioScreen drives the CarFM face from these events
 // directly (see the carFm NWD effect there).
 
@@ -95,7 +95,6 @@ export type NwdEvents = {
   NwdRadioRt: { rt: string };
   NwdRadioStereo: { on: boolean };
   NwdRadioPty: { pty: number };
-  NwdRadioTa: { ta: boolean };
   NwdRadioScanState: { state: number };
   /** One raw RDS group, 16 hex chars (4 blocks x 2 bytes), from
    *  com.nwd.app.NwdFmManager.getRadioRDSDataArm(). Feed to createNwdRdsDecoder

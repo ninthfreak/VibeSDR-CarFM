@@ -981,7 +981,10 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         override fun notifyPrefabFrequency(arr: Array<Frequency>?) {}
         override fun notifyPrefabPTYType(pty: Byte) {}
         override fun notifyRadioPoint(arr: Array<com.nwd.radio.service.data.RadioPoint>?) {}
-        override fun notifyCurrentIsTA(ta: Boolean) = emit("NwdRadioTa", Arguments.createMap().apply { putBoolean("ta", ta) })
+        // Required by the vendor RadioCallback interface, so it cannot be removed
+        // — but nothing listens any more. TA is no longer decoded or displayed:
+        // see RdsState.tp in src/services/nwdRds.ts.
+        override fun notifyCurrentIsTA(ta: Boolean) {}
         override fun notifyRdsShowState(on: Boolean) {}
         override fun notifyRtMessage(rt: String?) = emit("NwdRadioRt", Arguments.createMap().apply { putString("rt", rt ?: "") })
         override fun notifyRadioScanState(state: Int) = emit("NwdRadioScanState", Arguments.createMap().apply { putInt("state", state) })

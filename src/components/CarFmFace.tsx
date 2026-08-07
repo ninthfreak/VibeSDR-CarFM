@@ -77,7 +77,6 @@ export interface CarFmFaceProps {
   /** RDS Traffic Programme flag. */
   tp?: boolean;
   /** RDS Traffic Announcement in progress (pulses amber). */
-  ta?: boolean;
   /** Station transmits an AF list. */
   af?: boolean;
   /** Programme-type label ("Rock", …) — already region-decoded. */
@@ -229,7 +228,7 @@ function MotionCarGlyph({ pal, persistent, airship, wide }: {
       accessibilityLabel={flashing ? 'Not available while driving' : 'Vehicle in motion'}>
       {/* Led Zeppelin flies an airship in this slot instead of the car (§2.3).
           The colour and the ~2.6s pulse are NOT the theme's to change — this is
-          the fixed amber safety family, same as TA. On the wide track it lifts
+          the fixed amber safety family. On the wide track it lifts
           6px to fly level with the satellite beside it; no lift on tall. */}
       {airship
         ? <View style={wide ? { transform: [{ translateY: -6 }] } : undefined}>
@@ -546,7 +545,7 @@ function Tell({ label, on, pulse, pal, fontSize = 11, dark = false, off = false 
 export default function CarFmFace(props: CarFmFaceProps) {
   const {
     freqHz, stationName, callsignHint, radioText, stereo, signalDb, signalLit, signalLevelRaw, signalDottedPairs = 0, signalReadout = 'nwd',
-    rdsOk, tp, ta, af, ptyText, tunerError, theme, autostart,
+    rdsOk, tp, af, ptyText, tunerError, theme, autostart,
     onSetAutostart, onSetTheme, onRetryTuner, presets, nwdActive, onHardwareSeek,
     onTuneHz, onToggleSave, onReorderPreset, onRemovePreset, onSaveStationPreset,
     audioActive, onClaimAudio, onReleaseAudio, hardwareStep, device,
@@ -1223,7 +1222,11 @@ export default function CarFmFace(props: CarFmFaceProps) {
       <View style={styles.tellStrip}>
         <Tell label="RDS" on={!off && !!rdsOk} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />
         <Tell label="HD" on={false} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />
-        {ta && !off ? <Tell label="TA" on pulse pal={pal} fontSize={L.tellFont} dark={dark} off={off} /> : <Tell label="TP" on={!off && !!tp} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />}
+        {/* TP only. The pulsing TA variant that used to replace this is gone with
+            the TA decode — it rode bit 4 of the PTY block under the PTY field's
+            consensus, so one corrupt group swapped a steady tell for a flashing
+            one (and unmuted the radio). See RdsState.tp in nwdRds. */}
+        <Tell label="TP" on={!off && !!tp} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />
         <Tell label="AF" on={!off && !!af} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />
       </View>
     </View>

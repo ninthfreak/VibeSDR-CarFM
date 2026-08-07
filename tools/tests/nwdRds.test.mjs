@@ -36,6 +36,11 @@ const js = src
   .replace(/^export (interface|type)[\s\S]*?^}/gm, '')
   .replace(/: RdsState \| null/g, '').replace(/: RdsState/g, '')
   .replace(/: NwdRdsDecoder/g, '').replace(/: string \| null/g, '')
+  // `: boolean | null` must be stripped BEFORE the bare `: boolean` below, or
+  // that rule eats the annotation and leaves a dangling `| null`. TP's own
+  // consensus tally (tpPending) was the first nullable boolean here and broke
+  // this harness exactly that way — the same trap the note below describes.
+  .replace(/: boolean \| null/g, '')
   .replace(/: number \| null/g, '').replace(/: string/g, '').replace(/: number/g, '')
   // Same lesson as the generic-constructor rules below: each new annotation
   // shape broke this silently until it was added. RT+ brought `: void`.
@@ -434,6 +439,74 @@ const RT_FULL = [...RT_LED, ...RT_PAD];
   d2.push(hex(PI, 0x34d8, 0x0000, 0x1234));      // some other AID in the same slot
   d2.push(hex(PI, B, C, D));
   eq('a non-RT+ ODA declaration is ignored', d2.state().rtArtist, '');
+}
+
+// ── TP has its own consensus, and TA is not decoded at all ──────────────────
+// TP (block B bit 10) used to be published under the PTY field's gate. A
+// corruption leaving bits 9-5 intact while flipping bit 10 satisfied that gate
+// and moved TP off ONE group. TA (bit 4) had the same hole and additionally
+// lifted the user's mute, so it is no longer decoded — a flag that must react
+// within a group or two cannot also be consensus-protected.
+{
+  const d = createNwdRdsDecoder();
+  const PI = 0xa6ff;
+  const hx = (a, b, c, dd) => [a, b, c, dd].map((x) => x.toString(16).padStart(4, '0')).join('');
+  const B_PLAIN = 0x02c0;                 // PTY consensus fodder, TP clear, TA clear
+  const B_TP    = 0x06c0;                 // bit 10 set, PTY bits untouched
+  const B_TA    = 0x02d0;                 // bit 4 set, PTY bits untouched
+
+  for (let i = 0; i < 8; i++) d.push(hx(PI, B_PLAIN, 0xe0cd, 0x2020));
+  eq('TP starts clear', d.state().tp, false);
+
+  d.push(hx(PI, B_TP, 0xe0cd, 0x2020));
+  eq('one group does NOT move TP', d.state().tp, false);
+  d.push(hx(PI, B_TP, 0xe0cd, 0x2020));
+  eq('two do not either', d.state().tp, false);
+  d.push(hx(PI, B_TP, 0xe0cd, 0x2020));
+  eq('three consecutive do', d.state().tp, true);
+
+  // A single contrary group must not knock it back down, and must reset the tally.
+  d.push(hx(PI, B_PLAIN, 0xe0cd, 0x2020));
+  eq('one contrary group does not clear TP', d.state().tp, true);
+
+  // TA is gone from the state surface entirely.
+  check('TA is not on the decoder state', !('ta' in d.state()));
+  const d2 = createNwdRdsDecoder();
+  for (let i = 0; i < 8; i++) d2.push(hx(PI, B_PLAIN, 0xe0cd, 0x2020));
+  d2.push(hx(PI, B_TA, 0xe0cd, 0x2020));
+  check('a TA bit publishes nothing', !('ta' in d2.state()));
+}
+
+// ── resetForRetune clears the PI; reset does not ────────────────────────────
+// push() DROPS every group whose block A does not carry the trusted PI. So a
+// retune that leaves the old PI standing blacks out PS, RadioText and PTY for
+// as long as displacement takes (PI_DISPLACE consecutive, against 30-35% block
+// errors on real air). The dial moved, so the old PI is stale, not an incumbent.
+{
+  const A = 'a6ff02c0e0cd2020';
+  const B = '57ff02c0e0cd2020';
+  const acquire = (d) => { let n = 0; while (d.state().pi !== 0x57ff && n < 400) { d.push(B); n++; } return n; };
+
+  const fresh = createNwdRdsDecoder();
+  const fromEmpty = acquire(fresh);
+  eq('a fresh decoder acquires in PI_CONFIRM groups', fromEmpty, 3);
+
+  const kept = createNwdRdsDecoder();
+  for (let i = 0; i < 8; i++) kept.push(A);
+  kept.reset();
+  eq('reset() keeps the incumbent, so displacement is needed', acquire(kept), 12);
+
+  const cleared = createNwdRdsDecoder();
+  for (let i = 0; i < 8; i++) cleared.push(A);
+  cleared.resetForRetune();
+  eq('resetForRetune() drops it, back to the fast path', acquire(cleared), fromEmpty);
+
+  // ...and it must still clear everything reset() clears.
+  const wiped = createNwdRdsDecoder();
+  for (let i = 0; i < 8; i++) wiped.push(A);
+  wiped.resetForRetune();
+  eq('resetForRetune also empties the text', wiped.state().rt, '');
+  eq('...and the PI itself', wiped.state().pi, null);
 }
 
 console.log(bad ? `\nnwdRds: ${bad} FAILED` : '\nnwdRds: ALL PASS');

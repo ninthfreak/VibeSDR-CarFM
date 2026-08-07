@@ -16,7 +16,7 @@
  *
  * Scope is what the device actually sends, verified by hand against the drive
  * log of 2026-08-01 (see nwdRds.test.mjs, which replays those exact groups):
- * PI, PTY, TP/TA, PS (group 0A/0B), RadioText (2A/2B) and RT+ (3A + the group
+ * PI, PTY, TP, PS (group 0A/0B), RadioText (2A/2B) and RT+ (3A + the group
  * the station assigns it to). AF is NOT decoded: every 0A group in the logs
  * carries COUNT=0, which is each station stating outright that it has no
  * alternate frequencies, so there is nothing to follow.
@@ -29,10 +29,17 @@ export interface RdsState {
   pi: number | null;
   /** Programme Type, 0-31. */
   pty: number | null;
-  /** Traffic Programme flag. */
+  /** Traffic Programme flag — "this station carries traffic announcements at
+   *  all". Static per station, and consensus-gated on its own bit (see push).
+   *
+   *  There is deliberately no `ta` beside it. Traffic Announcement — "an
+   *  announcement is happening right now" — was published from bit 4 of the same
+   *  block, gated on the PTY field's consensus rather than its own, so a single
+   *  corrupt group could raise it. That drove a pulsing tell AND lifted the
+   *  user's mute. TA is the one field here that must react within a group or two
+   *  to be worth anything, which rules out the consensus that would make it
+   *  trustworthy, so it is not decoded at all rather than decoded badly. */
   tp: boolean;
-  /** Traffic Announcement in progress. */
-  ta: boolean;
   /** Programme Service name, 8 chars, trimmed. Empty until fully assembled. */
   ps: string;
   /** RadioText, up to 64 chars, trimmed. Empty until a terminator or full fill. */
@@ -47,7 +54,7 @@ export interface RdsState {
   rtTitle: string;
 }
 
-const BLANK: RdsState = { pi: null, pty: null, tp: false, ta: false, ps: '', rt: '',
+const BLANK: RdsState = { pi: null, pty: null, tp: false, ps: '', rt: '',
   psScrolling: false, rtArtist: '', rtTitle: '' };
 
 /** RT+ ODA Application Identifier. A 16-bit exact match, which is what makes a
@@ -93,11 +100,19 @@ const PI_CONFIRM = 3;
  *
  * Acquisition should be fast: there is no incumbent to protect and the sooner PI
  * lands the sooner the station has a name. Displacement should be slow, because
- * the decoder is almost never the thing that notices a station change — the
+ * what this path catches is a station changing UNDER a stationary dial, which
+ * happens on a long drive and happens over many seconds.
+ *
+ * This comment used to claim a retune never reaches this path, "because the
  * screen calls reset() on every frequency event, so a retune has already emptied
- * this decoder before a single group of the new station arrives. What is left for
- * this path to catch is a station changing UNDER a stationary dial, which happens
- * on a long drive and happens over many seconds.
+ * this decoder". reset() deliberately does NOT clear piConfirmed, so every
+ * retune DID reach it: the new station's PI was dissent against the old
+ * station's, needing twelve consecutive rather than three. Measured, 12 groups
+ * against 3 from an empty decoder on a clean signal — and far worse in practice,
+ * because piPendingCount resets to 1 on any differing block A and the drive logs
+ * run 30-35% block-A errors. Worse than slow: push() DROPS every group whose PI
+ * does not match the incumbent, so PS, RadioText, PTY and RT+ were all discarded
+ * for the whole window. resetForRetune() is what closes that.
  *
  * Three was not enough. On 2026-08-04, WERN's 0xA6FF was misread as 0x57FF three
  * times in a row during a fade, three separate times in one commute — enough to
@@ -119,8 +134,15 @@ export interface NwdRdsDecoder {
    *  field changed, or null when nothing did (the common case — the same group
    *  repeats many times per second). */
   push(hex: string): RdsState | null;
-  /** Drop all accumulated text. Call on retune: PS/RT belong to the old station. */
+  /** Drop all accumulated text, KEEPING the trusted PI. For a station change the
+   *  decoder detected itself — piConfirmed is overwritten by the caller on the
+   *  next line, and keeping it in the meantime avoids the no-incumbent path. */
   reset(): void;
+  /** Drop everything INCLUDING the trusted PI. For a retune, where the dial moved
+   *  and the old PI is known-stale rather than an incumbent worth defending.
+   *  Without this the new station has to displace the old one (see PI_DISPLACE),
+   *  which blocks all RDS for as long as that takes. */
+  resetForRetune(): void;
   state(): RdsState;
   /** Reception quality since the last resetStats(). `groups` counts well-formed
    *  non-empty groups; `piMismatch` counts those whose block A did not carry the
@@ -193,6 +215,13 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
   let qCount = 0;
   let ptyPending: number | null = null; // block B is corrupted independently of block A
   let ptyCount = 0;
+  // TP rides in the SAME block as PTY but in its own bit, so the PTY consensus
+  // says nothing about it: a corruption that leaves bits 9-5 intact while
+  // flipping bit 10 satisfied that gate and published a wrong TP off one group.
+  // Cheap to fix properly because TP is static per station — it costs three
+  // groups once, and then never moves.
+  let tpPending: boolean | null = null;
+  let tpCount = 0;
   // RT+ (ODA, AID 0x4BD7). The group it rides in is NOT fixed by the standard —
   // the station announces it in a 3A group and may pick any type. WIBA uses 12A;
   // another station may use 11A. So the assignment has to be learned from the air
@@ -217,6 +246,8 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     rtPublished = false;
     ptyPending = null;
     ptyCount = 0;
+    tpPending = null;
+    tpCount = 0;
     // The ODA assignment belongs to the station, so it goes with the rest of the
     // station's state on a retune.
     rtPlusGroup = null;
@@ -315,16 +346,18 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     const pty = (b >>> 5) & 0x1f;
     if (pty === ptyPending) ptyCount++;
     else { ptyPending = pty; ptyCount = 1; }
-    if (ptyCount >= PI_CONFIRM) {
-      st.pty = pty;
-      st.tp = ((b >>> 10) & 1) === 1;
-    }
+    if (ptyCount >= PI_CONFIRM) st.pty = pty;
+
+    // Voted separately — see tpPending. Same threshold, its own tally.
+    const tp = ((b >>> 10) & 1) === 1;
+    if (tp === tpPending) tpCount++;
+    else { tpPending = tp; tpCount = 1; }
+    if (tpCount >= PI_CONFIRM) st.tp = tp;
 
     if (groupType === 0) {
       // 0A / 0B — Programme Service name. Two chars per group in block D, and
-      // the segment index is the low 2 bits. TA rides in bit 4.
-      // TA rides in the same block as PTY, so it inherits the same trust gate.
-      if (ptyCount >= PI_CONFIRM) st.ta = ((b >>> 4) & 1) === 1;
+      // the segment index is the low 2 bits. Bit 4 carries TA, which this
+      // decoder deliberately does not publish — see the RdsState.tp comment.
       const seg = b & 0x3;
       psBuf[seg * 2] = chr((d >>> 8) & 0xff);
       psBuf[seg * 2 + 1] = chr(d & 0xff);
@@ -506,6 +539,18 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
   return {
     push,
     reset,
+    // The dial MOVED, so the previous station's PI is not an incumbent to
+    // protect — it is known to be wrong. Clearing it puts the decoder back on
+    // the 3-group acquisition path. The exposure that leaves (a 3-group run of
+    // corruption being adopted outright, with no trusted PI to outvote it) is
+    // exactly the exposure the app already accepts every time it starts up on a
+    // station; the alternative was a total RDS blackout on every retune.
+    resetForRetune: () => {
+      reset();
+      piConfirmed = null;
+      piPending = null;
+      piPendingCount = 0;
+    },
     state: () => ({ ...st }),
     stats: () => ({ groups: statGroups, piMismatch: statPiMismatch }),
     resetStats: () => { statGroups = 0; statPiMismatch = 0; },

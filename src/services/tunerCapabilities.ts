@@ -165,7 +165,7 @@ export const SDR_CAPABILITIES: TunerCapabilities = {
   id: 'sdr',
   label: 'SDR receiver',
   signal: 'measured',
-  radioText: 'live',              // RdsDecoder produces PS/RT/RT+/PTY/TA/AF
+  radioText: 'live',              // RdsDecoder produces PS/RT/RT+/PTY/AF
   stereo: 'live',
   stationIdentity: 'rds-pi',
   metadataSettleMs: 0,

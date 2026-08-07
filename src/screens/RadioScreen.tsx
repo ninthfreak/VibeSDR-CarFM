@@ -136,7 +136,7 @@ interface VtsNotifData {
 
 
 // The live-station snapshot that feeds the CarFM face (name/RadioText/RDS flags).
-type LiveStation = { name?: string; text?: string; rtArtist?: string; rtTitle?: string; tp?: boolean; ta?: boolean; pty?: number; af?: boolean; afMhz?: number[]; badge?: string; countryIso?: string; pi?: string };
+type LiveStation = { name?: string; text?: string; rtArtist?: string; rtTitle?: string; tp?: boolean; pty?: number; af?: boolean; afMhz?: number[]; badge?: string; countryIso?: string; pi?: string };
 
 function sameNums(a?: number[], b?: number[]): boolean {
   if (a === b) return true;
@@ -151,7 +151,7 @@ function sameNums(a?: number[], b?: number[]): boolean {
 // field; afMhz is the only non-primitive (element-wise).
 function liveStationEqual(a: LiveStation, b: LiveStation): boolean {
   return a.name === b.name && a.text === b.text && a.rtArtist === b.rtArtist &&
-    a.rtTitle === b.rtTitle && a.tp === b.tp && a.ta === b.ta && a.pty === b.pty &&
+    a.rtTitle === b.rtTitle && a.tp === b.tp && a.pty === b.pty &&
     a.af === b.af && a.badge === b.badge && a.countryIso === b.countryIso &&
     a.pi === b.pi && sameNums(a.afMhz, b.afMhz);
 }
@@ -1324,7 +1324,7 @@ export default function RadioScreen({ route, navigation }: Props) {
         // so a live station name shows uniformly regardless of source.
         liveStationRef.current = meta.stationName ?? '';
         liveBadgeRef.current = meta.badge;
-        const nextLive: LiveStation = { name: meta.stationName, text: meta.text, rtArtist: meta.rtArtist, rtTitle: meta.rtTitle, tp: meta.tp, ta: meta.ta, pty: meta.pty, af: meta.af, afMhz: meta.afMhz, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi };
+        const nextLive: LiveStation = { name: meta.stationName, text: meta.text, rtArtist: meta.rtArtist, rtTitle: meta.rtTitle, tp: meta.tp, pty: meta.pty, af: meta.af, afMhz: meta.afMhz, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi };
         setLiveStation(prev => liveStationEqual(prev, nextLive) ? prev : nextLive);
         if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
@@ -2611,7 +2611,7 @@ export default function RadioScreen({ route, navigation }: Props) {
   // On a tunerless carFm launch (no SDR dongle) — the normal case on a permanent
   // head-unit install — bind the unit's own FM tuner if it exposes the NWD radio
   // service, and drive the face from IT instead of showing the tuner-error pill.
-  // Audio is analog + MCU-routed; PS/RadioText/PTY/TA/stereo arrive as native
+  // Audio is analog + MCU-routed; PS/RadioText/PTY/stereo arrive as native
   // callback events. Tune commands route via onTuneHz's nwdActiveRef branch.
   useEffect(() => {
     if (!route.params.tunerless) return;
@@ -2780,7 +2780,6 @@ export default function RadioScreen({ route, navigation }: Props) {
           text: undefined,
           pty: undefined,
           tp: false,
-          ta: false,
           pi: undefined,
         }));
         // `arg` is the preset-slot index, NOT signal (confirmed on-device: it equals
@@ -2790,7 +2789,13 @@ export default function RadioScreen({ route, navigation }: Props) {
         // PS/RadioText belong to the station we just left. A PI change clears
         // them too, but the dial moves first and PI only arrives with the next
         // group — without this the old name lingers across a preset step.
-        rdsDecoder.current.reset();
+        // resetForRetune, not reset: the dial MOVED, so the previous station's
+        // PI is known-stale rather than an incumbent to defend. Plain reset()
+        // keeps piConfirmed, which made the new station's PI dissent needing
+        // PI_DISPLACE consecutive matches — and push() drops every group that
+        // does not carry the incumbent, so PS/RT/PTY were blacked out for the
+        // whole window.
+        rdsDecoder.current.resetForRetune();
         // Restart the staleness clock at the retune, so the new station gets a
         // full window to acquire instead of inheriting the old one's countdown.
         lastRdsAtRef.current = Date.now();
@@ -2902,7 +2907,6 @@ export default function RadioScreen({ route, navigation }: Props) {
           rtTitle: s.rtTitle || undefined,
           pty: s.pty ?? prev.pty,
           tp: s.tp,
-          ta: s.ta,
           // PI is a 4-digit uppercase hex STRING everywhere else in the app
           // (SDRBackend: "hex PI code, '' when none"), so match that rather than
           // leaking the decoder's numeric form into shared state.
@@ -2956,7 +2960,6 @@ export default function RadioScreen({ route, navigation }: Props) {
         if (!debugModeRef.current) diag(`stereo ${p.on}`);
       }));
       subs.push(onNwd('NwdRadioPty', (p) => { setLiveStation((prev) => ({ ...prev, pty: p.pty })); diag(`PTY ${p.pty}`); }));
-      subs.push(onNwd('NwdRadioTa', (p) => { setLiveStation((prev) => ({ ...prev, ta: p.ta })); diag(`TA ${p.ta}`); }));
       // Poll the getters as a freq fallback. RESOLVED: isStreroOn() is stuck true
       // (reads true even on dead air), so the poll must NOT drive stereo — the
       // NwdRadioStereo callback is the trustworthy source (see setStereoDebounced).
@@ -3005,8 +3008,8 @@ export default function RadioScreen({ route, navigation }: Props) {
           // the worst air of the drive.
           rdsStaleRef.current = true;
           setLiveStation((prev) =>
-            (prev.name || prev.text || prev.pty !== undefined || prev.tp || prev.ta || prev.pi)
-              ? { ...prev, name: undefined, text: undefined, pty: undefined, tp: false, ta: false, pi: undefined }
+            (prev.name || prev.text || prev.pty !== undefined || prev.tp || prev.pi)
+              ? { ...prev, name: undefined, text: undefined, pty: undefined, tp: false, pi: undefined }
               : prev);
           rdsExpiriesRef.current++;
           diag(`RDS expired — no group for ${RDS_STALE_MS / 1000}s`);
@@ -3089,21 +3092,12 @@ export default function RadioScreen({ route, navigation }: Props) {
     })();
   }, [route.params.tunerless]);
 
-  // TA: a real car radio breaks mute for traffic announcements. If TA rises
-  // while muted, unmute for the announcement and restore the mute when it
-  // ends. Only ever restores a mute THIS effect lifted.
-  const taLiftedMute = useRef(false);
-  useEffect(() => {
-    const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
-    if (liveStation.ta && isMutedRef.current && !taLiftedMute.current) {
-      taLiftedMute.current = true;
-      VM?.setMuted?.(false);
-    } else if (!liveStation.ta && taLiftedMute.current) {
-      taLiftedMute.current = false;
-      VM?.setMuted?.(true);
-    }
-  }, [liveStation.ta]);
-
+  // TA-breaks-mute lived here: a real car radio unmutes for a traffic
+  // announcement. It is GONE with the TA decode it depended on. TA came from bit
+  // 4 of the same block as PTY, gated on the PTY field's consensus rather than
+  // its own, so one corrupt group could raise it — and this effect turned that
+  // into the radio unmuting itself. A false positive that overrides the user's
+  // mute is worse than no feature. See the RdsState.tp comment in nwdRds.
   // AF-follow: when the signal has been weak for a sustained stretch and the
   // station transmits an AF list, probe an alternative: keep it ONLY if it is
   // provably the same station (PI match) with a clearly better signal, else
@@ -3233,7 +3227,6 @@ export default function RadioScreen({ route, navigation }: Props) {
         signalReadout={signalReadout}
         rdsOk={!!liveStation.pi || !!liveStation.name}
         tp={liveStation.tp}
-        ta={liveStation.ta}
         af={liveStation.af}
         ptyText={ptyLabel(liveStation.pty, ituRegion === 2)}
         tunerError={fmTunerError}
