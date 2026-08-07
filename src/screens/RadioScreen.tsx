@@ -544,11 +544,11 @@ export default function RadioScreen({ route, navigation }: Props) {
     bandwidthLow: -3000, bandwidthHigh: 3000,
     binCount: 1024, binBandwidth: 0, centerHz: 0, bwHz: 0,
   });
-  // Muted via media controls (AirPods squeeze → pause = mute) — native emits
-  // VibeMuted so the UI can show a tap-to-unmute banner.
-  const [isMuted, setIsMuted] = useState(false);
-  const isMutedRef = useRef(false);
-  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  // Muted via media controls (AirPods squeeze → pause = mute). The VibeMuted
+  // listener below still acts on the event — it drives the OWRX disconnect — but
+  // the muted FLAG is no longer mirrored into state: the tap-to-unmute banner the
+  // comment here used to promise does not exist, and the only reader left was
+  // TA-breaks-mute, which is deliberately not implemented (see below).
   /** The iPhone's real SYSTEM volume (0…1), kept current by the VibeVolume KVO event.
    *  The watch sends DELTAS against it — it never sends an absolute, because the phone
    *  owns the value and the wrist is only allowed to nudge it. */
@@ -1106,7 +1106,6 @@ export default function RadioScreen({ route, navigation }: Props) {
       c?.pan(e.frequency);
     });
     const subMute = emitter.addListener('VibeMuted', (e: { muted: boolean }) => {
-      setIsMuted(!!e.muted);
       // OWRX: pause releases the lock-screen controls (native) and disconnects —
       // there's no play-to-reconnect because an OWRX reconnect resets the server
       // profile. Close the WS and show the in-app reconnect prompt so the user
@@ -1190,7 +1189,6 @@ export default function RadioScreen({ route, navigation }: Props) {
     // zoom, no audio), so do a FULL from-scratch reconnect with a fresh uuid.
     const subDsOn = emitter.addListener('VibeDataSaverResume', () => {
       setDataSaverOff(false);
-      setIsMuted(false);
       fullReconnect();
     });
     // The OS says the network path moved under us (WiFi→cellular, or a cellular IP
@@ -1552,7 +1550,6 @@ export default function RadioScreen({ route, navigation }: Props) {
         // Opened the app after a data-saver disconnect (the Play event may not
         // survive suspension): do a full from-scratch reconnect.
         setDataSaverOff(false);
-        setIsMuted(false);
         fullReconnect();
       } else {
         // Instant zombie-socket check — after a background suspension the
@@ -3129,29 +3126,15 @@ export default function RadioScreen({ route, navigation }: Props) {
     })();
   }, [route.params.tunerless]);
 
-  // TA breaks mute: a real car radio interrupts for a traffic announcement. If TA
-  // rises while muted, unmute for the announcement and restore the mute when it
-  // ends. Only ever restores a mute THIS effect lifted.
+  // TA-breaks-mute is NOT implemented, by decision. A real car radio interrupts a
+  // mute for a traffic announcement; CarFM shows the TA tell and leaves the audio
+  // alone. Overriding a mute the driver set deliberately is the one TA behaviour
+  // whose false-positive cost is high, and the tell carries the same information
+  // without touching the audio.
   //
-  // This is the sharp end of the TA decode, and why that decode carries three
-  // guards (group-0 only, its own consensus, conditioned on a confirmed TP). An
-  // earlier build had none of them, so a single corrupt group could unmute the
-  // radio against the user's wish — which is a worse failure than missing an
-  // announcement, and is what got the whole feature pulled once.
-  //
-  // The RDS staleness sweep clears `ta` with the rest of the station state, so a
-  // carrier that goes quiet mid-announcement cannot leave the mute lifted.
-  const taLiftedMute = useRef(false);
-  useEffect(() => {
-    const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
-    if (liveStation.ta && isMutedRef.current && !taLiftedMute.current) {
-      taLiftedMute.current = true;
-      VM?.setMuted?.(false);
-    } else if (!liveStation.ta && taLiftedMute.current) {
-      taLiftedMute.current = false;
-      VM?.setMuted?.(true);
-    }
-  }, [liveStation.ta]);
+  // If it is ever wanted: TA rising while muted unmutes, TA falling restores —
+  // but only a mute that behaviour itself lifted. The decode is already guarded
+  // well enough to carry it (see RdsState.ta in nwdRds).
 
   // AF-follow: when the signal has been weak for a sustained stretch and the
   // station transmits an AF list, probe an alternative: keep it ONLY if it is

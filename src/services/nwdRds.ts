@@ -50,7 +50,12 @@ export interface RdsState {
    *  Consensus is affordable here despite TA being the one field that has to
    *  react promptly: an announcement runs tens of seconds — hundreds of groups —
    *  so three agreeing groups is well under a second against the length of the
-   *  event. */
+   *  event.
+   *
+   *  TA drives a tell and NOTHING else — it does not break the user's mute, by
+   *  decision. The guards still earn their keep without that: an unguarded TA
+   *  flickered a pulsing tell off single corrupt groups, which is the kind of
+   *  motion that trains a driver to stop reading an indicator. */
   ta: boolean;
   /** Programme Service name, 8 chars, trimmed. Empty until fully assembled. */
   ps: string;

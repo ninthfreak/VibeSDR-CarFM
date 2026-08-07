@@ -96,9 +96,15 @@ reading of it is dangerous on this hardware:
   traffic cannot be announcing any, and on the stations measured locally that
   rules out most of them.
 
-This matters more than a tell normally would because TA breaks the user's mute,
-so a false positive turns the radio on when they have deliberately silenced it.
-An earlier build here had none of the three guards and did exactly that.
+One deliberate departure: **TA does not break the mute here.** A real car radio
+interrupts a mute for an announcement, and an earlier build here did — off an
+unguarded TA, which meant a single corrupt group could turn the radio on after
+the driver had deliberately silenced it. The tell carries the same information
+without touching the audio, so the tell is all it drives.
+
+The guards still matter without the mute: an unguarded TA flickers the pulsing
+tell off single corrupt groups, which is the kind of motion that trains someone
+to stop reading an indicator.
 
 Worth a sentence in the spec: TA is the one flag whose false-positive cost is
 higher than its false-negative cost.
