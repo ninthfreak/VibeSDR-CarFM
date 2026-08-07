@@ -15,7 +15,10 @@
 //     delta: uint16 changeCount, then changeCount × {uint16 index, float32 value}
 //   8-bit variants: same layout but values are uint8 (0..255 mapped to dBFS range)
 
-import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
+// The crypto.getRandomValues polyfill MOVED TO index.ts. It was here, and it
+// installed a global that a different module (AudioPlayer, via uuid) depended on
+// — which held only while this module was loaded eagerly. It is not this
+// module's job and it must not be deferred.
 import { ungzip } from 'pako';
 import { VibePowerModule } from '../components/AudioPlayer';
 import { resolveStationIso, receiverIso } from './rdsCountry';
