@@ -4,6 +4,7 @@
  */
 import React from 'react';
 import Svg, { Circle, G, Line, Path, Polygon, Rect } from 'react-native-svg';
+import { HALF_STEP_OPACITY } from '../../services/nwdSignalLevel';
 
 /** Signal-glyph viewBox (SIGNAL-METER.md). Exported so the face can size the
  *  level number's overlay against the same box the arcs are drawn in. */
@@ -49,34 +50,60 @@ const DOT_DASH = [0.01, 4.79];
  * Broadcast glyph: a centre dot with four elliptical arc pairs radiating left and
  * right. NOT a tower and not bars — a point source, bilaterally symmetric.
  *
- * `strength` is 0–5: 0 lights nothing, 1 the dot, 2–5 the dot plus that many
- * pairs outward. `dottedPairs` converts that many of the OUTERMOST LIT pairs from
- * solid to dotted, which is how reception loss is drawn — the count never shrinks,
- * so a strong carrier arriving in pieces stays distinguishable from a weak one
- * arriving cleanly.
+ * THREE THINGS ARE DRAWN, and they are independent (SIGNAL-METER.md v1.14):
  *
- * Every element always renders; unlit ones take `off`, so zero strength is the
+ * 1. `fullPairs` pairs at full strength, innermost outward.
+ * 2. A HALF-STEP ring — the next pair up at 45% — once the level passes the
+ *    midpoint of its band. This is what gives a five-element glyph nine states
+ *    without a sixth wave.
+ * 3. `dotOpacity` on the centre dot. Below the local-seek floor the dot is not
+ *    dark but ramped, so levels the glyph used to render identically are told
+ *    apart. It is never omitted and never dotted — a filled circle has no dotted
+ *    form.
+ *
+ * `dottedArcs` converts that many of the OUTERMOST DRAWN arcs to dots, counting
+ * the half-step ring as drawn: dots spread inward from the leading arc, whether
+ * that arc is full or half. Completely unlit pairs are not in the pool. Nothing
+ * is exempt but the centre dot, so at 100% loss every drawn arc dots.
+ *
+ * Every element always renders; unlit ones take `off`, so the zero state is the
  * full glyph gone dim rather than a vanishing icon.
  */
-export function SignalWaves({ size = 54.6, strength, on, off, dottedPairs = 0 }: {
-  size?: number; strength: number; on: string; off: string; dottedPairs?: number;
+export function SignalWaves({
+  size = 54.6, fullPairs, half = false, dotOpacity = 1, on, off, dottedArcs = 0,
+}: {
+  size?: number;
+  /** Fully-lit pairs, 0-4, innermost first. */
+  fullPairs: number;
+  /** Draw the next pair up at HALF_STEP_OPACITY. */
+  half?: boolean;
+  /** Centre-dot opacity, 0-1. 0 draws it in the off colour. */
+  dotOpacity?: number;
+  on: string; off: string;
+  /** Outermost DRAWN arcs to dot, half-step ring included. */
+  dottedArcs?: number;
 }) {
-  const lit = Math.max(0, Math.min(5, strength));
-  const litPairs = Math.max(0, lit - 1);           // state 1 is the dot alone
-  // Dotting eats inward from the outside and is CLAMPED to what is lit — "dot two
-  // pairs" is meaningless when one is lit. It can never reach the dot: a filled
-  // circle has no dotted form, so the worst case is a lone solid dot.
-  const dotted = Math.max(0, Math.min(litPairs, dottedPairs));
+  const full = Math.max(0, Math.min(PAIRS.length, fullPairs));
+  const hasHalf = half && full < PAIRS.length;
+  const drawn = full + (hasHalf ? 1 : 0);
+  const dotted = Math.max(0, Math.min(drawn, dottedArcs));
   return (
     <Svg width={size} height={(size * SIGNAL_VB_H) / SIGNAL_VB_W} viewBox={`0 0 ${SIGNAL_VB_W} ${SIGNAL_VB_H}`}>
-      <Circle cx={29} cy={16} r={2.6} fill={lit >= 1 ? on : off} />
+      {/* The dot carries the sub-floor ramp. At 0 it takes the off token rather
+          than vanishing, which is the difference between "no station" and "the
+          icon is missing". */}
+      <Circle cx={29} cy={16} r={2.6} fill={dotOpacity > 0 ? on : off}
+        opacity={dotOpacity > 0 ? dotOpacity : 1} />
       {PAIRS.map((p, i) => {
-        const isLit = i < litPairs;
-        const isDotted = isLit && i >= litPairs - dotted;
-        const stroke = isLit ? on : off;
+        const isHalf = hasHalf && i === full;
+        const isDrawn = i < full || isHalf;
+        // Dots eat inward from the leading DRAWN arc, so the half-step ring is
+        // the first to carry loss whenever one is lit.
+        const isDotted = isDrawn && i >= drawn - dotted;
+        const stroke = isDrawn ? on : off;
         const dash = isDotted ? DOT_DASH : undefined;
         return (
-          <G key={i}>
+          <G key={i} opacity={isHalf ? HALF_STEP_OPACITY : 1}>
             <Path d={`M${p.xL} ${p.y0} A ${p.rx} ${p.ry} 0 0 0 ${p.xL} ${p.y1}`}
               stroke={stroke} strokeWidth={2.2} strokeLinecap="round" strokeDasharray={dash} fill="none" />
             <Path d={`M${p.xR} ${p.y0} A ${p.rx} ${p.ry} 0 0 1 ${p.xR} ${p.y1}`}
@@ -84,6 +111,41 @@ export function SignalWaves({ size = 54.6, strength, on, off, dottedPairs = 0 }:
           </G>
         );
       })}
+    </Svg>
+  );
+}
+
+/**
+ * Speaker cone for the STEREO / MONO pill (ANDROID §4.1, v1.14.3).
+ *
+ * Four marks in slight perspective: a magnet block at the narrow end, two cone
+ * walls, and an elliptical rim — the rim reads as an ellipse because the cone is
+ * turned a few degrees toward the viewer. Geometry verbatim from the handoff's
+ * `stereoWaveL` / `stereoWaveR`.
+ *
+ * Mirrored on the left so both cones flare AWAY from the label.
+ *
+ * BOTH cones are drawn on mono, not just one, and not none — mono thins the
+ * stroke to 1.1 and recolours: the right cone takes the dim label colour and the
+ * left the pill's own border colour, so it reads as a ghost. Blue is reserved for
+ * a stereo lock.
+ */
+const CONE = [
+  'M5.2 12.4 h3.4 v5.2 h-3.4 z',        // magnet block
+  'M16.6 5.4 a2.8 9.6 0 1 0 0.01 0',    // rim, as an ellipse
+  'M8.6 13 L16.6 5.4',                  // upper wall
+  'M8.6 17 L16.6 24.6',                 // lower wall
+];
+
+export function StereoCone({ color, flip, w = 20, h = 28, strokeWidth = 1.8 }: {
+  color: string; flip?: boolean; w?: number; h?: number; strokeWidth?: number;
+}) {
+  return (
+    <Svg width={w} height={h} viewBox="0 0 24 30" style={flip ? { transform: [{ scaleX: -1 }] } : undefined}>
+      {CONE.map((d, i) => (
+        <Path key={i} d={d} stroke={color} strokeWidth={strokeWidth}
+          strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      ))}
     </Svg>
   );
 }
@@ -206,17 +268,6 @@ export function StereoDot({ size = 16, color }: { size?: number; color: string }
   );
 }
 
-/** Trio of curved sound waves flanking the STEREO label (design v2). `flip`
- *  mirrors it for the left side. */
-export function StereoWave({ color, flip, w = 20, h = 28 }: { color: string; flip?: boolean; w?: number; h?: number }) {
-  return (
-    <Svg width={w} height={h} viewBox="0 0 24 30" style={flip ? { transform: [{ scaleX: -1 }] } : undefined}>
-      <Path d="M4 9 Q9 15 4 21" stroke={color} strokeWidth="2" strokeLinecap="round" fill="none" />
-      <Path d="M9 6 Q15 15 9 24" stroke={color} strokeWidth="2" strokeLinecap="round" fill="none" />
-      <Path d="M14 3 Q21 15 14 27" stroke={color} strokeWidth="2" strokeLinecap="round" fill="none" />
-    </Svg>
-  );
-}
 
 /** Gear/settings icon (design v2 header — placeholder for the Advanced panel). */
 export function GearIcon({ size = 24, color }: { size?: number; color: string }) {

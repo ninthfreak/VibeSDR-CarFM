@@ -14,6 +14,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { BatteryBolt, SignalWaves, WarningTriangle } from './icons';
+import { discreteLit } from '../../services/nwdSignalLevel';
 import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 import { EGG_MENU } from './bandThemes';
 import { getTunerBackend, loadTunerBackend, setTunerBackend, readoutFor, type TunerBackend } from '../../services/tunerBackend';
@@ -318,7 +319,7 @@ export default function SettingsPanel({
                 <View style={styles.iconWrap}>
                   {tunerError
                     ? <WarningTriangle size={32} color={pal.amber} />
-                    : <SignalWaves size={44} strength={5} on={pal.amber} off={pal.meterEmpty} />}
+                    : <SignalWaves size={44} {...discreteLit(5)} on={pal.amber} off={pal.meterEmpty} />}
                 </View>
                 <View style={styles.textWrap}>
                   <Text style={[styles.rowTitle, { color: pal.text }]}>{tunerError ? 'Not connected' : 'Connected'}</Text>

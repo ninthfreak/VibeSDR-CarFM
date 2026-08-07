@@ -51,7 +51,7 @@ import { createBackend } from '../services/UberSDRAdapter';
 import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, nwdStartLevelWatch, nwdStopLevelWatch, nwdReadLevelNow,
          onNwd, PANEL_KEY, panelKeyName } from '../services/nwdRadio';
 import { createNwdRdsDecoder } from '../services/nwdRds';
-import { levelToLit, settleDottedPairs, LEVEL_POLL_MS, LEVEL_FIRST_READ_MS,
+import { levelToLit, drawnArcs, settleDottedPairs, LEVEL_POLL_MS, LEVEL_FIRST_READ_MS,
          LEVEL_CORRECTION_MS, LEVEL_RETRY_MS, LEVEL_RETRY_MAX } from '../services/nwdSignalLevel';
 import { stripStationFromRt } from '../services/rtStation';
 import {
@@ -977,7 +977,11 @@ export default function RadioScreen({ route, navigation }: Props) {
     const sample: DebugSample = {
       mhz,
       level,
-      bars: levelToLit(level),
+      // What the glyph actually shows, not a band index: a half-step ring is half
+      // an element, so it is logged as .5 rather than rounded away. Analysis of
+      // an old log against the current thresholds is what caught that the bands
+      // had moved under it.
+      bars: (() => { const l = levelToLit(level); return l ? l.fullPairs + (l.half ? 0.5 : 0) : null; })(),
       lat: loc?.lat ?? null,
       lon: loc?.lon ?? null,
       accM: loc?.accM ?? null,
@@ -2871,7 +2875,14 @@ export default function RadioScreen({ route, navigation }: Props) {
         levelRetriesLeft = LEVEL_RETRY_MAX;   // a good read re-arms the budget
         setFmLevel(p.level);
         if (!debugModeRef.current) {
-          diag(`level ${p.level} @ ${p.asked} → ${levelToLit(p.level)} lit`);
+          {
+            // Spelled out rather than interpolating the object, which would log
+            // "[object Object]" — tsc cannot see that inside a template literal.
+            const l = levelToLit(p.level);
+            const shown = l == null ? '?'
+              : `${l.fullPairs}${l.half ? '+half' : ''}${l.dotOpacity < 1 ? ` dot@${Math.round(l.dotOpacity * 100)}%` : ''}`;
+            diag(`level ${p.level} @ ${p.asked} → ${shown}`);
+          }
           return;
         }
         // DEBUG MODE: this reading is the heartbeat of the dataset. Take the
@@ -3045,7 +3056,11 @@ export default function RadioScreen({ route, navigation }: Props) {
         {
           const match = rdsStaleRef.current ? null : rdsDecoder.current.quality().piMatchPct;
           const loss = match == null ? null : 100 - match;
-          const next = settleDottedPairs(fmDottedRef.current, loss);
+          // The pool is the arcs currently DRAWN, half-step ring included — dots
+          // spread inward from the leading arc whether it is full or half. It
+          // moves with the LEVEL, so it is read here rather than captured.
+          const dottable = drawnArcs(levelToLit(fmLevelRef.current));
+          const next = settleDottedPairs(fmDottedRef.current, loss, dottable);
           if (next !== fmDottedRef.current) setFmDotted(next);
         }
         // The poll does NOT drive PS / RadioText / PTY.
