@@ -53,7 +53,6 @@ import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, n
 import { createNwdRdsDecoder } from '../services/nwdRds';
 import { levelToLit, settleDottedPairs, LEVEL_POLL_MS, LEVEL_FIRST_READ_MS,
          LEVEL_CORRECTION_MS, LEVEL_RETRY_MS, LEVEL_RETRY_MAX } from '../services/nwdSignalLevel';
-import { getTunerBackend, loadTunerBackend, subscribeTunerBackend, readoutFor } from '../services/tunerBackend';
 import { stripStationFromRt } from '../services/rtStation';
 import {
   isDebugMode, subscribeDebugMode, formatSample, bearingDeg, DEBUG_SAMPLE_MS,
@@ -466,14 +465,13 @@ export default function RadioScreen({ route, navigation }: Props) {
    *  reception-loss overlay. Derived from the decoder's rolling PI-match figure,
    *  through a hysteresis band so a value near a boundary cannot flicker a whole
    *  pair on and off. 0 whenever there is no figure at all. */
-  // Which readout the face draws — the SETTINGS SELECTION, not the live probe
-  // (ANDROID §6.3 v1.13.0). Presentation only; picking RTL-SDR does not re-bind
-  // the hardware. See services/tunerBackend.
-  const [tunerSel, setTunerSel] = useState(getTunerBackend());
-  useEffect(() => {
-    void loadTunerBackend().then(setTunerSel);
-    return subscribeTunerBackend(() => setTunerSel(getTunerBackend()));
-  }, []);
+  // The tuner SELECTION is deliberately not mirrored into screen state. It used
+  // to be, to pick the meter's scale (ANDROID §6.3 v1.13.0) — but that now
+  // follows the source actually running, not the stored preference, because
+  // honouring the preference blanked the meter whenever the two disagreed (see
+  // signalReadout). What was left was state nothing read plus a subscription
+  // re-rendering the screen on every settings change. SettingsPanel owns the
+  // picker; picking RTL-SDR there still does not re-bind the hardware.
 
   const [fmDotted, setFmDotted] = useState(0);
   const fmDottedRef = useRef(0);
@@ -2638,8 +2636,20 @@ export default function RadioScreen({ route, navigation }: Props) {
       if (levelRetryTimer) { clearTimeout(levelRetryTimer); levelRetryTimer = null; }
     };
     let lastProbedMhz = 0;
+    // The frequency this probe timer is currently armed for. Needed because
+    // scheduleProbe is called from the 1.5s getter poll as well as the frequency
+    // handler, and the poll calls it on EVERY tick rather than on a change. With
+    // only lastProbedMhz — written inside the timeout body, so still 0 while the
+    // timer is pending — every poll tick cleared and re-armed the timer and the
+    // 4s deadline was never reached. Across 13 drive logs, 91 distinct-frequency
+    // visits produced 5 probes, and the ones that did fire were timers a poll
+    // stall had let slip through, not the intended schedule.
+    let armedProbeMhz = 0;
     const scheduleProbe = (mhz: number) => {
       if (!isDiagEnabled() || !(mhz > 0) || Math.abs(mhz - lastProbedMhz) < 0.05) return;
+      // Already counting down for this frequency: leave it alone. Only a move
+      // to a DIFFERENT frequency may restart the debounce.
+      if (probeTimer && Math.abs(mhz - armedProbeMhz) < 0.05) return;
       if (probeTimer) clearTimeout(probeTimer);
       // This used to cancel the post-tune level read as well, with no comment and
       // no reschedule. scheduleProbe runs from the frequency handler AFTER that
@@ -2649,7 +2659,9 @@ export default function RadioScreen({ route, navigation }: Props) {
       // meter waited for the free-running periodic watch instead. The frequency
       // handler already clears these timers itself, which is the right place;
       // the probe scheduler has no business touching them.
+      armedProbeMhz = mhz;
       probeTimer = setTimeout(async () => {
+        probeTimer = null;          // keeps the armed-for check above accurate
         if (cancelled) return;
         lastProbedMhz = mhz;
         const dump = await nwdProbe();
@@ -2912,7 +2924,15 @@ export default function RadioScreen({ route, navigation }: Props) {
           // leaking the decoder's numeric form into shared state.
           pi: s.pi === null ? prev.pi : s.pi.toString(16).toUpperCase().padStart(4, '0'),
         }));
-        if (s.ps) liveStationRef.current = s.ps;
+        // Mirrors the `name` rule above, and must: this ref is not a display
+        // value, it is what a preset gets SAVED as (onFmToggleSave) and what
+        // titles the lock-screen card. Guarding on truthiness alone meant the
+        // retraction never cleared it, so it froze on the last chunk published
+        // before the decoder called the PS scrolling — the SECOND distinct
+        // value, not the first. On WIBA that is a song word, saved as a preset
+        // name and persisted.
+        if (s.psScrolling) liveStationRef.current = '';
+        else if (s.ps) liveStationRef.current = s.ps;
         // Debug mode is deliberately quiet: this one line fired 184 times in a
         // 40-minute commute and is what buries the events worth reading. The
         // structured sample carries the same information, aggregated.
@@ -3161,12 +3181,19 @@ export default function RadioScreen({ route, navigation }: Props) {
    * Which reading the face draws.
    *
    * The picker chooses between sources that EXIST; it cannot conjure one that
-   * does not. With no NWD tuner bound the SDR figure is the only reading there
-   * is, so honouring a stale 'nwd' selection would leave the meter showing an
-   * em-dash forever while a live value sat unused — which is what the default
-   * selection did to an SDR-only install until this was caught.
+   * does not, so this follows the source actually RUNNING rather than the stored
+   * preference. Honouring the selection in either direction leaves the meter on
+   * a scale nothing is feeding: a stale 'nwd' selection blanked an SDR-only
+   * install, and an 'rtl' selection on a head unit with no dongle blanked the
+   * built-in tuner just as thoroughly — fmSignalDb's only writer returns early
+   * while nwdActive, so the meter drew waveStrength(null) and an em-dash with a
+   * live fmLevel sitting unused, and the selection persists, so it survived
+   * relaunch.
+   *
+   * nwdActive is set only once the vendor service is bound and producing, which
+   * is exactly the condition for "the NWD level is the real reading here".
    */
-  const signalReadout = nwdActive ? readoutFor(tunerSel) : 'sdr';
+  const signalReadout = nwdActive ? 'nwd' : 'sdr';
 
   return (
     <View
