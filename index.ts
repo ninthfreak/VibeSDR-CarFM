@@ -11,6 +11,13 @@
 // app is registered, and impossible to defer.
 import 'react-native-get-random-values';
 
+// TUNER SECOND. Nothing above needs it and nothing below should wait for it: the
+// bind and the audio claim are fired here so they are in flight while React is
+// still starting, instead of queueing behind fonts, the picker and a navigation.
+// Fire-and-forget on purpose — awaiting it would put the bind back in front of
+// first paint, which is the delay being removed.
+import { warmStartNwd } from './src/services/nwdWarmStart';
+
 import { registerRootComponent } from 'expo';
 
 import App from './App';
@@ -18,4 +25,6 @@ import App from './App';
 // registerRootComponent calls AppRegistry.registerComponent('main', () => App);
 // It also ensures that whether you load the app in Expo Go or in a native build,
 // the environment is set up appropriately
+warmStartNwd();
+
 registerRootComponent(App);
