@@ -129,19 +129,45 @@ export function lossToDottedPairs(lossPct: number | null | undefined): number {
  * Hysteresis for the loss figure, so a value sitting near a band edge cannot
  * flip a whole wave pair between solid and dotted every poll.
  *
- * The two inputs update at wildly different rates — loss every 1.5s, level every
- * 30s while parked — so the dotting would otherwise twitch against a wave count
- * that never moves. Nobody counts waves; this display exists to give a fast
- * impression, and a pair flickering carries no information to offset the motion.
+ * ONE-DIRECTIONAL, and deliberately: it applies only on the way DOWN. Dotting
+ * starts at the band edge itself — 30% dots the first pair, as specified — and
+ * only clears once the figure has fallen this far below the edge it came from.
  *
- * A new band has to be reached by this margin before it is adopted. Moving
- * further into the band you are already in is always free.
+ * That asymmetry is the right one for a warning. Flicker is what the margin
+ * exists to stop, and a margin on the falling side alone is enough to stop it:
+ * a figure oscillating around 30 latches the pair on and holds it. Applying the
+ * margin on the way up as well bought no extra stability and cost 5 points of
+ * sensitivity — it silently moved the documented 30% threshold to 35%.
+ *
+ * The anti-cry-wolf guard is the 30% boundary itself, which sits at the midpoint
+ * between the measured clean (~16%) and crackle (~44.5%) populations. It does
+ * not need a second guard stacked behind it.
  */
 export const LOSS_BAND_MARGIN = 5;
 
 /**
- * Apply the margin: `prev` is the band currently shown, `raw` the band the
- * current loss figure would pick on its own. Returns the band to show.
+ * Apply the margin: `prev` is the band currently shown, `lossPct` the current
+ * figure. Returns the band to show.
+ *
+ * ── The bug this shape exists to prevent ─────────────────────────────────────
+ *
+ * The first version tested whether the margin landed back on the SAME band —
+ * `nudged === next ? next : prev` — which quietly meant "only ever move to an
+ * ADJACENT band". A figure that jumped two bands in one poll left `nudged` on
+ * the band in between, so it matched nothing and the glyph refused to move AT
+ * ALL: 49% loss dotted one pair while 50% dotted none, and 69% dotted two while
+ * 70% dotted none. It failed that way from every starting band, in both
+ * directions.
+ *
+ * The reversal was not cosmetic. Any 25s RDS gap forces this to 0 (see the null
+ * case below), and when the carrier returns in the bad air that caused the gap
+ * the loss figure is high immediately — a two-band jump from 0, which under the
+ * old rule displayed nothing. The worse the reception, the more likely the tell
+ * was to show nothing at all, which is the opposite of its purpose.
+ *
+ * So the margin now decides HOW FAR to move, not WHETHER to move: take the band
+ * the nudged figure picks and clamp it between where we are and where the raw
+ * figure points. A move is never refused outright, only shortened.
  *
  * Pure so it can be tested without a renderer.
  */
@@ -149,10 +175,12 @@ export function settleDottedPairs(prev: number, lossPct: number | null | undefin
   const next = lossToDottedPairs(lossPct);
   if (next === prev) return prev;
   if (lossPct == null || !Number.isFinite(lossPct)) return next;   // no figure → all solid, at once
-  // Re-test with the margin pushing AGAINST the direction of travel, so the
-  // figure has to commit before the glyph redraws.
-  const nudged = lossToDottedPairs(lossPct + (next > prev ? -LOSS_BAND_MARGIN : LOSS_BAND_MARGIN));
-  return nudged === next ? next : prev;
+  // Rising: adopt at once, so the first pair dots at 30% and not at 30 + margin.
+  if (next > prev) return next;
+  // Falling: the figure has to drop the full margin below the edge before the
+  // glyph gives a pair back. Clamped, so a multi-band fall still moves.
+  const nudged = lossToDottedPairs(lossPct + LOSS_BAND_MARGIN);
+  return Math.min(prev, Math.max(next, nudged));
 }
 
 /** A reading is only trustworthy when the tuner stayed on the frequency we asked

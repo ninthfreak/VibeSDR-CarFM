@@ -90,16 +90,40 @@ eq('...and 42% loss breaks the outer pair', lossToDottedPairs(42), 1);
 // ── Hysteresis ───────────────────────────────────────────────────────────────
 // Nobody counts waves. A pair flipping between solid and dotted every 1.5s
 // carries no information to offset the movement.
+//
+// The margin is ONE-DIRECTIONAL. Dotting starts at the band edge itself, and
+// only clears once the figure has fallen a margin below it — fast to warn, slow
+// to forgive, which is the right asymmetry for a warning.
 eq('a clear move up is adopted', settleDottedPairs(0, 60), 2);
 eq('a clear move down is adopted', settleDottedPairs(2, 10), 0);
-eq('a hair over the boundary is NOT adopted', settleDottedPairs(0, 31), 0);
-eq('...nor is a hair under it, coming down', settleDottedPairs(1, 29), 1);
-eq('committing past the margin IS adopted', settleDottedPairs(0, 30 + LOSS_BAND_MARGIN), 1);
-eq('...and the same coming down', settleDottedPairs(1, 30 - LOSS_BAND_MARGIN - 1), 0);
+eq('the boundary itself dots a pair — no margin on the way up', settleDottedPairs(0, 30), 1);
+eq('a hair under the boundary does not', settleDottedPairs(0, 29.9), 0);
+eq('a hair under it, coming down, is NOT adopted', settleDottedPairs(1, 29), 1);
+eq('...but a full margin under it is', settleDottedPairs(1, 30 - LOSS_BAND_MARGIN - 1), 0);
 eq('staying inside the current band changes nothing', settleDottedPairs(1, 40), 1);
 // Losing the figure entirely is not a boundary crossing — it is the absence of
 // evidence, and the waves must go solid at once rather than lag by a margin.
 eq('losing the figure goes solid immediately', settleDottedPairs(3, null), 0);
+
+// ── Regression: a multi-band jump must not be refused outright ───────────────
+// The first version tested `nudged === next`, which meant "adjacent bands only".
+// A two-band jump matched nothing and the glyph did not move at all, so a WORSE
+// figure drew FEWER dots — 49% dotted one pair and 50% dotted none. This is the
+// exact path a drive takes: an RDS gap forces 0, then the carrier returns in bad
+// air with the loss figure already high.
+eq('a clean signal dropping straight to 50% dots two', settleDottedPairs(0, 50), 2);
+eq('a clean signal dropping straight to 70% dots three', settleDottedPairs(0, 70), 3);
+eq('...and 100% still dots three', settleDottedPairs(0, 100), 3);
+eq('a three-band collapse down still lets go', settleDottedPairs(3, 0), 0);
+
+// More loss must NEVER draw fewer dots, from any band the glyph is already in.
+// This is the property the old shape violated, in six separate places.
+let reversals = [];
+for (let prev = 0; prev <= 3; prev++)
+  for (let x = 0; x < 100; x++)
+    if (settleDottedPairs(prev, x + 1) < settleDottedPairs(prev, x))
+      reversals.push(`showing ${prev}: ${x}%→${settleDottedPairs(prev, x)} but ${x + 1}%→${settleDottedPairs(prev, x + 1)}`);
+eq('monotonic in loss from every starting band', reversals, []);
 
 // ── The safety check ─────────────────────────────────────────────────────────
 eq('a reading that stayed put is trusted', levelIsTrustworthy(10150, 10150), true);
