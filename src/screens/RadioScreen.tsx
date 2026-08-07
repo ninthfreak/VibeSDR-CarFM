@@ -51,7 +51,8 @@ import { createBackend } from '../services/UberSDRAdapter';
 import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, nwdStartLevelWatch, nwdStopLevelWatch, nwdReadLevelNow,
          onNwd, PANEL_KEY, panelKeyName } from '../services/nwdRadio';
 import { createNwdRdsDecoder } from '../services/nwdRds';
-import { levelToLit, settleDottedPairs, LEVEL_POLL_MS, LEVEL_SETTLE_MS } from '../services/nwdSignalLevel';
+import { levelToLit, settleDottedPairs, LEVEL_POLL_MS, LEVEL_FIRST_READ_MS,
+         LEVEL_CORRECTION_MS, LEVEL_RETRY_MS, LEVEL_RETRY_MAX } from '../services/nwdSignalLevel';
 import { getTunerBackend, loadTunerBackend, subscribeTunerBackend, readoutFor } from '../services/tunerBackend';
 import { stripStationFromRt } from '../services/rtStation';
 import {
@@ -2396,6 +2397,12 @@ export default function RadioScreen({ route, navigation }: Props) {
     return () => nwdStopLevelWatch();
   }, [nwdActive, debugOn]);
 
+  // The cadence the post-tune correction re-phases the watch to. Held in a ref
+  // because the frequency handler lives in a long-lived effect that must not be
+  // torn down and rebuilt every time debug mode is toggled.
+  const levelCadenceRef = useRef(LEVEL_POLL_MS);
+  useEffect(() => { levelCadenceRef.current = debugOn ? DEBUG_SAMPLE_MS : LEVEL_POLL_MS; }, [debugOn]);
+
   // Mirror the tail of the tuner log onto the face. Off by default; the settings
   // toggle drives it, and the persisted value arrives after mount, so this
   // subscribes rather than reading once.
@@ -2616,13 +2623,32 @@ export default function RadioScreen({ route, navigation }: Props) {
     // each station without any interaction. Debounced (reset on every freq
     // change) and de-duped per frequency; only runs while diagnostics are on.
     let probeTimer: ReturnType<typeof setTimeout> | null = null;
-    // Debounced post-tune level read; see the frequency handler.
-    let levelSettleTimer: ReturnType<typeof setTimeout> | null = null;
+    // Post-tune level reads; see the frequency handler. TWO of them — one at 1s
+    // to put a number on screen and one at 4s to correct it — plus a retry for
+    // the case where a read comes back rejected. All three are cleared on every
+    // retune: a read that fires after the dial has moved on would attribute the
+    // old station's level to the new one.
+    let levelFirstTimer: ReturnType<typeof setTimeout> | null = null;
+    let levelFixTimer: ReturnType<typeof setTimeout> | null = null;
+    let levelRetryTimer: ReturnType<typeof setTimeout> | null = null;
+    let levelRetriesLeft = 0;
+    const clearLevelTimers = () => {
+      if (levelFirstTimer) { clearTimeout(levelFirstTimer); levelFirstTimer = null; }
+      if (levelFixTimer)   { clearTimeout(levelFixTimer);   levelFixTimer = null; }
+      if (levelRetryTimer) { clearTimeout(levelRetryTimer); levelRetryTimer = null; }
+    };
     let lastProbedMhz = 0;
     const scheduleProbe = (mhz: number) => {
       if (!isDiagEnabled() || !(mhz > 0) || Math.abs(mhz - lastProbedMhz) < 0.05) return;
       if (probeTimer) clearTimeout(probeTimer);
-      if (levelSettleTimer) clearTimeout(levelSettleTimer);
+      // This used to cancel the post-tune level read as well, with no comment and
+      // no reschedule. scheduleProbe runs from the frequency handler AFTER that
+      // read is armed, and its guard passes whenever diagnostics are on and the
+      // dial moved — which is every drive that produced a log. So on exactly the
+      // runs we have evidence from, the post-tune read never happened and the
+      // meter waited for the free-running periodic watch instead. The frequency
+      // handler already clears these timers itself, which is the right place;
+      // the probe scheduler has no business touching them.
       probeTimer = setTimeout(async () => {
         if (cancelled) return;
         lastProbedMhz = mhz;
@@ -2771,20 +2797,11 @@ export default function RadioScreen({ route, navigation }: Props) {
         // A retune outranks a pending expiry: there is nothing worth restoring,
         // the decoder was just emptied.
         rdsStaleRef.current = false;
-        // The level belongs to the station we just left. Drop it and ask for a
-        // fresh one rather than letting the meter lie until the next tick — but
-        // WAIT for the front end to settle first.
-        //
-        // A reading taken immediately after a retune is systematically inflated.
-        // Measured on 2026-08-05 across 24 paired comparisons — the first reading
-        // after a tune against the same station 20s later — the mean excess was
-        // +17.7, with individual cases of +45, +48 and +57. Banded by age the
-        // same drive gives 0-5s mean 70.3 against 5-15s mean 51.8.
-        //
-        // The value comes from seek(), the chip's own scan primitive, so a level
-        // read while the tune is still completing plausibly reflects that
-        // operation rather than the settled channel. Whatever the mechanism, the
-        // number is not usable that early, and the meter was showing it.
+        // The level belongs to the station we just left, so it goes — but the
+        // meter must not then sit blank. Read at 1s and show whatever arrives,
+        // read again at 4s and correct it (see nwdSignalLevel for the timing
+        // evidence: the inflation is almost entirely in the first second, and a
+        // brief wrong number beats a long dash).
         setFmLevel(null);
         // The rating belongs to the station we just left, exactly like the level
         // and the decoder's text above it. Left standing it follows the driver
@@ -2792,8 +2809,17 @@ export default function RadioScreen({ route, navigation }: Props) {
         ratingRef.current = null;
         ratingMhzRef.current = null;
         lastTuneAtRef.current = Date.now();
-        if (levelSettleTimer) clearTimeout(levelSettleTimer);
-        levelSettleTimer = setTimeout(() => { if (!cancelled) nwdReadLevelNow(); }, LEVEL_SETTLE_MS);
+        clearLevelTimers();
+        levelRetriesLeft = LEVEL_RETRY_MAX;
+        levelFirstTimer = setTimeout(() => { if (!cancelled) nwdReadLevelNow(); }, LEVEL_FIRST_READ_MS);
+        // The correction ALSO re-phases the periodic watch. startLevelWatch reads
+        // once immediately and then sleeps the cadence, so restarting it here is
+        // both the 4s correction and a clean "…and every 20s from now" — without
+        // it the watch is a free-running native thread a retune never touches,
+        // and the next update after this could land anywhere in its cycle.
+        levelFixTimer = setTimeout(() => {
+          if (!cancelled) nwdStartLevelWatch(levelCadenceRef.current);
+        }, LEVEL_CORRECTION_MS);
         diag(`freq ${p.mhz.toFixed(1)} arg=${p.arg} PS='${p.ps}'`);
         scheduleProbe(p.mhz);
       }));
@@ -2810,7 +2836,22 @@ export default function RadioScreen({ route, navigation }: Props) {
         // `ok` false means the tuner did not stay on the frequency we asked
         // about, which is the same check AWNative makes before it believes a
         // level. Keep the previous reading rather than showing a wrong one.
-        if (!p.ok) { diag(`level: REJECTED asked=${p.asked} landed=${p.landed}${p.err ? ` ${p.err}` : ''}`); return; }
+        if (!p.ok) {
+          diag(`level: REJECTED asked=${p.asked} landed=${p.landed}${p.err ? ` ${p.err}` : ''}`);
+          // Retry rather than fall through to the periodic read. On the drive
+          // logs a rejection was almost always `landed=0` — the chip saying it
+          // was not ready — which the next attempt a second later usually
+          // clears. Without this, a rejected read right after a retune leaves
+          // the meter blank until the next tick, because the retune already
+          // dropped the previous reading and there is nothing to fall back on.
+          if (levelRetriesLeft > 0 && !cancelled) {
+            levelRetriesLeft--;
+            if (levelRetryTimer) clearTimeout(levelRetryTimer);
+            levelRetryTimer = setTimeout(() => { if (!cancelled) nwdReadLevelNow(); }, LEVEL_RETRY_MS);
+          }
+          return;
+        }
+        levelRetriesLeft = LEVEL_RETRY_MAX;   // a good read re-arms the budget
         setFmLevel(p.level);
         if (!debugModeRef.current) {
           diag(`level ${p.level} @ ${p.asked} → ${levelToLit(p.level)} lit`);
@@ -3017,7 +3058,7 @@ export default function RadioScreen({ route, navigation }: Props) {
       cancelled = true;
       if (pollTimer) clearInterval(pollTimer);
       if (probeTimer) clearTimeout(probeTimer);
-      if (levelSettleTimer) clearTimeout(levelSettleTimer);
+      clearLevelTimers();
       if (stereoTimer) clearTimeout(stereoTimer);
       nwdActiveRef.current = false;
       setNwdActive(false);

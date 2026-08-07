@@ -1131,12 +1131,12 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // centered, controls right — so the signal dB stacks below the icon and the
   // stereo column is truly centered regardless of the side widths.
   // NOT LIVE, and the number must not pretend otherwise (SIGNAL-METER.md states):
-  // the dial sweeping past other stations during a scan, and the first seconds
-  // after a retune. The retune case already arrives as a null level — the screen
-  // clears it and waits LEVEL_SETTLE_MS, because a reading taken immediately
-  // after tuning ran a mean +17.7 above the same station 20s later. Scanning is
-  // suppressed here, since the level keeps arriving throughout a sweep and
-  // belongs to whatever the dial swept past.
+  // the dial sweeping past other stations during a scan. The retune case arrives
+  // as a null level and the screen fills it back in a second later — see
+  // LEVEL_FIRST_READ_MS: the post-tune reading runs high, but showing it briefly
+  // and correcting it at 4s beats a blank meter. Scanning is suppressed here,
+  // since the level keeps arriving throughout a sweep and belongs to whatever
+  // the dial swept past.
   const levelLive = !off && !scan;
   const nwdLevel = levelLive ? signalLevelRaw : null;
   const sdrDb = levelLive ? signalDb : null;

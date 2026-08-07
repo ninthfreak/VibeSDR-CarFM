@@ -190,23 +190,59 @@ export function levelIsTrustworthy(asked: number, landed: number): boolean {
 }
 
 /**
- * How long to wait after a retune before believing a level.
+ * Post-retune reads: show something fast, then correct it.
+ *
+ * ── The bump ─────────────────────────────────────────────────────────────────
  *
  * A reading taken immediately after tuning is systematically inflated. Across 24
  * paired comparisons on 2026-08-05 — first reading after a tune against the same
  * station 20 seconds later — the mean excess was +17.7, with cases of +45, +48
- * and +57. Banded by age: 0-5s mean 70.3, 5-15s mean 51.8.
+ * and +57, and the excess was positive on all five frequencies independently
+ * (+7.9 to +25.3). The value is the return of seek(), the chip's own scan
+ * primitive, so a read taken while the tune is still completing plausibly
+ * reports that operation rather than the settled channel.
  *
- * The value is the return of seek(), the chip's own scan primitive, so a read
- * taken while the tune is still completing plausibly reports that operation
- * rather than the settled channel. Five seconds clears the inflated band.
+ * ── How long it actually lasts ───────────────────────────────────────────────
  *
- * Samples still carry `tuned=` so an analysis can discard anything too early
- * regardless of this delay.
+ * The first version of this waited 5s, on the reasoning that the drive's banded
+ * means (0-5s 70.3, 5-15s 51.8) showed the inflation clearing around there.
+ * Those pooled bands are confounded by which stations they contain — 105.9 is
+ * strong and supplies 55 of the late samples, which drags the 15s+ pooled mean
+ * back up to 65.0. Normalising each reading against its OWN station's settled
+ * level instead puts the excess almost entirely in the 0-1s bucket (+20.0
+ * median, n=29); from 2s on every band scatters around zero with no trend. So
+ * 5s was about five times longer than the evidence supports.
+ *
+ * ── Why two reads rather than one later one ──────────────────────────────────
+ *
+ * A blank meter for even a second reads as broken, and the whole point of this
+ * cluster is a fast impression. So: read at 1s and show whatever comes back,
+ * then read again at 4s and correct it. 1s is not necessarily past the bump —
+ * the sampler pools `tuned=0s` and `tuned=1s`, so it cannot be split — which
+ * means the first number may still be high and the second is what settles it.
+ * That trade is deliberate: a brief wrong number beats a long dash.
  */
-export const LEVEL_SETTLE_MS = 5_000;
+export const LEVEL_FIRST_READ_MS = 1_000;
+
+/** The correction, and the point the periodic cadence is re-phased from. */
+export const LEVEL_CORRECTION_MS = 4_000;
+
+/**
+ * A rejected read is not a reading — it is the absence of one.
+ *
+ * `ok` is false when the chip reports landing on a frequency other than the one
+ * queried, which on the drive logs was overwhelmingly `landed=0`: the tuner
+ * saying it was not ready. Eight of the ten rejections observed were that, and
+ * the two others landed on a genuinely different frequency mid-tune.
+ *
+ * Without a retry the handler simply returns, and immediately after a retune
+ * there is no previous reading to fall back on — so the meter stays blank until
+ * the next periodic read, which is the long dash this whole change removes.
+ */
+export const LEVEL_RETRY_MS = 1_000;
+export const LEVEL_RETRY_MAX = 2;
 
 /** How often to re-read while parked on a station. Each read COMMANDS the tuner,
- *  so this is deliberately slow: the vendor rate-limits its own comparable read
- *  to 900 ms (ArmRadioManager.clearVaildFlag) and this is far below that. */
-export const LEVEL_POLL_MS = 30_000;
+ *  so this stays well clear of the vendor's own rate limit on the comparable
+ *  read (900 ms, ArmRadioManager.clearVaildFlag). */
+export const LEVEL_POLL_MS = 20_000;

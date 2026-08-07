@@ -8,7 +8,8 @@
 // Run: node tools/tests/signalLevel.test.mjs
 
 import { levelToLit, lossToDottedPairs, settleDottedPairs, levelIsTrustworthy,
-  LEVEL_LOC_FLOOR, LOSS_BAND_MARGIN }
+  LEVEL_LOC_FLOOR, LOSS_BAND_MARGIN, LEVEL_FIRST_READ_MS, LEVEL_CORRECTION_MS,
+  LEVEL_RETRY_MS, LEVEL_RETRY_MAX, LEVEL_POLL_MS }
   from '../../src/services/nwdSignalLevel.ts';
 
 let fails = 0;
@@ -124,6 +125,19 @@ for (let prev = 0; prev <= 3; prev++)
     if (settleDottedPairs(prev, x + 1) < settleDottedPairs(prev, x))
       reversals.push(`showing ${prev}: ${x}%→${settleDottedPairs(prev, x)} but ${x + 1}%→${settleDottedPairs(prev, x + 1)}`);
 eq('monotonic in loss from every starting band', reversals, []);
+
+// ── Post-tune read schedule ──────────────────────────────────────────────────
+// Order is the invariant worth protecting: the first read has to land before the
+// correction, and a retry has to fit between them or it is not a retry — it just
+// races the correction it was meant to stand in for.
+eq('the first read comes before the correction', LEVEL_FIRST_READ_MS < LEVEL_CORRECTION_MS, true);
+eq('a retry fits inside that gap', LEVEL_FIRST_READ_MS + LEVEL_RETRY_MS < LEVEL_CORRECTION_MS, true);
+eq('every retry fits, not just the first', LEVEL_FIRST_READ_MS + LEVEL_RETRY_MAX * LEVEL_RETRY_MS <= LEVEL_CORRECTION_MS, true);
+// The correction re-phases the periodic watch, and the native side floors the
+// cadence at 5s to protect the chip — a cadence under that would be silently
+// overridden, so the constant must not claim a rate it will not get.
+eq('the cadence clears the native 5s floor', LEVEL_POLL_MS >= 5_000, true);
+eq('the correction lands well inside one cadence period', LEVEL_CORRECTION_MS < LEVEL_POLL_MS, true);
 
 // ── The safety check ─────────────────────────────────────────────────────────
 eq('a reading that stayed put is trusted', levelIsTrustworthy(10150, 10150), true);
