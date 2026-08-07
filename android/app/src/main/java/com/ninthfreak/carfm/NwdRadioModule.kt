@@ -528,6 +528,38 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     // The probe that read that channel, and the getter list it walked, are GONE —
     // task #43 closed the question and the answer was "absent", so it could only
     // ever report "not there". Do NOT re-add speculative parseJson calls.
+    // AWNative is a thin reflection shim over the vendor framework class
+    // com.nwd.app.NwdFmManager. Every name below is a GETTER lifted verbatim from
+    // that dump — no setter appears here, so this probe cannot change tuner state.
+    //
+    // The open question is REACHABILITY: the radio service is a system app and we
+    // are not. Encouraging sign — android.os.Hardware resolved fine from our
+    // process (that probe failed on the METHOD, not the class), so ROM framework
+    // classes are on our classloader and not hidden-API blocked.
+    private val nwdFmManagerClass = "com.nwd.app.NwdFmManager"
+
+    private val nwdFmGetters = listOf(
+        "getRadioRDSFunArm" to "1 = hardware supports RDS",
+        "getRadioRDSDataArm" to "16 hex chars = one raw RDS group",
+        // Reads 0 on this unit in all five probes of 2026-08-03, on four
+        // different stations with strong signal. Not implemented here, and NOT
+        // the source of the packed freq+strength int — that is the RETURN of
+        // NwdFmManager.seek(frequency); see the findings doc.
+        "getCurrentFrequency" to "0 on this unit — not implemented",
+        // Was labelled "real per-station stereo (vs the stuck isStreroOn)". It is
+        // not: it read 1 in all five probes, including on 102.1, a channel with
+        // no RDS at all and the AIDL stereo callback flapping. Stuck true exactly
+        // like isStreroOn(), and must not be used to drive the pill.
+        "getStationStereoState" to "reads 1 always — stuck, like isStreroOn()",
+        "getStereo" to "stereo mode flag",
+        "getLoc" to "local/DX",
+        "getRadioModuleArm" to "which module the MCU reports (12 here)",
+        // Was called a reachability canary. It reads 0 while FM is audibly
+        // playing, so it is neither the head unit's volume nor evidence of
+        // anything working.
+        "getVolue" to "vendor's spelling; reads 0 even while playing",
+    )
+
     /** One RDS read almost always returns the all-zero "no data this poll"
      *  sentinel, which reads like a failure. Burst it so a real group has a
      *  chance to land. */
