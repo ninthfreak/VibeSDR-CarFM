@@ -476,6 +476,240 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(out.toString())
     }
 
+    // ── Trampoline feasibility recon ─────────────────────────────────────────
+    //
+    // WHAT THIS IS FOR. The vendor radio app (`com.nwd.radio`) is what the unit
+    // brings to the front when the ignition comes back and FM was the source.
+    // The plan under consideration is to move that APK off `/system` and install
+    // a tiny same-named "trampoline" in its place whose only job is to launch
+    // CarFM — so CarFM inherits the firmware's own restore decision instead of
+    // reimplementing it.
+    //
+    // WHAT THIS PROBE IS AND IS NOT. It is a GATE, not an answer. It can say
+    // "stop, this is impossible" cheaply and definitively — a squashfs `/system`,
+    // no `su`, verity enforcing — and that is worth having before anything
+    // irreversible happens. It CANNOT say the plan will work. The two questions
+    // that decide that are whether the firmware's restore resolves the radio app
+    // by package name or by explicit component (only an ignition cycle with the
+    // app hidden answers that) and whether `/system` will actually remount rw
+    // (only the attempt answers that). Neither is reachable by reading.
+    //
+    // STRICTLY READ-ONLY. Nothing here remounts, deletes, installs or writes a
+    // setting. The one thing that reaches outside the process is `su -c id`,
+    // which may raise a Superuser prompt — that prompt IS the answer to "is
+    // there a root manager", so it is deliberate, and it is bounded by a timeout
+    // so an unanswered dialog cannot wedge the call.
+
+    /** `SystemProperties.get` by reflection — the same values `getprop` prints,
+     *  without paying for a process. Absent/unreadable comes back empty. */
+    private fun getprop(key: String): String = try {
+        val m = Class.forName("android.os.SystemProperties")
+            .getMethod("get", String::class.java, String::class.java)
+        (m.invoke(null, key, "") as? String).orEmpty()
+    } catch (e: Throwable) { "" }
+
+    /** Run a command, merge stderr into stdout, and give up after [timeoutMs].
+     *
+     *  The timeout is the point: `su` on a unit with a Superuser manager blocks
+     *  until someone taps the dialog, and this is called from a car. On timeout
+     *  the process is destroyed, which unblocks the reader. */
+    private fun execBounded(cmd: Array<String>, timeoutMs: Long): String {
+        return try {
+            val pb = ProcessBuilder(*cmd)
+            pb.redirectErrorStream(true)
+            val p = pb.start()
+            val out = StringBuilder()
+            val reader = Thread {
+                try {
+                    p.inputStream.bufferedReader().use { r -> r.forEachLine { out.append(it).append('\n') } }
+                } catch (_: Throwable) { /* destroyed out from under us — expected on timeout */ }
+            }
+            reader.start()
+            reader.join(timeoutMs)
+            val timedOut = reader.isAlive
+            try { p.destroy() } catch (_: Throwable) { }
+            val text = out.toString().trim()
+            if (timedOut) "${if (text.isEmpty()) "" else "$text\n"}(timed out after ${timeoutMs}ms)" else text
+        } catch (e: Throwable) { "exec failed: ${e.message}" }
+    }
+
+    /** SHA-256 of each signing certificate, uppercase hex.
+     *
+     *  The question this answers is narrow: do the vendor app and CarFM share a
+     *  signer? If they did, a same-package install would be an ordinary upgrade
+     *  and the whole `/system` remount — the only step with a brick risk — would
+     *  be unnecessary. Almost certainly they do not, but it is the one outcome
+     *  that erases the risk, so it is worth measuring rather than assuming. */
+    private fun certDigests(pm: android.content.pm.PackageManager, pkg: String): List<String> = try {
+        val sigs: Array<android.content.pm.Signature> =
+            if (Build.VERSION.SDK_INT >= 28) {
+                val si = pm.getPackageInfo(
+                    pkg, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES
+                ).signingInfo
+                when {
+                    si == null -> emptyArray()
+                    si.hasMultipleSigners() -> si.apkContentsSigners ?: emptyArray()
+                    else -> si.signingCertificateHistory ?: emptyArray()
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(
+                    pkg, android.content.pm.PackageManager.GET_SIGNATURES
+                ).signatures ?: emptyArray()
+            }
+        if (sigs.isEmpty()) listOf("no signatures reported")
+        else sigs.map { s ->
+            java.security.MessageDigest.getInstance("SHA-256")
+                .digest(s.toByteArray())
+                .joinToString("") { b -> "%02X".format(b) }
+        }
+    } catch (e: Throwable) { listOf("unreadable (${e.message})") }
+
+    /**
+     * Gather everything an unprivileged app can learn about whether the vendor
+     * radio app can be replaced. Returns a plain-text report; see the block
+     * comment above for what it can and cannot establish.
+     */
+    @ReactMethod
+    fun probeTrampolineFeasibility(promise: Promise) {
+        val vendorPkg = "com.nwd.radio"
+        val servicePkg = "com.nwd.radio.service"
+        val out = StringBuilder()
+        fun line(s: String) { out.append(s).append('\n') }
+        fun section(s: String) { line(""); line("== $s ==") }
+
+        val pm = reactContext.packageManager
+
+        section("DEVICE")
+        line("android          = ${Build.VERSION.RELEASE} (sdk ${Build.VERSION.SDK_INT})")
+        line("model/device     = ${Build.MODEL} / ${Build.DEVICE}")
+        line("fingerprint      = ${Build.FINGERPRINT}")
+        for (k in listOf("ro.build.type", "ro.build.tags", "ro.secure", "ro.debuggable")) {
+            line("$k".padEnd(16) + " = ${getprop(k).ifEmpty { "(unset)" }}")
+        }
+
+        // Verity is the single property most likely to make this plan impossible.
+        // "enforcing" means writing /system breaks boot, and on a unit bolted into
+        // a dashboard that means pulling it and flashing over USB.
+        section("VERIFIED BOOT")
+        for (k in listOf(
+            "ro.boot.veritymode", "ro.boot.verifiedbootstate",
+            "ro.boot.flash.locked", "ro.oem_unlock_supported", "ro.build.selinux",
+        )) {
+            line("$k".padEnd(26) + " = ${getprop(k).ifEmpty { "(unset)" }}")
+        }
+        line("NOTE: these are evidence, not proof — fstab flags on these ROMs often")
+        line("      disagree with the properties. Only an actual remount settles it.")
+
+        // A squashfs or erofs /system cannot be written at all, at any verity
+        // setting, and that ends the plan outright — so it is worth reading the
+        // filesystem type rather than only the ro/rw flag.
+        section("SYSTEM PARTITION")
+        try {
+            val wanted = setOf("/", "/system", "/system_root", "/vendor")
+            java.io.File("/proc/mounts").readLines().forEach { l ->
+                val f = l.split(" ")
+                if (f.size >= 4 && f[1] in wanted) line("mount  ${f[1]}  fs=${f[2]}  ${f[3]}  dev=${f[0]}")
+            }
+        } catch (e: Throwable) { line("/proc/mounts unreadable (${e.message})") }
+        try {
+            val st = android.os.StatFs("/system")
+            val freeMb = (st.availableBlocksLong * st.blockSizeLong) / (1024 * 1024)
+            val totalMb = (st.blockCountLong * st.blockSizeLong) / (1024 * 1024)
+            line("/system space    = $freeMb MB free of $totalMb MB")
+        } catch (e: Throwable) { line("/system statfs failed (${e.message})") }
+
+        section("VENDOR RADIO APP ($vendorPkg)")
+        try {
+            val ai = pm.getApplicationInfo(vendorPkg, 0)
+            val pi = pm.getPackageInfo(vendorPkg, 0)
+            val sys = (ai.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+            val upd = (ai.flags and android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+            line("sourceDir        = ${ai.sourceDir}")
+            line("dataDir          = ${ai.dataDir}")
+            line("uid              = ${ai.uid}")
+            line("version          = ${pi.versionName}")
+            line("FLAG_SYSTEM      = $sys")
+            line("UPDATED_SYSTEM   = $upd")
+            // An existing /data overlay changes the plan completely: `pm uninstall`
+            // alone would drop back to the system copy, with no remount involved.
+            if (upd) line("→ there is a /data overlay; `pm uninstall` reverts to the system copy")
+            line("enabledSetting   = ${pm.getApplicationEnabledSetting(vendorPkg)} (0=default 1=enabled 2=disabled 3=disabled-user 4=disabled-until-used)")
+            val launch = pm.getLaunchIntentForPackage(vendorPkg)
+            line("launchIntent     = ${launch?.component?.flattenToShortString() ?: "(none)"}")
+            val mainLauncher = android.content.Intent(android.content.Intent.ACTION_MAIN)
+                .addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+                .setPackage(vendorPkg)
+            pm.queryIntentActivities(mainLauncher, 0).forEach {
+                line("launcher activity= ${it.activityInfo.packageName}/${it.activityInfo.name}")
+            }
+        } catch (e: Throwable) {
+            line("NOT VISIBLE (${e.message})")
+            line("→ on API 30+ this may be package-visibility filtering, not absence")
+        }
+
+        section("SIGNATURES")
+        val ours = certDigests(pm, reactContext.packageName)
+        val theirs = certDigests(pm, vendorPkg)
+        ours.forEach { line("carfm            = $it") }
+        theirs.forEach { line("$vendorPkg = $it") }
+        val shareSigner = ours.isNotEmpty() && ours.any { it in theirs }
+        line("same signer      = $shareSigner")
+        line(
+            if (shareSigner) "→ a same-package install would be an ordinary upgrade; NO remount needed"
+            else "→ different signers: a same-name trampoline requires the /system copy to be GONE first"
+        )
+
+        section("NWD PACKAGES PRESENT")
+        try {
+            val all = pm.getInstalledPackages(0).map { it.packageName }.filter { it.startsWith("com.nwd") }.sorted()
+            if (all.isEmpty()) line("(none visible)") else all.forEach { line(it) }
+            // The service is the tuner. It is a separate package and must survive
+            // the removal untouched — CarFM talks to it, not to the app.
+            line("service present  = ${all.contains(servicePkg)}  ← must stay")
+        } catch (e: Throwable) { line("package list unreadable (${e.message})") }
+
+        // Whoever answers HOME is the most likely owner of the restore decision.
+        // The probe cannot see that decision, but naming the package tells you
+        // which APK to pull and decompile next.
+        section("HOME / LAUNCHER APPS")
+        try {
+            val home = android.content.Intent(android.content.Intent.ACTION_MAIN)
+                .addCategory(android.content.Intent.CATEGORY_HOME)
+            val res = pm.queryIntentActivities(home, 0)
+            if (res.isEmpty()) line("(none visible)")
+            res.forEach { line("${it.activityInfo.packageName}/${it.activityInfo.name}") }
+            line("→ decompile these to see HOW the radio app is launched on wake")
+        } catch (e: Throwable) { line("home query failed (${e.message})") }
+
+        section("ROOT")
+        val suPaths = listOf(
+            "/system/bin/su", "/system/xbin/su", "/sbin/su",
+            "/su/bin/su", "/system/sbin/su", "/vendor/bin/su", "/debug_ramdisk/su",
+        )
+        var anySu = false
+        for (p in suPaths) {
+            val f = java.io.File(p)
+            if (f.exists()) { anySu = true; line("present          = $p") }
+        }
+        if (!anySu) line("no su binary at any well-known path (it may still be on PATH)")
+        line("id (unprivileged)= ${execBounded(arrayOf("id"), 2000)}")
+        // This is the one call that may raise a Superuser dialog. That dialog is
+        // itself the answer, so it is intentional — and bounded, because nobody
+        // should have to sit in a car waiting on a prompt that never came.
+        line("su -c id         = ${execBounded(arrayOf("su", "-c", "id"), 8000)}")
+
+        section("WHAT THIS PROBE CANNOT ANSWER")
+        line("1. by package or by component? — only `pm hide $vendorPkg` + one ACC cycle")
+        line("2. will /system remount rw?    — only the attempt")
+        line("3. what else breaks on removal — behavioural, ACC cycle only")
+        line("4. is a same-name install accepted once /system is clear")
+        line("5. is background activity start allowed for the trampoline")
+        line("6. can this unit be recovered if the remount bricks it")
+
+        promise.resolve(out.toString())
+    }
+
     /** Write text to the PUBLIC Downloads folder and return a human path. No SAF /
      *  no picker Activity (so it can't crash on units without DocumentsUI), and
      *  Downloads is a standard location a file manager can see + copy to USB.
