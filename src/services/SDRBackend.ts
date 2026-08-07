@@ -189,7 +189,7 @@ export interface StationMeta {
   rtTitle?: string;
   /** RDS Traffic Programme flag (block B bit 10). */
   tp?: boolean;
-  /** RDS Traffic Announcement in progress (group 0). */
+  /** RDS Traffic Announcement in progress (group 0 bit 4). */
   ta?: boolean;
   /** RDS Programme Type code 0–31 (RBDS table in region 2). */
   pty?: number;

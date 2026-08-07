@@ -51,8 +51,8 @@ import { createBackend } from '../services/UberSDRAdapter';
 import { isNwdAvailable, nwdConnect, nwdDisconnect, nwdTune, nwdSeek, nwdPoll, nwdSetRds, nwdSetAudio, nwdProbe, nwdStartIlluminationWatch, nwdStartLevelWatch, nwdStopLevelWatch, nwdReadLevelNow,
          onNwd, PANEL_KEY, panelKeyName } from '../services/nwdRadio';
 import { createNwdRdsDecoder } from '../services/nwdRds';
-import { levelToLit, settleDottedPairs, LEVEL_POLL_MS, LEVEL_SETTLE_MS } from '../services/nwdSignalLevel';
-import { getTunerBackend, loadTunerBackend, subscribeTunerBackend, readoutFor } from '../services/tunerBackend';
+import { levelToLit, drawnArcs, settleDottedPairs, LEVEL_POLL_MS, LEVEL_FIRST_READ_MS,
+         LEVEL_CORRECTION_MS, LEVEL_RETRY_MS, LEVEL_RETRY_MAX } from '../services/nwdSignalLevel';
 import { stripStationFromRt } from '../services/rtStation';
 import {
   isDebugMode, subscribeDebugMode, formatSample, bearingDeg, DEBUG_SAMPLE_MS,
@@ -465,14 +465,13 @@ export default function RadioScreen({ route, navigation }: Props) {
    *  reception-loss overlay. Derived from the decoder's rolling PI-match figure,
    *  through a hysteresis band so a value near a boundary cannot flicker a whole
    *  pair on and off. 0 whenever there is no figure at all. */
-  // Which readout the face draws — the SETTINGS SELECTION, not the live probe
-  // (ANDROID §6.3 v1.13.0). Presentation only; picking RTL-SDR does not re-bind
-  // the hardware. See services/tunerBackend.
-  const [tunerSel, setTunerSel] = useState(getTunerBackend());
-  useEffect(() => {
-    void loadTunerBackend().then(setTunerSel);
-    return subscribeTunerBackend(() => setTunerSel(getTunerBackend()));
-  }, []);
+  // The tuner SELECTION is deliberately not mirrored into screen state. It used
+  // to be, to pick the meter's scale (ANDROID §6.3 v1.13.0) — but that now
+  // follows the source actually running, not the stored preference, because
+  // honouring the preference blanked the meter whenever the two disagreed (see
+  // signalReadout). What was left was state nothing read plus a subscription
+  // re-rendering the screen on every settings change. SettingsPanel owns the
+  // picker; picking RTL-SDR there still does not re-bind the hardware.
 
   const [fmDotted, setFmDotted] = useState(0);
   const fmDottedRef = useRef(0);
@@ -545,11 +544,11 @@ export default function RadioScreen({ route, navigation }: Props) {
     bandwidthLow: -3000, bandwidthHigh: 3000,
     binCount: 1024, binBandwidth: 0, centerHz: 0, bwHz: 0,
   });
-  // Muted via media controls (AirPods squeeze → pause = mute) — native emits
-  // VibeMuted so the UI can show a tap-to-unmute banner.
-  const [isMuted, setIsMuted] = useState(false);
-  const isMutedRef = useRef(false);
-  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  // Muted via media controls (AirPods squeeze → pause = mute). The VibeMuted
+  // listener below still acts on the event — it drives the OWRX disconnect — but
+  // the muted FLAG is no longer mirrored into state: the tap-to-unmute banner the
+  // comment here used to promise does not exist, and the only reader left was
+  // TA-breaks-mute, which is deliberately not implemented (see below).
   /** The iPhone's real SYSTEM volume (0…1), kept current by the VibeVolume KVO event.
    *  The watch sends DELTAS against it — it never sends an absolute, because the phone
    *  owns the value and the wrist is only allowed to nudge it. */
@@ -978,7 +977,11 @@ export default function RadioScreen({ route, navigation }: Props) {
     const sample: DebugSample = {
       mhz,
       level,
-      bars: levelToLit(level),
+      // What the glyph actually shows, not a band index: a half-step ring is half
+      // an element, so it is logged as .5 rather than rounded away. Analysis of
+      // an old log against the current thresholds is what caught that the bands
+      // had moved under it.
+      bars: (() => { const l = levelToLit(level); return l ? l.fullPairs + (l.half ? 0.5 : 0) : null; })(),
       lat: loc?.lat ?? null,
       lon: loc?.lon ?? null,
       accM: loc?.accM ?? null,
@@ -1103,7 +1106,6 @@ export default function RadioScreen({ route, navigation }: Props) {
       c?.pan(e.frequency);
     });
     const subMute = emitter.addListener('VibeMuted', (e: { muted: boolean }) => {
-      setIsMuted(!!e.muted);
       // OWRX: pause releases the lock-screen controls (native) and disconnects —
       // there's no play-to-reconnect because an OWRX reconnect resets the server
       // profile. Close the WS and show the in-app reconnect prompt so the user
@@ -1187,7 +1189,6 @@ export default function RadioScreen({ route, navigation }: Props) {
     // zoom, no audio), so do a FULL from-scratch reconnect with a fresh uuid.
     const subDsOn = emitter.addListener('VibeDataSaverResume', () => {
       setDataSaverOff(false);
-      setIsMuted(false);
       fullReconnect();
     });
     // The OS says the network path moved under us (WiFi→cellular, or a cellular IP
@@ -1549,7 +1550,6 @@ export default function RadioScreen({ route, navigation }: Props) {
         // Opened the app after a data-saver disconnect (the Play event may not
         // survive suspension): do a full from-scratch reconnect.
         setDataSaverOff(false);
-        setIsMuted(false);
         fullReconnect();
       } else {
         // Instant zombie-socket check — after a background suspension the
@@ -2396,6 +2396,12 @@ export default function RadioScreen({ route, navigation }: Props) {
     return () => nwdStopLevelWatch();
   }, [nwdActive, debugOn]);
 
+  // The cadence the post-tune correction re-phases the watch to. Held in a ref
+  // because the frequency handler lives in a long-lived effect that must not be
+  // torn down and rebuilt every time debug mode is toggled.
+  const levelCadenceRef = useRef(LEVEL_POLL_MS);
+  useEffect(() => { levelCadenceRef.current = debugOn ? DEBUG_SAMPLE_MS : LEVEL_POLL_MS; }, [debugOn]);
+
   // Mirror the tail of the tuner log onto the face. Off by default; the settings
   // toggle drives it, and the persisted value arrives after mount, so this
   // subscribes rather than reading once.
@@ -2616,14 +2622,47 @@ export default function RadioScreen({ route, navigation }: Props) {
     // each station without any interaction. Debounced (reset on every freq
     // change) and de-duped per frequency; only runs while diagnostics are on.
     let probeTimer: ReturnType<typeof setTimeout> | null = null;
-    // Debounced post-tune level read; see the frequency handler.
-    let levelSettleTimer: ReturnType<typeof setTimeout> | null = null;
+    // Post-tune level reads; see the frequency handler. TWO of them — one at 1s
+    // to put a number on screen and one at 4s to correct it — plus a retry for
+    // the case where a read comes back rejected. All three are cleared on every
+    // retune: a read that fires after the dial has moved on would attribute the
+    // old station's level to the new one.
+    let levelFirstTimer: ReturnType<typeof setTimeout> | null = null;
+    let levelFixTimer: ReturnType<typeof setTimeout> | null = null;
+    let levelRetryTimer: ReturnType<typeof setTimeout> | null = null;
+    let levelRetriesLeft = 0;
+    const clearLevelTimers = () => {
+      if (levelFirstTimer) { clearTimeout(levelFirstTimer); levelFirstTimer = null; }
+      if (levelFixTimer)   { clearTimeout(levelFixTimer);   levelFixTimer = null; }
+      if (levelRetryTimer) { clearTimeout(levelRetryTimer); levelRetryTimer = null; }
+    };
     let lastProbedMhz = 0;
+    // The frequency this probe timer is currently armed for. Needed because
+    // scheduleProbe is called from the 1.5s getter poll as well as the frequency
+    // handler, and the poll calls it on EVERY tick rather than on a change. With
+    // only lastProbedMhz — written inside the timeout body, so still 0 while the
+    // timer is pending — every poll tick cleared and re-armed the timer and the
+    // 4s deadline was never reached. Across 13 drive logs, 91 distinct-frequency
+    // visits produced 5 probes, and the ones that did fire were timers a poll
+    // stall had let slip through, not the intended schedule.
+    let armedProbeMhz = 0;
     const scheduleProbe = (mhz: number) => {
       if (!isDiagEnabled() || !(mhz > 0) || Math.abs(mhz - lastProbedMhz) < 0.05) return;
+      // Already counting down for this frequency: leave it alone. Only a move
+      // to a DIFFERENT frequency may restart the debounce.
+      if (probeTimer && Math.abs(mhz - armedProbeMhz) < 0.05) return;
       if (probeTimer) clearTimeout(probeTimer);
-      if (levelSettleTimer) clearTimeout(levelSettleTimer);
+      // This used to cancel the post-tune level read as well, with no comment and
+      // no reschedule. scheduleProbe runs from the frequency handler AFTER that
+      // read is armed, and its guard passes whenever diagnostics are on and the
+      // dial moved — which is every drive that produced a log. So on exactly the
+      // runs we have evidence from, the post-tune read never happened and the
+      // meter waited for the free-running periodic watch instead. The frequency
+      // handler already clears these timers itself, which is the right place;
+      // the probe scheduler has no business touching them.
+      armedProbeMhz = mhz;
       probeTimer = setTimeout(async () => {
+        probeTimer = null;          // keeps the armed-for check above accurate
         if (cancelled) return;
         lastProbedMhz = mhz;
         const dump = await nwdProbe();
@@ -2764,27 +2803,24 @@ export default function RadioScreen({ route, navigation }: Props) {
         // PS/RadioText belong to the station we just left. A PI change clears
         // them too, but the dial moves first and PI only arrives with the next
         // group — without this the old name lingers across a preset step.
-        rdsDecoder.current.reset();
+        // resetForRetune, not reset: the dial MOVED, so the previous station's
+        // PI is known-stale rather than an incumbent to defend. Plain reset()
+        // keeps piConfirmed, which made the new station's PI dissent needing
+        // PI_DISPLACE consecutive matches — and push() drops every group that
+        // does not carry the incumbent, so PS/RT/PTY were blacked out for the
+        // whole window.
+        rdsDecoder.current.resetForRetune();
         // Restart the staleness clock at the retune, so the new station gets a
         // full window to acquire instead of inheriting the old one's countdown.
         lastRdsAtRef.current = Date.now();
         // A retune outranks a pending expiry: there is nothing worth restoring,
         // the decoder was just emptied.
         rdsStaleRef.current = false;
-        // The level belongs to the station we just left. Drop it and ask for a
-        // fresh one rather than letting the meter lie until the next tick — but
-        // WAIT for the front end to settle first.
-        //
-        // A reading taken immediately after a retune is systematically inflated.
-        // Measured on 2026-08-05 across 24 paired comparisons — the first reading
-        // after a tune against the same station 20s later — the mean excess was
-        // +17.7, with individual cases of +45, +48 and +57. Banded by age the
-        // same drive gives 0-5s mean 70.3 against 5-15s mean 51.8.
-        //
-        // The value comes from seek(), the chip's own scan primitive, so a level
-        // read while the tune is still completing plausibly reflects that
-        // operation rather than the settled channel. Whatever the mechanism, the
-        // number is not usable that early, and the meter was showing it.
+        // The level belongs to the station we just left, so it goes — but the
+        // meter must not then sit blank. Read at 1s and show whatever arrives,
+        // read again at 4s and correct it (see nwdSignalLevel for the timing
+        // evidence: the inflation is almost entirely in the first second, and a
+        // brief wrong number beats a long dash).
         setFmLevel(null);
         // The rating belongs to the station we just left, exactly like the level
         // and the decoder's text above it. Left standing it follows the driver
@@ -2792,8 +2828,17 @@ export default function RadioScreen({ route, navigation }: Props) {
         ratingRef.current = null;
         ratingMhzRef.current = null;
         lastTuneAtRef.current = Date.now();
-        if (levelSettleTimer) clearTimeout(levelSettleTimer);
-        levelSettleTimer = setTimeout(() => { if (!cancelled) nwdReadLevelNow(); }, LEVEL_SETTLE_MS);
+        clearLevelTimers();
+        levelRetriesLeft = LEVEL_RETRY_MAX;
+        levelFirstTimer = setTimeout(() => { if (!cancelled) nwdReadLevelNow(); }, LEVEL_FIRST_READ_MS);
+        // The correction ALSO re-phases the periodic watch. startLevelWatch reads
+        // once immediately and then sleeps the cadence, so restarting it here is
+        // both the 4s correction and a clean "…and every 20s from now" — without
+        // it the watch is a free-running native thread a retune never touches,
+        // and the next update after this could land anywhere in its cycle.
+        levelFixTimer = setTimeout(() => {
+          if (!cancelled) nwdStartLevelWatch(levelCadenceRef.current);
+        }, LEVEL_CORRECTION_MS);
         diag(`freq ${p.mhz.toFixed(1)} arg=${p.arg} PS='${p.ps}'`);
         scheduleProbe(p.mhz);
       }));
@@ -2810,10 +2855,32 @@ export default function RadioScreen({ route, navigation }: Props) {
         // `ok` false means the tuner did not stay on the frequency we asked
         // about, which is the same check AWNative makes before it believes a
         // level. Keep the previous reading rather than showing a wrong one.
-        if (!p.ok) { diag(`level: REJECTED asked=${p.asked} landed=${p.landed}${p.err ? ` ${p.err}` : ''}`); return; }
+        if (!p.ok) {
+          diag(`level: REJECTED asked=${p.asked} landed=${p.landed}${p.err ? ` ${p.err}` : ''}`);
+          // Retry rather than fall through to the periodic read. On the drive
+          // logs a rejection was almost always `landed=0` — the chip saying it
+          // was not ready — which the next attempt a second later usually
+          // clears. Without this, a rejected read right after a retune leaves
+          // the meter blank until the next tick, because the retune already
+          // dropped the previous reading and there is nothing to fall back on.
+          if (levelRetriesLeft > 0 && !cancelled) {
+            levelRetriesLeft--;
+            if (levelRetryTimer) clearTimeout(levelRetryTimer);
+            levelRetryTimer = setTimeout(() => { if (!cancelled) nwdReadLevelNow(); }, LEVEL_RETRY_MS);
+          }
+          return;
+        }
+        levelRetriesLeft = LEVEL_RETRY_MAX;   // a good read re-arms the budget
         setFmLevel(p.level);
         if (!debugModeRef.current) {
-          diag(`level ${p.level} @ ${p.asked} → ${levelToLit(p.level)} lit`);
+          {
+            // Spelled out rather than interpolating the object, which would log
+            // "[object Object]" — tsc cannot see that inside a template literal.
+            const l = levelToLit(p.level);
+            const shown = l == null ? '?'
+              : `${l.fullPairs}${l.half ? '+half' : ''}${l.dotOpacity < 1 ? ` dot@${Math.round(l.dotOpacity * 100)}%` : ''}`;
+            diag(`level ${p.level} @ ${p.asked} → ${shown}`);
+          }
           return;
         }
         // DEBUG MODE: this reading is the heartbeat of the dataset. Take the
@@ -2867,7 +2934,15 @@ export default function RadioScreen({ route, navigation }: Props) {
           // leaking the decoder's numeric form into shared state.
           pi: s.pi === null ? prev.pi : s.pi.toString(16).toUpperCase().padStart(4, '0'),
         }));
-        if (s.ps) liveStationRef.current = s.ps;
+        // Mirrors the `name` rule above, and must: this ref is not a display
+        // value, it is what a preset gets SAVED as (onFmToggleSave) and what
+        // titles the lock-screen card. Guarding on truthiness alone meant the
+        // retraction never cleared it, so it froze on the last chunk published
+        // before the decoder called the PS scrolling — the SECOND distinct
+        // value, not the first. On WIBA that is a song word, saved as a preset
+        // name and persisted.
+        if (s.psScrolling) liveStationRef.current = '';
+        else if (s.ps) liveStationRef.current = s.ps;
         // Debug mode is deliberately quiet: this one line fired 184 times in a
         // 40-minute commute and is what buries the events worth reading. The
         // structured sample carries the same information, aggregated.
@@ -2915,7 +2990,6 @@ export default function RadioScreen({ route, navigation }: Props) {
         if (!debugModeRef.current) diag(`stereo ${p.on}`);
       }));
       subs.push(onNwd('NwdRadioPty', (p) => { setLiveStation((prev) => ({ ...prev, pty: p.pty })); diag(`PTY ${p.pty}`); }));
-      subs.push(onNwd('NwdRadioTa', (p) => { setLiveStation((prev) => ({ ...prev, ta: p.ta })); diag(`TA ${p.ta}`); }));
       // Poll the getters as a freq fallback. RESOLVED: isStreroOn() is stuck true
       // (reads true even on dead air), so the poll must NOT drive stereo — the
       // NwdRadioStereo callback is the trustworthy source (see setStereoDebounced).
@@ -2981,7 +3055,11 @@ export default function RadioScreen({ route, navigation }: Props) {
         {
           const match = rdsStaleRef.current ? null : rdsDecoder.current.quality().piMatchPct;
           const loss = match == null ? null : 100 - match;
-          const next = settleDottedPairs(fmDottedRef.current, loss);
+          // The pool is the arcs currently DRAWN, half-step ring included — dots
+          // spread inward from the leading arc whether it is full or half. It
+          // moves with the LEVEL, so it is read here rather than captured.
+          const dottable = drawnArcs(levelToLit(fmLevelRef.current));
+          const next = settleDottedPairs(fmDottedRef.current, loss, dottable);
           if (next !== fmDottedRef.current) setFmDotted(next);
         }
         // The poll does NOT drive PS / RadioText / PTY.
@@ -3017,7 +3095,7 @@ export default function RadioScreen({ route, navigation }: Props) {
       cancelled = true;
       if (pollTimer) clearInterval(pollTimer);
       if (probeTimer) clearTimeout(probeTimer);
-      if (levelSettleTimer) clearTimeout(levelSettleTimer);
+      clearLevelTimers();
       if (stereoTimer) clearTimeout(stereoTimer);
       nwdActiveRef.current = false;
       setNwdActive(false);
@@ -3048,20 +3126,15 @@ export default function RadioScreen({ route, navigation }: Props) {
     })();
   }, [route.params.tunerless]);
 
-  // TA: a real car radio breaks mute for traffic announcements. If TA rises
-  // while muted, unmute for the announcement and restore the mute when it
-  // ends. Only ever restores a mute THIS effect lifted.
-  const taLiftedMute = useRef(false);
-  useEffect(() => {
-    const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
-    if (liveStation.ta && isMutedRef.current && !taLiftedMute.current) {
-      taLiftedMute.current = true;
-      VM?.setMuted?.(false);
-    } else if (!liveStation.ta && taLiftedMute.current) {
-      taLiftedMute.current = false;
-      VM?.setMuted?.(true);
-    }
-  }, [liveStation.ta]);
+  // TA-breaks-mute is NOT implemented, by decision. A real car radio interrupts a
+  // mute for a traffic announcement; CarFM shows the TA tell and leaves the audio
+  // alone. Overriding a mute the driver set deliberately is the one TA behaviour
+  // whose false-positive cost is high, and the tell carries the same information
+  // without touching the audio.
+  //
+  // If it is ever wanted: TA rising while muted unmutes, TA falling restores —
+  // but only a mute that behaviour itself lifted. The decode is already guarded
+  // well enough to carry it (see RdsState.ta in nwdRds).
 
   // AF-follow: when the signal has been weak for a sustained stretch and the
   // station transmits an AF list, probe an alternative: keep it ONLY if it is
@@ -3126,12 +3199,19 @@ export default function RadioScreen({ route, navigation }: Props) {
    * Which reading the face draws.
    *
    * The picker chooses between sources that EXIST; it cannot conjure one that
-   * does not. With no NWD tuner bound the SDR figure is the only reading there
-   * is, so honouring a stale 'nwd' selection would leave the meter showing an
-   * em-dash forever while a live value sat unused — which is what the default
-   * selection did to an SDR-only install until this was caught.
+   * does not, so this follows the source actually RUNNING rather than the stored
+   * preference. Honouring the selection in either direction leaves the meter on
+   * a scale nothing is feeding: a stale 'nwd' selection blanked an SDR-only
+   * install, and an 'rtl' selection on a head unit with no dongle blanked the
+   * built-in tuner just as thoroughly — fmSignalDb's only writer returns early
+   * while nwdActive, so the meter drew waveStrength(null) and an em-dash with a
+   * live fmLevel sitting unused, and the selection persists, so it survived
+   * relaunch.
+   *
+   * nwdActive is set only once the vendor service is bound and producing, which
+   * is exactly the condition for "the NWD level is the real reading here".
    */
-  const signalReadout = nwdActive ? readoutFor(tunerSel) : 'sdr';
+  const signalReadout = nwdActive ? 'nwd' : 'sdr';
 
   return (
     <View

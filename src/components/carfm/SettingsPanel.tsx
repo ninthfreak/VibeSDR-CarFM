@@ -14,6 +14,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { BatteryBolt, SignalWaves, WarningTriangle } from './icons';
+import { discreteLit } from '../../services/nwdSignalLevel';
 import { FONT, FONT_BOLD, type CarFmPalette } from './tokens';
 import { EGG_MENU } from './bandThemes';
 import { getTunerBackend, loadTunerBackend, setTunerBackend, readoutFor, type TunerBackend } from '../../services/tunerBackend';
@@ -169,6 +170,35 @@ export default function SettingsPanel({
     diag('— end settings —');
   }, []);
 
+  // Read-only recon for replacing the vendor radio app with a trampoline that
+  // launches CarFM — so CarFM inherits the firmware's own restore decision
+  // instead of reimplementing it.
+  //
+  // A GATE, not an answer: it can establish that the plan is impossible (no su,
+  // verity enforcing, an unwritable /system filesystem) before anything
+  // irreversible is attempted, but it cannot establish that the plan will work.
+  // The report ends with an explicit list of what it could not determine.
+  //
+  // Nothing here writes, remounts, or installs. The one outward call is
+  // `su -c id`, which may raise a Superuser prompt — that prompt is itself the
+  // answer, and it is bounded by a timeout so it cannot hang the panel.
+  const probeTrampoline = useCallback(async () => {
+    if (!isDiagEnabled()) setDiagEnabled(true);
+    const mod = NativeModules.VibePowerModule as
+      { probeTrampolineFeasibility?: () => Promise<string> } | undefined;
+    if (!mod?.probeTrampolineFeasibility) {
+      Alert.alert('Not available', 'This build has no trampoline probe.'); return;
+    }
+    diag('— trampoline recon —');
+    try {
+      const report = await mod.probeTrampolineFeasibility();
+      for (const l of report.split('\n')) diag(l.length ? l : ' ');
+    } catch (e) {
+      diag(`trampoline recon failed: ${String(e)}`);
+    }
+    diag('— end trampoline recon —');
+  }, []);
+
   const Local = (NativeModules as any).VibeLocalSDR as
     | { isIgnoringBatteryOptimizations?: () => Promise<boolean>; requestIgnoreBatteryOptimizations?: () => void }
     | undefined;
@@ -289,7 +319,7 @@ export default function SettingsPanel({
                 <View style={styles.iconWrap}>
                   {tunerError
                     ? <WarningTriangle size={32} color={pal.amber} />
-                    : <SignalWaves size={44} strength={5} on={pal.amber} off={pal.meterEmpty} />}
+                    : <SignalWaves size={44} {...discreteLit(5)} on={pal.amber} off={pal.meterEmpty} />}
                 </View>
                 <View style={styles.textWrap}>
                   <Text style={[styles.rowTitle, { color: pal.text }]}>{tunerError ? 'Not connected' : 'Connected'}</Text>
@@ -509,6 +539,11 @@ export default function SettingsPanel({
                       <View style={[styles.divider, { backgroundColor: pal.border }]} />
                       <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={dumpSettings} accessibilityRole="button" accessibilityLabel="Dump head unit settings">
                         <Text style={[styles.clearText, { color: pal.blue }]}>Dump head unit settings (boot / power-on behaviour)</Text>
+                        <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
+                      </Pressable>
+                      <View style={[styles.divider, { backgroundColor: pal.border }]} />
+                      <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={probeTrampoline} accessibilityRole="button" accessibilityLabel="Probe whether the vendor radio app can be replaced">
+                        <Text style={[styles.clearText, { color: pal.blue }]}>Probe vendor-app replacement (read-only; may prompt for root)</Text>
                         <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                       </Pressable>
                       <View style={[styles.divider, { backgroundColor: pal.border }]} />

@@ -23,7 +23,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getNearbyStations, callsignForFreq } from '../services/stationFinder';
 import type { NearbyStation } from '../services/stationTypes';
-import { GearIcon, GpsSatellite, MagnifierTower, MotionCar, PowerIcon, SignalWaves, StarIcon, StereoWave, WarningTriangle } from './carfm/icons';
+import { GearIcon, GpsSatellite, MagnifierTower, MotionCar, PowerIcon, SignalWaves, StarIcon, StereoCone, WarningTriangle } from './carfm/icons';
+import { discreteLit, type SignalLit } from '../services/nwdSignalLevel';
 import { useIsMoving } from '../services/motion';
 import { useGpsFix } from '../services/gps';
 import { blockedWhileDriving, closeOnMotion, subscribeDriveBlocked } from '../services/driveLock';
@@ -58,7 +59,7 @@ export interface CarFmFaceProps {
    *  GPS+database ESTIMATE — coarse, recomputed only on retune, and null until a
    *  fix exists.
    *  See services/nwdSignalLevel.ts. UNDER DEVELOPMENT. */
-  signalLit?: number | null;
+  signalLit?: SignalLit | null;
   /** The raw level behind `signalLit`, drawn inside the glyph. Shown bare, with
    *  NO unit: the scale is anchored to the vendor's own seek-stop thresholds but
    *  its units are unresolved, and printing "dB" would be inventing one. */
@@ -76,8 +77,8 @@ export interface CarFmFaceProps {
   rdsOk?: boolean;
   /** RDS Traffic Programme flag. */
   tp?: boolean;
-  /** RDS Traffic Announcement in progress (pulses amber). */
   ta?: boolean;
+  /** RDS Traffic Announcement in progress (pulses amber). */
   /** Station transmits an AF list. */
   af?: boolean;
   /** Programme-type label ("Rock", …) — already region-decoded. */
@@ -1131,12 +1132,12 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // centered, controls right — so the signal dB stacks below the icon and the
   // stereo column is truly centered regardless of the side widths.
   // NOT LIVE, and the number must not pretend otherwise (SIGNAL-METER.md states):
-  // the dial sweeping past other stations during a scan, and the first seconds
-  // after a retune. The retune case already arrives as a null level — the screen
-  // clears it and waits LEVEL_SETTLE_MS, because a reading taken immediately
-  // after tuning ran a mean +17.7 above the same station 20s later. Scanning is
-  // suppressed here, since the level keeps arriving throughout a sweep and
-  // belongs to whatever the dial swept past.
+  // the dial sweeping past other stations during a scan. The retune case arrives
+  // as a null level and the screen fills it back in a second later — see
+  // LEVEL_FIRST_READ_MS: the post-tune reading runs high, but showing it briefly
+  // and correcting it at 4s beats a blank meter. Scanning is suppressed here,
+  // since the level keeps arriving throughout a sweep and belongs to whatever
+  // the dial swept past.
   const levelLive = !off && !scan;
   const nwdLevel = levelLive ? signalLevelRaw : null;
   const sdrDb = levelLive ? signalDb : null;
@@ -1154,10 +1155,16 @@ export default function CarFmFace(props: CarFmFaceProps) {
           number this cluster draws is measured. */}
       <SignalWaves
         size={L.signalIcon}
-        strength={off ? 0 : signalReadout === 'sdr' ? waveStrength(sdrDb) : (signalLit ?? 0)}
+        {...(off
+          ? discreteLit(0)
+          : signalReadout === 'sdr'
+            // The SDR path has no unitless level, so it takes none of the richer
+            // model — five discrete steps from the segment count (SIGNAL-METER).
+            ? discreteLit(waveStrength(sdrDb))
+            : (signalLit ?? discreteLit(0)))}
         on={pal.amber}
         off={pal.meterEmpty}
-        dottedPairs={signalDottedPairs}
+        dottedArcs={off ? 0 : signalDottedPairs}
       />
       {/* The level, INSIDE the glyph, in the ink-free column below the dot.
           Absolutely positioned and centred, so 2 → 3 digits moves nothing here or
@@ -1212,18 +1219,53 @@ export default function CarFmFace(props: CarFmFaceProps) {
         borderColor: so ? pal.blue : pal.border,
         backgroundColor: so ? pal.blueFill : 'transparent',
       }]}>
-        {so ? <StereoWave color={pal.blue} flip w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
-        <Text style={[styles.stereoText, { fontSize: L.stereoFont, color: so ? pal.blue : pal.dim }]}>
-          {stereoBlank ? '' : stereo ? 'STEREO' : 'MONO'}
-        </Text>
-        {so ? <StereoWave color={pal.blue} w={L.stereoWave.w} h={L.stereoWave.h} /> : <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />}
+        {/* BOTH cones on mono, not one and not none (§4.1 v1.14.3). Mono only
+            changes their APPEARANCE: stroke 1.8 → 1.1, the right cone in the dim
+            label colour and the left in the pill's own border colour, so it
+            reads as a ghost. Blue is reserved for a stereo lock. The blank and
+            powered-off states show neither cone and no label — the slot stays
+            reserved so nothing reflows. */}
+        {stereoBlank
+          ? <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />
+          : <StereoCone flip color={so ? pal.blue : pal.border} strokeWidth={so ? 1.8 : 1.1}
+              w={L.stereoWave.w} h={L.stereoWave.h} />}
+        {/* THE CONES MUST NOT MOVE between states. "MONO" is narrower than
+            "STEREO" and the row centres its contents, so a naive label pulls
+            both cones inward on mono. The label sits in a box the width of the
+            widest string — an invisible "STEREO" reserves it and the live label
+            is absolutely positioned, centred over it. A fixed dp width would be
+            equivalent; this survives a font-metric change. */}
+        <View style={styles.stereoLabelBox}>
+          <Text style={[styles.stereoText, { fontSize: L.stereoFont, opacity: 0 }]} allowFontScaling={false}>
+            STEREO
+          </Text>
+          <Text
+            style={[styles.stereoText, styles.stereoLabelOver,
+              { fontSize: L.stereoFont, color: so ? pal.blue : pal.dim }]}
+            allowFontScaling={false}
+            numberOfLines={1}
+          >
+            {stereoBlank ? '' : stereo ? 'STEREO' : 'MONO'}
+          </Text>
+        </View>
+        {stereoBlank
+          ? <View style={{ width: L.stereoWave.w, height: L.stereoWave.h }} />
+          : <StereoCone color={so ? pal.blue : pal.dim} strokeWidth={so ? 1.8 : 1.1}
+              w={L.stereoWave.w} h={L.stereoWave.h} />}
       </View>
       {stereoFan('right')}
       </View>
       <View style={styles.tellStrip}>
         <Tell label="RDS" on={!off && !!rdsOk} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />
         <Tell label="HD" on={false} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />
-        {ta && !off ? <Tell label="TA" on pulse pal={pal} fontSize={L.tellFont} dark={dark} off={off} /> : <Tell label="TP" on={!off && !!tp} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />}
+        {/* TA REPLACES TP while an announcement is running, and pulses (§4.1).
+            One slot, two states — TP says the station carries traffic at all, TA
+            says one is happening now, and the second implies the first. The
+            decoder conditions TA on a confirmed TP, so this cannot show TA on a
+            station whose TP never landed. */}
+        {ta && !off
+          ? <Tell label="TA" on pulse pal={pal} fontSize={L.tellFont} dark={dark} off={off} />
+          : <Tell label="TP" on={!off && !!tp} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />}
         <Tell label="AF" on={!off && !!af} pal={pal} fontSize={L.tellFont} dark={dark} off={off} />
       </View>
     </View>
@@ -1732,6 +1774,11 @@ const styles = StyleSheet.create({
   stereoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
   waveSpacer: { width: 20, height: 28 },
   stereoText: { fontFamily: FONT_BOLD, fontSize: 15, letterSpacing: 1 },
+  // Reserves the widest label's width so STEREO / MONO / blank leave the cones in
+  // identical positions (§4.1: stated as a requirement, not an implementation
+  // detail). The hidden child sets the width; the live label overlays it.
+  stereoLabelBox: { position: 'relative', alignItems: 'center', justifyContent: 'center' },
+  stereoLabelOver: { position: 'absolute', left: 0, right: 0, textAlign: 'center' },
   tellStrip: { flexDirection: 'row', gap: 10 },
   tell: { fontFamily: FONT_BOLD, fontSize: 11, letterSpacing: 1, lineHeight: 12 },
   // PTY: plain dim ellipsized text — no border/fill (design ptyStyle).

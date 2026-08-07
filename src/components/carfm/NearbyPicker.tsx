@@ -10,6 +10,7 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, useW
 import { getNearbyStations, type NearbyResult } from '../../services/stationFinder';
 import type { NearbyStation } from '../../services/stationTypes';
 import { BackArrowIcon, SignalWaves, StarIcon } from './icons';
+import { discreteLit } from '../../services/nwdSignalLevel';
 import { FONT, FONT_BOLD, cleanCall, type CarFmPalette } from './tokens';
 
 const HOLD_MS = 550;
@@ -96,7 +97,7 @@ function Row({ st, pal, saved, strength, m, onTune, onSave }: {
       {saved ? <StarIcon size={26} filled color={pal.amber} outline={pal.amber} /> : null}
       <View style={m.narrow ? styles.spacerNarrow : styles.spacer} />
       <View style={styles.trailing}>
-        <SignalWaves size={30} strength={strength} on={pal.amber} off={pal.meterEmpty} />
+        <SignalWaves size={30} {...discreteLit(strength)} on={pal.amber} off={pal.meterEmpty} />
         <Text style={[styles.dist, { color: pal.dim }]}>{Math.round(st.distanceKm)} km</Text>
       </View>
       <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>

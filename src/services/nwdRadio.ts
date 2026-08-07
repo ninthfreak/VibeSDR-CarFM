@@ -95,7 +95,6 @@ export type NwdEvents = {
   NwdRadioRt: { rt: string };
   NwdRadioStereo: { on: boolean };
   NwdRadioPty: { pty: number };
-  NwdRadioTa: { ta: boolean };
   NwdRadioScanState: { state: number };
   /** One raw RDS group, 16 hex chars (4 blocks x 2 bytes), from
    *  com.nwd.app.NwdFmManager.getRadioRDSDataArm(). Feed to createNwdRdsDecoder

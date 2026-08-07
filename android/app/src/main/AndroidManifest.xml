@@ -28,6 +28,17 @@
     <!-- Android 11+ package visibility: needed to see + bind the NOWADA (NWD)
          head-unit FM tuner service (built-in-tuner backend). -->
     <package android:name="com.nwd.radio.service"/>
+    <!-- The vendor radio APP (distinct from the service above): the trampoline
+         recon reads its install path, signer and launcher component. The head
+         unit itself predates package-visibility filtering, so this changes
+         nothing there — it keeps the probe honest on a modern Android. -->
+    <package android:name="com.nwd.radio"/>
+    <!-- Same reason: name whichever app answers HOME, since that is the likely
+         owner of the restore-on-wake decision. -->
+    <intent>
+      <action android:name="android.intent.action.MAIN"/>
+      <category android:name="android.intent.category.HOME"/>
+    </intent>
   </queries>
   <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true" android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/data_extraction_rules" android:theme="@style/AppTheme" android:supportsRtl="true" android:enableOnBackInvokedCallback="false" android:usesCleartextTraffic="true">
     <meta-data android:name="com.google.android.gms.car.application" android:resource="@xml/automotive_app_desc"/>

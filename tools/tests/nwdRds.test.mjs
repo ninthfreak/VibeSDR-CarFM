@@ -36,6 +36,11 @@ const js = src
   .replace(/^export (interface|type)[\s\S]*?^}/gm, '')
   .replace(/: RdsState \| null/g, '').replace(/: RdsState/g, '')
   .replace(/: NwdRdsDecoder/g, '').replace(/: string \| null/g, '')
+  // `: boolean | null` must be stripped BEFORE the bare `: boolean` below, or
+  // that rule eats the annotation and leaves a dangling `| null`. TP's own
+  // consensus tally (tpPending) was the first nullable boolean here and broke
+  // this harness exactly that way — the same trap the note below describes.
+  .replace(/: boolean \| null/g, '')
   .replace(/: number \| null/g, '').replace(/: string/g, '').replace(/: number/g, '')
   // Same lesson as the generic-constructor rules below: each new annotation
   // shape broke this silently until it was added. RT+ brought `: void`.
@@ -434,6 +439,123 @@ const RT_FULL = [...RT_LED, ...RT_PAD];
   d2.push(hex(PI, 0x34d8, 0x0000, 0x1234));      // some other AID in the same slot
   d2.push(hex(PI, B, C, D));
   eq('a non-RT+ ODA declaration is ignored', d2.state().rtArtist, '');
+}
+
+// ── TP has its own consensus, and TA is not decoded at all ──────────────────
+// TP (block B bit 10) used to be published under the PTY field's gate. A
+// corruption leaving bits 9-5 intact while flipping bit 10 satisfied that gate
+// and moved TP off ONE group. TA (bit 4) had the same hole and additionally
+// lifted the user's mute, so it is no longer decoded — a flag that must react
+// within a group or two cannot also be consensus-protected.
+{
+  const d = createNwdRdsDecoder();
+  const PI = 0xa6ff;
+  const hx = (a, b, c, dd) => [a, b, c, dd].map((x) => x.toString(16).padStart(4, '0')).join('');
+  const B_PLAIN = 0x02c0;                 // PTY consensus fodder, TP clear, TA clear
+  const B_TP    = 0x06c0;                 // bit 10 set, PTY bits untouched
+  const B_TA    = 0x02d0;                 // bit 4 set, PTY bits untouched
+
+  for (let i = 0; i < 8; i++) d.push(hx(PI, B_PLAIN, 0xe0cd, 0x2020));
+  eq('TP starts clear', d.state().tp, false);
+
+  d.push(hx(PI, B_TP, 0xe0cd, 0x2020));
+  eq('one group does NOT move TP', d.state().tp, false);
+  d.push(hx(PI, B_TP, 0xe0cd, 0x2020));
+  eq('two do not either', d.state().tp, false);
+  d.push(hx(PI, B_TP, 0xe0cd, 0x2020));
+  eq('three consecutive do', d.state().tp, true);
+
+  // A single contrary group must not knock it back down, and must reset the tally.
+  d.push(hx(PI, B_PLAIN, 0xe0cd, 0x2020));
+  eq('one contrary group does not clear TP', d.state().tp, true);
+
+}
+
+// ── TA: three guards, tested one at a time ──────────────────────────────────
+// An earlier build read bit 4 from EVERY group under the PTY field's consensus,
+// so one corrupt group raised TA — and TA lifts the user's mute. Guards are:
+// group-0 only, its own tally, and conditioned on a confirmed TP.
+{
+  const PI = 0xa6ff;
+  const hx = (a, b, c, dd) => [a, b, c, dd].map((x) => x.toString(16).padStart(4, '0')).join('');
+  // Group 0A. TP is bit 10, TA is bit 4, PTY bits 9-5, segment in bits 1-0.
+  const g0 = (tp, ta, seg) => hx(PI, (0 << 12) | (tp << 10) | (0x16 << 5) | (ta << 4) | seg, 0x0000, 0x2020);
+  // Group 2A. Bit 4 here is the RadioText A/B flag, NOT TA.
+  const g2 = (tp, bit4) => hx(PI, (2 << 12) | (tp << 10) | (0x16 << 5) | (bit4 << 4), 0x2020, 0x2020);
+
+  // GUARD 1 — bit 4 outside group 0 is not TA.
+  const d = createNwdRdsDecoder();
+  for (let i = 0; i < 6; i++) d.push(g0(1, 0, i % 4));      // TP on, TA off, PI+TP confirmed
+  eq('TP confirms', d.state().tp, true);
+  eq('TA starts clear', d.state().ta, false);
+  for (let i = 0; i < 10; i++) d.push(g2(1, 1));            // bit 4 set, but in a 2A
+  eq('bit 4 in a RadioText group never raises TA', d.state().ta, false);
+
+  // GUARD 2 — TA needs its OWN consensus, not the PTY field's.
+  d.push(g0(1, 1, 0));
+  eq('one group-0 with TA does not raise it', d.state().ta, false);
+  d.push(g0(1, 1, 1));
+  eq('two do not either', d.state().ta, false);
+  d.push(g0(1, 1, 2));
+  eq('three consecutive do', d.state().ta, true);
+  // And it clears the same way, not on a single contrary group.
+  d.push(g0(1, 0, 3));
+  eq('one contrary group does not clear TA', d.state().ta, true);
+  d.push(g0(1, 0, 0)); d.push(g0(1, 0, 1));
+  eq('three consecutive clear it', d.state().ta, false);
+
+  // GUARD 3 — no TA on a station that does not carry traffic.
+  const d2 = createNwdRdsDecoder();
+  for (let i = 0; i < 6; i++) d2.push(g0(0, 0, i % 4));     // TP OFF, confirmed
+  eq('TP is off', d2.state().tp, false);
+  for (let i = 0; i < 6; i++) d2.push(g0(0, 1, i % 4));     // TA claimed anyway
+  eq('TA is suppressed without a confirmed TP', d2.state().ta, false);
+
+  // Losing TP must drop a latched TA with it.
+  const d3 = createNwdRdsDecoder();
+  for (let i = 0; i < 6; i++) d3.push(g0(1, 1, i % 4));
+  eq('TA latches on a traffic station', d3.state().ta, true);
+  for (let i = 0; i < 4; i++) d3.push(g0(0, 1, i % 4));
+  eq('...and drops when TP goes away', d3.state().ta, false);
+
+  // reset() clears the tally, so a retune cannot inherit an announcement.
+  const d4 = createNwdRdsDecoder();
+  for (let i = 0; i < 6; i++) d4.push(g0(1, 1, i % 4));
+  eq('TA is set before the reset', d4.state().ta, true);
+  d4.reset();
+  eq('reset clears TA', d4.state().ta, false);
+}
+
+// ── resetForRetune clears the PI; reset does not ────────────────────────────
+// push() DROPS every group whose block A does not carry the trusted PI. So a
+// retune that leaves the old PI standing blacks out PS, RadioText and PTY for
+// as long as displacement takes (PI_DISPLACE consecutive, against 30-35% block
+// errors on real air). The dial moved, so the old PI is stale, not an incumbent.
+{
+  const A = 'a6ff02c0e0cd2020';
+  const B = '57ff02c0e0cd2020';
+  const acquire = (d) => { let n = 0; while (d.state().pi !== 0x57ff && n < 400) { d.push(B); n++; } return n; };
+
+  const fresh = createNwdRdsDecoder();
+  const fromEmpty = acquire(fresh);
+  eq('a fresh decoder acquires in PI_CONFIRM groups', fromEmpty, 3);
+
+  const kept = createNwdRdsDecoder();
+  for (let i = 0; i < 8; i++) kept.push(A);
+  kept.reset();
+  eq('reset() keeps the incumbent, so displacement is needed', acquire(kept), 12);
+
+  const cleared = createNwdRdsDecoder();
+  for (let i = 0; i < 8; i++) cleared.push(A);
+  cleared.resetForRetune();
+  eq('resetForRetune() drops it, back to the fast path', acquire(cleared), fromEmpty);
+
+  // ...and it must still clear everything reset() clears.
+  const wiped = createNwdRdsDecoder();
+  for (let i = 0; i < 8; i++) wiped.push(A);
+  wiped.resetForRetune();
+  eq('resetForRetune also empties the text', wiped.state().rt, '');
+  eq('...and the PI itself', wiped.state().pi, null);
 }
 
 console.log(bad ? `\nnwdRds: ${bad} FAILED` : '\nnwdRds: ALL PASS');
