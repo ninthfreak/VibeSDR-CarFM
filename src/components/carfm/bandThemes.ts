@@ -215,7 +215,7 @@ const MATCH_TABLE: { id: string; names: string[] }[] = [
 export const EGG_MENU: { id: string; label: string }[] = [
   { id: 'AC/DC', label: 'Powerage' },
   { id: 'The Beatles', label: 'The Walrus was Paul' },
-  { id: 'Led Zeppelin', label: 'Four Symbols' },
+  { id: 'Led Zeppelin', label: 'Hammer of the Gods' },
   { id: 'Nirvana', label: 'Smells Like Gen X' },
   { id: 'Nine Inch Nails', label: 'Now I’m Nothing' },
 ];
