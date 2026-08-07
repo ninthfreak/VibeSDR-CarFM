@@ -57,8 +57,23 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     let cancelled = false;
 
     async function loadAndInit() {
-      let mode = await getViewMode();
+      // THREE INDEPENDENT STORAGE READS, IN PARALLEL. They were sequential, and
+      // every one of them sits in front of the navigate that gets the radio face
+      // on screen — three native round trips deep in the critical path for no
+      // reason, since none depends on another. getDefaultInstance is not even
+      // wanted on the built-in-tuner path; it is read for the server flow further
+      // down, which that path returns before reaching.
+      const [modeEarly, dEarly, backend] = await Promise.all([
+        getViewMode(),
+        getDefaultInstance(),
+        loadTunerBackend(),
+      ]);
+      let mode = modeEarly;
       if (cancelled) return;
+      if (dEarly) {
+        setDefaultInst(dEarly);
+        splashBridge.updateLabel(dEarly.name || dEarly.url);
+      }
       const { width } = Dimensions.get('window');
       const isSmallScreen = width <= 390;
       if (!mode) {
@@ -69,12 +84,6 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       }
       setViewModeState(mode);
       setModeReady(true);
-
-      const dEarly = await getDefaultInstance();
-      if (!cancelled && dEarly) {
-        setDefaultInst(dEarly);
-        splashBridge.updateLabel(dEarly.name || dEarly.url);
-      }
 
       // Learn the user's location for distance sorting (used elsewhere), but
       // fire-and-forget, NEVER awaited: on Android this can pop the runtime
@@ -93,7 +102,6 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // 'rtl' looks for its dongle; 'auto' probes everything, which is what Auto
       // means; the built-in tuners skip straight through and let the NWD module
       // bind inside RadioScreen as it already does.
-      const backend = await loadTunerBackend();
       const wantsDongle = backend === 'rtl' || backend === 'auto';
       // Launched by plugging in an RTL-SDR? Go straight to Local Hardware and skip
       // the default-instance auto-connect below (which would otherwise win the
