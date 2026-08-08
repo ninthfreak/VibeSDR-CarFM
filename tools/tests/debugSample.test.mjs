@@ -24,9 +24,16 @@ const FULL = {
 };
 
 eq('a full sample formats to fixed columns', formatSample(FULL),
-  'SMP f=101.5 lvl=54 bars=3 lat=43.07305 lon=-89.40123 acc=8 spd=27.4 hdg=284 fix=2s '
+  'SMP f=101.5 lvl=54 bars=3.0 lat=43.07305 lon=-89.40123 acc=8 spd=27.4 hdg=284 fix=2s '
   + 'pred=-12.4 dist=31.2 brg=118 erp=100.0 cls=B call=WIBA-FM '
   + 'rds=8.1/s err=12% flips=3 exp=0 tuned=118s rate=crackle@22s');
+
+// A half-step must survive the log — it is the exact thing the fractional bars
+// records. Default dp=0 rounded .5 UP and lost it (level 40 logged as level 48).
+eq('a half-step bars logs as .5, not rounded away',
+   formatSample({ ...FULL, bars: 0.5 }).includes('bars=0.5'), true);
+eq('...and 2.5 stays 2.5', formatSample({ ...FULL, bars: 2.5 }).includes('bars=2.5'), true);
+eq('a null bars is still ?', formatSample({ ...FULL, bars: null }).includes('bars=?'), true);
 
 // Every unknown becomes `?` and NOTHING is omitted — the column count must not
 // change with a missing GPS fix, or the CSV parse shifts.
