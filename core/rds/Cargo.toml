@@ -1,0 +1,13 @@
+[package]
+name = "carfm-rds"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "RDS group decoder — pure, no I/O, no platform dependencies."
+
+[lib]
+# Both: rlib so sibling crates and the test harness can use it directly, cdylib
+# so a JNI shim (or any C ABI consumer) can link it later without a rebuild.
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
