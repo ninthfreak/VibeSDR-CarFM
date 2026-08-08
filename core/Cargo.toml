@@ -1,0 +1,17 @@
+# The portable core.
+#
+# Everything here compiles for Android, generic Linux, and anything else with a
+# Rust target — no platform APIs, no framework. It is the answer to a specific
+# problem: CarFM's decoding and data logic ended up in TypeScript because the app
+# was built on React Native, and TypeScript is the one part of the stack that
+# cannot follow the app to another display engine or another operating system.
+#
+# The rule for this workspace: no I/O, no threads, no platform calls. Feed it
+# bytes, get values back. Platform glue lives above it.
+[workspace]
+resolver = "2"
+members = ["rds", "stations"]
+
+[workspace.package]
+edition = "2021"
+license = "GPL-3.0-only"

@@ -1,0 +1,13 @@
+[package]
+name = "carfm-stations"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Station identity, geo ranking and RBDS PI arithmetic — pure, no I/O."
+
+[lib]
+# Same shape as carfm-rds: rlib for sibling crates and the harness, cdylib so a
+# JNI shim can link it without a rebuild.
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]

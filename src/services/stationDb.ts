@@ -27,7 +27,8 @@ import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as SQLite from 'expo-sqlite';
 
-import { boundingBox, haversineKm, receivabilityScore } from './stationGeo';
+import { boundingBox } from './stationGeo';
+import { rankNearby } from './stationRank';
 
 import type { StationRow } from './stationTypes';
 
@@ -195,18 +196,12 @@ export async function nearbyStations(
     console.warn('[stationDb] nearby query failed', e);
     return [];
   }
-  const out: NearbyDbResult[] = [];
-  for (const r of raw) {
-    const distanceKm = haversineKm(lat, lon, r.lat, r.lon);
-    if (distanceKm > radiusKm) continue;
-    out.push({
-      ...mapRow(r), distanceKm,
-      score: receivabilityScore({ erpKw: r.erp_kw, stationClass: r.station_class, distanceKm }),
-      hasLogo: !!r.has_logo, genre: r.genre ?? null, homepage: r.homepage ?? null,
-    });
-  }
-  out.sort((a, b2) => b2.score - a.score);
-  return out.slice(0, limit);
+  // The trim/score/sort/cap is stationRank.rankNearby — pure, and shared with the
+  // Rust port's differential harness. Only the SQL above belongs to this file.
+  return rankNearby(lat, lon, radiusKm, limit, raw.map((r) => ({
+    ...mapRow(r),
+    hasLogo: !!r.has_logo, genre: r.genre ?? null, homepage: r.homepage ?? null,
+  })));
 }
 
 export async function stationsForCallsignBase(base: string): Promise<StationRow[]> {
