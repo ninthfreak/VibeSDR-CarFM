@@ -86,6 +86,23 @@ const RTPLUS_TITLE = 1;
 const RTPLUS_ARTIST = 4;
 
 /**
+ * Whether an ODA may legally ride in this group.
+ *
+ * 0A/0B (PS), 1A/1B (PIN, slow labelling), 2A/2B (RadioText), 3A (the ODA
+ * announcement itself), 4A (clock time), 10A (programme type name) and 15B
+ * (fast basic tuning) all have uses fixed by the standard. An announcement
+ * naming one of them is a corrupted announcement, not a station being unusual —
+ * and believing it turns the groups this decoder already parses into RT+
+ * payloads.
+ */
+function odaGroupIsLegal(group: number, verB: boolean): boolean {
+  if (group === 0 || group === 1 || group === 2) return false;
+  if (!verB && (group === 3 || group === 4 || group === 10)) return false;
+  if (verB && group === 15) return false;
+  return true;
+}
+
+/**
  * Distinct published PS values, on ONE station, that mean the PS is a scrolling
  * text field rather than a name.
  *
@@ -254,6 +271,10 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
   // could have short-circuited this: the app must discover it at runtime anyway.
   let rtPlusGroup: number | null = null;   // group TYPE carrying RT+
   let rtPlusVerB = false;                  // ...and its version
+  // An ODA assignment awaiting its repeat, and the last payload seen — both
+  // gates exist because block B and blocks C/D carry no error protection.
+  let rtPlusPending: string | null = null;
+  let rtPlusLast: string | null = null;
 
   const reset = () => {
     st = { ...BLANK };
@@ -279,6 +300,8 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     // station's state on a retune.
     rtPlusGroup = null;
     rtPlusVerB = false;
+    rtPlusPending = null;
+    rtPlusLast = null;
     qRing = new Array<0 | 1>(QUALITY_RING).fill(0);
     qAt = 0;
     qCount = 0;
@@ -531,8 +554,24 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
     if (groupType === 3 && !versionB) {
       if (d === RTPLUS_AID) {
         const agt = b & 0x1f;
-        rtPlusGroup = agt >>> 1;
-        rtPlusVerB = (agt & 1) === 1;
+        const group = agt >>> 1;
+        const verB = (agt & 1) === 1;
+        // THE AID PROVES BLOCK D, NOT BLOCK B. The 1-in-65536 argument above for
+        // trusting a single declaration covers the application id only; the
+        // group NUMBER rides in block B's low bits with no protection at all. A
+        // 3A with an intact AID and a corrupted block B pointed RT+ at group 0A,
+        // after which ordinary PS groups were parsed as RT+ payloads and set the
+        // artist from a slice of the RadioText. Two guards, matching what every
+        // other field in this decoder already has:
+        if (odaGroupIsLegal(group, verB)) {
+          const announced = `${group}|${verB}`;
+          if (announced === rtPlusPending) {
+            rtPlusGroup = group;
+            rtPlusVerB = verB;
+          } else {
+            rtPlusPending = announced;
+          }
+        }
       }
     } else if (rtPlusGroup !== null && groupType === rtPlusGroup && versionB === rtPlusVerB) {
       // The payload is 37 bits spread across the five spare bits of B and all of
@@ -545,7 +584,16 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
       const ct2 = (((c & 0x1) << 5) | (d >>> 11)) & 0x3f;
       const start2 = (d >>> 5) & 0x3f;
       const len2 = (d & 0x1f) + 1;
-      if (!running) {
+      // THE PAYLOAD NEEDS THE SAME TREATMENT. Blocks C and D carry the offsets
+      // and nothing protects them — the very reason RadioText requires two
+      // agreeing cycles. Unguarded, one corrupt group rewrote the artist from
+      // "LED ZEPPELIN" to "EPPELIN", and a corrupt running bit blanked both
+      // tags. Act only on a payload that has repeated, which costs one group
+      // (~a second) against an item that runs for minutes.
+      const payload = `${running}|${ct1}|${start1}|${len1}|${ct2}|${start2}|${len2}`;
+      if (payload !== rtPlusLast) {
+        rtPlusLast = payload;
+      } else if (!running) {
         // The item has ENDED. Keeping the last song on screen over the next one
         // is the same staleness the rest of this decoder works to avoid.
         st.rtArtist = '';

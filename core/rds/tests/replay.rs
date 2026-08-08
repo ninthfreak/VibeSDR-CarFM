@@ -293,7 +293,9 @@ fn rt_plus_labels_artist_and_title() {
     );
 
     // WIBA's ACTUAL announcement. 0x34d8 → group 3A, and the low five bits
-    // (0x18 = 24) say group 12, version A.
+    // (0x18 = 24) say group 12, version A. Group 12 has no use fixed by the
+    // standard, so it is a legal ODA carrier — but one announcement is not
+    // enough, because the group number rides in block B unprotected.
     d.push("19e234d800004bd7");
 
     // Group 12A payload: running=1, artist @0 len 12, title @15 len 7.
@@ -303,10 +305,37 @@ fn rt_plus_labels_artist_and_title() {
     let c = (0b100u16 << 13) | (0 << 7) | (11 << 1);
     let dd = (1u16 << 11) | (15 << 5) | 6;
     d.push(&hex(PI, b, c, dd));
-    assert_eq!(d.state().rt_artist, "Led Zeppelin");
+    d.push(&hex(PI, b, c, dd));
+    assert_eq!(
+        d.state().rt_artist,
+        "",
+        "a single announcement does not assign the group"
+    );
+
+    d.push("19e234d800004bd7"); // announced again — now the group is assigned
+
+    d.push(&hex(PI, b, c, dd));
+    assert_eq!(
+        d.state().rt_artist,
+        "",
+        "nor does a single payload group publish"
+    );
+    d.push(&hex(PI, b, c, dd));
+    assert_eq!(
+        d.state().rt_artist,
+        "Led Zeppelin",
+        "the repeat publishes it"
+    );
     assert_eq!(d.state().rt_title, "Kashmir");
 
-    // running=0 means the item ENDED.
+    // running=0 means the item ENDED — gated the same way, so a lone corrupt
+    // group cannot blank a running item.
+    d.push(&hex(PI, 0xc000, c, dd));
+    assert_eq!(
+        d.state().rt_artist,
+        "Led Zeppelin",
+        "one group does not end it"
+    );
     d.push(&hex(PI, 0xc000, c, dd));
     assert_eq!(d.state().rt_artist, "", "an ended item clears the artist");
     assert_eq!(d.state().rt_title, "", "and the title");
@@ -314,14 +343,42 @@ fn rt_plus_labels_artist_and_title() {
     // A marker running off the end is REJECTED, not clamped — a truncated artist
     // is still a wrong artist.
     d.push(&hex(PI, b, c, dd));
+    d.push(&hex(PI, b, c, dd));
     assert_eq!(d.state().rt_artist, "Led Zeppelin");
     let far_c = (0b100u16 << 13) | (60 << 7) | (11 << 1);
+    d.push(&hex(PI, b, far_c, dd));
     d.push(&hex(PI, b, far_c, dd));
     assert_eq!(
         d.state().rt_artist,
         "Led Zeppelin",
         "out of range is refused"
     );
+}
+
+/// REGRESSION — an ODA announcement naming a group the standard already defines
+/// is a corrupted announcement, not a station being unusual.
+///
+/// Measured: a 3A carrying an intact AID with a corrupted block B pointed RT+ at
+/// group 0A. Ordinary PS groups then satisfied the payload branch — M/S set is
+/// the "running" bit, and a normal AF pair in block C decodes as an ARTIST
+/// marker — so the artist was set from a slice of the RadioText.
+#[test]
+fn an_oda_announced_on_a_defined_group_is_refused() {
+    const PI: u16 = 0x19e2;
+    let mut d = rt_plus_fixture();
+    assert_eq!(d.state().rt, "Led Zeppelin - Kashmir");
+
+    // 3A, correct AID, low five bits 0 → "RT+ lives in group 0A". Twice, so it
+    // is the LEGALITY check being tested and not the repeat check.
+    d.push(&hex(PI, 0x3000, 0x0000, 0x4bd7));
+    d.push(&hex(PI, 0x3000, 0x0000, 0x4bd7));
+
+    // Ordinary 0A groups: M/S set, a real AF pair (100.3 + 89.6 MHz) in block C.
+    let ps = hex(PI, 0x0008, 0x8016, 0x2020);
+    d.push(&ps);
+    d.push(&ps);
+    assert_eq!(d.state().rt_artist, "", "a PS group is not an RT+ payload");
+    assert_eq!(d.state().rt_title, "");
 }
 
 #[test]

@@ -37,11 +37,22 @@ pub fn rank_nearby(
     }
     // Descending by score. `sort_by` is stable, as is JavaScript's Array#sort
     // (required since ES2019), so ties resolve identically.
-    out.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    //
+    // A NaN SCORE RANKS LAST, EXPLICITLY, and the TypeScript does the same.
+    // `receivability_score` propagates NaN on purpose (it reproduces
+    // `Math.max`'s NaN handling), and the trim above deliberately keeps a
+    // NaN-distance row, because `NaN > r` is false in both languages — so NaN
+    // genuinely reaches this sort. The obvious comparator,
+    // `partial_cmp(..).unwrap_or(Equal)`, mirrors JavaScript's rule that a NaN
+    // comparison coerces to 0, but that is NOT a total order: with NaN, 1, 2 it
+    // claims NaN == 1 and NaN == 2 while 1 < 2. Rust's sort detects the
+    // violation and PANICS — in release as well as debug, since the check lives
+    // in `core` — so the faithful-looking comparator aborts the process where
+    // JavaScript merely returns a badly ordered list. Mapping NaN to
+    // NEG_INFINITY first gives a real total order, sinks the unrankable rows,
+    // and leaves them tied so the stable sort keeps their input order.
+    let key = |s: f64| if s.is_nan() { f64::NEG_INFINITY } else { s };
+    out.sort_by(|a, b| key(b.score).total_cmp(&key(a.score)));
     out.truncate(limit);
     out
 }
@@ -104,5 +115,44 @@ mod tests {
     #[test]
     fn an_empty_input_is_an_empty_list() {
         assert!(rank_nearby(43.0, -89.0, 100.0, 10, &[]).is_empty());
+    }
+
+    /// REGRESSION — a NaN score used to abort the process.
+    ///
+    /// `partial_cmp(..).unwrap_or(Equal)` looks like JavaScript's NaN rule but is
+    /// not a total order, and Rust's sort panics on one. It does not trip on
+    /// tidy input, so this fixture interleaves NaN irregularly across enough
+    /// rows to reach the detecting code path; with the old comparator it panics
+    /// with "user-provided comparison function does not correctly implement a
+    /// total order", in release as well as debug.
+    #[test]
+    fn a_nan_score_sinks_instead_of_aborting() {
+        // erp NaN on an irregular subset; the rest get distinct real scores.
+        let nan_at = [1usize, 2, 5, 8, 13, 21, 34, 55, 60, 61, 62, 70, 71, 90];
+        let rows: Vec<StationRow> = (0..100)
+            .map(|i| {
+                let erp = if nan_at.contains(&i) {
+                    Some(f64::NAN)
+                } else {
+                    Some(1.0 + (i * 37 % 97) as f64)
+                };
+                row(
+                    "WNAN",
+                    43.0 + (i % 11) as f64 * 0.01,
+                    -89.4 - (i % 7) as f64 * 0.01,
+                    erp,
+                    None,
+                )
+            })
+            .collect();
+
+        let out = rank_nearby(43.0731, -89.4012, 500.0, 1000, &rows);
+        assert_eq!(out.len(), 100, "every row is inside the radius");
+
+        // Real scores first, descending; the unrankable rows are all at the end.
+        let first_nan = out.iter().position(|s| s.score.is_nan());
+        assert_eq!(first_nan, Some(86), "14 NaN rows sink to the tail");
+        assert!(out[..86].windows(2).all(|w| w[0].score >= w[1].score));
+        assert!(out[86..].iter().all(|s| s.score.is_nan()));
     }
 }

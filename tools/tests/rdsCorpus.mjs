@@ -62,8 +62,11 @@ for (const pi of PIS) {
             out.push(grp(pi, blockB(2, 0, tp, pty, (ab << 4) | seg), ch(t.slice(0, 2)), ch(t.slice(2, 4))));
           }
         }
-        // 3A: RT+ ODA announcement, and a 0B version-B variant for coverage
-        // (version-B RadioText has its own passage below — this line is 0B only).
+        // 3A: an RT+ announcement naming group 0A — which the standard defines
+        // as PS, so it must be REFUSED. Left in deliberately: this is the shape
+        // a corrupt block B takes, and believing it turned PS groups into RT+
+        // payloads. Also a 0B version-B variant (version-B RadioText has its own
+        // passage below — this line is 0B only).
         out.push(grp(pi, blockB(3, 0, tp, pty, 0), 0x0000, 0x4bd7));
         out.push(grp(pi, blockB(0, 1, tp, pty, (ta << 4) | 1), pi, ch('OK')));
       }
@@ -79,7 +82,10 @@ for (const pi of PIS) {
 const RT_MSG = 'LED ZEPPELIN - WHOLE LOTTA LOVE';   // 31 chars, 0x0D at 31
 for (const pi of PIS) {
   for (const ab of [0, 1]) {
+    // TWICE: an ODA assignment is adopted only when it repeats, because the
+    // group number rides in block B with no error protection.
     out.push(grp(pi, blockB(3, 0, 1, 10, 22), 0x0000, 0x4bd7));       // RT+ on 11A
+    out.push(grp(pi, blockB(3, 0, 1, 10, 22), 0x0000, 0x4bd7));
     for (let pass = 0; pass < 3; pass++) {
       for (let seg = 0; seg < 8; seg++) {
         const at = seg * 4;
@@ -91,6 +97,7 @@ for (const pi of PIS) {
     out.push(grp(pi, blockB(11, 0, 1, 10, 0b01000), 0x8016, 0x09ef)); // running
     out.push(grp(pi, blockB(11, 0, 1, 10, 0b01000), 0x8016, 0x09ef));
     out.push(grp(pi, blockB(11, 0, 1, 10, 0b00000), 0x8016, 0x09ef)); // item ended
+    out.push(grp(pi, blockB(11, 0, 1, 10, 0b00000), 0x8016, 0x09ef)); // ...confirmed
   }
 }
 
@@ -162,6 +169,7 @@ for (const pi of PIS) {
 for (const pi of PIS) {
   primeStory(pi);
   stories.push(grp(pi, blockB(3, 0, 1, 10, 23), 0x0000, 0x4bd7));   // RT+ on 11B
+  stories.push(grp(pi, blockB(3, 0, 1, 10, 23), 0x0000, 0x4bd7));   // ...confirmed
   for (let pass = 0; pass < 2; pass++) {
     for (let seg = 0; seg < 8; seg++) {
       const at = seg * 4;
@@ -169,8 +177,58 @@ for (const pi of PIS) {
       stories.push(grp(pi, blockB(2, 0, 1, 10, seg), (byte(0) << 8) | byte(1), (byte(2) << 8) | byte(3)));
     }
   }
-  stories.push(grp(pi, blockB(11, 1, 1, 10, 0b01000), 0x8016, 0x09ef)); // 11B: applies
+  stories.push(grp(pi, blockB(11, 1, 1, 10, 0b01000), 0x8016, 0x09ef)); // 11B payload
+  stories.push(grp(pi, blockB(11, 1, 1, 10, 0b01000), 0x8016, 0x09ef)); // ...repeats: applies
   stories.push(grp(pi, blockB(11, 0, 1, 10, 0b01000), 0x2016, 0x21ef)); // 11A decoy: ignored
+  stories.push(grp(pi, blockB(11, 0, 1, 10, 0b01000), 0x2016, 0x21ef)); // ...twice: still ignored
+}
+
+// The RT+ trust gates, exercised negatively. RT+ used to act on a single
+// unvalidated group in two separate places, and both are reproduced here so a
+// decoder that drops either gate diverges on the very next line.
+for (const pi of PIS) {
+  const publishRt = () => {
+    for (let pass = 0; pass < 2; pass++) {
+      for (let seg = 0; seg < 8; seg++) {
+        const at = seg * 4;
+        const byte = i => (at + i === 31 ? 0x0d : (RT_MSG.charCodeAt(at + i) || 0x20));
+        stories.push(grp(pi, blockB(2, 0, 1, 10, seg),
+          (byte(0) << 8) | byte(1), (byte(2) << 8) | byte(3)));
+      }
+    }
+  };
+
+  // 1. Announced ONCE. The group number rides in block B with no error check, so
+  //    one announcement is not evidence; the payloads that follow must be
+  //    ignored and the tags must stay empty.
+  primeStory(pi);
+  publishRt();
+  stories.push(grp(pi, blockB(3, 0, 1, 10, 22), 0x0000, 0x4bd7));
+  stories.push(grp(pi, blockB(11, 0, 1, 10, 0b01000), 0x8016, 0x09ef));
+  stories.push(grp(pi, blockB(11, 0, 1, 10, 0b01000), 0x8016, 0x09ef));
+
+  // 2. Announced TWICE but naming 0A, which the standard defines as PS. This is
+  //    the measured failure: an intact AID with a corrupted block B pointed RT+
+  //    at 0A, after which ordinary PS groups — M/S set, a normal AF pair in
+  //    block C — were read as RT+ payloads and set the artist from the
+  //    RadioText. Tags must stay empty.
+  primeStory(pi);
+  publishRt();
+  stories.push(grp(pi, blockB(3, 0, 1, 10, 0), 0x0000, 0x4bd7));
+  stories.push(grp(pi, blockB(3, 0, 1, 10, 0), 0x0000, 0x4bd7));
+  stories.push(grp(pi, blockB(0, 0, 1, 10, 0b01000), 0x8016, 0x2020));
+  stories.push(grp(pi, blockB(0, 0, 1, 10, 0b01000), 0x8016, 0x2020));
+
+  // 3. Properly announced and running, so the tags DO publish — then one corrupt
+  //    payload, which must not displace them. Blocks C and D carry the offsets
+  //    and nothing protects them, which is why a single group is not enough.
+  primeStory(pi);
+  publishRt();
+  stories.push(grp(pi, blockB(3, 0, 1, 10, 22), 0x0000, 0x4bd7));
+  stories.push(grp(pi, blockB(3, 0, 1, 10, 22), 0x0000, 0x4bd7));
+  stories.push(grp(pi, blockB(11, 0, 1, 10, 0b01000), 0x8016, 0x09ef));
+  stories.push(grp(pi, blockB(11, 0, 1, 10, 0b01000), 0x8016, 0x09ef));
+  stories.push(grp(pi, blockB(11, 0, 1, 10, 0b01000), 0x828e, 0x0000));
 }
 
 // The replacement gate. Publish M, then a corrupt assembly ONCE (must not

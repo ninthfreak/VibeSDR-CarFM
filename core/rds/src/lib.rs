@@ -75,6 +75,25 @@ const RTPLUS_AID: u16 = 0x4bd7;
 const RTPLUS_TITLE: u8 = 1;
 const RTPLUS_ARTIST: u8 = 4;
 
+/// The decoded RT+ payload — the running flag and both (content type, start,
+/// length) triplets. Compared whole, so "it repeated" means every field did.
+type RtPlusPayload = (bool, u8, usize, usize, u8, usize, usize);
+
+/// Whether an ODA may legally ride in this group.
+///
+/// 0A/0B (PS), 1A/1B (PIN, slow labelling), 2A/2B (RadioText), 3A (the ODA
+/// announcement itself), 4A (clock time), 10A (programme type name) and 15B
+/// (fast basic tuning) all have uses fixed by the standard. An announcement
+/// naming one of them is a corrupted announcement, not a station being unusual —
+/// and believing it turns the groups this decoder already parses into RT+
+/// payloads.
+fn oda_group_is_legal(group: u8, ver_b: bool) -> bool {
+    !matches!(
+        (group, ver_b),
+        (0, _) | (1, _) | (2, _) | (3, false) | (4, false) | (10, false) | (15, true)
+    )
+}
+
 /// Distinct published PS values, on ONE station, that mean the PS is a scrolling
 /// text field rather than a name.
 ///
@@ -192,6 +211,10 @@ pub struct RdsDecoder {
     // station rather than hard-coded.
     rt_plus_group: Option<u8>,
     rt_plus_ver_b: bool,
+    // An ODA assignment awaiting its repeat, and the last payload seen — both
+    // gates exist because block B and blocks C/D carry no error protection.
+    rt_plus_pending: Option<(u8, bool)>,
+    rt_plus_last: Option<RtPlusPayload>,
 }
 
 impl Default for RdsDecoder {
@@ -232,6 +255,8 @@ impl RdsDecoder {
             ta_count: 0,
             rt_plus_group: None,
             rt_plus_ver_b: false,
+            rt_plus_pending: None,
+            rt_plus_last: None,
         }
     }
 
@@ -271,6 +296,8 @@ impl RdsDecoder {
         // the station's state on a retune.
         self.rt_plus_group = None;
         self.rt_plus_ver_b = false;
+        self.rt_plus_pending = None;
+        self.rt_plus_last = None;
         self.q_ring = [0; QUALITY_RING];
         self.q_at = 0;
         self.q_count = 0;
@@ -655,8 +682,25 @@ impl RdsDecoder {
         if group_type == 3 && !version_b {
             if d == RTPLUS_AID {
                 let agt = (b & 0x1f) as u8;
-                self.rt_plus_group = Some(agt >> 1);
-                self.rt_plus_ver_b = agt & 1 == 1;
+                let group = agt >> 1;
+                let ver_b = agt & 1 == 1;
+                // THE AID PROVES BLOCK D, NOT BLOCK B. The 1-in-65536 argument
+                // for trusting a single announcement covers the application id
+                // only; the group NUMBER rides in block B's low bits with no
+                // protection at all. A 3A with an intact AID and a corrupted
+                // block B pointed RT+ at group 0A, after which ordinary PS
+                // groups were parsed as RT+ payloads and set the artist from a
+                // slice of the RadioText. Two guards, matching what every other
+                // field here already has:
+                if !oda_group_is_legal(group, ver_b) {
+                    return; // the standard defines that group; it cannot be an ODA
+                }
+                if self.rt_plus_pending == Some((group, ver_b)) {
+                    self.rt_plus_group = Some(group);
+                    self.rt_plus_ver_b = ver_b;
+                } else {
+                    self.rt_plus_pending = Some((group, ver_b));
+                }
             }
             return;
         }
@@ -673,6 +717,17 @@ impl RdsDecoder {
         let ct2 = ((((c & 0x1) << 5) | (d >> 11)) & 0x3f) as u8;
         let start2 = ((d >> 5) & 0x3f) as usize;
         let len2 = (d & 0x1f) as usize + 1;
+        // THE PAYLOAD NEEDS THE SAME TREATMENT. Blocks C and D carry the offsets
+        // and nothing protects them — the very reason RadioText requires two
+        // agreeing cycles. Unguarded, one corrupt group rewrote the artist from
+        // "LED ZEPPELIN" to "EPPELIN", and a corrupt running bit blanked both
+        // tags. Act only on a payload that has repeated, which costs one group
+        // (~a second) against an item that runs for minutes.
+        let payload = (running, ct1, start1, len1, ct2, start2, len2);
+        if self.rt_plus_last != Some(payload) {
+            self.rt_plus_last = Some(payload);
+            return;
+        }
         if !running {
             // The item has ENDED. Keeping the last song on screen over the next
             // one is the same staleness the rest of this decoder works to avoid.

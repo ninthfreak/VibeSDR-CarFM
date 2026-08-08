@@ -46,6 +46,22 @@ export function rankNearby<T extends RankableRow>(
   }
   // Array#sort is stable (required since ES2019), as is the Rust port's
   // sort_by, so equal scores keep the order SQLite returned them in.
-  out.sort((a, b) => b.score - a.score);
+  //
+  // A NaN SCORE RANKS LAST, EXPLICITLY. receivabilityScore propagates NaN (it
+  // is Math.max, which does), and the trim above keeps a NaN-distance row
+  // because `NaN > r` is false — so NaN really can reach this sort. The plain
+  // `b.score - a.score` returns NaN for those pairs, which the spec coerces to
+  // 0, making the comparator inconsistent: it reports NaN == 1 and NaN == 2
+  // while 1 < 2. That leaves the resulting order implementation-defined here,
+  // and it makes the Rust port's equivalent comparator PANIC outright (Rust
+  // checks its sort comparators for a total order, in release too). Sinking NaN
+  // to a single sentinel gives both languages the same total order; equal
+  // sentinels keep the stable sort's input order.
+  const key = (s: number): number => (Number.isNaN(s) ? -Infinity : s);
+  out.sort((a, b) => {
+    const x = key(a.score);
+    const y = key(b.score);
+    return x < y ? 1 : x > y ? -1 : 0;
+  });
   return out.slice(0, limit);
 }

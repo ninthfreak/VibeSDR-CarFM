@@ -1,0 +1,79 @@
+# The checks that must pass before anything lands on main.
+#
+# These are the same five the commit gate runs
+# (.claude/hooks/verify-before-commit.sh). The gate is Claude Code's PreToolUse
+# hook, so it only fires on commits made through Claude Code — a human typing
+# `git commit`, a web edit, or a force-push all bypass it. This is the only
+# thing that gates the MERGE. PRs #84-#88 all merged with zero automated checks.
+#
+# The two differentials are the reason this file exists. docs/HANDOFF.md §6
+# records that the first cut of the Rust port "drifted from the TypeScript
+# reference silently while its own tests stayed green"; the differentials were
+# built as the answer, and until now nothing ran them unasked.
+
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch makes the previous run irrelevant.
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # WITHOUT the FCC source zips. assets/fcc_source is 176 MB of raw LMS
+          # archives — build inputs to tools/build_station_db, needed by none of
+          # the checks below, and the bulk of a 263 MB .git. Excluding them takes
+          # the working tree from ~190 MB to 13 MB.
+          #
+          # Stated as "everything, except" rather than as a list of wanted
+          # directories on purpose: an include-list silently stops covering a new
+          # source directory the day someone adds one, which is exactly the kind
+          # of quiet gap this whole file exists to close.
+          sparse-checkout: |
+            /*
+            !/assets/fcc_source/
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'   # matches the toolchain the suites are run against
+          cache: npm
+
+      # Both crates are dependency-free, so there is nothing to cache and a cold
+      # `cargo test` costs about a second.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Backend suite
+        run: npm run test:backend
+
+      - name: Rust core
+        run: cargo test
+        working-directory: core
+
+      # Byte-identical, or it fails: the shipped decoder and the Rust port are
+      # fed the same generated corpus and their state is diffed after every step.
+      - name: RDS differential
+        run: npm run test:rds-diff
+
+      # Not a byte comparison — structure must match exactly, numbers to a
+      # relative 1e-9. tools/tests/stationsDifferential.mjs opens with the why.
+      - name: Station differential
+        run: npm run test:stations-diff

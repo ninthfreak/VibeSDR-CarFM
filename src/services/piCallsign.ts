@@ -148,12 +148,17 @@ export function callsignBase(callsign: string): string {
  * a country code rather than part of the callsign arithmetic. Observed on this
  * unit 2026-08-03, on two stations at once:
  *
- *   WIBA-FM 101.5 sends 0x19E2, callsign arithmetic gives 0x69E2 -> "KDTI"
- *   WZEE    104.1 sends 0x1718, callsign arithmetic gives 0x9718 -> "KCRW"
+ *   WIBA-FM 101.5 SENDS 0x19E2, which the formula renders as "KDTI".
+ *     WIBA's own arithmetic value is 0x69E2, and 0x69E2 does decode to "WIBA" —
+ *     the low 12 bits (0x9E2) are intact and only the top nibble is wrong.
+ *   WZEE    104.1 SENDS 0x1718, which renders as "KCRW".
+ *     WZEE's own arithmetic value is 0x9718, sharing the same low 12 bits.
  *
- * Both decodes are real, distant stations (KDTI is 90.3 in Rochester Hills MI,
- * KCRW is 89.9 in Santa Monica CA), so nothing about the value itself looks
- * wrong — only the dial disagrees.
+ * Read the arrows carefully: the arithmetic is not broken, the transmitted top
+ * nibble is. Both of the wrong decodes name real, distant stations (KDTI is 90.3
+ * in Rochester Hills MI, KCRW is 89.9 in Santa Monica CA), so nothing about the
+ * value itself looks wrong — only the dial disagrees. That is what makes the low
+ * 12 bits worth searching on, and it is what piLowBitsCandidates does.
  */
 export const PI_LOW_MASK = 0x0fff;
 
