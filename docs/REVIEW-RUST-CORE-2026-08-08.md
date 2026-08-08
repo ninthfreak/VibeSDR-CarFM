@@ -228,3 +228,30 @@ pass at the branch tip, not a rewrite.
 3. Rename the duplicate examples; run `cargo fmt` and fix the 5 clippy lints.
 4. One updating pass over HANDOFF.md §6–§8 and the two comment defects
    (`reset()` retune advice, corpus "0B/2B" claim, `replay.rs` header).
+
+## Addendum, same day: fixes applied
+
+All four items above landed on the work branch as `a9a5475` (code and
+harness) and `d315251` (handoff), verified the same way the review was done —
+each closed hole was re-opened on purpose and observed to fail:
+
+- Segment-15 mask computed in u32; two `replay.rs` regressions pin it; the
+  corpus gained four un-interleaved, `!retune`-primed stories (seg-15
+  terminator, 2B RadioText terminating in segment 15, slow scroller crossing
+  the verdict, replacement gate). Reverting the mask fix panics the harness;
+  breaking 2B addressing, `PS_SCROLL_DISTINCT`, or reverting `quality()` to
+  f32 each print DIVERGED with a step number.
+- Both dumps print `stats()`/`quality()` per line; `quality()` is f64 with
+  the TypeScript's operation order.
+- Examples renamed `rds-dump`/`stations-dump`; the issue-6313 warning is
+  gone; `cargo fmt --check` and `cargo clippy --all-targets` are clean.
+- `reset()`'s doc, the corpus "0B/2B" comment and the `replay.rs` header now
+  say true things; HANDOFF §6–§8 rewritten against the branch tip.
+- After all of it: RDS differential IDENTICAL over 2101 steps, stations
+  differential unchanged (worst deviation 1.097e-15), cargo test 52/52,
+  test:backend 18/18, tsc clean.
+
+Still open, deliberately (minors, in the list above): the `fmt_mhz` edge
+cases, unicode PS text in the stations corpus, the NaN clamp-site semantics,
+`rt_plus_ver_b` coverage, the tie-pick dump columns, the hardcoded 0.05
+beside `FREQ_EPS`, and the unfixable commit-message figure in `6211f46`.
