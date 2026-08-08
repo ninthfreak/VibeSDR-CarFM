@@ -69,9 +69,10 @@ export interface CarFmFaceProps {
    *  which is common: a station with weak RDS must render solid, because absence
    *  of data is not evidence of loss. Clamped inside SignalWaves. */
   signalDottedPairs?: number;
-  /** Which readout to draw, from the SETTINGS SELECTION rather than the live
-   *  probe (ANDROID §6.3 v1.13.0): `'sdr'` prints the dB figure with its unit,
-   *  `'nwd'` the unitless level. Defaults to the built-in tuner. */
+  /** Which readout to draw, following the source actually RUNNING (not the stored
+   *  picker selection — honouring that blanked the meter when the two disagreed,
+   *  fixed in e499d56): `'sdr'` prints the dB figure with its unit, `'nwd'` the
+   *  unitless level. Defaults to the built-in tuner. */
   signalReadout?: 'nwd' | 'sdr';
   /** RDS decoder has a lock (PI/PS seen) — drives the RDS tell. */
   rdsOk?: boolean;
@@ -1145,11 +1146,12 @@ export default function CarFmFace(props: CarFmFaceProps) {
   // there is no row/column variant to pick between.
   const signalCluster = (
     <View style={[styles.signalPill, !tall && { minHeight: L.stereoH, justifyContent: 'center' }]}>
-      {/* Strength draws the waves; reception loss converts the outermost lit
-          pairs to dotted. The count never shrinks, so a strong carrier arriving
-          in pieces stays distinguishable from a weak one arriving cleanly — the
-          case a level alone renders identically (WERN sat at 53-55 while losing
-          RDS fifteen times across one commute).
+      {/* Strength draws the waves; reception loss dots the DRAWN arcs inward from
+          the leading one (the half-step ring if lit, else the outermost full
+          pair) — so a strong carrier arriving in pieces stays distinguishable
+          from a weak one arriving cleanly, the case a level alone renders
+          identically (WERN sat at 53-55 while losing RDS fifteen times across one
+          commute). Model + thresholds: services/nwdSignalLevel + SIGNAL-METER.md.
           ALWAYS AMBER now. Grey used to mean "this is a GPS+database estimate
           rather than a reading", and there is no longer any such path — every
           number this cluster draws is measured. */}

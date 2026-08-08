@@ -98,7 +98,11 @@ export function formatSample(s: DebugSample): string {
     'SMP',
     `f=${n(s.mhz, 1)}`,
     `lvl=${n(s.level)}`,
-    `bars=${n(s.bars)}`,
+    // ONE decimal, because bars is fractional now: a half-step ring is half an
+    // element and logs as .5. Default dp=0 rounded it away — .5 rounds UP, so
+    // level 40 (a 45% ring, no solid pair) logged byte-identically to level 48
+    // (one solid pair), collapsing the exact distinction the half-step records.
+    `bars=${n(s.bars, 1)}`,
     `lat=${n(s.lat, 5)}`,
     `lon=${n(s.lon, 5)}`,
     `acc=${n(s.accM)}`,

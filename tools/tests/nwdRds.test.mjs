@@ -524,6 +524,28 @@ const RT_FULL = [...RT_LED, ...RT_PAD];
   eq('TA is set before the reset', d4.state().ta, true);
   d4.reset();
   eq('reset clears TA', d4.state().ta, false);
+
+  // clearTa() — the RDS-expiry path. The screen restores decoder.state()
+  // wholesale after a stale gap; without dropping TA here a stale announcement
+  // came back, and because the tally was still satisfied a genuinely-ongoing one
+  // could not re-publish. clearTa handles both: drops it, and forces re-confirm.
+  const d5 = createNwdRdsDecoder();
+  for (let i = 0; i < 6; i++) d5.push(g0(1, 1, i % 4));
+  eq('TA is set before the expiry', d5.state().ta, true);
+  d5.clearTa();
+  eq('clearTa drops it (so the restore reads false)', d5.state().ta, false);
+  // Sticky station state is untouched — only TA is momentary.
+  eq('clearTa keeps TP', d5.state().tp, true);
+  // Still running: it must re-confirm from fresh group-0s, not stay stuck off.
+  let back = null;
+  for (let i = 0; i < 5; i++) { d5.push(g0(1, 1, i % 4)); if (d5.state().ta && back === null) back = i + 1; }
+  eq('an ongoing announcement re-confirms after PI_CONFIRM group-0s', back, 3);
+  // Ended during the gap: TA=0 groups keep it off.
+  const d6 = createNwdRdsDecoder();
+  for (let i = 0; i < 6; i++) d6.push(g0(1, 1, i % 4));
+  d6.clearTa();
+  for (let i = 0; i < 4; i++) d6.push(g0(1, 0, i % 4));
+  eq('an ended announcement stays off', d6.state().ta, false);
 }
 
 // ── resetForRetune clears the PI; reset does not ────────────────────────────

@@ -128,12 +128,12 @@ export interface TunerCapabilities {
 export const NWD_CAPABILITIES: TunerCapabilities = {
   id: 'nwd',
   label: 'Built-in FM radio',
-  // No RSSI *yet*. getCurrentFrequency() returns 0, but that only rules out that
-  // method as the source of the packed freq+strength int — an xref shows the sole
-  // producer is NwdFmManager.seek(freq), whose return value AWNative.seek() splits
-  // into frequency and strength. Untested because seek() commands the tuner rather
-  // than reading it. See task #58.
-  signal: 'estimated',
+  // MEASURED as of 2026-08-04: seek(freq)'s packed return splits into frequency
+  // and strength (AWNative.seek), read on the post-tune schedule. The old
+  // GPS+FCC-DB 'estimated' path is gone. (This whole table is not yet wired into
+  // the face — task #55 migrates the source-identity branches onto it — so this
+  // value is not what actually drives the meter today; RadioScreen does.)
+  signal: 'measured',
   // LIVE as of 2026-08-01 — not via the AIDL (getRtMessage() is still hardcoded
   // "" and RDS is still region-gated at mcu_radio_area_current=1), but by reading
   // raw groups off NwdFmManager.getRadioRDSDataArm() and decoding them ourselves.

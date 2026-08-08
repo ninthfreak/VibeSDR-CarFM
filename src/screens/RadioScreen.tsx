@@ -1191,14 +1191,6 @@ export default function RadioScreen({ route, navigation }: Props) {
       setDataSaverOff(false);
       fullReconnect();
     });
-    // The OS says the network path moved under us (WiFi→cellular, or a cellular IP
-    // change on cell handover). Neither sends a FIN or an RST, so every socket on
-    // the old flow is now a zombie that will sit OPEN forever. Native has already
-    // treated the audio WS as suspect; the spectrum WS is JS's to revive, and it
-    // has the same zombie on the same dead flow. Rate-limited inside the client.
-    const subPath = emitter.addListener('VibeNetworkPathChanged', () => {
-      client.current?.forceResubscribe?.('network-path-change');
-    });
     // The device's SYSTEM volume changed — by the hardware buttons, a headset's own
     // rocker, etc. Track it so the app's own volume state stays in sync.
     const subVol = emitter.addListener('VibeVolume', (e: { volume: number }) => {
@@ -1243,7 +1235,7 @@ export default function RadioScreen({ route, navigation }: Props) {
     });
     return () => {
       sub.remove(); subMute.remove(); subSig.remove(); subSkip.remove(); subMediaKey.remove(); subHwKey.remove(); subFocus.remove(); subWs.remove();
-      subCar.remove(); subCarTune.remove(); subDsOff.remove(); subDsOn.remove(); subPath.remove(); subVol.remove();
+      subCar.remove(); subCarTune.remove(); subDsOff.remove(); subDsOn.remove(); subVol.remove();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -2409,11 +2401,23 @@ export default function RadioScreen({ route, navigation }: Props) {
   useEffect(() => subscribeDiagPrefs(() => setDiagOverlay(isDiagOverlayEnabled())), []);
   const osScheme = useColorScheme();
 
-  // Listen for the headlights on EVERY backend, not just NWD. This used to be
-  // registered only inside the NWD connect path, which is gated on a tunerless
-  // launch — so an RTL-SDR session never heard the broadcast and stayed light all
-  // night. Idempotent, and a no-op on a non-NWD unit.
-  useEffect(() => { nwdStartIlluminationWatch(); }, []);
+  // Headlights → day/night, on EVERY backend, not just NWD. The native watch AND
+  // the JS listener both have to live out here: the watch used to start only in
+  // the NWD connect path (gated on a tunerless launch), and the NwdIllState
+  // listener still did until this — so an RTL-SDR session on the same head unit
+  // started the emitter but had nobody listening, and stayed light all night.
+  // onNwd is a no-op when the native module is absent, so this is inert off-unit.
+  useEffect(() => {
+    nwdStartIlluminationWatch();
+    // extra_ill_state: 1 = headlights on = night. Confirmed on device; the same
+    // log confirmed androidUiMode never moves, which is why this is the signal
+    // rather than useColorScheme().
+    return onNwd('NwdIllState', (p) => {
+      const m = /extra_ill_state=(\d+)/.exec(p.extras);
+      if (m) setFmIllNight(m[1] === '1');
+      diag(`ILL ${p.action} [${p.extras}] androidUiMode=${p.uiMode}`);
+    });
+  }, []);
 
   // What the face is actually told. An explicit light/dark preference always
   // wins; only 'system' defers to the headlights.
@@ -2798,8 +2802,9 @@ export default function RadioScreen({ route, navigation }: Props) {
         }));
         // `arg` is the preset-slot index, NOT signal (confirmed on-device: it equals
         // the frequency's position in the factory preset list, −1 otherwise). The
-        // tuner exposes no real signal level, so drive the meter from the DB+GPS
-        // estimate instead (grey/estimated on the face).
+        // real signal level comes from seek()'s packed return, read on the post-tune
+        // schedule below — NOT from `arg`, and NOT from the old DB+GPS estimate,
+        // which is gone (there is no grey/estimated meter state any more).
         // PS/RadioText belong to the station we just left. A PI change clears
         // them too, but the dial moves first and PI only arrives with the next
         // group — without this the old name lingers across a preset step.
@@ -2969,17 +2974,10 @@ export default function RadioScreen({ route, navigation }: Props) {
         if (p.key === PANEL_KEY.PRESET_NEXT) fmHwStepRef.current?.(1);
         else if (p.key === PANEL_KEY.PRESET_PREV) fmHwStepRef.current?.(-1);
       }));
-      // Headlights → day/night. Logs only; nothing drives the palette from this
-      // yet. The pairing is the answer: if uiMode flips with the broadcast, the
-      // ROM does set Android night mode and the face should already follow it.
-      subs.push(onNwd('NwdIllState', (p) => {
-        // extra_ill_state: 1 = headlights on = night. Confirmed on device; the
-        // same log confirmed androidUiMode never moves, which is why this is the
-        // signal rather than useColorScheme().
-        const m = /extra_ill_state=(\d+)/.exec(p.extras);
-        if (m) setFmIllNight(m[1] === '1');
-        diag(`ILL ${p.action} [${p.extras}] androidUiMode=${p.uiMode}`);
-      }));
+      // NwdIllState (headlights → day/night) is NOT subscribed here. It moved to a
+      // top-level effect beside nwdStartIlluminationWatch, so an RTL-SDR session
+      // on this head unit follows the headlights too — this block only runs on the
+      // built-in-tuner (tunerless) path.
       subs.push(onNwd('NwdRadioRt', (p) => { setLiveStation((prev) => ({ ...prev, text: p.rt || undefined })); diag(`RT '${p.rt}'`); }));
       subs.push(onNwd('NwdRadioStereo', (p) => {
         // Counted on the RAW event, before the 2s debounce: the debounce exists to
@@ -3037,6 +3035,14 @@ export default function RadioScreen({ route, navigation }: Props) {
           // confirmed text comes straight back instead of being re-acquired from
           // the worst air of the drive.
           rdsStaleRef.current = true;
+          // Drop TA in the DECODER, not just the display. The restore path in the
+          // group handler re-publishes decoder.state() wholesale after a stale
+          // gap; without this it would resurrect a `st.ta` latched before the
+          // carrier dropped — and because the tally would still be satisfied, a
+          // genuinely-ongoing announcement could not re-publish either. clearTa
+          // handles both. TP and the text stay; only "an announcement is running
+          // now" is unsafe to carry across a multi-second silence.
+          rdsDecoder.current.clearTa();
           setLiveStation((prev) =>
             (prev.name || prev.text || prev.pty !== undefined || prev.tp || prev.ta || prev.pi)
               ? { ...prev, name: undefined, text: undefined, pty: undefined, tp: false, ta: false, pi: undefined }

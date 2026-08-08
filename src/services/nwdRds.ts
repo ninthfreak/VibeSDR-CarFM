@@ -160,6 +160,10 @@ export interface NwdRdsDecoder {
    *  Without this the new station has to displace the old one (see PI_DISPLACE),
    *  which blocks all RDS for as long as that takes. */
   resetForRetune(): void;
+  /** Drop TA only, keeping all sticky station state. For an RDS expiry: the
+   *  announcement cannot be assumed still running after a multi-second gap, and
+   *  clearing the tally makes it re-confirm rather than be restored stale. */
+  clearTa(): void;
   state(): RdsState;
   /** Reception quality since the last resetStats(). `groups` counts well-formed
    *  non-empty groups; `piMismatch` counts those whose block A did not carry the
@@ -586,6 +590,18 @@ export function createNwdRdsDecoder(): NwdRdsDecoder {
       piConfirmed = null;
       piPending = null;
       piPendingCount = 0;
+    },
+    // The carrier went quiet (an RDS expiry, NOT a retune). Everything else the
+    // decoder holds is sticky station identity worth restoring when the carrier
+    // returns — PS, RadioText, PI, PTY, TP. TA is the one exception: it means "an
+    // announcement is happening RIGHT NOW", and after a multi-second gap that is
+    // no longer a safe assumption. Dropping the tally too forces it to
+    // re-confirm from fresh group-0s rather than the screen's restore path
+    // resurrecting a `st.ta` left over from before the gap.
+    clearTa: () => {
+      st.ta = false;
+      taPending = null;
+      taCount = 0;
     },
     state: () => ({ ...st }),
     stats: () => ({ groups: statGroups, piMismatch: statPiMismatch }),

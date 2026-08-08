@@ -2260,13 +2260,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     playFromBrowseId("${it.freq}|${it.mode}|${it.step}|0")
                     setMutedNative(false)
                 }
-                override fun onPlayFromSearch(query: String?, extras: Bundle?) {
-                    // Voice ("play 94.1" / "play WJJO"): resolved in JS against
-                    // presets/bands/frequencies — same path as the Siri intent.
-                    val q = query?.trim().orEmpty()
-                    if (q.isEmpty()) { setMutedNative(false); return }
-                    emitEvent("VibeVoiceQuery") { it.putString("query", q) }
-                }
+                // onPlayFromSearch (voice "play 94.1" / "play WJJO") is deliberately
+                // NOT overridden. It emitted VibeVoiceQuery to JS "same path as the
+                // Siri intent" — but the Siri/CarPlay path was stripped, so nothing
+                // ever listened and the query resolved to nothing. VibeSDR remnant.
                 override fun onCustomAction(action: String?, extras: Bundle?) {
                     when (action) {
                         ACTION_CARFM_SAVE -> emitEvent("VibeCarAction") { it.putString("action", "save") }
