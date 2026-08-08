@@ -26,7 +26,7 @@ writeFileSync(corpusPath, corpus);
 const steps = corpus.trimEnd().split('\n').length;
 
 const ts = run(process.execPath, ['--no-warnings', join(here, 'rdsDump.mjs'), corpusPath]);
-const rs = run('cargo', ['run', '-q', '--example', 'dump'], {
+const rs = run('cargo', ['run', '-q', '-p', 'carfm-rds', '--example', 'dump'], {
   cwd: join(repo, 'core'),
   input: corpus,
 });

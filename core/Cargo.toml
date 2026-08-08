@@ -10,7 +10,7 @@
 # bytes, get values back. Platform glue lives above it.
 [workspace]
 resolver = "2"
-members = ["rds"]
+members = ["rds", "stations"]
 
 [workspace.package]
 edition = "2021"
