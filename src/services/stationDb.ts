@@ -28,6 +28,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as SQLite from 'expo-sqlite';
 
 import { boundingBox } from './stationGeo';
+import { FREQ_EPS } from './stationIdentify';
 import { rankNearby } from './stationRank';
 
 import type { StationRow } from './stationTypes';
@@ -231,7 +232,7 @@ export async function stationsAtFrequency(mhz: number): Promise<StationRow[]> {
   if (!d || !Number.isFinite(mhz) || mhz <= 0) return [];
   try {
     const raw = await d.getAllAsync<RawRow>(
-      `SELECT * FROM stations WHERE service = 'FM' AND ABS(frequency_mhz - ?) < 0.05`, [mhz]);
+      `SELECT * FROM stations WHERE service = 'FM' AND ABS(frequency_mhz - ?) < ?`, [mhz, FREQ_EPS]);
     return raw.map(mapRow);
   } catch (e) {
     console.warn('[stationDb] frequency lookup failed', e);

@@ -255,3 +255,32 @@ Still open, deliberately (minors, in the list above): the `fmt_mhz` edge
 cases, unicode PS text in the stations corpus, the NaN clamp-site semantics,
 `rt_plus_ver_b` coverage, the tie-pick dump columns, the hardcoded 0.05
 beside `FREQ_EPS`, and the unfixable commit-message figure in `6211f46`.
+
+## Second addendum: the minors, closed
+
+Six of the seven landed in a follow-up commit on this branch, each verified
+by breaking it and watching the harness object:
+
+- `fmt_mhz` handles the non-finite spellings and −0 and documents its true
+  domain; a new `identify … Infinity` scenario pins it (mutant prints "inf"
+  vs "Infinity" — STRUCTURAL DIVERGENCE).
+- The stations corpus feeds the hand-rolled `\b` reproduction embedded runs,
+  multi-byte neighbours, ß-expansion and underscores; stripping the boundary
+  checks now diverges (caught on `AKQRZX`).
+- All four Rust clamp sites reproduce `Math.min`/`Math.max` NaN propagation
+  via explicit comparisons; NaN `score`/`geo`/`bbox` scenarios pin them
+  (reverting one clamp: NaN vs −59.02… — STRUCTURAL DIVERGENCE).
+- An RT+ version-B story assigns 11B and sends an 11A decoy with swapped
+  artist/title fields; removing the version check swaps the tags and
+  diverges at the decoy.
+- Both station dumps print `facility_id` on nearby rows and the identify
+  station triple, so a tie-pick among identically-printed rows can no longer
+  drift invisibly.
+- The dial tolerance references `FREQ_EPS` everywhere it was hardcoded: the
+  SQL in `stationDb.ts`, both harness sources, and the crate's test fixture.
+
+The seventh — commit `6211f46` quoting 119 control commands where the
+generator emits 139 — is committed history; this document is its correction.
+After the fixes: RDS differential IDENTICAL over 2170 steps, stations
+differential EQUIVALENT over 87,622 scenarios (worst deviation unchanged),
+cargo test 52/52, clippy and fmt clean, test:backend 18/18, tsc clean.

@@ -9,7 +9,7 @@ import { readFileSync } from 'fs';
 import { haversineKm, boundingBox, receivabilityScore } from '../../src/services/stationGeo.ts';
 import { piToCallsign, callsignToPi, callsignBase } from '../../src/services/piCallsign.ts';
 import { rankNearby } from '../../src/services/stationRank.ts';
-import { identifyFromSource } from '../../src/services/stationIdentify.ts';
+import { identifyFromSource, FREQ_EPS } from '../../src/services/stationIdentify.ts';
 
 const text = readFileSync(process.argv[2], 'utf8').split('\n');
 const q = (s) => JSON.stringify(s);
@@ -46,7 +46,7 @@ const source = {
   },
   async atFrequency(mhz) {
     if (!Number.isFinite(mhz) || mhz <= 0) return [];
-    return rows.filter((r) => r.service === 'FM' && Math.abs(r.frequencyMhz - mhz) < 0.05);
+    return rows.filter((r) => r.service === 'FM' && Math.abs(r.frequencyMhz - mhz) < FREQ_EPS);
   },
 };
 
@@ -94,7 +94,7 @@ for (; i < text.length; i++) {
       const ranked = rankNearby(lat, lon, radius, limit, inBox);
       lines.push(`nearby ${rest} -> ${ranked.length}`);
       for (const s of ranked) {
-        lines.push(`  ${s.callsign} ${s.callsignBase} ${n(s.frequencyMhz)} ${s.service} d=${n(s.distanceKm)} s=${n(s.score)}`);
+        lines.push(`  ${s.callsign} ${s.callsignBase} ${n(s.frequencyMhz)} ${s.service} f=${s.facilityId} d=${n(s.distanceKm)} s=${n(s.score)}`);
       }
       break;
     }
@@ -104,7 +104,7 @@ for (; i < text.length; i++) {
       const ps = a.slice(2).join(' ') === '\\N' ? undefined : a.slice(2).join(' ');
       const id = await identifyFromSource(pi, ps, freq, source);
       lines.push(`identify ${rest} -> call=${q(id.callsign)} conf=${id.confident} `
-        + `st=${q(id.station ? `${id.station.callsign}|${n(id.station.frequencyMhz)}|${id.station.service}` : null)} `
+        + `st=${q(id.station ? `${id.station.callsign}|${n(id.station.frequencyMhz)}|${id.station.service}|${id.station.facilityId}` : null)} `
         + `note=${q(id.note ?? null)}`);
       break;
     }

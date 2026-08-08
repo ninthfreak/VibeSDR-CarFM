@@ -138,6 +138,42 @@ for (const pi of [0xa6ff, 0x57ff, 0xffff, 0x0000, 0xa000, 0xafff, 0x1000, 0x54a8
   out.push(`identify ${pi} \\N \\N`);
 }
 
+// ── PS-text word boundaries, unicode included ────────────────────────────────
+// The Rust side reproduces /\b([KW][A-Z]{3})\b/ by hand over UTF-8 bytes.
+// Embedded runs must NOT read as callsigns; multi-byte neighbours ARE
+// boundaries (JS \w is [A-Za-z0-9_] only); input is uppercased first, and ß
+// uppercases to SS, which shifts byte offsets. Frequency is \N so the dial
+// gate cannot short-circuit the PS check.
+const psHost = rows.find((r) => r.service === 'FM' && /^[KW][A-Z]{3}$/.test(r.callsign_base));
+const psPi = piOf(psHost.callsign_base);
+for (const ps of [
+  'KQRZ NEWS',            // a standalone other callsign: contradiction
+  'AKQRZX',               // the same run embedded: no match
+  'ROCKQRZ',              // embedded at the end of a word
+  'KQRZS',                // trailing word char
+  'WKQRZ',                // a W then the run — the K is mid-word
+  'Ö KQRZ Ö',             // multi-byte neighbours are boundaries
+  'ÖKQRZ',                // multi-byte char directly before: still a boundary
+  'kqrz calling',         // lowercase reaches toUpperCase first
+  'ßKQRZ',                // uppercases to SSKQRZ: no boundary before K
+  '_KQRZ', 'KQRZ_',       // underscore is a word char
+  `${psHost.callsign_base} FM`, // names ITSELF: not a contradiction
+]) {
+  out.push(`identify ${psPi} \\N ${ps}`);
+}
+
+// ── non-finite inputs ────────────────────────────────────────────────────────
+// JavaScript's Math.min/max PROPAGATE NaN where Rust's f64 min/max discard it,
+// and `${Infinity}` prints differently from Rust's default "inf". Both parse
+// "nan"/"Infinity" identically, so the corpus can carry them as text.
+for (const [erp, cls, dist] of [['nan', 'C1', '15'], ['6', '\\N', 'nan'], ['nan', '\\N', 'nan']]) {
+  out.push(`score ${erp} ${cls} ${dist}`);
+}
+out.push('geo nan 0 43.0731 -89.4012');
+out.push('bbox nan 0 100');
+out.push(`identify ${psPi} Infinity \\N`);
+out.push(`identify ${psPi} nan \\N`);
+
 function piOf(base) {
   // The RBDS formula, inline, so the corpus does not depend on the code it tests.
   if (!/^[KW][A-Z]{3}$/.test(base)) return 0;
