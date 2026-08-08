@@ -523,10 +523,30 @@ The cargo-absent path was tested both ways: with no Rust on `PATH` a
 TypeScript-only commit is allowed, while a commit touching `core/` is refused
 rather than silently skipped.
 
-**What this does not cover, stated plainly:** the hook is Claude Code's
-`PreToolUse`, so a human typing `git commit` in a terminal still runs nothing,
-and there is still no CI. A `.github/workflows` job running the same five
-commands remains the real backstop and was not built here.
+**§3 the enforcement gap, closed at the merge.** `.github/workflows/verify.yml`
+runs the same five commands on every pull request and on pushes to `main`. That
+is what the commit hook cannot do: the hook is Claude Code's `PreToolUse`, so a
+human typing `git commit`, a web edit or a force-push all bypass it, and PRs
+#84-#88 merged with nothing checking them at all.
+
+The checkout excludes `assets/fcc_source` — 176 MB of raw FCC zips that are
+build inputs to the database builder and are needed by none of the checks —
+taking the working tree from ~190 MB to 13 MB. It is expressed as "everything,
+except" rather than as a list of wanted directories, so a new source directory
+is covered the day someone adds it rather than silently skipped.
+
+**Verified, and the limit on that verification:** GitHub Actions cannot run in
+this container, so the workflow has never executed. What was proved here is
+that a real clone made with the same sparse pattern contains everything the
+checks need — `assets/db/stations.sqlite`, `patches/`, `app.json`, the Android
+manifest — and that all five commands pass inside it (`npm ci`, `tsc`,
+`test:backend`, `cargo test`, both differentials, every one exit 0), plus that
+the YAML parses to the intended nine steps. The first pull request is the
+workflow's own first real test.
+
+Not covered by either mechanism: a native git hook. `.git/hooks` still holds
+only samples and `core.hooksPath` is unset, so a terminal commit runs nothing
+locally — CI catches it, but only at the merge.
 
 One process note, recorded because it nearly slipped through: the TypeScript RDS
 test was failing while a `grep`-based check of the suite output reported success.

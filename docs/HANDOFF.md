@@ -186,11 +186,20 @@ installed, but refuses outright if the commit touches `core/` without one, so
 the skip cannot become the silent hole it is meant to avoid. `--no-verify` is
 still an explicit human override.
 
-Two limits worth knowing. The hook is Claude Code's `PreToolUse`, so a human
-typing `git commit` in a terminal runs nothing; and there is **no CI at all** —
-no `.github/`, no installed git hooks (`.git/hooks` holds only samples,
-`core.hooksPath` is unset). PRs #84-#88 merged with zero automated checks. A
-workflow running these same five commands is the remaining gap.
+The hook is Claude Code's `PreToolUse`, so a human typing `git commit` in a
+terminal runs nothing, and a web edit or force-push bypasses it too. What gates
+the MERGE is `.github/workflows/verify.yml`, which runs the same five commands
+on every pull request and on pushes to `main`. It checks out without
+`assets/fcc_source` (176 MB of FCC zips that no check needs), which takes the
+working tree from ~190 MB to 13 MB; the exclusion is written as "everything,
+except" so a new source directory is covered the day it appears.
+
+**That workflow has never executed** — GitHub Actions cannot run in this
+container. What was verified here is that its five commands all pass inside a
+real sparse checkout built with the same pattern, and that the YAML parses. The
+first PR to use it is also its first real test. Still absent: any git hook
+outside Claude Code (`.git/hooks` holds only samples, `core.hooksPath` is
+unset).
 
 **Cannot be run in the container:**
 - **There is no Kotlin compiler and no Android build.** Native changes are
