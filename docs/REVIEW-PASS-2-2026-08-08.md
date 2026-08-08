@@ -462,6 +462,58 @@ build to confirm.
 
 ---
 
+## Addendum — four fixes applied
+
+Landed after the pass, each closed and then re-broken on purpose to prove the
+guard sees it.
+
+**1.4 the NaN sort.** Both implementations now map a NaN score to a single
+sentinel before sorting, giving a real total order in Rust and a consistent
+comparator in JavaScript, with unrankable rows sunk and left tied so the stable
+sort keeps their input order. The two agree independently: over a
+hundred-row fixture with scattered NaN, both put the first NaN at index 86.
+Pinned by a Rust regression test and a new `tools/tests/stationRank.test.mjs`
+(wired into `test:backend`); reverting the comparator makes the Rust test panic
+with "user-provided comparison function does not correctly implement a total
+order".
+
+**1.1 the RT+ gates.** Both halves are closed, in both ports. An ODA
+announcement is refused outright when it names a group the standard already
+defines (0A/0B, 1A/1B, 2A/2B, 3A, 4A, 10A, 15B), and is otherwise adopted only
+when it repeats. The payload is acted on only when the whole decoded triplet set
+repeats, which also stops a lone corrupt group blanking a running item. The two
+original exploits now produce empty tags instead of `art="E"` and
+`art="EPPELIN"`, while a legitimately announced and repeated payload still
+publishes `"LED ZEPPELIN"` / `"WHOLE LOTTA LOVE"`. The corpus gained a story for
+each failure shape, and the existing RT+ passages were extended so the change
+did not silently delete the coverage that was already there — artist and title
+still publish 17 times across the corpus.
+
+**2.1 the inverted PI comment.** Corrected in `piCallsign.ts` and `pi.rs`: the
+transmitted code is what renders as KDTI/KCRW, the arithmetic values 0x69E2 and
+0x9718 are the stations' own and decode correctly, and the fault is the top
+nibble rather than the formula.
+
+**1.2 the deep-link regex.** The guard now tests `carfm|sdr`, matching what
+`app.json` and `AndroidManifest.xml` register. A new
+`tools/tests/deepLinkSchemes.test.mjs` cross-checks the manifest, `app.json`,
+the runtime guard and both parsers against each other, and fails if they drift
+again. **Consequence worth stating:** this makes `DeepLinkHandler` reachable for
+the first time, which also makes the `kiwi`/`owrx` server types selectable — so
+the ~2,100 lines of SDR adapters listed as unreachable in §5 are no longer
+unreachable. Nothing else was changed to suit that; it is a live consequence of
+repairing the link path rather than deleting it.
+
+After all four: `cargo test` 54, `cargo clippy` 0 warnings, `cargo fmt` clean,
+`tsc` clean, `test:backend` 20 suites, `test:rds-diff` identical over 2411
+steps, `test:stations-diff` equivalent over 87,622 scenarios.
+
+One process note, recorded because it nearly slipped through: the TypeScript RDS
+test was failing while a `grep`-based check of the suite output reported success.
+`tools/tests/nwdRds.test.mjs` builds the decoder from source through a
+hand-written regex type-stripper, so an unfamiliar type annotation surfaced as a
+`SyntaxError` rather than as a failed assertion. Verify suites by exit code.
+
 ## Appendix — checked and clean
 
 Recorded so the next pass need not redo them: the logos `LEFT JOIN` cannot

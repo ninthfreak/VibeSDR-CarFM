@@ -415,12 +415,27 @@ const RT_FULL = [...RT_LED, ...RT_PAD];
   const B = 0xc000 | (1 << 3) | 0b000;
   const C = (0b100 << 13) | (0 << 7) | (11 << 1) | 0;
   const D = (1 << 11) | (15 << 5) | 6;
+
+  // NEITHER HALF OF RT+ ACTS ON ONE GROUP. The group number rides in block B and
+  // the offsets in blocks C/D, none of which carry error protection — the same
+  // exposure that forced RadioText's two-cycle rule. One 3A pointed RT+ at group
+  // 0A once, and one corrupt payload rewrote a correct artist.
+  d.push(hex(PI, B, C, D));
+  d.push(hex(PI, B, C, D));
+  eq('one announcement does not assign the group', d.state().rtArtist, '');
+
+  d.push('19e234d800004bd7');                    // announced again: now assigned
+  d.push(hex(PI, B, C, D));
+  eq('nor does a single payload group publish', d.state().rtArtist, '');
   d.push(hex(PI, B, C, D));
   eq('RT+ labels the artist', d.state().rtArtist, 'Led Zeppelin');
   eq('RT+ labels the title', d.state().rtTitle, 'Kashmir');
 
   // running=0 means the item ENDED. Holding the last song over the next one is
-  // the staleness the rest of this decoder exists to prevent.
+  // the staleness the rest of this decoder exists to prevent — but a lone group
+  // must not blank a running item either.
+  d.push(hex(PI, 0xc000 | 0b000, C, D));
+  eq('one group does not end the item', d.state().rtArtist, 'Led Zeppelin');
   d.push(hex(PI, 0xc000 | 0b000, C, D));
   eq('an ended item clears the artist', d.state().rtArtist, '');
   eq('an ended item clears the title', d.state().rtTitle, '');
@@ -428,8 +443,10 @@ const RT_FULL = [...RT_LED, ...RT_PAD];
   // A marker running off the end of the RadioText is REJECTED, not clamped — a
   // truncated artist is still a wrong artist.
   d.push(hex(PI, B, C, D));
+  d.push(hex(PI, B, C, D));
   eq('...and a fresh running item restores them', d.state().rtArtist, 'Led Zeppelin');
   const farC = (0b100 << 13) | (60 << 7) | (11 << 1) | 0;
+  d.push(hex(PI, B, farC, D));
   d.push(hex(PI, B, farC, D));
   eq('an out-of-range marker is refused, not clamped', d.state().rtArtist, 'Led Zeppelin');
 
@@ -437,8 +454,22 @@ const RT_FULL = [...RT_LED, ...RT_PAD];
   const d2 = createNwdRdsDecoder();
   for (let i = 0; i < 4; i++) d2.push(hex(PI, 0x0000, 0x0000, 0x2020));
   d2.push(hex(PI, 0x34d8, 0x0000, 0x1234));      // some other AID in the same slot
+  d2.push(hex(PI, 0x34d8, 0x0000, 0x1234));
+  d2.push(hex(PI, B, C, D));
   d2.push(hex(PI, B, C, D));
   eq('a non-RT+ ODA declaration is ignored', d2.state().rtArtist, '');
+
+  // An ODA announced on a group the standard already defines is a corrupted
+  // announcement. 0A is PS: believing it turned PS groups into RT+ payloads,
+  // because M/S is the running bit and an AF pair decodes as an ARTIST marker.
+  const d3 = createNwdRdsDecoder();
+  for (let i = 0; i < 4; i++) d3.push(hex(PI, 0x0000, 0x0000, 0x2020));
+  for (let pass = 0; pass < 2; pass++) for (let seg = 0; seg < 6; seg++) d3.push(put(seg));
+  d3.push(hex(PI, 0x3000, 0x0000, 0x4bd7));      // "RT+ lives in 0A" — refused
+  d3.push(hex(PI, 0x3000, 0x0000, 0x4bd7));
+  d3.push(hex(PI, 0x0008, 0x8016, 0x2020));      // ordinary 0A: M/S set, AF pair
+  d3.push(hex(PI, 0x0008, 0x8016, 0x2020));
+  eq('an ODA announced on a defined group is refused', d3.state().rtArtist, '');
 }
 
 // ── TP has its own consensus, and TA is not decoded at all ──────────────────

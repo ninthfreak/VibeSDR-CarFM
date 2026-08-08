@@ -119,7 +119,14 @@ export function useDeepLinks(ready: boolean) {
   };
 
   const handle = (url: string | null) => {
-    if (!url || !/^(vibesdr|sdr):\/\//i.test(url)) return;
+    // The schemes this app actually registers, and nothing else. This read
+    // `vibesdr|sdr` until 2026-08-08 — a leftover from the fork's rename that
+    // disabled the app's own scheme completely: AndroidManifest and app.json
+    // register `carfm` and `sdr`, DeepLinkHandler parses only `carfm://`, and
+    // `vibesdr://` is registered nowhere and so can never be delivered. Every
+    // carfm:// intent was dropped here, one line short of the parser meant to
+    // handle it. Keep this list in step with app.json's `scheme` array.
+    if (!url || !/^(carfm|sdr):\/\//i.test(url)) return;
     const now = Date.now();
     if (url === lastUrl.current && now - lastAt.current < 2000) return; // dedup
     lastUrl.current = url;
