@@ -6,7 +6,7 @@
 use carfm_stations::identify::StationSource;
 use carfm_stations::{
     bounding_box, callsign_base, callsign_to_pi, haversine_km, identify_by_pi, pi_to_callsign,
-    rank_nearby, receivability_score, StationRow,
+    rank_nearby, receivability_score, StationRow, FREQ_EPS,
 };
 
 /// `JSON.stringify` for a string or null, matching what the TypeScript prints.
@@ -66,7 +66,7 @@ impl StationSource for Table {
         }
         self.0
             .iter()
-            .filter(|r| r.service == "FM" && (r.frequency_mhz - mhz).abs() < 0.05)
+            .filter(|r| r.service == "FM" && (r.frequency_mhz - mhz).abs() < FREQ_EPS)
             .cloned()
             .collect()
     }
@@ -207,11 +207,12 @@ fn main() {
                 out.push_str(&format!("nearby {rest} -> {}\n", ranked.len()));
                 for s in &ranked {
                     out.push_str(&format!(
-                        "  {} {} {} {} d={} s={}\n",
+                        "  {} {} {} {} f={} d={} s={}\n",
                         s.row.callsign,
                         s.row.callsign_base,
                         jnum(s.row.frequency_mhz),
                         s.row.service,
+                        s.row.facility_id,
                         jnum(s.distance_km),
                         jnum(s.score)
                     ));
@@ -223,10 +224,15 @@ fn main() {
                 let ps_joined = a[2..].join(" ");
                 let ps = un(&ps_joined).map(str::to_string);
                 let id = identify_by_pi(pi, ps.as_deref(), freq, &table);
-                let st = id
-                    .station
-                    .as_ref()
-                    .map(|s| format!("{}|{}|{}", s.callsign, jnum(s.frequency_mhz), s.service));
+                let st = id.station.as_ref().map(|s| {
+                    format!(
+                        "{}|{}|{}|{}",
+                        s.callsign,
+                        jnum(s.frequency_mhz),
+                        s.service,
+                        s.facility_id
+                    )
+                });
                 out.push_str(&format!(
                     "identify {rest} -> call={} conf={} st={} note={}\n",
                     jstr(id.callsign.as_deref()),

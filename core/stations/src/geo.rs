@@ -10,13 +10,33 @@ const EARTH_R_KM: f64 = 6371.0088;
 const KM_PER_DEG_LAT: f64 = 111.32;
 const D2R: f64 = std::f64::consts::PI / 180.0;
 
+/// `Math.min`/`Math.max` clamps, NaN included. Rust's `f64::min`/`max` DISCARD a
+/// NaN operand where JavaScript's propagate it, so a NaN input produced a number
+/// here and NaN in the reference. Explicit comparisons reproduce the JS rule:
+/// the comparison with NaN is false, so NaN falls through unclamped.
+fn clamp_min(floor: f64, v: f64) -> f64 {
+    if v < floor {
+        floor
+    } else {
+        v
+    }
+}
+
+fn clamp_max(ceil: f64, v: f64) -> f64 {
+    if v > ceil {
+        ceil
+    } else {
+        v
+    }
+}
+
 /// Great-circle distance in km.
 pub fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let d_lat = (lat2 - lat1) * D2R;
     let d_lon = (lon2 - lon1) * D2R;
     let a = (d_lat / 2.0).sin().powi(2)
         + (lat1 * D2R).cos() * (lat2 * D2R).cos() * (d_lon / 2.0).sin().powi(2);
-    2.0 * EARTH_R_KM * a.sqrt().min(1.0).asin()
+    2.0 * EARTH_R_KM * clamp_max(1.0, a.sqrt()).asin()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -33,7 +53,7 @@ pub struct BBox {
 pub fn bounding_box(lat: f64, lon: f64, radius_km: f64) -> BBox {
     let d_lat = radius_km / KM_PER_DEG_LAT;
     // Guard the cosine near the poles (irrelevant for the US, but keep it safe).
-    let cos = (lat * D2R).cos().max(0.01);
+    let cos = clamp_min(0.01, (lat * D2R).cos());
     let d_lon = radius_km / (KM_PER_DEG_LAT * cos);
     BBox {
         min_lat: lat - d_lat,
@@ -71,9 +91,9 @@ pub fn receivability_score(
     distance_km: f64,
 ) -> f64 {
     // Floor; assume tiny if unknown.
-    let erp = erp_kw.unwrap_or(0.05).max(0.0001);
+    let erp = clamp_min(0.0001, erp_kw.unwrap_or(0.05));
     // Avoid log(0) right on top of a transmitter.
-    let dist = distance_km.max(1.0);
+    let dist = clamp_min(1.0, distance_km);
     10.0 * erp.log10() - 20.0 * dist.log10() + class_bonus(station_class)
 }
 

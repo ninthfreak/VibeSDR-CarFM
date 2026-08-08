@@ -154,6 +154,25 @@ for (const pi of PIS) {
   }
 }
 
+// RT+ carried by a VERSION-B group. The 3A announcement's low bit selects the
+// version and the decoder must honour it: after 11B is assigned, an 11B payload
+// applies while an 11A payload — same group number, wrong version — must be
+// ignored. The decoy swaps the artist and title fields, so a decoder that stops
+// checking the version shows swapped tags rather than nothing.
+for (const pi of PIS) {
+  primeStory(pi);
+  stories.push(grp(pi, blockB(3, 0, 1, 10, 23), 0x0000, 0x4bd7));   // RT+ on 11B
+  for (let pass = 0; pass < 2; pass++) {
+    for (let seg = 0; seg < 8; seg++) {
+      const at = seg * 4;
+      const byte = i => (at + i === 31 ? 0x0d : (RT_MSG.charCodeAt(at + i) || 0x20));
+      stories.push(grp(pi, blockB(2, 0, 1, 10, seg), (byte(0) << 8) | byte(1), (byte(2) << 8) | byte(3)));
+    }
+  }
+  stories.push(grp(pi, blockB(11, 1, 1, 10, 0b01000), 0x8016, 0x09ef)); // 11B: applies
+  stories.push(grp(pi, blockB(11, 0, 1, 10, 0b01000), 0x2016, 0x21ef)); // 11A decoy: ignored
+}
+
 // The replacement gate. Publish M, then a corrupt assembly ONCE (must not
 // replace), then a genuinely new message ONCE (must not replace either — it has
 // not repeated), then that message AGAIN (two agreeing cycles: replace).

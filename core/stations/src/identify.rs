@@ -92,7 +92,24 @@ fn callsign_in_ps(ps_upper: &str) -> Option<String> {
 
 /// Format a frequency the way JavaScript's template literal does, so the note
 /// strings the two implementations produce compare equal.
+///
+/// The plain `{}` already agrees with JS for every finite value in
+/// [1e-6, 1e21) — both print the shortest round-tripping decimal without an
+/// exponent. Outside that window JS switches to exponent notation and this does
+/// not; those magnitudes cannot describe a dial frequency, so they are out of
+/// domain rather than handled. The cases a caller CAN reach are matched
+/// explicitly: the non-finite spellings differ ("inf" vs "Infinity"), and JS
+/// prints -0 as "0".
 fn fmt_mhz(v: f64) -> String {
+    if v.is_nan() {
+        return "NaN".to_string();
+    }
+    if v.is_infinite() {
+        return if v > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+    if v == 0.0 {
+        return "0".to_string();
+    }
     format!("{v}")
 }
 
@@ -223,7 +240,7 @@ mod tests {
         fn at_frequency(&self, mhz: f64) -> Vec<StationRow> {
             self.0
                 .iter()
-                .filter(|r| r.service == "FM" && (r.frequency_mhz - mhz).abs() < 0.05)
+                .filter(|r| r.service == "FM" && (r.frequency_mhz - mhz).abs() < FREQ_EPS)
                 .cloned()
                 .collect()
         }
