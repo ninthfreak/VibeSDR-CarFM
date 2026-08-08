@@ -58,16 +58,19 @@ pub struct PiDecode {
 
 impl PiDecode {
     fn none(note: &str) -> Self {
-        PiDecode { callsign: None, method: PiMethod::None, confident: false, note: Some(note.to_string()) }
+        PiDecode {
+            callsign: None,
+            method: PiMethod::None,
+            confident: false,
+            note: Some(note.to_string()),
+        }
     }
 }
 
 /// `/^[KW][A-Z]{3}$/` — four ASCII chars, K or W then three A-Z.
 fn is_valid_callsign(cs: &str) -> bool {
     let b = cs.as_bytes();
-    b.len() == 4
-        && (b[0] == b'K' || b[0] == b'W')
-        && b[1..].iter().all(|c| c.is_ascii_uppercase())
+    b.len() == 4 && (b[0] == b'K' || b[0] == b'W') && b[1..].iter().all(|c| c.is_ascii_uppercase())
 }
 
 /// `callsignRaw.toUpperCase().replace(/-.*$/, '').trim()`.
@@ -81,9 +84,9 @@ fn is_valid_callsign(cs: &str) -> bool {
 /// divergence rather than as a shrug.
 pub fn callsign_base(callsign: &str) -> String {
     let upper = callsign.to_uppercase();
-    let cut = upper.char_indices().find(|&(i, c)| {
-        c == '-' && !upper[i..].chars().any(is_js_line_terminator)
-    });
+    let cut = upper
+        .char_indices()
+        .find(|&(i, c)| c == '-' && !upper[i..].chars().any(is_js_line_terminator));
     let sliced = match cut {
         Some((i, _)) => &upper[..i],
         None => &upper[..],
@@ -114,7 +117,10 @@ pub fn callsign_to_pi(callsign_raw: &str) -> Option<u16> {
 
     if cs.chars().count() == 3 {
         // Three-letter: table only.
-        return THREE_LETTER_PI.iter().find(|(_, c)| *c == cs).map(|(p, _)| *p);
+        return THREE_LETTER_PI
+            .iter()
+            .find(|(_, c)| *c == cs)
+            .map(|(p, _)| *p);
     }
     if !is_valid_callsign(&cs) {
         return None;
@@ -181,7 +187,12 @@ pub fn pi_to_callsign(pi: u16) -> PiDecode {
         (b'A' + v2) as char,
         (b'A' + v3) as char
     );
-    PiDecode { callsign: Some(callsign), method: PiMethod::Formula, confident: true, note: None }
+    PiDecode {
+        callsign: Some(callsign),
+        method: PiMethod::Formula,
+        confident: true,
+        note: None,
+    }
 }
 
 /// The PI bits that survive a wrong top nibble.
@@ -268,7 +279,10 @@ mod tests {
     fn the_a_block_is_detected_and_not_inverted() {
         let d = pi_to_callsign(0xa123);
         assert!(d.callsign.is_none());
-        assert_eq!(d.note.as_deref(), Some("A-block remapped PI (not inverted)"));
+        assert_eq!(
+            d.note.as_deref(),
+            Some("A-block remapped PI (not inverted)")
+        );
     }
 
     #[test]

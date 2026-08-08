@@ -1,7 +1,11 @@
-//! Ported from `tools/tests/nwdRds.test.mjs`. The hex groups are real captures
-//! from the drive logs, not synthesised — that is the whole point of them. If the
-//! Rust decoder disagrees with any assertion here, it has diverged from the
-//! behaviour the logs justify and the TypeScript one must stay.
+//! The decoder's trust gates, replayed. A SELECTION ported from
+//! `tools/tests/nwdRds.test.mjs` — full TS-vs-Rust equivalence is the
+//! differential harness's job (`npm run test:rds-diff`), so what lives here is
+//! the gates a refactor is most likely to loosen, plus Rust-specific
+//! regressions the TypeScript cannot have. The hex groups are real captures
+//! from the drive logs wherever a capture exists. If the Rust decoder disagrees
+//! with any assertion here, it has diverged from the behaviour the logs justify
+//! and the TypeScript one must stay.
 
 use carfm_rds::RdsDecoder;
 
@@ -119,7 +123,10 @@ fn a_slow_scroller_is_caught_and_retracted() {
     // The third distinct value is the verdict, and it RETRACTS what was shown —
     // those earlier chunks were never a name either.
     hold(&mut d, "Aerosmit");
-    assert!(d.state().ps_scrolling, "three distinct values means scrolling");
+    assert!(
+        d.state().ps_scrolling,
+        "three distinct values means scrolling"
+    );
     assert_eq!(d.state().ps, "", "and the earlier chunks are withdrawn");
 
     hold(&mut d, "NicoletL");
@@ -186,7 +193,11 @@ fn malformed_input_is_refused() {
 #[test]
 fn quality_is_silent_below_the_floor() {
     let mut d = prime(PS_WERN[0]);
-    assert_eq!(d.quality().pi_match_pct, None, "5 groups is under the floor");
+    assert_eq!(
+        d.quality().pi_match_pct,
+        None,
+        "5 groups is under the floor"
+    );
     for _ in 0..20 {
         d.push(PS_WERN[0]);
     }
@@ -202,6 +213,53 @@ fn quality_is_silent_below_the_floor() {
 
 fn hex(a: u16, b: u16, c: u16, d: u16) -> String {
     format!("{a:04x}{b:04x}{c:04x}{d:04x}")
+}
+
+// ── RadioText, the last segment ──────────────────────────────────────────────
+// A 0x0D terminator in SEGMENT 15 makes the completeness mask cover all sixteen
+// segments. JavaScript computes that as (1 << 16) - 1 = 0xFFFF; the u16 port
+// overflowed the shift — a panic under cargo test's debug profile, a phantom
+// empty publish in release. Both tests are regressions for that fix.
+
+#[test]
+fn a_lone_terminator_in_the_last_segment_neither_panics_nor_publishes() {
+    const PI: u16 = 0xa6ff;
+    let mut d = prime(&hex(PI, 0x0000, 0x0000, 0x2020));
+    // Segment 15, CR at position 62, every earlier segment missing.
+    d.push(&hex(PI, 0x200f, 0x2020, 0x0d20));
+    assert_eq!(
+        d.state().rt,
+        "",
+        "a lone terminated segment is not a message"
+    );
+}
+
+#[test]
+fn a_message_terminating_in_the_last_segment_publishes_whole() {
+    const PI: u16 = 0xa6ff;
+    const MSG: &[u8] = b"Whole Lotta Love - Led Zeppelin - Royal Albert Hall, early set";
+    let mut d = prime(&hex(PI, 0x0000, 0x0000, 0x2020));
+    for seg in 0..16u16 {
+        let ch = |k: usize| {
+            let at = seg as usize * 4 + k;
+            if at == 62 {
+                0x0d
+            } else {
+                *MSG.get(at).unwrap_or(&b' ') as u16
+            }
+        };
+        d.push(&hex(
+            PI,
+            0x2000 | seg,
+            (ch(0) << 8) | ch(1),
+            (ch(2) << 8) | ch(3),
+        ));
+    }
+    assert_eq!(
+        d.state().rt,
+        std::str::from_utf8(MSG).unwrap().trim_end(),
+        "first fill publishes on the terminator's own segment"
+    );
 }
 
 /// Lay down a RadioText the offsets can point into, and let it publish.
@@ -228,7 +286,11 @@ fn rt_plus_labels_artist_and_title() {
     const PI: u16 = 0x19e2;
     let mut d = rt_plus_fixture();
     assert_eq!(d.state().rt, "Led Zeppelin - Kashmir");
-    assert_eq!(d.state().rt_artist, "", "not claimed before it is announced");
+    assert_eq!(
+        d.state().rt_artist,
+        "",
+        "not claimed before it is announced"
+    );
 
     // WIBA's ACTUAL announcement. 0x34d8 → group 3A, and the low five bits
     // (0x18 = 24) say group 12, version A.
@@ -236,6 +298,8 @@ fn rt_plus_labels_artist_and_title() {
 
     // Group 12A payload: running=1, artist @0 len 12, title @15 len 7.
     let b = 0xc000u16 | (1 << 3);
+    // (0 << 7) is the zero start offset — kept so the field layout stays visible.
+    #[allow(clippy::identity_op)]
     let c = (0b100u16 << 13) | (0 << 7) | (11 << 1);
     let dd = (1u16 << 11) | (15 << 5) | 6;
     d.push(&hex(PI, b, c, dd));
@@ -253,7 +317,11 @@ fn rt_plus_labels_artist_and_title() {
     assert_eq!(d.state().rt_artist, "Led Zeppelin");
     let far_c = (0b100u16 << 13) | (60 << 7) | (11 << 1);
     d.push(&hex(PI, b, far_c, dd));
-    assert_eq!(d.state().rt_artist, "Led Zeppelin", "out of range is refused");
+    assert_eq!(
+        d.state().rt_artist,
+        "Led Zeppelin",
+        "out of range is refused"
+    );
 }
 
 #[test]
@@ -262,6 +330,8 @@ fn a_non_rt_plus_oda_declaration_is_ignored() {
     let mut d = rt_plus_fixture();
     d.push(&hex(PI, 0x34d8, 0x0000, 0x1234)); // some other AID in the same slot
     let b = 0xc000u16 | (1 << 3);
+    // (0 << 7) is the zero start offset — kept so the field layout stays visible.
+    #[allow(clippy::identity_op)]
     let c = (0b100u16 << 13) | (0 << 7) | (11 << 1);
     let dd = (1u16 << 11) | (15 << 5) | 6;
     d.push(&hex(PI, b, c, dd));
@@ -282,7 +352,11 @@ fn reset_keeps_the_trusted_pi_and_re_asserts_it() {
     assert_eq!(d.state().pi, None, "and the published PI with it");
 
     d.push(PS_WERN[0]);
-    assert_eq!(d.state().pi, Some(0xa6ff), "one matching group re-asserts it");
+    assert_eq!(
+        d.state().pi,
+        Some(0xa6ff),
+        "one matching group re-asserts it"
+    );
 }
 
 // ─── TP and TA: the guards, one at a time ────────────────────────────────────
@@ -299,11 +373,21 @@ fn hx(a: u16, b: u16, c: u16, d: u16) -> String {
 }
 /// Group 0A. TP is bit 10, TA bit 4, PTY bits 9-5, segment in bits 1-0.
 fn g0(tp: u16, ta: u16, seg: u16) -> String {
-    hx(PI_A6FF, (tp << 10) | (0x16 << 5) | (ta << 4) | seg, 0x0000, 0x2020)
+    hx(
+        PI_A6FF,
+        (tp << 10) | (0x16 << 5) | (ta << 4) | seg,
+        0x0000,
+        0x2020,
+    )
 }
 /// Group 2A. Bit 4 here is the RadioText A/B flag, NOT TA.
 fn g2(tp: u16, bit4: u16) -> String {
-    hx(PI_A6FF, (2 << 12) | (tp << 10) | (0x16 << 5) | (bit4 << 4), 0x2020, 0x2020)
+    hx(
+        PI_A6FF,
+        (2 << 12) | (tp << 10) | (0x16 << 5) | (bit4 << 4),
+        0x2020,
+        0x2020,
+    )
 }
 
 #[test]
@@ -336,7 +420,10 @@ fn ta_is_only_read_from_group_zero() {
     for _ in 0..10 {
         d.push(&g2(1, 1)); // bit 4 set, but in a RadioText group
     }
-    assert!(!d.state().ta, "bit 4 in a 2A is the text A/B flag, never TA");
+    assert!(
+        !d.state().ta,
+        "bit 4 in a 2A is the text A/B flag, never TA"
+    );
 }
 
 #[test]
@@ -368,7 +455,10 @@ fn ta_is_suppressed_without_a_confirmed_tp() {
     for i in 0..6 {
         d.push(&g0(0, 1, i % 4)); // TA claimed anyway
     }
-    assert!(!d.state().ta, "a station carrying no traffic cannot be announcing");
+    assert!(
+        !d.state().ta,
+        "a station carrying no traffic cannot be announcing"
+    );
 }
 
 #[test]
@@ -412,21 +502,32 @@ fn reset_for_retune_drops_the_pi_so_the_new_station_acquires_fast() {
 
     let mut fresh = RdsDecoder::new();
     let from_empty = acquire(&mut fresh);
-    assert_eq!(from_empty, 3, "a fresh decoder acquires in PI_CONFIRM groups");
+    assert_eq!(
+        from_empty, 3,
+        "a fresh decoder acquires in PI_CONFIRM groups"
+    );
 
     let mut kept = RdsDecoder::new();
     for _ in 0..8 {
         kept.push(A);
     }
     kept.reset();
-    assert_eq!(acquire(&mut kept), 12, "reset() keeps the incumbent: displacement");
+    assert_eq!(
+        acquire(&mut kept),
+        12,
+        "reset() keeps the incumbent: displacement"
+    );
 
     let mut cleared = RdsDecoder::new();
     for _ in 0..8 {
         cleared.push(A);
     }
     cleared.reset_for_retune();
-    assert_eq!(acquire(&mut cleared), from_empty, "reset_for_retune: fast path");
+    assert_eq!(
+        acquire(&mut cleared),
+        from_empty,
+        "reset_for_retune: fast path"
+    );
 
     let mut wiped = RdsDecoder::new();
     for _ in 0..8 {

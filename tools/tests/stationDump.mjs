@@ -1,4 +1,4 @@
-// Differential harness, TypeScript side. Mirrors core/stations/examples/dump.rs
+// Differential harness, TypeScript side. Mirrors core/stations/examples/stations-dump.rs
 // line for line — if you change what one prints, change the other.
 //
 // Imports the REAL modules the app ships, not a transcription of them. That is

@@ -1,17 +1,21 @@
 // Corpus generator for the RDS differential harness. Prints one input line per
 // step on stdout: a raw hex group, or one of the !reset / !retune / !clearta
 // control commands. Feed the same file to tools/tests/rdsDump.mjs and to
-// core/rds/examples/dump.rs and the outputs must match byte for byte.
+// core/rds/examples/rds-dump.rs and the outputs must match byte for byte.
 //
 // The corpus is DETERMINISTIC — the interleave runs off a fixed-seed LCG, not
 // Math.random — so a divergence is always reproducible. Regenerating it on a
 // later commit and diffing again is the whole point: the previous port drifted
 // from the TypeScript reference silently while its own tests stayed green.
 //
-// Three sources, because no one of them covers the decoder:
+// Four sources, because no one of them covers the decoder:
 //   1. every raw group captured in the drive logs, lifted from the test suite;
 //   2. a sweep of synthesised 0A/0B/2A/3A groups over PI × PTY × TP × TA;
-//   3. a full RadioText + RT+ story, which the sweep cannot assemble.
+//   3. a full RadioText + RT+ story, which the sweep cannot assemble;
+//   4. targeted passages for what neither reaches: a terminator in the LAST
+//      segment (the case that overflowed the Rust end-mask shift), version-B
+//      RadioText, a slow-scrolling PS crossing PS_SCROLL_DISTINCT, and the
+//      replacement gate (corrupt-once must not replace, two agreeing cycles must).
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -58,7 +62,8 @@ for (const pi of PIS) {
             out.push(grp(pi, blockB(2, 0, tp, pty, (ab << 4) | seg), ch(t.slice(0, 2)), ch(t.slice(2, 4))));
           }
         }
-        // 3A: RT+ ODA announcement, and a 0B/2B version-B variant for coverage.
+        // 3A: RT+ ODA announcement, and a 0B version-B variant for coverage
+        // (version-B RadioText has its own passage below — this line is 0B only).
         out.push(grp(pi, blockB(3, 0, tp, pty, 0), 0x0000, 0x4bd7));
         out.push(grp(pi, blockB(0, 1, tp, pty, (ta << 4) | 1), pi, ch('OK')));
       }
@@ -89,6 +94,89 @@ for (const pi of PIS) {
   }
 }
 
+// ── Targeted stories, appended AFTER the interleave ──────────────────────────
+// The LCG interleave injects !reset/!retune at ~11% per line, which is right
+// for shaking state transitions but wrong for these: each needs its internal
+// sequence intact (a reset mid-story wipes the assembly or the distinct-PS
+// tally it exists to build). So they run un-interleaved, each opening with a
+// !retune plus three priming groups so the PI is re-acquired in PI_CONFIRM
+// steps instead of eating the story's own head as displacement dissent.
+const stories = [];
+const primeStory = (pi) => {
+  stories.push('!retune');
+  for (let i = 0; i < 3; i++) stories.push(grp(pi, blockB(0, 0, 1, 10, 0), 0xe0cd, ch('CA')));
+};
+
+// A message whose 0x0D lands in SEGMENT 15 (position 62). The end mask must
+// then cover all sixteen segments — (1 << 16) - 1 in JavaScript, and the shift
+// that overflowed a u16 in the first Rust cut. Full assembly first; then, after
+// a reset, the seg-15 group ALONE, which must publish nothing on either side.
+const LONG_MSG = 'WHOLE LOTTA LOVE - LED ZEPPELIN - ROYAL ALBERT HALL, EARLY SET'; // 62 chars
+for (const pi of PIS) {
+  primeStory(pi);
+  for (let pass = 0; pass < 2; pass++) {
+    for (let seg = 0; seg < 16; seg++) {
+      const at = seg * 4;
+      const byte = i => (at + i === 62 ? 0x0d : (LONG_MSG.charCodeAt(at + i) || 0x20));
+      stories.push(grp(pi, blockB(2, 0, 1, 10, seg), (byte(0) << 8) | byte(1), (byte(2) << 8) | byte(3)));
+    }
+  }
+  stories.push('!reset');
+  stories.push(grp(pi, blockB(2, 0, 1, 10, 15), 0x2020, 0x0d20)); // lone terminated seg 15
+}
+
+// Version-B RadioText: 2 chars per group in block D at seg×2, block C repeating
+// the PI. Terminator at position 30 — segment 15 again, via the 2B addressing.
+const MSG_2B = 'KASHMIR - LED ZEPPELIN ON WERN'; // 30 chars
+for (const pi of PIS) {
+  primeStory(pi);
+  for (let pass = 0; pass < 2; pass++) {
+    for (let seg = 0; seg < 16; seg++) {
+      const at = seg * 2;
+      const byte = i => (at + i === 30 ? 0x0d : (MSG_2B.charCodeAt(at + i) || 0x20));
+      stories.push(grp(pi, blockB(2, 1, 1, 10, seg), pi, (byte(0) << 8) | byte(1)));
+    }
+  }
+}
+
+// A SLOW scroller: four distinct PS values, each held for two complete agreeing
+// assemblies, so each one clears the two-cycle gate — exactly the WIBA case.
+// The third distinct publish must flip the scrolling verdict and retract the
+// name; the fourth must change nothing.
+for (const pi of PIS) {
+  primeStory(pi);
+  for (const val of ['WALK    ', 'THIS WAY', 'AEROSMIT', 'NICOLETL']) {
+    for (let cycle = 0; cycle < 2; cycle++) {
+      for (let seg = 0; seg < 4; seg++) {
+        stories.push(grp(pi, blockB(0, 0, 1, 10, seg), 0xe0cd, ch(val.slice(seg * 2, seg * 2 + 2))));
+      }
+    }
+  }
+}
+
+// The replacement gate. Publish M, then a corrupt assembly ONCE (must not
+// replace), then a genuinely new message ONCE (must not replace either — it has
+// not repeated), then that message AGAIN (two agreeing cycles: replace).
+const RT_SEQ = [
+  ['ROCKIN INTO THE NIGHT - 38 SPECIAL', 2],
+  ['ROCKIN INTO T#E NIGHT - 38 SPECIAL', 1],
+  ['AGAINST THE WIND - BOB SEGER', 1],
+  ['AGAINST THE WIND - BOB SEGER', 1],
+];
+for (const pi of PIS) {
+  primeStory(pi);
+  for (const [msg, passes] of RT_SEQ) {
+    for (let pass = 0; pass < passes; pass++) {
+      const segs = Math.ceil((msg.length + 1) / 4);
+      for (let seg = 0; seg < segs; seg++) {
+        const at = seg * 4;
+        const byte = i => (at + i === msg.length ? 0x0d : (msg.charCodeAt(at + i) || 0x20));
+        stories.push(grp(pi, blockB(2, 0, 1, 10, seg), (byte(0) << 8) | byte(1), (byte(2) << 8) | byte(3)));
+      }
+    }
+  }
+}
+
 // Malformed / edge inputs the decoders must both refuse identically.
 const bad = ['', 'zzzz', 'a6ff02c0e0cd20', 'a6ff02c0e0cd2020ff', 'A6FF02C0E0CD2020', '0000000000000000'];
 
@@ -102,4 +190,5 @@ for (let i = 0; i < pool.length; i++) {
   else if (r === 2) lines.push('!clearta');
   else if (r === 3) lines.push(bad[next(bad.length)]);
 }
+lines.push(...stories);
 process.stdout.write(lines.filter(l => l !== '').join('\n') + '\n');

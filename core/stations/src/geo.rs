@@ -65,7 +65,11 @@ pub fn class_bonus(station_class: Option<&str>) -> f64 {
 /// samples it explained 85% of the variance BETWEEN stations and essentially
 /// none WITHIN one, which is why the estimated-signal meter that used it was
 /// removed. Ranking a list is what it is good at.
-pub fn receivability_score(erp_kw: Option<f64>, station_class: Option<&str>, distance_km: f64) -> f64 {
+pub fn receivability_score(
+    erp_kw: Option<f64>,
+    station_class: Option<&str>,
+    distance_km: f64,
+) -> f64 {
     // Floor; assume tiny if unknown.
     let erp = erp_kw.unwrap_or(0.05).max(0.0001);
     // Avoid log(0) right on top of a transmitter.

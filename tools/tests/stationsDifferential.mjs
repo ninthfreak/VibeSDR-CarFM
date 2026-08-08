@@ -49,7 +49,7 @@ const scenarios = corpus.slice(corpus.indexOf('\n#SCENARIOS\n')).trimEnd().split
 const ts = run(process.execPath,
   ['--no-warnings', '--import', join(here, 'tsResolve.mjs'), join(here, 'stationDump.mjs'), corpusPath]);
 const rs = run('cargo',
-  ['run', '-q', '--release', '-p', 'carfm-stations', '--example', 'dump', '--', corpusPath],
+  ['run', '-q', '--release', '-p', 'carfm-stations', '--example', 'stations-dump', '--', corpusPath],
   { cwd: join(repo, 'core') });
 
 const a = ts.trimEnd().split('\n');

@@ -12,16 +12,26 @@ fn main() {
         if g.is_empty() {
             continue;
         }
-        if g == "!reset" { d.reset(); }
-        else if g == "!retune" { d.reset_for_retune(); }
-        else if g == "!clearta" { d.clear_ta(); }
-        else { d.push(g); }
+        if g == "!reset" {
+            d.reset();
+        } else if g == "!retune" {
+            d.reset_for_retune();
+        } else if g == "!clearta" {
+            d.clear_ta();
+        } else {
+            d.push(g);
+        }
         let s = d.state();
+        let t = d.stats();
+        let q = d.quality();
         println!(
-            "pi={} pty={} tp={} ta={} ps={:?} rt={:?} scroll={} art={:?} tit={:?}",
+            "pi={} pty={} tp={} ta={} ps={:?} rt={:?} scroll={} art={:?} tit={:?} g={} x={} q={} n={}",
             s.pi.map(|v| format!("{v:04x}")).unwrap_or("-".into()),
             s.pty.map(|v| v.to_string()).unwrap_or("-".into()),
-            s.tp, s.ta, s.ps, s.rt, s.ps_scrolling, s.rt_artist, s.rt_title
+            s.tp, s.ta, s.ps, s.rt, s.ps_scrolling, s.rt_artist, s.rt_title,
+            t.groups, t.pi_mismatch,
+            q.pi_match_pct.map(|v| v.to_string()).unwrap_or("-".into()),
+            q.samples
         );
     }
 }

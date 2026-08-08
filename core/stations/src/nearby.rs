@@ -29,11 +29,19 @@ pub fn rank_nearby(
             continue;
         }
         let score = receivability_score(r.erp_kw, r.station_class.as_deref(), distance_km);
-        out.push(NearbyStation { row: r.clone(), distance_km, score });
+        out.push(NearbyStation {
+            row: r.clone(),
+            distance_km,
+            score,
+        });
     }
     // Descending by score. `sort_by` is stable, as is JavaScript's Array#sort
     // (required since ES2019), so ties resolve identically.
-    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     out.truncate(limit);
     out
 }
@@ -74,7 +82,7 @@ mod tests {
     fn ranking_is_by_receivability_not_distance() {
         // The ordering the score exists to produce.
         let rows = vec![
-            row("WTNY", 43.10, -89.40, Some(0.25), None),  // close, tiny
+            row("WTNY", 43.10, -89.40, Some(0.25), None), // close, tiny
             row("WBIG", 43.80, -89.40, Some(100.0), Some("C")), // far, big
         ];
         let out = rank_nearby(43.0731, -89.4012, 200.0, 50, &rows);

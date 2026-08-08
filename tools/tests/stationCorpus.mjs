@@ -2,7 +2,7 @@
 //
 // Emits one file with two sections: every row of the bundled FCC table, then a
 // list of scenario lines. Both the TypeScript dump (tools/tests/stationDump.mjs)
-// and the Rust dump (core/stations/examples/dump.rs) read this same file, so
+// and the Rust dump (core/stations/examples/stations-dump.rs) read this same file, so
 // they see byte-identical inputs in byte-identical order — which matters, since
 // bestStation and the nearby sort are both STABLE and therefore depend on it.
 //

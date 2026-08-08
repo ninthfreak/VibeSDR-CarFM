@@ -11,7 +11,9 @@ use carfm_stations::{
 
 /// `JSON.stringify` for a string or null, matching what the TypeScript prints.
 fn jstr(s: Option<&str>) -> String {
-    let Some(s) = s else { return "null".to_string() };
+    let Some(s) = s else {
+        return "null".to_string();
+    };
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {
@@ -52,7 +54,11 @@ impl StationSource for Table {
             return Vec::new();
         }
         let k = base.to_uppercase();
-        self.0.iter().filter(|r| r.callsign_base == k).cloned().collect()
+        self.0
+            .iter()
+            .filter(|r| r.callsign_base == k)
+            .cloned()
+            .collect()
     }
     fn at_frequency(&self, mhz: f64) -> Vec<StationRow> {
         if !mhz.is_finite() || mhz <= 0.0 {
@@ -67,7 +73,11 @@ impl StationSource for Table {
 }
 
 fn un(s: &str) -> Option<&str> {
-    if s == "\\N" { None } else { Some(s) }
+    if s == "\\N" {
+        None
+    } else {
+        Some(s)
+    }
 }
 fn unum(s: &str) -> Option<f64> {
     un(s).map(|v| v.parse().expect("number"))
@@ -79,8 +89,16 @@ fn main() {
     let mut lines = text.split('\n');
 
     let head = lines.next().expect("empty corpus");
-    assert!(head.starts_with("#ROWS"), "corpus does not start with #ROWS");
-    let row_count: usize = head.split('\t').nth(1).expect("#ROWS count").parse().expect("count");
+    assert!(
+        head.starts_with("#ROWS"),
+        "corpus does not start with #ROWS"
+    );
+    let row_count: usize = head
+        .split('\t')
+        .nth(1)
+        .expect("#ROWS count")
+        .parse()
+        .expect("count");
 
     let mut rows = Vec::with_capacity(row_count);
     for _ in 0..row_count {
@@ -128,24 +146,39 @@ fn main() {
                 ));
             }
             "tocall" => {
-                let v = callsign_to_pi(rest).map(|p| p.to_string()).unwrap_or_else(|| "null".into());
+                let v = callsign_to_pi(rest)
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "null".into());
                 out.push_str(&format!("tocall {} -> {}\n", jstr(Some(rest)), v));
             }
             "base" => {
-                out.push_str(&format!("base {} -> {}\n", jstr(Some(rest)), jstr(Some(&callsign_base(rest)))));
+                out.push_str(&format!(
+                    "base {} -> {}\n",
+                    jstr(Some(rest)),
+                    jstr(Some(&callsign_base(rest)))
+                ));
             }
             "geo" => {
                 let d = haversine_km(
-                    a[0].parse().unwrap(), a[1].parse().unwrap(),
-                    a[2].parse().unwrap(), a[3].parse().unwrap(),
+                    a[0].parse().unwrap(),
+                    a[1].parse().unwrap(),
+                    a[2].parse().unwrap(),
+                    a[3].parse().unwrap(),
                 );
                 out.push_str(&format!("geo {rest} -> {}\n", jnum(d)));
             }
             "bbox" => {
-                let b = bounding_box(a[0].parse().unwrap(), a[1].parse().unwrap(), a[2].parse().unwrap());
+                let b = bounding_box(
+                    a[0].parse().unwrap(),
+                    a[1].parse().unwrap(),
+                    a[2].parse().unwrap(),
+                );
                 out.push_str(&format!(
                     "bbox {rest} -> {} {} {} {}\n",
-                    jnum(b.min_lat), jnum(b.max_lat), jnum(b.min_lon), jnum(b.max_lon)
+                    jnum(b.min_lat),
+                    jnum(b.max_lat),
+                    jnum(b.min_lon),
+                    jnum(b.max_lon)
                 ));
             }
             "score" => {
@@ -162,8 +195,12 @@ fn main() {
                 let in_box: Vec<StationRow> = table
                     .0
                     .iter()
-                    .filter(|r| r.lat >= b.min_lat && r.lat <= b.max_lat
-                        && r.lon >= b.min_lon && r.lon <= b.max_lon)
+                    .filter(|r| {
+                        r.lat >= b.min_lat
+                            && r.lat <= b.max_lat
+                            && r.lon >= b.min_lon
+                            && r.lon <= b.max_lon
+                    })
                     .cloned()
                     .collect();
                 let ranked = rank_nearby(lat, lon, radius, limit, &in_box);
@@ -171,8 +208,12 @@ fn main() {
                 for s in &ranked {
                     out.push_str(&format!(
                         "  {} {} {} {} d={} s={}\n",
-                        s.row.callsign, s.row.callsign_base, jnum(s.row.frequency_mhz),
-                        s.row.service, jnum(s.distance_km), jnum(s.score)
+                        s.row.callsign,
+                        s.row.callsign_base,
+                        jnum(s.row.frequency_mhz),
+                        s.row.service,
+                        jnum(s.distance_km),
+                        jnum(s.score)
                     ));
                 }
             }
@@ -182,9 +223,10 @@ fn main() {
                 let ps_joined = a[2..].join(" ");
                 let ps = un(&ps_joined).map(str::to_string);
                 let id = identify_by_pi(pi, ps.as_deref(), freq, &table);
-                let st = id.station.as_ref().map(|s| {
-                    format!("{}|{}|{}", s.callsign, jnum(s.frequency_mhz), s.service)
-                });
+                let st = id
+                    .station
+                    .as_ref()
+                    .map(|s| format!("{}|{}|{}", s.callsign, jnum(s.frequency_mhz), s.service));
                 out.push_str(&format!(
                     "identify {rest} -> call={} conf={} st={} note={}\n",
                     jstr(id.callsign.as_deref()),

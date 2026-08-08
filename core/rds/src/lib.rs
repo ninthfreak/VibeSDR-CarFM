@@ -45,6 +45,7 @@ pub struct RdsState {
     ///   2. its own consensus tally, not the PTY field's;
     ///   3. gated on a CONFIRMED TP — a station that carries no traffic cannot
     ///      be announcing any.
+    ///
     /// Consensus is affordable despite TA needing to react promptly: an
     /// announcement runs tens of seconds, so three groups is well under a second
     /// against the length of the event.
@@ -135,7 +136,7 @@ pub struct Quality {
     /// B, C and D are invisible — which is why RadioText arrives corrupt while
     /// this figure looks healthy, since the text lives in C and D. A proxy for
     /// channel quality, never "% intact".
-    pub pi_match_pct: Option<f32>,
+    pub pi_match_pct: Option<f64>,
     pub samples: usize,
 }
 
@@ -154,17 +155,17 @@ pub struct RdsDecoder {
     // Segment buffers. Held separately from `st` so a partially-assembled name is
     // never shown — a half-filled PS reads as a different station.
     ps_buf: [char; 8],
-    ps_seen: u8,             // bitmask of the 4 PS segments seen
-    ps_candidate: String,    // previous COMPLETE assembly; must repeat to publish
+    ps_seen: u8,                 // bitmask of the 4 PS segments seen
+    ps_candidate: String,        // previous COMPLETE assembly; must repeat to publish
     ps_seen_values: Vec<String>, // distinct published names — see PS_SCROLL_DISTINCT
-    ps_scrolling: bool,      // ...and the verdict once there are too many
+    ps_scrolling: bool,          // ...and the verdict once there are too many
     rt_buf: [char; 64],
-    rt_seen: u16,            // bitmask of the 16 RT segments seen
-    rt_end: Option<usize>,   // index of the 0x0D terminator, once seen
-    rt_end_seg: Option<u16>, // and which segment carried it
-    rt_ab: Option<u8>,       // A/B flag; a flip means a new message
-    rt_candidate: String,    // previous COMPLETE assembly, corrupt or not
-    rt_published: bool,      // has THIS message ever reached the face?
+    rt_seen: u16,              // bitmask of the 16 RT segments seen
+    rt_end: Option<usize>,     // index of the 0x0D terminator, once seen
+    rt_end_seg: Option<u16>,   // and which segment carried it
+    rt_ab: Option<u8>,         // A/B flag; a flip means a new message
+    rt_candidate: String,      // previous COMPLETE assembly, corrupt or not
+    rt_published: bool,        // has THIS message ever reached the face?
     pi_confirmed: Option<u16>, // the PI we trust; groups not carrying it are dropped
     pi_pending: Option<u16>,
     pi_pending_count: u32,
@@ -234,9 +235,14 @@ impl RdsDecoder {
         }
     }
 
-    /// Drop all accumulated text. Call on retune: PS/RT belong to the old station.
+    /// Drop all accumulated text and per-station tallies. NOT the retune call —
+    /// that is `reset_for_retune`, and the app calls it on every frequency event.
+    /// This one is the building block: `push` uses it when a persistent new PI
+    /// displaces the old one, and `reset_for_retune` builds on it.
     ///
-    /// `pi_confirmed` is deliberately NOT cleared. Clearing it would drop the
+    /// `pi_confirmed` is deliberately NOT cleared, which is exactly why this is
+    /// wrong for a retune on its own: the old PI would stand as an incumbent the
+    /// new station has to outvote. Clearing it here instead would drop the
     /// decoder into the no-incumbent path where any 3-group run of corruption is
     /// adopted outright, with no trusted PI to outvote it. `st.pi` is re-asserted
     /// from `pi_confirmed` by the next matching group — see the equality branch in
@@ -337,8 +343,11 @@ impl RdsDecoder {
             };
         }
         let good: u32 = self.q_ring[..self.q_count].iter().map(|&v| v as u32).sum();
+        // f64, and `(100 * good)` FIRST — the TypeScript computes
+        // `(100 * good) / qCount` in doubles, and the differential compares the
+        // printed value, so the width and the operation order both matter.
         Quality {
-            pi_match_pct: Some(100.0 * good as f32 / self.q_count as f32),
+            pi_match_pct: Some((100.0 * good as f64) / self.q_count as f64),
             samples: self.q_count,
         }
     }
@@ -417,11 +426,11 @@ impl RdsDecoder {
             }
             Some(pi) => {
                 self.pi_pending_count = 0; // a good group resets the dissent counter
-                // Re-assert after an external reset(), which rebuilds st from
-                // blank but deliberately keeps pi_confirmed. Without this, every
-                // later group carrying the same PI lands here and never rewrites
-                // st.pi, so PI stays null for the rest of the session — and the
-                // screen calls reset() on EVERY frequency event.
+                                           // Re-assert after an external reset(), which rebuilds st from
+                                           // blank but deliberately keeps pi_confirmed. Without this, every
+                                           // later group carrying the same PI lands here and never rewrites
+                                           // st.pi, so PI stays null for the rest of the session — and the
+                                           // screen calls reset() on EVERY frequency event.
                 if self.st.pi.is_none() {
                     self.st.pi = Some(pi);
                 }
@@ -595,9 +604,11 @@ impl RdsDecoder {
         // so publishing on the terminator alone put a fragment on the plate after
         // every retune: segments 2,3 then a CR in segment 4 rendered as "tta
         // Love". Require every segment up to the terminator's own.
+        // In u32: a terminator in segment 15 makes the shift amount 16, which
+        // overflows a u16 — JavaScript's `(1 << 16) - 1` is what this mirrors.
         let end_mask = match self.rt_end_seg {
             None => 0u16,
-            Some(s) => (1u16 << (s + 1)).wrapping_sub(1),
+            Some(s) => ((1u32 << (s + 1)) - 1) as u16,
         };
         let terminated_and_complete =
             self.rt_end_seg.is_some() && (self.rt_seen & end_mask) == end_mask;
@@ -605,7 +616,11 @@ impl RdsDecoder {
             return;
         }
         let upto = self.rt_end.unwrap_or(64);
-        let msg: String = self.rt_buf[..upto].iter().collect::<String>().trim_end().to_string();
+        let msg: String = self.rt_buf[..upto]
+            .iter()
+            .collect::<String>()
+            .trim_end()
+            .to_string();
         // FIRST FILL IS INSTANT, REPLACEMENTS MUST REPEAT.
         //
         // Blocks C and D carry the text itself and nothing protects them: PI

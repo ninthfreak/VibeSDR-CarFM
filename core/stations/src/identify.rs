@@ -108,7 +108,13 @@ pub fn identify_by_pi(
 ) -> StationIdentity {
     let dec = pi_to_callsign(pi);
     let Some(decoded) = dec.callsign else {
-        return StationIdentity { pi, callsign: None, confident: false, station: None, note: dec.note };
+        return StationIdentity {
+            pi,
+            callsign: None,
+            confident: false,
+            station: None,
+            note: dec.note,
+        };
     };
 
     let mut callsign = decoded;
@@ -133,7 +139,10 @@ pub fn identify_by_pi(
     let mut confident = dec.confident && station.service == "FM";
     let mut note = dec.note;
     if station.service != "FM" {
-        note = Some(format!("matched a {} (formula unreliable for translators)", station.service));
+        note = Some(format!(
+            "matched a {} (formula unreliable for translators)",
+            station.service
+        ));
     }
 
     // ── THE DIAL OUTRANKS THE PI ────────────────────────────────────────────
@@ -188,7 +197,13 @@ pub fn identify_by_pi(
         }
     }
 
-    StationIdentity { pi, callsign: Some(callsign), confident, station: Some(station), note }
+    StationIdentity {
+        pi,
+        callsign: Some(callsign),
+        confident,
+        station: Some(station),
+        note,
+    }
 }
 
 #[cfg(test)]
@@ -199,7 +214,11 @@ mod tests {
 
     impl StationSource for Fixed {
         fn for_callsign_base(&self, base: &str) -> Vec<StationRow> {
-            self.0.iter().filter(|r| r.callsign_base == base).cloned().collect()
+            self.0
+                .iter()
+                .filter(|r| r.callsign_base == base)
+                .cloned()
+                .collect()
         }
         fn at_frequency(&self, mhz: f64) -> Vec<StationRow> {
             self.0
@@ -252,7 +271,10 @@ mod tests {
         assert_eq!(id.callsign, None);
         assert_eq!(id.station, None);
         assert!(!id.confident);
-        assert_eq!(id.note.as_deref(), Some("no DB match for computed callsign"));
+        assert_eq!(
+            id.note.as_deref(),
+            Some("no DB match for computed callsign")
+        );
     }
 
     #[test]
@@ -276,7 +298,10 @@ mod tests {
         let id = identify_by_pi(0x19e2, None, Some(101.5), &Fixed(rows));
         assert_eq!(id.callsign.as_deref(), Some("WIBA"));
         assert!(id.confident);
-        assert!(id.note.unwrap().contains("low 12 bits match WIBA-FM on the dial"));
+        assert!(id
+            .note
+            .unwrap()
+            .contains("low 12 bits match WIBA-FM on the dial"));
     }
 
     #[test]
@@ -305,7 +330,10 @@ mod tests {
 
     #[test]
     fn full_power_wins_over_a_translator_on_the_same_base() {
-        let rows = vec![row("WXXX-FX", "WXXX", 95.1, "FX"), row("WXXX", "WXXX", 95.1, "FM")];
+        let rows = vec![
+            row("WXXX-FX", "WXXX", 95.1, "FX"),
+            row("WXXX", "WXXX", 95.1, "FM"),
+        ];
         assert_eq!(best_station(&rows).unwrap().service, "FM");
     }
 
