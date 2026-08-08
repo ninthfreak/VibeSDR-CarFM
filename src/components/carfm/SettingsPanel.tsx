@@ -25,6 +25,7 @@ import { invalidateLogoTile, invalidateStationDisplay } from './LogoTile';
 import { isNwdAvailable, nwdProbe, nwdProbeFmManager } from '../../services/nwdRadio';
 import { isDebugMode, setDebugMode } from '../../services/debugMode';
 import { diag, isDiagEnabled, setDiagEnabled, isDiagOverlayEnabled, setDiagOverlayEnabled,
+  isRdsCaptureEnabled, setRdsCaptureEnabled,
          diagLines, diagText, clearDiag, subscribeDiag } from '../../services/diag';
 
 export type CarFmTheme = 'system' | 'light' | 'dark';
@@ -79,6 +80,7 @@ export default function SettingsPanel({
   const [logosOn, setLogosOn] = useState(false);
   const [dataDate, setDataDate] = useState<string | null>(null);
   const [diagOn, setDiagOn] = useState(isDiagEnabled());
+  const [rdsCaptureOn, setRdsCaptureOn] = useState(isRdsCaptureEnabled());
   const [diagOverlayOn, setDiagOverlayOn] = useState(isDiagOverlayEnabled());
   const [debugOn, setDebugOn] = useState(isDebugMode());
   const [, forceTick] = useState(0);
@@ -91,6 +93,10 @@ export default function SettingsPanel({
     if (!visible || !diagOn) return;
     return subscribeDiag(() => forceTick((n) => n + 1));
   }, [visible, diagOn]);
+
+  const toggleRdsCapture = useCallback(() => {
+    setRdsCaptureOn((v) => { const nv = !v; setRdsCaptureEnabled(nv); return nv; });
+  }, []);
 
   const toggleDiag = useCallback(() => {
     setDiagOn((v) => { const nv = !v; setDiagEnabled(nv); return nv; });
@@ -509,6 +515,20 @@ export default function SettingsPanel({
                       </Text>
                     </View>
                     <Toggle on={diagOverlayOn} pal={pal} onToggle={toggleDiagOverlay} label="Show the log on the radio" />
+                  </Pressable>
+                  {/* Raw INPUT, where the two above record decoded output. Its
+                      value is that the decoders can be replayed against real air
+                      afterwards — the whole captured corpus in the project is 27
+                      groups. Writes continuously, so it is worth turning off
+                      again once a drive is in the bag. */}
+                  <Pressable style={({ pressed }) => [styles.switchRow, pressed && { backgroundColor: pal.raised }]} onPress={toggleRdsCapture} accessibilityRole="switch" accessibilityState={{ checked: rdsCaptureOn }}>
+                    <View style={styles.textWrap}>
+                      <Text style={[styles.rowTitle, { color: pal.text }]}>Raw RDS capture</Text>
+                      <Text style={[styles.rowSub, { color: pal.dim }]}>
+                        Write every raw RDS group to a file for later analysis. Built-in tuner only. Leave off unless a drive is being recorded — it writes continuously.
+                      </Text>
+                    </View>
+                    <Toggle on={rdsCaptureOn} pal={pal} onToggle={toggleRdsCapture} label="Raw RDS capture" />
                   </Pressable>
                   <Pressable style={({ pressed }) => [styles.switchRow, pressed && { backgroundColor: pal.raised }]} onPress={toggleDebug} accessibilityRole="switch" accessibilityState={{ checked: debugOn }}>
                     <View style={styles.textWrap}>

@@ -10,8 +10,11 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { nwdSetRdsCapture } from './nwdRadio';
+
 const KEY = '@carfm/diag_enabled';
 const OVERLAY_KEY = '@carfm/diag_overlay';
+const RDS_CAPTURE_KEY = '@carfm/rds_capture';
 // Big enough to hold a full drive's worth of change-gated tuner events (a short
 // driveway test used ~50 lines; a commute with seeks + stereo flapping can run
 // into the hundreds). Ring-buffered, kept in memory only while capturing.
@@ -21,6 +24,7 @@ const listeners = new Set<() => void>();
 const prefListeners = new Set<() => void>();
 let enabled = false;
 let overlay = false;
+let rdsCapture = false;
 
 // Restore the persisted toggles at import so capture starts before settings is
 // opened — and notify, because the read is async and lands after mount.
@@ -30,6 +34,15 @@ AsyncStorage.getItem(KEY).then((v) => {
 }).catch(() => {});
 AsyncStorage.getItem(OVERLAY_KEY).then((v) => {
   overlay = v === '1';
+  prefListeners.forEach((l) => l());
+}).catch(() => {});
+// The raw capture lives in the native pump, so the restore has to PUSH — the
+// module defaults to off and would otherwise ignore a choice made on a previous
+// drive. This is the only place that pushes it, so the flag cannot drift from
+// the stored preference.
+AsyncStorage.getItem(RDS_CAPTURE_KEY).then((v) => {
+  rdsCapture = v === '1';
+  nwdSetRdsCapture(rdsCapture);
   prefListeners.forEach((l) => l());
 }).catch(() => {});
 
@@ -64,6 +77,24 @@ export function setDiagOverlayEnabled(on: boolean): void {
   AsyncStorage.setItem(OVERLAY_KEY, on ? '1' : '0').catch(() => {});
   prefListeners.forEach((l) => l());
 }
+/** Raw RDS group capture — every group the chip hands over, appended to
+ *  carfm-rds-capture.txt in the app's documents directory.
+ *
+ *  Separate from the tuner log: that one records decoded EVENTS for a human to
+ *  read, this one records the raw input so the decoders can be replayed against
+ *  real air. The repo's entire real corpus is 27 groups, so a single drive with
+ *  this on is worth more than any amount of synthesised test data. It writes to
+ *  disk continuously, which is why it is opt-in and worth turning back off once
+ *  a drive or two has been captured. */
+export function isRdsCaptureEnabled(): boolean { return rdsCapture; }
+export function setRdsCaptureEnabled(on: boolean): void {
+  rdsCapture = on;
+  AsyncStorage.setItem(RDS_CAPTURE_KEY, on ? '1' : '0').catch(() => {});
+  nwdSetRdsCapture(on);
+  diag(on ? '— raw RDS capture on —' : '— raw RDS capture off —');
+  prefListeners.forEach((l) => l());
+}
+
 /** Fires when either diagnostics toggle changes, including the async restore at
  *  import — which lands after the first render, so subscribing is not optional. */
 export function subscribeDiagPrefs(l: () => void): () => void {

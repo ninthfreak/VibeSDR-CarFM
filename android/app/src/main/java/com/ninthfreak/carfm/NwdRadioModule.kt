@@ -306,9 +306,12 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     // feed tools/tests/rdsDump.mjs or the Rust dump, keep it to measure cadence.
     // filesDir is Expo's documentDirectory, so JS can read the file back with no
     // new bridge surface.
+    // OFF by default and owned by the "Raw RDS capture" switch in settings
+    // (Diagnostics). It writes to disk on every drive, so it opts in rather than
+    // out; diag.ts restores the persisted choice at app start and pushes it here.
     private val rdsCaptureName = "carfm-rds-capture.txt"
     private val rdsCaptureMaxBytes = 4L * 1024 * 1024
-    @Volatile private var rdsCaptureOn = true
+    @Volatile private var rdsCaptureOn = false
     private var rdsCaptureOut: java.io.Writer? = null
     private var rdsCaptureBytes = 0L
 
@@ -549,6 +552,16 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun setRdsEnabled(on: Boolean) {
         try { radio?.setRDSState(0.toByte(), on) } catch (e: Throwable) { Log.w(TAG, "setRDSState failed", e) }
+    }
+
+    /** Raw RDS capture on/off — the Diagnostics switch in settings. Turning it
+     *  off closes the file immediately rather than at the next pump stop, so the
+     *  switch means "stop writing now". Re-enabling appends to the same file. */
+    @ReactMethod
+    fun setRdsCapture(on: Boolean) {
+        rdsCaptureOn = on
+        if (!on) rdsCaptureClose()
+        Log.i(TAG, "RDS capture " + (if (on) "on" else "off"))
     }
 
     /** One-shot diagnostic dump of EVERY readable getter the NWD RadioFeature
