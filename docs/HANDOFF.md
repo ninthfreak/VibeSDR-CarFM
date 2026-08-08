@@ -174,7 +174,10 @@ stands and the reason is recorded.
 - `npx tsc --noEmit -p tsconfig.json` — currently clean.
 - `npm run test:backend` — 18 suites, currently all passing. Plain node, type
   stripping; tests live in `tools/tests/`.
-- `cd core && cargo test` — 20 tests, currently all passing.
+- `cd core && cargo test` — currently all passing (52 at the time of writing;
+  trust the run, not this number).
+- `npm run test:rds-diff` and `npm run test:stations-diff` — the differential
+  harnesses below. Both need cargo, which is why they are not in test:backend.
 
 **Cannot be run in the container:**
 - **There is no Kotlin compiler and no Android build.** Native changes are
@@ -186,37 +189,48 @@ stands and the reason is recorded.
 - **Nothing renders.** Layout and SVG correctness is reasoning, not observation.
 - **The hardware.** Everything behavioural needs the owner to drive.
 
-**The differential harness is the strongest tool in the repo.**
-`core/rds/examples/dump.rs` and `tools/tests/rdsDump.mjs` print the same state
-shape from the Rust and TypeScript decoders. Feed both the same corpus and diff:
+**The differential harnesses are the strongest tool in the repo.** Each pair
+prints the same state shape from the Rust port and the shipped TypeScript, over
+a corpus regenerated deterministically on every run:
 
 ```
-node --no-warnings tools/tests/rdsDump.mjs corpus.txt > ts.out
-cd core && cargo run -q --example dump < ../corpus.txt > ../rs.out
-diff ts.out rs.out
+npm run test:rds-diff        # decoder pair — byte-identical, or it fails
+npm run test:stations-diff   # station logic pair — structure exact, numbers to 1e-9
 ```
 
-They are currently byte-identical over a 4024-step corpus. **Keep them identical.**
-If you extend the Rust core, extend the TypeScript reference or retire it
-explicitly — do not let them drift silently, which is exactly what happened to
-the first cut of this port.
+By hand, the RDS pair is `tools/tests/rdsDump.mjs` against
+`cargo run -q -p carfm-rds --example rds-dump` (stdin), fed the output of
+`tools/tests/rdsCorpus.mjs`. The step counts are printed each run — do not
+record them anywhere, they grow with the corpus. The stations pair is not a
+byte comparison because it runs transcendentals; `stationsDifferential.mjs`
+opens with the reasoning. **Keep both green.** If you extend a Rust crate,
+extend the TypeScript reference or retire it explicitly — do not let them
+drift silently, which is exactly what happened to the first cut of this port.
 
 ---
 
 ## 7. State of the work
 
-**Branches.** `main` is the trunk and is current; the work branch has been merged
-into it (PR #85). `claude/portable-core-rds` is **superseded** — its core has been
-re-ported onto `main` with the four missing behaviours and the differential proof.
-Delete it or ignore it; do not resume it.
+**Branches.** `main` is the trunk. PR #85 merged the previous work branch
+(`claude/design-audit-handoff-26qnlb`); the portable core lives on THIS branch
+(`claude/slint-conversion-carfm-removal-325vh5`), which is where you are
+reading this and which is **not on main until its own PR merges** — main's
+`core/` holds nothing but stray build artifacts this branch deletes.
+`claude/portable-core-rds` was **superseded** — its core was re-ported here
+with the four missing behaviours and the differential proof — and has since
+been deleted from the remote.
 
 **26 commits have never run on the hardware** — everything after the drive log of
 2026-08-06 20:58. That is the v1.14 signal-meter rebuild, the stereo cones, the
 TA round-trip, the post-tune read schedule, the startup reordering, and two bug
-passes. All verified by tsc, tests and analysis only. (The newest of the 26 is
-the Rust core, which is a library with no caller and cannot affect app
-behaviour.) **A commute is the highest-value next action** — it either confirms a
-large body of work or produces a short bug list, and it is cheap.
+passes. All verified by tsc, tests and analysis only. (The Rust crates are
+libraries with no caller and cannot affect app behaviour — but the stations
+port also refactored LIVE app code: `stationDb`/`stationFinder` now delegate to
+the extracted `stationRank` and `stationIdentify`. Behaviour-preserving per
+tsc, the 18 suites and the differential, and still part of this same
+untested-on-hardware pile.) **A commute is the highest-value next action** — it
+either confirms a large body of work or produces a short bug list, and it is
+cheap.
 
 **Unresolved and known-broken.** Commit `943857e` added an ACC-wake receiver that
 brings CarFM forward, gated on a `was_foreground` flag written by
@@ -260,16 +274,20 @@ Heads, which Led Zeppelin replaced, so the branch is unreachable.
 
 ## 8. On the road ahead
 
-**The portable core is much larger than one decoder.** `core/rds` is ~600 lines
-and it is the easy part. The station database, the logo dark-mode pipeline,
-presets, the NWD vendor integration and the SDR backends are all substantially
-bigger and all still live in TypeScript and Kotlin. Scope the Slint move against
+**The portable core is much larger than one decoder.** `core/rds` was the easy
+part, and `core/stations` (PI arithmetic, geo, ranking, identification) is the
+second piece. What remains is bigger than both: the database I/O itself, the
+logo dark-mode pipeline, presets, the NWD vendor integration and the SDR
+backends all still live in TypeScript and Kotlin. Scope the Slint move against
 that, not against the decoder.
 
 **Design ships HTML prototypes, not code.** They port to any framework, so the
 Slint move does not break that relationship. Read the bundles as structure and
-behaviour, and reimplement natively — that is what they ask for. The current
-bundle is v1.14.4 and the meter spec is vendored at `docs/design/SIGNAL-METER.md`.
+behaviour, and reimplement natively — that is what they ask for. The design
+spec line is at v1.14.x — the meter spec is vendored at
+`docs/design/SIGNAL-METER.md` — while the vendored prototype bundle at
+`docs/design/handoff` is older (its VERSION file reads 1.10.0); trust the
+vendored specs over the bundle where they disagree.
 
 **Whatever replaces the face has to reproduce a lot of finished work**: the
 signal meter with half-steps, the sub-floor ramp and the dotted-arc overlay; the
