@@ -16,16 +16,27 @@ equivalent over 87,622 scenarios.
 ## The headline
 
 The first review proved the Rust port equals the TypeScript. This pass looked
-at what that proof *cannot* see, and found three things:
+at what that proof *cannot* see, and found four things:
 
 1. **A real decoder bug that lives in both implementations.** RT+ is the only
    part of the RDS decoder with no consensus gate. Because the fault is
    identical on both sides, both differentials stay green over it forever.
-2. **A comment that inverts the exact fault the code exists to handle**, copied
+2. **The first review introduced a way to abort the process.** Making the geo
+   clamps propagate NaN like JavaScript closed a cosmetic gap and opened a path
+   into a sort comparator that is not a total order, which Rust panics on in
+   release. Not reachable from the shipped database; reachable from the public
+   API. See §1.4 — that one is mine.
+3. **A comment that inverts the exact fault the code exists to handle**, copied
    into both ports.
-3. **Nothing enforces the differentials.** No CI, no git hooks, and the one
+4. **Nothing enforces the differentials.** No CI, no git hooks, and the one
    commit gate runs neither `cargo test` nor either differential — which is
    precisely the mechanism the handoff says already let this port drift once.
+
+A methodological note, because it nearly cost a correct finding: two of the
+items below survived only because they were checked by code point and by
+randomised input rather than by reading output. §1.5 prints identically in a
+terminal whether or not the bug is present, and §1.4 does not reproduce on
+tidily-structured data.
 
 ---
 
@@ -125,7 +136,79 @@ Worth noting alongside: the differential's corpus feeds rows `ORDER BY
 facility_id`, which is *not* the order the app's SQL produces — so the harness
 verifies ordering under an input order production never generates.
 
-### 1.4 Two latent hazards, currently harmless **[verified here]**
+### 1.4 `rank_nearby` aborts the process on a NaN score — MAJOR, and it is a regression from the first review **[verified here]**
+
+`core/stations/src/nearby.rs:38-44` sorts with
+`b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal)`. That faithfully
+reproduces JavaScript's rule that a NaN comparison result coerces to +0 — but it
+is **not a total order**: with `a = NaN`, `b = 1`, `c = 2` it claims `a == b` and
+`a == c` while `b < c`. Rust's sort detects this and panics, in **release builds
+too** (the check lives in `core`, it is not a debug assertion).
+
+Reproduced over randomised tables (20–320 rows, random NaN fraction, release
+profile): **393 panics in 3,000 trials**, first at 61 rows with 32% NaN. A
+structured arrangement does not trigger it — my first attempt with NaN every
+third row and monotonic scores returned cleanly — so the detection is
+data-dependent, which is exactly what makes it a bad thing to leave in place.
+The TypeScript on equivalent input returns a list and never throws.
+
+**This is my regression.** Before `be1521f`, `geo.rs` read
+`erp_kw.unwrap_or(0.05).max(0.0001)`, and `f64::max` *discards* NaN — so a score
+could never be NaN and the sort never saw one. The first review changed that to
+`clamp_min`, to reproduce JavaScript's NaN *propagation*, and closed a cosmetic
+parity gap by opening a path to a process abort. `nearby.rs:28`
+(`if distance_km > radius_km { continue; }`) deliberately keeps NaN-distance
+rows for the same parity reason, so two faithful choices funnel NaN into a sort
+that aborts.
+
+Not reachable from the shipped table **[verified here]**: 0 rows with NULL or
+non-numeric `lat`/`lon`, 0 with non-numeric `erp_kw`, and the 652 NULL `erp_kw`
+rows become `None → 0.05`. It needs caller-supplied NaN — and `rank_nearby` is a
+public export on a crate whose whole design is to be fed rows by platform glue
+above it. The differential cannot catch it, because the corpus is built from the
+same NaN-free table.
+
+**Fix:** `sort_by(|a, b| b.score.total_cmp(&a.score))`, which is a total order;
+or map NaN to `NEG_INFINITY` before sorting. Either way the "ties resolve
+identically" comment must stop claiming an equivalence it does not have.
+
+### 1.5 `callsign_base` trims U+0085 where JavaScript does not — MINOR **[verified here]**
+
+`core/stations/src/pi.rs:103-105` implements `js_trim` as
+`c.is_whitespace() || c == '\u{feff}'`. Rust's `char::is_whitespace` is the
+Unicode `White_Space` property, which includes **U+0085 NEXT LINE**;
+ECMAScript's `WhiteSpace` does not, and NEL is not a JS `LineTerminator` either.
+
+```
+raw             [85,57,4f,4c,58]
+JS  raw.trim()  [85,57,4f,4c,58]   (unchanged, length 5)
+JS  callsignBase[85,57,4f,4c,58]   -> callsignToPi = null
+Rust callsign_base = "WOLX"        -> callsign_to_pi = Some(31445)
+```
+
+A caution for whoever confirms this: `JSON.stringify` does not escape U+0085
+(it is above 0x1F) and terminals render it invisibly, so the JS result *prints*
+as `"WOLX"` and looks identical. I nearly refuted this finding on that basis —
+compare code points, not rendered strings.
+
+Harmless today (FCC callsigns are ASCII), but `callsign_base` is a public export
+whose own doc says "the differential harness compares these two functions byte
+for byte and an approximation would show up as a divergence rather than as a
+shrug". It is an approximation. Fix: drop U+0085 from the predicate. The two
+neighbouring reproductions were checked and are correct — `to_uppercase` matches
+JS across all 1,114,112 scalars, and `is_js_line_terminator` is exactly the
+right four code points.
+
+### 1.6 The RDS harness aborts on a non-UTF-8 byte — MINOR **[verified here]**
+
+`core/rds/examples/rds-dump.rs:10` — `let l = line.unwrap();`. `BufRead::lines()`
+yields `Err(InvalidData)` on invalid UTF-8, so one stray byte panics the run
+mid-corpus, while `tools/tests/rdsDump.mjs` reads with `readFileSync(path,
+'utf8')`, substitutes U+FFFD and continues. The differential would report this
+as a crashed subprocess rather than as malformed input. `unwrap_or_default()`
+restores parity.
+
+### 1.7 Two latent hazards, currently harmless **[verified here]**
 
 - **Song titles match the callsign pattern.** `Walk`, `Wind`, `King` and `Kiss`
   all satisfy `/\b([KW][A-Z]{3})\b/`. On a scrolling-PS station the chunk
