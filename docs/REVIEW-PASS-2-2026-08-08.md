@@ -508,6 +508,26 @@ After all four: `cargo test` 54, `cargo clippy` 0 warnings, `cargo fmt` clean,
 `tsc` clean, `test:backend` 20 suites, `test:rds-diff` identical over 2411
 steps, `test:stations-diff` equivalent over 87,622 scenarios.
 
+**§3 the enforcement gap, partly closed.** `.claude/hooks/verify-before-commit.sh`
+now runs `cargo test` and both differentials in addition to `tsc` and
+`test:backend`, and the whole gate costs ~9s. Each arm was verified by injecting
+drift a *different* arm would miss:
+
+| injected drift | blocked by |
+|---|---|
+| `PS_SCROLL_DISTINCT` 3 → 4 | `cargo test` |
+| 2B RadioText addressing `seg*2` → `seg*4` | RDS differential (cargo test still passed) |
+| unknown-ERP default 0.05 → 0.06 | stations differential (cargo test still passed), quoting the exact diverging line |
+
+The cargo-absent path was tested both ways: with no Rust on `PATH` a
+TypeScript-only commit is allowed, while a commit touching `core/` is refused
+rather than silently skipped.
+
+**What this does not cover, stated plainly:** the hook is Claude Code's
+`PreToolUse`, so a human typing `git commit` in a terminal still runs nothing,
+and there is still no CI. A `.github/workflows` job running the same five
+commands remains the real backstop and was not built here.
+
 One process note, recorded because it nearly slipped through: the TypeScript RDS
 test was failing while a `grep`-based check of the suite output reported success.
 `tools/tests/nwdRds.test.mjs` builds the decoder from source through a

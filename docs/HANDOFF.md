@@ -172,12 +172,25 @@ stands and the reason is recorded.
 
 **Can be run in the container:**
 - `npx tsc --noEmit -p tsconfig.json` — currently clean.
-- `npm run test:backend` — 18 suites, currently all passing. Plain node, type
+- `npm run test:backend` — 20 suites, currently all passing. Plain node, type
   stripping; tests live in `tools/tests/`.
-- `cd core && cargo test` — currently all passing (52 at the time of writing;
+- `cd core && cargo test` — currently all passing (54 at the time of writing;
   trust the run, not this number).
 - `npm run test:rds-diff` and `npm run test:stations-diff` — the differential
   harnesses below. Both need cargo, which is why they are not in test:backend.
+
+**All five are enforced.** `.claude/hooks/verify-before-commit.sh` refuses a
+`git commit` unless every one of them passes — the whole gate costs about nine
+seconds. It skips the three cargo-dependent checks when no Rust toolchain is
+installed, but refuses outright if the commit touches `core/` without one, so
+the skip cannot become the silent hole it is meant to avoid. `--no-verify` is
+still an explicit human override.
+
+Two limits worth knowing. The hook is Claude Code's `PreToolUse`, so a human
+typing `git commit` in a terminal runs nothing; and there is **no CI at all** —
+no `.github/`, no installed git hooks (`.git/hooks` holds only samples,
+`core.hooksPath` is unset). PRs #84-#88 merged with zero automated checks. A
+workflow running these same five commands is the remaining gap.
 
 **Cannot be run in the container:**
 - **There is no Kotlin compiler and no Android build.** Native changes are
