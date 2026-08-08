@@ -21,6 +21,7 @@ type NwdNative = {
   poll(): Promise<NwdPoll | null>;
   probe(): Promise<string>;
   setRdsEnabled(on: boolean): void;
+  setRdsCapture?(on: boolean): void;
   setAudioEnabled(on: boolean): void;
   sendPanelKey?(key: number): void;
   probeNwdFmManager?(): Promise<string>;
@@ -87,6 +88,10 @@ export async function nwdProbe(): Promise<string> {
   try { return await native.probe(); } catch (e) { return `probe failed: ${String(e)}`; }
 }
 export function nwdSetRds(on: boolean): void { native?.setRdsEnabled(on); }
+/** Raw RDS group capture to a file. Optional on the native side so an older
+ *  build of the module (or a non-Android platform) is a silent no-op rather than
+ *  a crash — same shape as the other late additions above. */
+export function nwdSetRdsCapture(on: boolean): void { native?.setRdsCapture?.(on); }
 export function nwdSetAudio(on: boolean): void { native?.setAudioEnabled(on); }
 
 // ── Events ───────────────────────────────────────────────────────────────────

@@ -279,6 +279,91 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     @Volatile private var rdsPumpRunning = false
     private var rdsThread: Thread? = null
 
+    // ── Raw group capture ────────────────────────────────────────────────────
+    //
+    // Every well-formed group the chip hands over, written to a file, so the
+    // decoders can be replayed against REAL AIR. The entire real corpus in the
+    // repo today is 27 groups lifted from a test file; everything else the
+    // differential harness replays was synthesised — which means the TypeScript
+    // decoder and the Rust port can agree with each other perfectly and both be
+    // wrong about this hardware in the same way. Nothing in the test suite can
+    // see that. A drive can.
+    //
+    // Captured BEFORE the dedupe below, deliberately. The dedupe drops a group
+    // identical to the previous one, so the emitted stream is exactly this file
+    // with consecutive duplicates removed — nothing is lost by recording the
+    // wider stream, and two open questions need it:
+    //   1. whether dropping repeats starves the decoder's consensus gates. They
+    //      COUNT repeats (PI needs 3, PTY 3, PS two agreeing assemblies), so the
+    //      note above claiming the decoder "is idempotent for repeats" is wrong;
+    //      AUDIT-2026-08-02 #35 has it open and this is the evidence to close it.
+    //   2. how often a station re-sends its 3A ODA announcement. The RT+ trust
+    //      gate now requires that announcement to repeat before it is believed,
+    //      and the repo contains exactly one captured 3A — so the cadence that
+    //      gate depends on has never been measured.
+    //
+    // Format `<epochMillis> <hex>`, one group per line: strip the first column to
+    // feed tools/tests/rdsDump.mjs or the Rust dump, keep it to measure cadence.
+    // filesDir is Expo's documentDirectory, so JS can read the file back with no
+    // new bridge surface.
+    // OFF by default and owned by the "Raw RDS capture" switch in settings
+    // (Diagnostics). It writes to disk on every drive, so it opts in rather than
+    // out; diag.ts restores the persisted choice at app start and pushes it here.
+    private val rdsCaptureName = "carfm-rds-capture.txt"
+    private val rdsCaptureMaxBytes = 4L * 1024 * 1024
+    @Volatile private var rdsCaptureOn = false
+    private var rdsCaptureOut: java.io.Writer? = null
+    private var rdsCaptureBytes = 0L
+
+    /** Append one group. Synchronized because stopRdsPump closes from another
+     *  thread; never throws, because a capture must not take the tuner down. */
+    @Synchronized
+    private fun rdsCaptureWrite(hex: String) {
+        if (!rdsCaptureOn) return
+        try {
+            // `?: run { … }` rather than a null-check-then-assign, so the result
+            // is non-null by construction instead of by smart cast.
+            val w: java.io.Writer = rdsCaptureOut ?: run {
+                val f = java.io.File(reactContext.filesDir, rdsCaptureName)
+                rdsCaptureBytes = if (f.exists()) f.length() else 0L
+                val opened = java.io.BufferedWriter(java.io.FileWriter(f, true))
+                rdsCaptureOut = opened
+                opened
+            }
+            val line = System.currentTimeMillis().toString() + " " + hex + "\n"
+            w.write(line)
+            // Flushed every line on purpose. The firmware KILLS this process on
+            // ACC-off, which is exactly how a drive ends — a buffer holding the
+            // last minutes of the only interesting part would be lost every time.
+            // At ~11 groups/s the cost is irrelevant.
+            w.flush()
+            rdsCaptureBytes += line.length.toLong()
+            if (rdsCaptureBytes >= rdsCaptureMaxBytes) {
+                w.close()
+                rdsCaptureOut = null
+                rdsCaptureBytes = 0L
+                val cur = java.io.File(reactContext.filesDir, rdsCaptureName)
+                val prev = java.io.File(reactContext.filesDir, rdsCaptureName + ".prev")
+                if (prev.exists()) prev.delete()
+                cur.renameTo(prev)
+            }
+        } catch (t: Throwable) {
+            rdsCaptureOn = false
+            try { rdsCaptureOut?.close() } catch (_: Throwable) {}
+            rdsCaptureOut = null
+            Log.w(TAG, "RDS capture off: " + t.message)
+        }
+    }
+
+    @Synchronized
+    private fun rdsCaptureClose() {
+        try {
+            rdsCaptureOut?.flush()
+            rdsCaptureOut?.close()
+        } catch (_: Throwable) {}
+        rdsCaptureOut = null
+    }
+
     private fun startRdsPump() {
         if (rdsThread != null) return
         rdsPumpRunning = true
@@ -324,9 +409,13 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
                     }
                 }
                 val hex = try { nwdFmGet("getRadioRDSDataArm")?.toString() ?: "" } catch (_: Throwable) { "" }
-                if (hex.length == 16 && hex != zeroGroup && hex != last) {
-                    last = hex
-                    emit("NwdRdsGroup", Arguments.createMap().apply { putString("hex", hex) })
+                if (hex.length == 16 && hex != zeroGroup) {
+                    // Capture the WHOLE stream, then dedupe for the bridge.
+                    rdsCaptureWrite(hex)
+                    if (hex != last) {
+                        last = hex
+                        emit("NwdRdsGroup", Arguments.createMap().apply { putString("hex", hex) })
+                    }
                 }
                 try { Thread.sleep(rdsPollMs) } catch (_: InterruptedException) { break }
             }
@@ -342,6 +431,7 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         rdsPumpRunning = false
         rdsThread?.interrupt()
         rdsThread = null
+        rdsCaptureClose()
     }
 
     /** Send a panel key AS IF the wheel/panel had been pressed (same unprotected
@@ -462,6 +552,16 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun setRdsEnabled(on: Boolean) {
         try { radio?.setRDSState(0.toByte(), on) } catch (e: Throwable) { Log.w(TAG, "setRDSState failed", e) }
+    }
+
+    /** Raw RDS capture on/off — the Diagnostics switch in settings. Turning it
+     *  off closes the file immediately rather than at the next pump stop, so the
+     *  switch means "stop writing now". Re-enabling appends to the same file. */
+    @ReactMethod
+    fun setRdsCapture(on: Boolean) {
+        rdsCaptureOn = on
+        if (!on) rdsCaptureClose()
+        Log.i(TAG, "RDS capture " + (if (on) "on" else "off"))
     }
 
     /** One-shot diagnostic dump of EVERY readable getter the NWD RadioFeature
