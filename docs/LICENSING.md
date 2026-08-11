@@ -92,12 +92,12 @@ tracking; a real pre-distribution pass wants `license-checker` or an SBOM.
 
 ## ⚠️ Fonts — audit required before distribution
 
-12 files in `assets/fonts` are bundled into the APK. None ships with a licence
+11 files in `assets/fonts` are bundled into the APK. None ships with a licence
 file, and a spot check of the embedded name tables found at least three carrying
 explicit foundry rights reservations with no distribution grant.
 
 **No per-font determination has been made, and none is needed while the app stays
-private.** Before any distribution, all 12 need a proper licence audit.
+private.** Before any distribution, all 11 need a proper licence audit.
 
 `bandThemes.ts` has a `BAND_FONTS_READY` flag that drops the whole band-theme
 system back to Atkinson Hyperlegible — that is the kill switch if the set cannot
@@ -147,15 +147,49 @@ hand-written from the interface rather than decompiler output, and document that
 
 ---
 
+## ⚠️ Release builds are signed with the debug keystore
+
+Not a licensing question, recorded here because this is where the things that
+block a release are tracked and nothing else in `docs/` mentions it.
+
+`android/app/build.gradle:132`:
+
+```gradle
+signingConfig = hasUploadKey ? signingConfigs.release : signingConfigs.debug
+```
+
+`hasUploadKey` is `keystorePropsFile.exists()` (`:107`), and there is no
+`keystore.properties` in the tree — so **`assembleRelease` today produces an APK
+signed by `android/app/debug.keystore`**, whose password (`android`) and alias
+(`androiddebugkey`) are the public Android defaults and are committed to this
+repository.
+
+Two consequences. Play rejects a debug-signed upload outright, so this blocks a
+listing mechanically. And more seriously for a sideloaded APK — the intended
+distribution route here — anyone can sign a package with the same well-known key,
+which Android will then accept as an update to this app. The signing key is the
+only thing that makes an update authentic.
+
+**The fix is mechanical**, and deliberately not done here: generate an upload
+key, write **`android/keystore.properties`** — `rootProject.file(...)` at
+`build.gradle:106`, and the Gradle root here is `android/`, so it is that path
+and not `android/app/`. `.gitignore:54` already lists it by name, so it cannot be
+committed by accident. Keep a backup of the key itself: losing it means never
+updating the app again without a Play key-reset. Nothing in the build needs changing: the conditional above already
+picks the release config up the moment the file exists.
+
+---
+
 ## Summary — what blocks distribution today
 
 | # | Item | Severity |
 |---|---|---|
-| 1 | Fonts — 12 bundled, none licence-audited | ⚠️ High — audit before distribution |
+| 1 | Fonts — 11 bundled, none licence-audited | ⚠️ High — audit before distribution |
 | 2 | Band artwork, trademarked logos | ⚠️ High — trademark, not just copyright |
-| 3 | Vendor `.java` parcelables in `com.nwd.*` | ⚠️ Medium — confirm provenance |
-| 4 | `sdr-kit` prebuilts, no licence texts, GPL-2.0-only risk | ⚠️ Medium — mechanical to fix |
-| 5 | Native code, JS deps, data assets | ✅ Clear |
+| 3 | Release builds signed with the committed debug keystore | ⚠️ High — mechanical, but blocks any release |
+| 4 | Vendor `.java` parcelables in `com.nwd.*` | ⚠️ Medium — confirm provenance |
+| 5 | `sdr-kit` prebuilts, no licence texts, GPL-2.0-only risk | ⚠️ Medium — mechanical to fix |
+| 6 | Native code, JS deps, data assets | ✅ Clear |
 
 Items 1 and 2 both come from the band-themes feature and share one mitigation:
 it can be disabled wholesale (`BAND_FONTS_READY`, plus gating `bandart`) without
