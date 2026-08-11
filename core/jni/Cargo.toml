@@ -1,0 +1,23 @@
+# The ONLY crate in this workspace that knows a platform.
+#
+# core/rds and core/stations are pure by rule — no I/O, no threads, no platform
+# calls — and they stay that way. Everything Android-specific lives here, which
+# is also why this is the only crate with an external dependency: `jni` does not
+# leak into the logic it wraps. A Linux or desktop build binds the same core
+# without touching this crate.
+[package]
+name = "carfm-jni"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "JNI adapter exposing the portable core to the Android app."
+
+[lib]
+# cdylib only: this is loaded by System.loadLibrary, never linked by another crate.
+crate-type = ["cdylib"]
+
+[dependencies]
+# 0.21 on purpose, not 0.22: 0.22 splits JNIEnv into Env/EnvUnowned and deprecates
+# the API every Android/Rust example is written against. Nothing here needs it.
+jni = "0.21"
+carfm-rds = { path = "../rds" }

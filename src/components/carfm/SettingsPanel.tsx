@@ -22,7 +22,7 @@ import { snapshotDate, clearAllStationPrefs } from '../../services/stationDb';
 import { clearAllLogoFiles } from '../../services/logoStore';
 import { clearLogoCache } from '../../services/stationLogoCache';
 import { invalidateLogoTile, invalidateStationDisplay } from './LogoTile';
-import { isNwdAvailable, nwdProbe, nwdProbeFmManager } from '../../services/nwdRadio';
+import { isNwdAvailable, nwdProbe, nwdProbeFmManager, nwdExportRdsCapture } from '../../services/nwdRadio';
 import { isDebugMode, setDebugMode } from '../../services/debugMode';
 import { diag, isDiagEnabled, setDiagEnabled, isDiagOverlayEnabled, setDiagOverlayEnabled,
   isRdsCaptureEnabled, setRdsCaptureEnabled,
@@ -130,6 +130,18 @@ export default function SettingsPanel({
       Alert.alert('Log saved to Downloads', `${path}\n\nOpen your file manager → Downloads to copy it to USB. (Or just screenshot the log.)`);
     } catch (e) {
       Alert.alert('Couldn’t save', `Screenshot the log instead.\n\n${String(e)}`);
+    }
+  }, []);
+
+  // The capture lives in filesDir, which is app-private and unreachable on a
+  // release build (not debuggable, so `adb run-as` is refused). Copy it into
+  // Downloads, where a file manager can put it on a USB stick.
+  const exportCapture = useCallback(async () => {
+    try {
+      const path = await nwdExportRdsCapture();
+      Alert.alert('Capture saved to Downloads', `${path}\n\nOpen your file manager → Downloads to copy it off.`);
+    } catch (e) {
+      Alert.alert('Nothing to export', `${String(e)}`);
     }
   }, []);
 
@@ -554,6 +566,15 @@ export default function SettingsPanel({
                     <Text style={[styles.clearText, { color: pal.blue }]}>Save to file</Text>
                     <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
                   </Pressable>
+                  {rdsCaptureOn ? (
+                    <>
+                      <View style={[styles.divider, { backgroundColor: pal.border }]} />
+                      <Pressable style={({ pressed }) => [styles.clearRow, pressed && { backgroundColor: pal.blueFill }]} onPress={exportCapture} accessibilityRole="button" accessibilityLabel="Export the raw RDS capture">
+                        <Text style={[styles.clearText, { color: pal.blue }]}>Export raw RDS capture</Text>
+                        <Text style={[styles.chevron, { color: pal.dim }]}>›</Text>
+                      </Pressable>
+                    </>
+                  ) : null}
                   {nwdActive ? (
                     <>
                       <View style={[styles.divider, { backgroundColor: pal.border }]} />

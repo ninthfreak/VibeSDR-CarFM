@@ -22,6 +22,7 @@ type NwdNative = {
   probe(): Promise<string>;
   setRdsEnabled(on: boolean): void;
   setRdsCapture?(on: boolean): void;
+  exportRdsCapture?(): Promise<string>;
   setAudioEnabled(on: boolean): void;
   sendPanelKey?(key: number): void;
   probeNwdFmManager?(): Promise<string>;
@@ -92,6 +93,11 @@ export function nwdSetRds(on: boolean): void { native?.setRdsEnabled(on); }
  *  build of the module (or a non-Android platform) is a silent no-op rather than
  *  a crash — same shape as the other late additions above. */
 export function nwdSetRdsCapture(on: boolean): void { native?.setRdsCapture?.(on); }
+/** Copy the capture into Downloads and resolve its path. Rejects when there is
+ *  no capture yet, or when the native module predates this method. */
+export function nwdExportRdsCapture(): Promise<string> {
+  return native?.exportRdsCapture?.() ?? Promise.reject(new Error('not available'));
+}
 export function nwdSetAudio(on: boolean): void { native?.setAudioEnabled(on); }
 
 // ── Events ───────────────────────────────────────────────────────────────────
