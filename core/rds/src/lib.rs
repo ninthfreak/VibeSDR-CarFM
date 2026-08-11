@@ -159,6 +159,33 @@ pub struct Quality {
     pub samples: usize,
 }
 
+/// One-line rendering of everything the decoder publishes, in exactly the shape
+/// the differential harness compares.
+///
+/// It lives in the library rather than in the dump example because there are now
+/// two consumers — the harness and the Android JNI adapter — and a format that
+/// exists twice is a format that drifts. The whole value of the differential is
+/// that both implementations print identically; a second, hand-copied formatter
+/// would quietly break that the first time a field was added.
+pub fn format_state(s: &RdsState, t: &Stats, q: &Quality) -> String {
+    format!(
+        "pi={} pty={} tp={} ta={} ps={:?} rt={:?} scroll={} art={:?} tit={:?} g={} x={} q={} n={}",
+        s.pi.map(|v| format!("{v:04x}")).unwrap_or("-".into()),
+        s.pty.map(|v| v.to_string()).unwrap_or("-".into()),
+        s.tp,
+        s.ta,
+        s.ps,
+        s.rt,
+        s.ps_scrolling,
+        s.rt_artist,
+        s.rt_title,
+        t.groups,
+        t.pi_mismatch,
+        q.pi_match_pct.map(|v| v.to_string()).unwrap_or("-".into()),
+        q.samples
+    )
+}
+
 /// Fold every non-printable byte to a space. Must NOT be applied before the
 /// RadioText terminator test — see the note at that call site.
 fn chr(byte: u8) -> char {

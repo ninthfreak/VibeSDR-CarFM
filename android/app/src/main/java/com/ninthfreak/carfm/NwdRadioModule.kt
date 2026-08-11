@@ -564,6 +564,63 @@ class NwdRadioModule(private val reactContext: ReactApplicationContext) :
         Log.i(TAG, "RDS capture " + (if (on) "on" else "off"))
     }
 
+    /**
+     * Copy the capture into Downloads, where a file manager can reach it.
+     *
+     * The capture itself lives in filesDir, which is app-private: on the release
+     * build that actually gets driven — not debuggable — `adb run-as` is refused
+     * and there is no way to retrieve it without root. Writing straight to
+     * Downloads instead would mean a MediaStore round trip on every group, ~11
+     * times a second in a moving car, so the copy happens once, on demand.
+     *
+     * Mirrors VibeStreamModule.writeLog: MediaStore on API 29+, the public
+     * Downloads directory below that.
+     */
+    @ReactMethod
+    fun exportRdsCapture(promise: Promise) {
+        try {
+            // Flush first: the writer holds the most recent line, and the whole
+            // point of exporting is usually the drive that just finished.
+            rdsCaptureClose()
+            val src = java.io.File(reactContext.filesDir, rdsCaptureName)
+            if (!src.exists() || src.length() == 0L) {
+                promise.reject("empty", "No capture yet — turn on Raw RDS capture and drive.")
+                return
+            }
+            val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                .format(java.util.Date())
+            val fileName = "carfm-rds-capture-$stamp.txt"
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                val resolver = reactContext.contentResolver
+                val values = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain")
+                    put(
+                        android.provider.MediaStore.Downloads.RELATIVE_PATH,
+                        android.os.Environment.DIRECTORY_DOWNLOADS
+                    )
+                }
+                val uri = resolver.insert(
+                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                ) ?: throw java.io.IOException("MediaStore insert returned null")
+                resolver.openOutputStream(uri)?.use { out -> src.inputStream().use { it.copyTo(out) } }
+                    ?: throw java.io.IOException("openOutputStream returned null")
+                promise.resolve("Downloads/" + fileName + " (" + src.length() + " bytes)")
+            } else {
+                @Suppress("DEPRECATION")
+                val dir = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS
+                )
+                dir.mkdirs()
+                val f = java.io.File(dir, fileName)
+                src.copyTo(f, overwrite = true)
+                promise.resolve(f.absolutePath + " (" + src.length() + " bytes)")
+            }
+        } catch (e: Exception) {
+            promise.reject("export", e.message ?: "export failed", e)
+        }
+    }
+
     /** One-shot diagnostic dump of EVERY readable getter the NWD RadioFeature
      *  exposes. On-device the station name (PS) and RadioText never populate
      *  through the usual paths (psName / getRtMessage / the callbacks), so this

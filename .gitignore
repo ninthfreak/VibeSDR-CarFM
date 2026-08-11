@@ -72,3 +72,6 @@ android/app/src/main/cpp/vibedsp/test/build/
 # ── Slimming (2026-07-31) ───────────────────────────────────────────────────
 # Expo iOS export leftovers — this fork is Android-only.
 dist-ios-tmp/
+
+# Rust core cross-compiled for Android (tools/build-core-android.sh)
+android/app/src/main/jniLibs/
