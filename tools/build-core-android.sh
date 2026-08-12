@@ -33,8 +33,32 @@ if ! command -v cargo-ndk >/dev/null 2>&1; then
   echo "cargo-ndk not found. Install it with: cargo install cargo-ndk" >&2
   exit 1
 fi
+# Find the NDK if it was not exported. Newest side-by-side install wins, under
+# whichever SDK root is set — this is the layout `sdkmanager --install "ndk;…"`
+# produces, and having to export a path by hand every session is friction for no
+# reason. React Native 0.86 pins 27.1.12297006 (node_modules/react-native/gradle/
+# libs.versions.toml); cargo-ndk is not fussy, but matching Gradle avoids
+# surprises.
 if [[ -z "${ANDROID_NDK_HOME:-}" && -z "${NDK_HOME:-}" && -z "${ANDROID_NDK_ROOT:-}" ]]; then
-  echo "Set ANDROID_NDK_HOME (or NDK_HOME / ANDROID_NDK_ROOT) to your NDK." >&2
+  for sdk in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Android/Sdk" "$HOME/Library/Android/sdk"; do
+    [[ -n "$sdk" && -d "$sdk/ndk" ]] || continue
+    found=$(ls -1 "$sdk/ndk" 2>/dev/null | sort -V | tail -1)
+    if [[ -n "$found" ]]; then
+      export ANDROID_NDK_HOME="$sdk/ndk/$found"
+      echo "Using NDK $found (found under $sdk/ndk)"
+      break
+    fi
+  done
+fi
+if [[ -z "${ANDROID_NDK_HOME:-}" && -z "${NDK_HOME:-}" && -z "${ANDROID_NDK_ROOT:-}" ]]; then
+  cat >&2 <<'MSG'
+No Android NDK found.
+
+  sdkmanager --install "ndk;27.1.12297006"      # the version RN 0.86 pins
+
+then either re-run this script (it looks under $ANDROID_HOME/ndk and
+~/Android/Sdk/ndk), or set ANDROID_NDK_HOME yourself.
+MSG
   exit 1
 fi
 
