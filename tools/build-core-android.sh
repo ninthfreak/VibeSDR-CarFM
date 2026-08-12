@@ -34,11 +34,15 @@ if ! command -v cargo-ndk >/dev/null 2>&1; then
   exit 1
 fi
 # Find the NDK if it was not exported. Newest side-by-side install wins, under
-# whichever SDK root is set — this is the layout `sdkmanager --install "ndk;…"`
-# produces, and having to export a path by hand every session is friction for no
-# reason. React Native 0.86 pins 27.1.12297006 (node_modules/react-native/gradle/
-# libs.versions.toml); cargo-ndk is not fussy, but matching Gradle avoids
-# surprises.
+# whichever SDK root is set — the layout `sdkmanager --install "ndk;…"` produces.
+#
+# ANY reasonably recent NDK works. carfm-jni is pure Rust with no C++ interop —
+# it does not link libc++_shared or touch the STL — so the usual reason to match
+# the NDK Gradle uses (STL linkage) does not apply here. Gradle's own version is
+# pinned separately by React Native (27.1.12297006 in
+# node_modules/react-native/gradle/libs.versions.toml) and the two need not agree.
+# Keep cargo-ndk current instead: it is the piece that has to understand the
+# NDK's toolchain layout, and that layout changes between releases.
 if [[ -z "${ANDROID_NDK_HOME:-}" && -z "${NDK_HOME:-}" && -z "${ANDROID_NDK_ROOT:-}" ]]; then
   for sdk in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Android/Sdk" "$HOME/Library/Android/sdk"; do
     [[ -n "$sdk" && -d "$sdk/ndk" ]] || continue
@@ -54,10 +58,12 @@ if [[ -z "${ANDROID_NDK_HOME:-}" && -z "${NDK_HOME:-}" && -z "${ANDROID_NDK_ROOT
   cat >&2 <<'MSG'
 No Android NDK found.
 
-  sdkmanager --install "ndk;27.1.12297006"      # the version RN 0.86 pins
+Install one — any recent version is fine for this library. Android Studio:
+SDK Manager -> SDK Tools -> Show Package Details -> NDK (Side by side).
+Or, if you have the command-line tools:  sdkmanager --install "ndk;<version>"
 
-then either re-run this script (it looks under $ANDROID_HOME/ndk and
-~/Android/Sdk/ndk), or set ANDROID_NDK_HOME yourself.
+Then re-run this script (it looks under $ANDROID_HOME/ndk, $ANDROID_SDK_ROOT/ndk
+and ~/Android/Sdk/ndk), or set ANDROID_NDK_HOME yourself.
 MSG
   exit 1
 fi
