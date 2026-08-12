@@ -20,7 +20,11 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-OUT="android/app/src/main/jniLibs"     # AGP's default jniLibs dir; no Gradle change needed
+REPO="$PWD"
+# ABSOLUTE, because the build runs from core/ (see below) — a relative path would
+# resolve against the wrong directory and silently write the .so somewhere Gradle
+# never looks. AGP's default jniLibs dir, so no Gradle change is needed.
+OUT="$REPO/android/app/src/main/jniLibs"
 
 PROFILE_ARGS=(--release)
 PROFILE_NAME="release"
@@ -77,9 +81,15 @@ fi
 
 # The two ABIs android/gradle.properties builds for (reactNativeArchitectures).
 # Keep this list in step with that one.
+# RUN FROM core/, not the repo root. cargo-ndk loads `cargo metadata` from the
+# CURRENT DIRECTORY before it forwards anything to cargo, so --manifest-path does
+# not save it: at the repo root — which has no Cargo.toml, the workspace being in
+# core/ — it fails with "could not find Cargo.toml in ... or any parent directory"
+# before the build starts.
+cd core
 echo "Building carfm-jni ($PROFILE_NAME) for armeabi-v7a + arm64-v8a…"
 cargo ndk -t armeabi-v7a -t arm64-v8a -o "$OUT" \
-  build -p carfm-jni --manifest-path core/Cargo.toml "${PROFILE_ARGS[@]}"
+  build -p carfm-jni "${PROFILE_ARGS[@]}"
 
 echo
 echo "Wrote:"
