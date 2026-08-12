@@ -29,8 +29,15 @@ if [[ "${1:-}" == "--debug" ]]; then
   PROFILE_NAME="debug"
 fi
 
-if ! command -v cargo-ndk >/dev/null 2>&1; then
-  echo "cargo-ndk not found. Install it with: cargo install cargo-ndk" >&2
+# Ask CARGO whether the subcommand works, rather than looking for cargo-ndk on
+# PATH. `cargo install` drops binaries in $CARGO_HOME/bin, and cargo resolves
+# `cargo <sub>` from there whether or not that directory is on PATH — so a PATH
+# probe reports "not found" for a perfectly working install. That is exactly what
+# it did on a Pop!_OS box with cargo from apt in /usr/bin and cargo-ndk in
+# ~/.cargo/bin: the tool was installed, the script refused to run.
+if ! cargo ndk --version >/dev/null 2>&1; then
+  echo "cargo-ndk not usable. Install it with: cargo install cargo-ndk" >&2
+  echo "(already installed? check it runs: cargo ndk --version)" >&2
   exit 1
 fi
 # Find the NDK if it was not exported. Newest side-by-side install wins, under
